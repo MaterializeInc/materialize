@@ -3,6 +3,27 @@
 //! [`ObjectId`] is the canonical way to refer to a database object throughout
 //! the project pipeline. It is used as a map key, dependency graph node, and
 //! display type in error messages.
+//!
+//! ## Invariant
+//!
+//! An `ObjectId` is always fully qualified: all three components (`database`,
+//! `schema`, `object`) are non-empty strings. Partially qualified references
+//! are resolved into `ObjectId`s by [`ObjectId::from_item_name`] and
+//! [`ObjectId::from_raw_item_name`], which fill in missing components from
+//! the current file's database/schema context.
+//!
+//! ## Resolution Examples
+//!
+//! ```text
+//! from_item_name("sales", default_db="materialize", default_schema="public")
+//!   → ObjectId { database: "materialize", schema: "public", object: "sales" }
+//!
+//! from_item_name("analytics.summary", default_db="materialize", default_schema="public")
+//!   → ObjectId { database: "materialize", schema: "analytics", object: "summary" }
+//!
+//! from_item_name("other_db.staging.events", ...)
+//!   → ObjectId { database: "other_db", schema: "staging", object: "events" }
+//! ```
 
 use mz_sql_parser::ast::{Ident, RawItemName, UnresolvedItemName};
 

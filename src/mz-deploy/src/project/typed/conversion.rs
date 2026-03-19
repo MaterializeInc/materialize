@@ -1,7 +1,37 @@
 //! Conversion implementations for typed representation.
 //!
-//! This module contains the TryFrom implementations that convert raw
-//! parsed representations into validated typed representations.
+//! This module contains the `TryFrom` and `validate()` implementations that
+//! convert raw parsed representations into validated typed representations.
+//!
+//! ## Conversion Pipeline
+//!
+//! ```text
+//! raw::Project ──TryFrom──▶ typed::Project
+//!   └─ raw::Database ──validate()──▶ typed::Database
+//!        └─ raw::Schema ──validate()──▶ typed::Schema
+//!             └─ raw::DatabaseObject ──validate()──▶ typed::DatabaseObject
+//! ```
+//!
+//! Each level collects errors from all children and aggregates them into a
+//! single `ValidationErrors` result. This means the user sees **all** errors
+//! at once rather than fixing them one at a time.
+//!
+//! ## Per-Object Validation (in `validate_single_variant`)
+//!
+//! 1. **Statement classification** — exactly one main CREATE statement per file
+//! 2. **Name validation** — object name matches file stem, FQN matches path
+//! 3. **Identifier format** — lowercase, valid characters
+//! 4. **Name normalization** — fully qualify all references via `NormalizingVisitor`
+//! 5. **Cluster validation** — MVs, sinks, sources, indexes have required `IN CLUSTER`
+//! 6. **Reference validation** — indexes, constraints, grants, comments reference the parent object
+//! 7. **Constraint enforcement** — enforced constraints have `IN CLUSTER`
+//!
+//! ## Profile Variant Handling
+//!
+//! Objects may have multiple file variants (e.g., `conn.sql` and
+//! `conn__staging.sql`). All variants are classified for type consistency,
+//! then only the active variant (matching profile or default) is fully
+//! validated. Views and materialized views do not allow profile overrides.
 
 use super::super::ast::Statement;
 use super::super::normalize::NormalizingVisitor;
@@ -16,7 +46,7 @@ use super::validation::{
 use crate::project::SchemaQualifier;
 use crate::project::error::{ValidationError, ValidationErrorKind, ValidationErrors};
 use mz_sql_parser::ast::*;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 /// Classify statements in a single variant and determine its object type.
@@ -551,14 +581,30 @@ impl Database {
     }
 }
 
+/// A flattened representation of a raw object with its database/schema context,
+/// used as the unit of work for the validation pipeline.
+struct ObjectTask {
+    db_name: String,
+    schema_name: String,
+    raw_object: super::super::raw::DatabaseObject,
+}
+
 impl TryFrom<super::super::raw::Project> for Project {
     type Error = ValidationErrors;
 
     /// Converts a raw project into a fully validated HIR project.
     ///
-    /// This performs a complete validation of the entire project tree. Collects
-    /// all validation errors from all databases, schemas, and objects and returns
-    /// them together, grouped by location.
+    /// The conversion pipeline is structured as collect → process → reassemble:
+    ///
+    /// 1. **Collect** — Flatten all `(db_name, schema_name, raw::DatabaseObject)` tuples
+    ///    from the nested raw project. Mod statements are validated inline during
+    ///    this phase since they are few and tied to the hierarchy.
+    ///
+    /// 2. **Process** — Validate each object through `DatabaseObject::validate()`.
+    ///    All errors are collected rather than failing on the first.
+    ///
+    /// 3. **Reassemble** — Group validated objects by `(db, schema)`, run per-schema
+    ///    post-validation checks, and build the typed `Project`.
     ///
     /// # Errors
     ///
@@ -566,15 +612,148 @@ impl TryFrom<super::super::raw::Project> for Project {
     fn try_from(value: super::super::raw::Project) -> Result<Self, Self::Error> {
         let profile = value.profile.clone();
         let mut all_errors = Vec::new();
-        let mut databases = Vec::new();
+
+        // ── Step 1: Collect ─────────────────────────────────────────────
+        // Flatten all objects and validate mod statements inline.
+
+        let mut object_tasks = Vec::new();
+
+        // Track database/schema metadata for reassembly
+        struct DbMeta {
+            name: String,
+            mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
+            schema_names: Vec<String>,
+            schema_mod_statements: BTreeMap<String, Option<Vec<mz_sql_parser::ast::Statement<Raw>>>>,
+        }
+        // Use Vec to preserve BTreeMap ordering from raw project
+        let mut db_metas: Vec<DbMeta> = Vec::new();
 
         for (_, database) in value.databases {
-            match Database::validate(database, &profile) {
-                Ok(db) => databases.push(db),
+            // Validate database mod statements
+            if let Some(ref mod_stmts) = database.mod_statements {
+                let db_mod_path = PathBuf::from(format!("{}.sql", database.name));
+                validate_database_mod_statements(
+                    &database.name,
+                    &db_mod_path,
+                    mod_stmts,
+                    &mut all_errors,
+                );
+            }
+
+            let mut schema_names = Vec::new();
+            let mut schema_mod_stmts_map = BTreeMap::new();
+
+            for (schema_name, mut schema) in database.schemas {
+                // Validate schema mod statements
+                if let Some(ref mut mod_stmts) = schema.mod_statements {
+                    let schema_mod_path =
+                        PathBuf::from(format!("{}/{}.sql", database.name, schema_name));
+                    validate_schema_mod_statements(
+                        &database.name,
+                        &schema_name,
+                        &schema_mod_path,
+                        mod_stmts,
+                        &mut all_errors,
+                    );
+                }
+
+                schema_mod_stmts_map.insert(schema_name.clone(), schema.mod_statements);
+
+                // Flatten objects into tasks
+                for obj in schema.objects {
+                    object_tasks.push(ObjectTask {
+                        db_name: database.name.clone(),
+                        schema_name: schema_name.clone(),
+                        raw_object: obj,
+                    });
+                }
+
+                schema_names.push(schema_name);
+            }
+
+            db_metas.push(DbMeta {
+                name: database.name,
+                mod_statements: database.mod_statements,
+                schema_names,
+                schema_mod_statements: schema_mod_stmts_map,
+            });
+        }
+
+        // ── Step 2: Process ─────────────────────────────────────────────
+        // Validate each object, collecting all errors.
+
+        struct ValidatedObject {
+            db_name: String,
+            schema_name: String,
+            object: DatabaseObject,
+        }
+
+        let mut validated_objects = Vec::new();
+
+        for task in object_tasks {
+            match DatabaseObject::validate(task.raw_object, &profile) {
+                Ok(Some(db_obj)) => validated_objects.push(ValidatedObject {
+                    db_name: task.db_name,
+                    schema_name: task.schema_name,
+                    object: db_obj,
+                }),
+                Ok(None) => {
+                    // Object belongs to a different profile — skip it
+                }
                 Err(errs) => {
                     all_errors.extend(errs.errors);
                 }
             }
+        }
+
+        // ── Step 3: Reassemble ──────────────────────────────────────────
+        // Group validated objects by (db, schema), run per-schema checks, build Project.
+
+        // Group objects by (db_name, schema_name)
+        let mut objects_by_location: BTreeMap<(String, String), Vec<DatabaseObject>> =
+            BTreeMap::new();
+        for vo in validated_objects {
+            objects_by_location
+                .entry((vo.db_name, vo.schema_name))
+                .or_default()
+                .push(vo.object);
+        }
+
+        let mut databases = Vec::new();
+
+        for meta in db_metas {
+            let mut schemas = Vec::new();
+
+            for schema_name in &meta.schema_names {
+                let objects = objects_by_location
+                    .remove(&(meta.name.clone(), schema_name.clone()))
+                    .unwrap_or_default();
+
+                // Per-schema post-validation
+                validate_no_storage_and_computation_in_schema(
+                    schema_name,
+                    &objects,
+                    &mut all_errors,
+                );
+
+                let mod_statements = meta
+                    .schema_mod_statements
+                    .get(schema_name)
+                    .cloned()
+                    .flatten();
+
+                schemas.push(Schema {
+                    name: schema_name.clone(),
+                    objects,
+                    mod_statements,
+                });
+            }
+
+            databases.push(Database {
+                name: meta.name,
+                schemas,
+                mod_statements: meta.mod_statements,
+            });
         }
 
         // Derive replacement schemas from SET api = stable statements

@@ -61,15 +61,58 @@ fn determine_schema_type(objects: &[DatabaseObject]) -> SchemaType {
     }
 }
 
-impl From<typed::Project> for Project {
-    fn from(typed_project: typed::Project) -> Self {
-        let mut dependency_graph = BTreeMap::new();
-        let mut databases = Vec::new();
-        let mut defined_objects = BTreeSet::new();
-        let mut cluster_dependencies = BTreeSet::new();
-        let mut tests = Vec::new();
+/// A flattened typed object with its database/schema context,
+/// used as the unit of work for the dependency extraction pipeline.
+struct TypedObjectTask {
+    db_name: String,
+    schema_name: String,
+    typed_obj: typed::DatabaseObject,
+}
 
-        // First pass: collect all objects defined in the project
+/// The result of processing a single typed object through dependency extraction.
+struct ProcessedObject {
+    db_name: String,
+    schema_name: String,
+    object_id: ObjectId,
+    typed_object: typed::DatabaseObject,
+    dependencies: BTreeSet<ObjectId>,
+    clusters: BTreeSet<Cluster>,
+    constraint_mvs: Vec<(ObjectId, CreateConstraintStatement<Raw>, typed::DatabaseObject)>,
+    tests: Vec<(ObjectId, crate::unit_test::UnitTest)>,
+}
+
+impl From<typed::Project> for Project {
+    /// Converts a typed project into a planned project with dependency information.
+    ///
+    /// The conversion pipeline is structured as collect → process → reassemble:
+    ///
+    /// 1. **Collect** — Flatten all typed objects into `TypedObjectTask`s and
+    ///    collect defined object IDs for external dependency detection.
+    ///
+    /// 2. **Process** — Extract dependencies, clusters, and constraint MVs from
+    ///    each object. This is the CPU-intensive step.
+    ///
+    /// 3. **Reassemble** — Merge results into the dependency graph and
+    ///    hierarchical `Project` structure.
+    fn from(typed_project: typed::Project) -> Self {
+        // ── Step 1: Collect ─────────────────────────────────────────────
+        // Flatten all typed objects and collect defined object IDs.
+
+        let mut object_tasks = Vec::new();
+        let mut defined_objects = BTreeSet::new();
+
+        // Track database/schema metadata for reassembly
+        struct DbMeta {
+            name: String,
+            mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
+            schema_metas: Vec<SchemaMeta>,
+        }
+        struct SchemaMeta {
+            name: String,
+            mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
+        }
+        let mut db_metas: Vec<DbMeta> = Vec::new();
+
         for typed_db in &typed_project.databases {
             for typed_schema in &typed_db.schemas {
                 for typed_obj in &typed_schema.objects {
@@ -83,140 +126,197 @@ impl From<typed::Project> for Project {
             }
         }
 
-        // Second pass: build dependency graph and track external dependencies and clusters
-        let mut external_dependencies = BTreeSet::new();
-
         for typed_db in typed_project.databases {
-            let mut schemas = Vec::new();
+            let mut schema_metas = Vec::new();
 
             for typed_schema in typed_db.schemas {
-                let mut objects = Vec::new();
-                let mut constraint_mvs = Vec::new();
+                schema_metas.push(SchemaMeta {
+                    name: typed_schema.name.clone(),
+                    mod_statements: typed_schema.mod_statements,
+                });
 
                 for typed_obj in typed_schema.objects {
-                    let object_id = ObjectId::new(
-                        typed_db.name.clone(),
-                        typed_schema.name.clone(),
-                        typed_obj.stmt.ident().object.clone(),
-                    );
-
-                    // Extract dependencies from the statement
-                    let (dependencies, clusters) =
-                        extract_dependencies(&typed_obj.stmt, &typed_db.name, &typed_schema.name);
-
-                    // Track cluster dependencies
-                    for cluster in clusters {
-                        cluster_dependencies.insert(cluster);
-                    }
-
-                    // ── Constraint lowering ──────────────────────────────────────
-                    //
-                    // Enforced constraints are "lowered" into companion materialized
-                    // views. Each enforced constraint on this object produces a
-                    // synthetic typed::DatabaseObject (an MV) that is added to the
-                    // schema alongside regular objects. This makes constraint MVs
-                    // first-class participants in the dependency graph, change
-                    // detection, and deployment pipeline.
-                    //
-                    // Not-enforced constraints are skipped — they remain metadata-only.
-                    //
-                    // See `crate::project::constraint` for the lowering rules and
-                    // query generation logic.
-                    for c in &typed_obj.constraints {
-                        if let Some(mv_obj) = constraint::lower_to_materialized_view(
-                            c,
-                            &typed_obj.stmt.ident().object,
-                            &typed_db.name,
-                            &typed_schema.name,
-                        ) {
-                            constraint_mvs.push((object_id.clone(), c.clone(), mv_obj));
-                        }
-                    }
-
-                    // Check for external dependencies
-                    for dep in &dependencies {
-                        if !defined_objects.contains(dep) {
-                            external_dependencies.insert(dep.clone());
-                        }
-                    }
-
-                    dependency_graph.insert(object_id.clone(), dependencies.clone());
-
-                    // Collect tests for this object
-                    for test_stmt in &typed_obj.tests {
-                        let unit_test =
-                            crate::unit_test::UnitTest::from_execute_statement(test_stmt);
-                        tests.push((object_id.clone(), unit_test));
-                    }
-
-                    objects.push(DatabaseObject {
-                        id: object_id,
-                        typed_object: typed_obj,
-                        dependencies,
-                        is_constraint_mv: false,
+                    object_tasks.push(TypedObjectTask {
+                        db_name: typed_db.name.clone(),
+                        schema_name: typed_schema.name.clone(),
+                        typed_obj,
                     });
                 }
+            }
 
-                // Process lowered constraint MVs as first-class planned objects.
-                for (parent_id, constraint_stmt, mv_obj) in constraint_mvs {
-                    let mv_id = ObjectId::new(
-                        typed_db.name.clone(),
-                        typed_schema.name.clone(),
-                        mv_obj.stmt.ident().object.clone(),
+            db_metas.push(DbMeta {
+                name: typed_db.name,
+                mod_statements: typed_db.mod_statements,
+                schema_metas,
+            });
+        }
+
+        // ── Step 2: Process ─────────────────────────────────────────────
+        // Extract dependencies and clusters from each object.
+
+        let processed: Vec<ProcessedObject> = object_tasks
+            .into_iter()
+            .map(|task| {
+                let object_id = ObjectId::new(
+                    task.db_name.clone(),
+                    task.schema_name.clone(),
+                    task.typed_obj.stmt.ident().object.clone(),
+                );
+
+                let (dependencies, clusters) = extract_dependencies(
+                    &task.typed_obj.stmt,
+                    &task.db_name,
+                    &task.schema_name,
+                );
+
+                // Constraint lowering: enforced constraints become companion MVs
+                let mut constraint_mvs = Vec::new();
+                for c in &task.typed_obj.constraints {
+                    if let Some(mv_obj) = constraint::lower_to_materialized_view(
+                        c,
+                        &task.typed_obj.stmt.ident().object,
+                        &task.db_name,
+                        &task.schema_name,
+                    ) {
+                        constraint_mvs.push((object_id.clone(), c.clone(), mv_obj));
+                    }
+                }
+
+                // Collect tests
+                let tests: Vec<_> = task
+                    .typed_obj
+                    .tests
+                    .iter()
+                    .map(|test_stmt| {
+                        let unit_test =
+                            crate::unit_test::UnitTest::from_execute_statement(test_stmt);
+                        (object_id.clone(), unit_test)
+                    })
+                    .collect();
+
+                ProcessedObject {
+                    db_name: task.db_name,
+                    schema_name: task.schema_name,
+                    object_id,
+                    typed_object: task.typed_obj,
+                    dependencies,
+                    clusters,
+                    constraint_mvs,
+                    tests,
+                }
+            })
+            .collect();
+
+        // ── Step 3: Reassemble ──────────────────────────────────────────
+        // Merge results into dependency graph and hierarchical structure.
+
+        let mut dependency_graph = BTreeMap::new();
+        let mut external_dependencies = BTreeSet::new();
+        let mut cluster_dependencies = BTreeSet::new();
+        let mut tests = Vec::new();
+
+        // Group planned objects by (db_name, schema_name)
+        let mut objects_by_location: BTreeMap<(String, String), Vec<DatabaseObject>> =
+            BTreeMap::new();
+
+        for po in processed {
+            // Merge clusters
+            for cluster in po.clusters {
+                cluster_dependencies.insert(cluster);
+            }
+
+            // Check for external dependencies
+            for dep in &po.dependencies {
+                if !defined_objects.contains(dep) {
+                    external_dependencies.insert(dep.clone());
+                }
+            }
+
+            dependency_graph.insert(po.object_id.clone(), po.dependencies.clone());
+            tests.extend(po.tests);
+
+            objects_by_location
+                .entry((po.db_name.clone(), po.schema_name.clone()))
+                .or_default()
+                .push(DatabaseObject {
+                    id: po.object_id,
+                    typed_object: po.typed_object,
+                    dependencies: po.dependencies,
+                    is_constraint_mv: false,
+                });
+
+            // Process lowered constraint MVs
+            for (parent_id, constraint_stmt, mv_obj) in po.constraint_mvs {
+                let mv_id = ObjectId::new(
+                    po.db_name.clone(),
+                    po.schema_name.clone(),
+                    mv_obj.stmt.ident().object.clone(),
+                );
+
+                let (mut mv_deps, mv_clusters) =
+                    extract_dependencies(&mv_obj.stmt, &po.db_name, &po.schema_name);
+
+                for cluster in mv_clusters {
+                    cluster_dependencies.insert(cluster);
+                }
+
+                mv_deps.insert(parent_id);
+
+                if let Some(ref refs) = constraint_stmt.references {
+                    let ref_id = ObjectId::from_raw_item_name(
+                        &refs.object,
+                        &po.db_name,
+                        &po.schema_name,
                     );
+                    mv_deps.insert(ref_id);
+                }
 
-                    let (mut mv_deps, mv_clusters) =
-                        extract_dependencies(&mv_obj.stmt, &typed_db.name, &typed_schema.name);
-
-                    for cluster in mv_clusters {
-                        cluster_dependencies.insert(cluster);
+                for dep in &mv_deps {
+                    if !defined_objects.contains(dep) {
+                        external_dependencies.insert(dep.clone());
                     }
+                }
 
-                    // The MV depends on its parent object
-                    mv_deps.insert(parent_id.clone());
+                defined_objects.insert(mv_id.clone());
+                dependency_graph.insert(mv_id.clone(), mv_deps.clone());
 
-                    // For FK constraints, it also depends on the referenced object
-                    if let Some(ref refs) = constraint_stmt.references {
-                        let ref_id = ObjectId::from_raw_item_name(
-                            &refs.object,
-                            &typed_db.name,
-                            &typed_schema.name,
-                        );
-                        mv_deps.insert(ref_id);
-                    }
-
-                    for dep in &mv_deps {
-                        if !defined_objects.contains(dep) {
-                            external_dependencies.insert(dep.clone());
-                        }
-                    }
-
-                    defined_objects.insert(mv_id.clone());
-                    dependency_graph.insert(mv_id.clone(), mv_deps.clone());
-
-                    objects.push(DatabaseObject {
+                objects_by_location
+                    .entry((po.db_name.clone(), po.schema_name.clone()))
+                    .or_default()
+                    .push(DatabaseObject {
                         id: mv_id,
                         typed_object: mv_obj,
                         dependencies: mv_deps,
                         is_constraint_mv: true,
                     });
-                }
+            }
+        }
 
-                // Determine schema type based on objects
+        // Reassemble into hierarchical structure
+        let mut databases = Vec::new();
+
+        for meta in db_metas {
+            let mut schemas = Vec::new();
+
+            for schema_meta in meta.schema_metas {
+                let objects = objects_by_location
+                    .remove(&(meta.name.clone(), schema_meta.name.clone()))
+                    .unwrap_or_default();
+
                 let schema_type = determine_schema_type(&objects);
 
                 schemas.push(Schema {
-                    name: typed_schema.name,
+                    name: schema_meta.name,
                     objects,
-                    mod_statements: typed_schema.mod_statements,
+                    mod_statements: schema_meta.mod_statements,
                     schema_type,
                 });
             }
 
             databases.push(Database {
-                name: typed_db.name,
+                name: meta.name,
                 schemas,
-                mod_statements: typed_db.mod_statements,
+                mod_statements: meta.mod_statements,
             });
         }
 

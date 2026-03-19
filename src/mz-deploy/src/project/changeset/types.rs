@@ -2,6 +2,20 @@
 //!
 //! A `ChangeSet` captures the full set of objects, schemas, and clusters that
 //! need redeployment after comparing two deployment snapshots.
+//!
+//! ## Field Relationships
+//!
+//! - `changed_objects` ⊆ `objects_to_deploy` — every directly changed object
+//!   is also scheduled for deployment, but `objects_to_deploy` additionally
+//!   includes objects pulled in by dependency, cluster, or schema propagation.
+//! - `dirty_schemas` — schemas that contain at least one dirty non-sink,
+//!   non-replacement object. All non-replacement objects in a dirty schema are
+//!   added to `objects_to_deploy` (schema-level atomicity).
+//! - `dirty_clusters` — clusters used by changed statements (not by
+//!   propagation-only dirty objects).
+//! - `new_replacement_objects` ∪ `changed_replacement_objects` — partition of
+//!   dirty replacement objects by deployment strategy (blue-green swap vs.
+//!   `CREATE REPLACEMENT`).
 
 use super::super::SchemaQualifier;
 use super::super::ast::Cluster;

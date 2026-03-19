@@ -1,7 +1,29 @@
 //! Database validation operations.
 //!
-//! This module contains methods for validating projects against the database,
-//! including checking for required databases, schemas, clusters, and privileges.
+//! Validates that the target Materialize environment satisfies all prerequisites
+//! for deploying the project. Runs before any DDL is executed.
+//!
+//! ## Validation Checklist
+//!
+//! | Check | Function | What it verifies |
+//! |-------|----------|-----------------|
+//! | External databases exist | `find_missing_databases` | Databases referenced by external dependencies are present |
+//! | External schemas exist | `find_missing_schemas` | Schemas referenced by external dependencies are present |
+//! | Clusters exist | `find_missing_clusters` | All clusters in `project.cluster_dependencies` are present |
+//! | External objects exist | `find_missing_external_dependencies` | Objects outside the project that are referenced exist in the catalog |
+//! | Cluster isolation | `validate_cluster_isolation_impl` | Sources/sinks don't share clusters with MVs/indexes (prevents accidental recreation during swap) |
+//! | Privileges | `validate_privileges_impl` | Current role has USAGE on databases and CREATECLUSTER system privilege |
+//! | Sources exist | `validate_sources_exist_impl` | Sources referenced by `CREATE TABLE FROM SOURCE` exist |
+//! | Sink connections exist | `validate_sink_connections_exist_impl` | Connections referenced by sinks exist |
+//! | Schema ownership | `validate_schema_ownership_impl` | Current role owns all production schemas that will be swapped |
+//! | Cluster ownership | `validate_cluster_ownership_impl` | Current role owns all production clusters that will be swapped |
+//! | Table dependencies | `validate_table_dependencies_impl` | Tables depended on by objects being deployed exist |
+//!
+//! ## Batching Strategy
+//!
+//! Catalog lookups use `IN` clause queries batched in chunks of
+//! `LOOKUP_BATCH_SIZE` (1000) to avoid exceeding query parameter limits
+//! while minimizing round trips.
 
 use crate::client::connection::{Client, ValidationClient};
 use crate::client::errors::DatabaseValidationError;

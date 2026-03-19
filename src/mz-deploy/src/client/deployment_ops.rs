@@ -3,6 +3,49 @@
 //! This module contains methods for managing deployment records in the database,
 //! including creating tracking tables, inserting/querying deployment records,
 //! and managing deployment lifecycle (staging, promotion, abort).
+//!
+//! ## Hydration State Machine
+//!
+//! During staging, clusters transition through the following states:
+//!
+//! ```text
+//!   ┌──────────┐    all objects hydrated     ┌───────┐
+//!   │ Hydrating │ ────────────────────────▶  │ Ready │
+//!   └──────────┘    & lag ≤ threshold         └───────┘
+//!        │                                       ▲
+//!        │         lag > threshold          ┌─────────┐
+//!        └────────────────────────────────▶ │ Lagging │
+//!                                           └─────────┘
+//!        │
+//!        ▼ (no replicas OR all replicas OOM-looping)
+//!   ┌─────────┐
+//!   │ Failing  │
+//!   └─────────┘
+//! ```
+//!
+//! - **Hydrating** → objects are being backfilled; progress tracked as
+//!   `hydrated / total` via `mz_internal.mz_hydration_statuses`.
+//! - **Ready** → all objects hydrated and max wallclock lag ≤ threshold
+//!   (default 300s / 5 minutes).
+//! - **Lagging** → all objects hydrated but wallclock lag exceeds threshold.
+//! - **Failing** → no replicas configured, or all replicas are problematic
+//!   (3+ OOM kills within 24 hours per `mz_cluster_replica_status_history`).
+//!
+//! ## Apply State Tracking
+//!
+//! The apply (cutover) process uses a pair of schemas in `_mz_deploy` as a
+//! state marker: `apply_<id>_pre` and `apply_<id>_post`. During the atomic
+//! swap transaction these schemas exchange names, moving the `swapped=true`
+//! comment to the `_pre` schema. This enables crash recovery:
+//! - Schema absent → `NotStarted`
+//! - `_pre` comment = `swapped=false` → `PreSwap` (resume pre-swap work)
+//! - `_pre` comment = `swapped=true` → `PostSwap` (resume post-swap work)
+//!
+//! ## SUBSCRIBE Streaming
+//!
+//! `subscribe_deployment_hydration` opens a `SUBSCRIBE` cursor over the
+//! hydration status query. Retractions (`mz_diff == -1`) are filtered out
+//! before yielding updates — only insertions are surfaced to the caller.
 
 use crate::client::connection::{Client, DeploymentsClient, DeploymentsClientMut};
 use crate::client::errors::ConnectionError;

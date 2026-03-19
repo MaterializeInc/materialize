@@ -3,6 +3,30 @@
 //! This module provides different strategies for transforming object names in SQL statements.
 //! Each transformer implements the `NameTransformer` trait, allowing the `NormalizingVisitor`
 //! to apply different transformation strategies using the same traversal logic.
+//!
+//! ## Strategies
+//!
+//! | Transformer | When used | Transform example |
+//! |-------------|-----------|-------------------|
+//! | `FullyQualifyingTransformer` | Typed phase (default normalization) | `sales` → `materialize.public.sales` |
+//! | `FlatteningTransformer` | Type-checking (single-schema container) | `materialize.public.sales` → `"materialize.public.sales"` |
+//! | `StagingTransformer` | Blue/green staging | `materialize.public.sales` → `materialize.public_v1.sales` |
+//!
+//! ## StagingTransformer Rules
+//!
+//! The staging transformer appends a suffix to schema and cluster names. It
+//! has special handling for objects that should **not** be transformed:
+//!
+//! - **External dependencies** — objects not defined in the project are
+//!   referenced as-is (they exist in production schemas).
+//! - **Non-deployed objects** — when `objects_to_deploy` is set, objects
+//!   outside that set are treated as external.
+//! - **Replacement objects** — objects in replacement schemas are deployed
+//!   in-place, so references to them are not suffixed.
+//!
+//! **Key Insight:** `transform_own_name` always suffixes, even for replacement
+//! objects. The `is_external` exemption applies only to *references to other
+//! objects*, not to the object's own CREATE statement name.
 
 use super::super::typed::FullyQualifiedName;
 use crate::project::object_id::ObjectId;

@@ -2,6 +2,36 @@
 //!
 //! This module contains the `NormalizingVisitor` struct which traverses SQL statements
 //! and applies name transformations using a configurable strategy (via the `NameTransformer` trait).
+//!
+//! ## CTE Scoping
+//!
+//! Common Table Expressions (CTEs) introduce names that shadow real database
+//! objects. The visitor maintains a **stack of CTE scopes** (`cte_scope`) to
+//! track which names are currently in scope:
+//!
+//! - When entering a `WITH` clause, all CTE names from that clause are pushed
+//!   as a new scope level.
+//! - Unqualified single-identifier references are checked against the scope
+//!   stack — if a match is found, the reference is **not transformed** (it
+//!   refers to a CTE, not a database object).
+//! - When leaving a `WITH` clause, the scope is popped.
+//!
+//! **Key Insight:** CTE names can only be referenced by their unqualified
+//! name. Any multi-part reference (e.g., `schema.name`) is always a database
+//! object reference and is always transformed.
+//!
+//! ## Traversal Order
+//!
+//! The visitor performs a recursive depth-first traversal of the SQL AST:
+//! `Query` → `CteBlock` → `SetExpr` → `Select` → `TableFactor` / `Expr`.
+//! Subqueries in WHERE, HAVING, and SELECT items are recursively normalized.
+//!
+//! ## Implicit Aliasing
+//!
+//! When a table reference in a FROM clause is transformed (e.g., `sales` →
+//! `materialize.public.sales`), an implicit alias preserving the original
+//! table name is attached. This ensures that column references like
+//! `sales.column` continue to resolve correctly after transformation.
 
 use super::super::typed::FullyQualifiedName;
 use super::transformers::{

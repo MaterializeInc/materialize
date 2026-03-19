@@ -7,6 +7,35 @@
 //! A deployment snapshot captures the state of all deployed objects with their content hashes,
 //! enabling change detection (like git diff but for database objects) and supporting
 //! blue/green deployment workflows.
+//!
+//! ## What's Hashed
+//!
+//! Content hashes are computed by [`compute_typed_hash`] from the **typed AST
+//! representation** of each object, not the raw SQL file contents. The hash
+//! includes:
+//! - The main CREATE statement (via `Hash` on the AST node)
+//! - All indexes (sorted deterministically by cluster, on_name, name, key_parts)
+//! - All constraints (sorted deterministically by kind, on_name, name, columns)
+//!
+//! Hashing uses SHA-256 (via a `Sha256Hasher` bridge to `std::hash::Hash`)
+//! for cross-platform stability. The output format is `sha256:<hex>`.
+//!
+//! **Key Insight:** Because the hash is computed from the parsed AST, changes
+//! that are syntactically equivalent (whitespace, comment edits, identifier
+//! casing) produce identical hashes and do not trigger redeployment.
+//!
+//! ## Apply-Managed Exclusions
+//!
+//! Tables, table-from-source, sources, secrets, and connections are excluded
+//! from snapshots by [`build_snapshot_from_planned`] because they are managed
+//! by the `apply` command path and should not participate in snapshot-based
+//! blue/green change detection.
+//!
+//! ## Snapshot Storage
+//!
+//! Snapshots are persisted in the `_mz_deploy` database:
+//! - `_mz_deploy.public.deployments` — per-schema deployment metadata
+//! - `_mz_deploy.public.objects` — per-object content hashes (append-only)
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};

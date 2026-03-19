@@ -2,12 +2,27 @@
 //!
 //! This module provides the main `Client` struct for interacting with Materialize.
 //! The client handles connection management and delegates specialized operations
-//! to submodules:
+//! to domain-specific sub-clients.
 //!
-//! - `errors` - Error types for client operations
-//! - `deployment_ops` - Deployment tracking and management
-//! - `introspection` - Database metadata queries
-//! - `validation` - Project validation against the database
+//! ## Sub-Client Architecture
+//!
+//! Operations are grouped into domain sub-clients accessed via accessor methods
+//! on `Client`. Each sub-client borrows the `Client` and provides a focused API:
+//!
+//! | Sub-client | Accessor | Responsibility |
+//! |------------|----------|---------------|
+//! | `DeploymentsClient` | `.deployments()` | Deployment lifecycle (stage, promote, abort) |
+//! | `DeploymentsClientMut` | `.deployments_mut()` | Mutable deployment ops (SUBSCRIBE cursors) |
+//! | `IntrospectionClient` | `.introspection()` | Read-only catalog metadata queries |
+//! | `ValidationClient` | `.validation()` | Pre-deployment environment checks |
+//! | `TypeInfoClient` | `.types()` | Column/type introspection for type checking |
+//! | `ProvisioningClient` | `.provisioning()` | Idempotent DDL for databases, schemas, clusters |
+//!
+//! ## TLS Policy
+//!
+//! - **Local** connections (localhost, 127.0.0.1, private IP ranges) → `NoTls`
+//! - **Cloud** connections (all other hosts) → TLS with peer verification,
+//!   using system CA certificates from platform-specific paths
 
 use crate::client::errors::ConnectionError;
 use crate::config::Profile;

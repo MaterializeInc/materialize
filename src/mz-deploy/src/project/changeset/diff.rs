@@ -1,4 +1,17 @@
 //! Snapshot diff — finds objects whose hashes changed between two deployments.
+//!
+//! Compares the `objects` maps of two [`DeploymentSnapshot`]s by content hash.
+//! An object is considered **changed** if:
+//!
+//! - It exists in both snapshots but the hashes differ (modified)
+//! - It exists only in the new snapshot (added)
+//! - It exists only in the old snapshot (deleted)
+//!
+//! Because hashes are computed from the normalized typed AST (not raw file
+//! contents), formatting-only changes — whitespace, comment edits, identifier
+//! casing — do **not** produce different hashes and therefore do not appear
+//! in the diff. See [`super::super::deployment_snapshot::compute_typed_hash`]
+//! for hash computation details.
 
 use super::super::deployment_snapshot::DeploymentSnapshot;
 use super::super::object_id::ObjectId;

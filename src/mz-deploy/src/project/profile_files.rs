@@ -3,6 +3,24 @@
 //! Files can be named `name__<profile>.sql` to override `name.sql` when a
 //! particular profile is active. The `__` delimiter is split on the **last**
 //! occurrence (`rsplit_once`) so object names may themselves contain underscores.
+//!
+//! ## Resolution Algorithm
+//!
+//! 1. **Parse** each file stem via [`parse_file_stem`] using `rsplit_once("__")`
+//!    to separate `(object_name, profile)`. Files without `__` (or with an
+//!    empty object/profile part) are treated as the default (no profile).
+//! 2. **Group** files by object name into `FileGroup`s, recording the default
+//!    file and any profile-specific overrides. Duplicates within the same
+//!    group (e.g., two defaults, or two overrides for the same profile) are
+//!    rejected with `LoadError::DuplicateProfileObject`.
+//! 3. **Resolve** each group against the active profile:
+//!    - If a `name__<active_profile>` file exists → use it.
+//!    - Otherwise if a `name` (default) file exists → use it.
+//!    - Otherwise → skip (object is defined only for other profiles).
+//!
+//! **Key Insight:** `rsplit_once` splits on the *last* `__`, so
+//! `my_pg__conn__staging` → `("my_pg__conn", "staging")`. This allows
+//! object names to freely contain underscores.
 
 use crate::project::error::LoadError;
 use std::collections::BTreeMap;

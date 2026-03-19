@@ -3,6 +3,24 @@
 //! This module contains the `DeploymentExecutor` for running SQL statements
 //! during deployment, along with helper functions for collecting deployment
 //! metadata and generating environment names.
+//!
+//! ## ApplyPlan Lifecycle
+//!
+//! ```text
+//! compile project → connect client → plan phases → execute
+//!                                        │
+//!                     ┌──────────────────┼───────────────────┐
+//!                     ▼                  ▼                   ▼
+//!              prepare_schemas     add_phase(...)      execute(&client)
+//!              (CREATE DB/SCHEMA)  (dry-run SQL)       (run all SQL)
+//! ```
+//!
+//! 1. **Compile** — `compile_apply_project_and_connect` loads and validates the project.
+//! 2. **Plan** — Each apply subcommand calls `DeploymentExecutor::new_dry_run()` to
+//!    collect SQL without executing it, then packages results as `ApplyResult` phases.
+//! 3. **Execute** — `ApplyPlan::execute()` runs setup statements first, then per-phase
+//!    object statements. Objects sharing a `transaction_group` key are wrapped in a
+//!    single `BEGIN`/`COMMIT` block with automatic `ROLLBACK` on failure.
 
 use crate::cli::CliError;
 use crate::cli::git::get_git_commit;

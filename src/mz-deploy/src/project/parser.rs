@@ -3,6 +3,15 @@
 //! Wraps `mz_sql_parser` to parse `.sql` files into AST statements, attaching
 //! file-path context to error messages so that parse failures point back to
 //! the originating source file.
+//!
+//! ## Variable Resolution and Parsing
+//!
+//! [`parse_statements_with_context`] runs variable resolution *before* parsing:
+//! 1. Resolve psql-style variables (`:foo`, `:'foo'`, `:"foo"`) via
+//!    [`super::variables::resolve_variables`]
+//! 2. Check for unresolved variables — error or warning based on pragma
+//! 3. Parse the resolved SQL via `mz_sql_parser`
+//! 4. Wrap any parse errors with file path and SQL content for context
 
 use super::error::ParseError;
 use super::variables::VariableError;

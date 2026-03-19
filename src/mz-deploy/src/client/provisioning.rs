@@ -4,6 +4,20 @@
 //! `ALTER` statements to ensure that the target region's databases, schemas,
 //! and clusters match the project definition. These are idempotent and run
 //! before any object-level deployment.
+//!
+//! ## Ordering
+//!
+//! Provisioning must follow referential order: **databases → schemas → clusters**.
+//! A schema cannot be created until its parent database exists, so callers
+//! (e.g., [`super::super::cli::executor::DeploymentExecutor`]) are responsible
+//! for invoking provisioning methods in the correct order.
+//!
+//! ## Idempotency
+//!
+//! All `create_*` methods use `IF NOT EXISTS` (or catch "already exists" errors)
+//! so that re-running provisioning on an already-provisioned environment is a
+//! no-op. `alter_cluster` is the exception — it always applies the requested
+//! configuration, which may be a no-op if options haven't changed.
 
 use crate::client::connection::ProvisioningClient;
 use crate::client::errors::ConnectionError;

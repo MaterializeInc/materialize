@@ -2,6 +2,14 @@
 //!
 //! This module contains core AST types that are used by multiple layers (HIR, MIR, etc.)
 //! without creating circular dependencies between those modules.
+//!
+//! **Key Insight:** The project uses separate AST wrapper types per pipeline
+//! layer (raw, typed, planned) rather than a single type with status flags.
+//! This makes illegal states unrepresentable — e.g., a `typed::DatabaseObject`
+//! is guaranteed to have passed validation, while a `raw::DatabaseObject` has
+//! not. The shared types in this module (`Statement`, `DatabaseIdent`, `Cluster`)
+//! are the common vocabulary that all layers use without implying any
+//! validation status.
 
 use mz_sql_parser::ast::*;
 

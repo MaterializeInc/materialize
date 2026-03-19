@@ -3,6 +3,32 @@
 //! Implements the propagation rules documented in the parent module's header.
 //! Each `apply_*` helper corresponds to one or more Datalog rules and is
 //! annotated with the exact rule it encodes.
+//!
+//! ## Algorithm
+//!
+//! 1. **Seed:** Initialize `dirty_stmts` from `changed_stmts` (objects whose
+//!    hashes differ between the old and new snapshots).
+//! 2. **Build indexes:** Pre-compute reverse lookup maps (`DatalogIndexes`)
+//!    from base facts for O(1) rule evaluation.
+//! 3. **Fixed-point loop:** In each iteration, apply all five rule groups in
+//!    a fixed order:
+//!    1. Cluster dirtiness (from changed statements only)
+//!    2. Statement dirtiness from dirty clusters
+//!    3. Dependency propagation (downstream of dirty statements)
+//!    4. Schema dirtiness (from dirty statements, excluding sinks/replacements)
+//!    5. Statement dirtiness from dirty schemas (excluding replacements)
+//! 4. **Termination:** The loop converges when no set (`dirty_stmts`,
+//!    `dirty_clusters`, `dirty_schemas`) grows in an iteration. Convergence
+//!    is guaranteed because all sets are monotonically non-decreasing and
+//!    bounded by the finite project universe.
+//!
+//! ## Rule Application Order
+//!
+//! The ordering within a single iteration matters for convergence speed but
+//! not correctness — the fixed-point semantics guarantee the same result
+//! regardless of order. The chosen order (clusters → stmts-from-clusters →
+//! dependencies → schemas → stmts-from-schemas) maximizes information
+//! propagated per iteration, typically converging in 2–3 rounds.
 
 use super::super::SchemaQualifier;
 use super::super::ast::Cluster;

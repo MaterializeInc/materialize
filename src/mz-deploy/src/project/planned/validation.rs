@@ -3,6 +3,14 @@
 //! These validations check runtime constraints that require the full planned
 //! representation (dependency graph, cluster assignments, etc.) rather than
 //! the per-object checks performed during the typed phase.
+//!
+//! ## Validations
+//!
+//! - **Cluster isolation** ([`validate_cluster_isolation`]): Ensures that
+//!   sources/sinks do not share a cluster with materialized views or indexes.
+//!   During a blue/green swap, **all** objects on a cluster are affected. If
+//!   storage and compute objects share a cluster, an MV update would force
+//!   source recreation — an expensive and disruptive operation.
 
 use super::super::ast::Statement;
 use super::types::Project;

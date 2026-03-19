@@ -3,6 +3,36 @@
 //! Resolves `:foo`, `:'foo'`, and `:"foo"` syntax in raw SQL text before
 //! it reaches the SQL parser. Variables are defined per-profile in
 //! `[profiles.<name>.variables]` in `project.toml`.
+//!
+//! ## Variable Syntax
+//!
+//! | Syntax | Semantics | Example output |
+//! |--------|-----------|----------------|
+//! | `:name` | Raw substitution — value inserted verbatim | `analytics` |
+//! | `:'name'` | SQL literal — value wrapped in single quotes, `'` doubled | `'it''s-a-host'` |
+//! | `:"name"` | SQL identifier — value wrapped in double quotes, `"` doubled | `"my""col"` |
+//!
+//! ## Resolution Rules
+//!
+//! 1. Variables are looked up in the `BTreeMap<String, String>` passed to
+//!    [`resolve_variables`]. This map is populated from `project.toml`'s
+//!    `[profiles.<name>.variables]` section.
+//! 2. If a referenced variable has no definition, it is left as-is in the
+//!    output and its name is recorded in `ResolvedSql::unresolved`.
+//! 3. The caller decides whether unresolved variables are errors or warnings
+//!    based on the `PRAGMA WARN_ON_MISSING_VARIABLES;` directive.
+//!
+//! ## Context Awareness
+//!
+//! Variable references are **not** resolved inside:
+//! - Single-quoted string literals (`'...'`)
+//! - Double-quoted identifiers (`"..."`)
+//! - Line comments (`-- ...`)
+//! - Block comments (`/* ... */`), including nested blocks
+//! - Dollar-quoted strings (`$$...$$` or `$tag$...$tag$`)
+//!
+//! The `::` token (PostgreSQL type cast) is never interpreted as a variable
+//! reference.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};

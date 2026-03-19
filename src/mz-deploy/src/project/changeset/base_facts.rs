@@ -2,6 +2,24 @@
 //!
 //! Translates the project's object graph into relational facts consumed by
 //! the Datalog fixed-point computation in [`super::datalog`].
+//!
+//! ## Base Facts
+//!
+//! Each base fact corresponds to a Datalog relation used by the propagation
+//! rules in [`super::datalog`]:
+//!
+//! | Relation | Source | Meaning |
+//! |----------|--------|---------|
+//! | `ObjectInSchema(obj, db, sch)` | Project hierarchy | Object `obj` lives in `db.sch` |
+//! | `DependsOn(child, parent)` | `project.dependency_graph` | `child` references `parent` in its query |
+//! | `StmtUsesCluster(obj, cluster)` | `IN CLUSTER` clause on main CREATE | Object's statement runs on `cluster` |
+//! | `IndexUsesCluster(obj, idx, cluster)` | `IN CLUSTER` clause on CREATE INDEX / constraint | Index/constraint `idx` on `obj` runs on `cluster` |
+//! | `IsSink(obj)` | `Statement::CreateSink` | Object writes to an external system |
+//! | `IsReplacement(obj)` | Schema is in `project.replacement_schemas` | Object uses in-place replacement protocol |
+//!
+//! **Key Insight:** `IndexUsesCluster` treats enforced constraints identically
+//! to indexes — both produce `(object, name, cluster)` tuples — because
+//! constraint companion MVs run on clusters with the same lifecycle semantics.
 
 use super::super::ast::Statement;
 use super::super::object_id::ObjectId;

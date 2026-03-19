@@ -3,13 +3,21 @@
 //! This module contains helper functions used during the conversion from
 //! raw to typed representation to validate various constraints.
 //!
-//! # Submodules
+//! ## Validation Categories
 //!
-//! - [`identifiers`]: Identifier format validation (naming rules)
+//! All validations run during [`super::conversion`]'s `validate_single_variant`.
+//! They are independent — each produces its own error list, and all errors
+//! are aggregated before returning. No validation depends on the output of
+//! another.
+//!
+//! ## Submodules
+//!
+//! - [`identifiers`]: Identifier format validation (naming rules, FQN matching)
 //! - [`clusters`]: Cluster specification validation for indexes, MVs, sinks, sources
-//! - [`references`]: Reference validation for indexes, grants, and comments
+//! - [`references`]: Reference validation for indexes, grants, comments, and constraints
+//! - [`constraints`]: Constraint enforcement validation (enforced constraints need `IN CLUSTER`)
 //! - [`mod_statements`]: Database and schema mod file statement validation
-//! - [`schema_constraints`]: Schema-level structural constraint validation
+//! - [`schema_constraints`]: Schema-level structural constraint validation (no mixed storage/compute)
 
 mod clusters;
 mod constraints;

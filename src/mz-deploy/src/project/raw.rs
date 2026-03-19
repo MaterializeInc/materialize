@@ -227,7 +227,35 @@ pub struct Project {
     pub database_name_map: BTreeMap<String, String>,
 }
 
+/// A file variant to be parsed: either a default or profile-specific override.
+struct VariantTask {
+    file_path: PathBuf,
+    profile: Option<String>,
+}
+
+/// A task describing one object's file variants to be parsed.
+struct ParseTask {
+    db_name: String,
+    schema_name: String,
+    object_name: String,
+    variants: Vec<VariantTask>,
+}
+
 /// Loads and parses a Materialize project from a directory structure.
+///
+/// The loading pipeline is structured as collect → process → reassemble:
+///
+/// 1. **Collect** — Walk the directory tree, gathering metadata about databases,
+///    schemas, and object files into `ParseTask` descriptors. Mod statements
+///    (database.sql, schema.sql) are read and parsed inline during this phase
+///    since they are few and tied to directory structure.
+///
+/// 2. **Process** — Iterate over collected `ParseTask`s, reading each file from
+///    disk and parsing its SQL content. This is the CPU/IO-intensive step that
+///    benefits from parallelization.
+///
+/// 3. **Reassemble** — Group the parsed results back into the hierarchical
+///    `Project` → `Database` → `Schema` → `DatabaseObject` structure.
 pub fn load_project<P: AsRef<Path>>(
     root: P,
     profile: &str,
@@ -255,10 +283,22 @@ pub fn load_project<P: AsRef<Path>>(
         return Err(LoadError::ModelsNotFound { path: models_dir }.into());
     }
 
-    let mut databases = BTreeMap::new();
-    let mut database_name_map = BTreeMap::new();
+    // ── Step 1: Collect ─────────────────────────────────────────────────
+    // Walk directories, collect ParseTasks with file paths + metadata.
+    // Mod statements are parsed inline since they are few.
 
-    // Iterate over database directories (first level inside models/)
+    let mut database_name_map = BTreeMap::new();
+    let mut parse_tasks = Vec::new();
+
+    // Per-database metadata collected during the walk
+    struct DbMeta {
+        db_name: String,
+        mod_statements: Option<Vec<Statement<Raw>>>,
+        /// Per-schema metadata: (schema_name, mod_statements)
+        schemas: BTreeMap<String, Option<Vec<Statement<Raw>>>>,
+    }
+    let mut db_metas: BTreeMap<String, DbMeta> = BTreeMap::new();
+
     for db_entry in fs::read_dir(&models_dir).map_err(|source| LoadError::DirectoryReadFailed {
         path: models_dir.to_path_buf(),
         source,
@@ -284,9 +324,7 @@ pub fn load_project<P: AsRef<Path>>(
             database_name_map.insert(original_db_name.clone(), db_name.clone());
         }
 
-        let mut schemas = BTreeMap::new();
-
-        // Check for database-level sibling .sql file (e.g., materialize.sql next to materialize/)
+        // Parse database-level sibling .sql file inline
         let db_mod_path = models_dir.join(format!("{}.sql", original_db_name));
         let db_mod_statements = if db_mod_path.exists() {
             let mut sql_content =
@@ -306,7 +344,9 @@ pub fn load_project<P: AsRef<Path>>(
             None
         };
 
-        // Iterate over schema directories (second level)
+        let mut schema_metas = BTreeMap::new();
+
+        // Walk schema directories
         for schema_entry in
             fs::read_dir(&db_path).map_err(|source| LoadError::DirectoryReadFailed {
                 path: db_path.clone(),
@@ -319,16 +359,14 @@ pub fn load_project<P: AsRef<Path>>(
             })?;
             let schema_path = schema_entry.path();
 
-            // Skip non-directories, hidden directories, and .sql files (schema-level .sql files are handled separately)
             if !schema_path.is_dir() || schema_entry.file_name().to_string_lossy().starts_with('.')
             {
                 continue;
             }
 
             let schema_name = schema_entry.file_name().to_string_lossy().to_string();
-            let mut objects = Vec::new();
 
-            // Check for schema-level sibling .sql file (e.g., public.sql next to public/)
+            // Parse schema-level sibling .sql file inline
             let schema_mod_path = db_path.join(format!("{}.sql", schema_name));
             let schema_mod_statements = if schema_mod_path.exists() {
                 let mut sql_content = fs::read_to_string(&schema_mod_path).map_err(|source| {
@@ -349,67 +387,119 @@ pub fn load_project<P: AsRef<Path>>(
                 None
             };
 
-            // Collect all SQL files grouped by object name (all profile variants)
+            schema_metas.insert(schema_name.clone(), schema_mod_statements);
+
+            // Collect object file paths as ParseTasks
             let all_files = collect_all_sql_files(&schema_path)?;
-
             for object_files in all_files {
-                let mut variants = Vec::new();
+                let mut variant_tasks = Vec::new();
 
-                // Parse the default file if it exists
                 if let Some(ref default_path) = object_files.default {
-                    let sql_content = fs::read_to_string(default_path).map_err(|source| {
-                        LoadError::FileReadFailed {
-                            path: default_path.clone(),
-                            source,
-                        }
-                    })?;
-                    let statements = parse_statements_with_context(
-                        &sql_content,
-                        default_path.clone(),
-                        variables,
-                    )?;
-                    variants.push(ObjectVariant {
-                        path: default_path.clone(),
+                    variant_tasks.push(VariantTask {
+                        file_path: default_path.clone(),
                         profile: None,
-                        statements,
                     });
                 }
 
-                // Parse all profile override files
                 for (prof, override_path) in &object_files.overrides {
-                    let sql_content = fs::read_to_string(override_path).map_err(|source| {
-                        LoadError::FileReadFailed {
-                            path: override_path.clone(),
-                            source,
-                        }
-                    })?;
-                    let statements = parse_statements_with_context(
-                        &sql_content,
-                        override_path.clone(),
-                        variables,
-                    )?;
-                    variants.push(ObjectVariant {
-                        path: override_path.clone(),
+                    variant_tasks.push(VariantTask {
+                        file_path: override_path.clone(),
                         profile: Some(prof.clone()),
-                        statements,
                     });
                 }
 
-                objects.push(DatabaseObject {
-                    name: object_files.name,
-                    database: db_name.clone(),
-                    schema: schema_name.clone(),
-                    variants,
+                parse_tasks.push(ParseTask {
+                    db_name: db_name.clone(),
+                    schema_name: schema_name.clone(),
+                    object_name: object_files.name,
+                    variants: variant_tasks,
                 });
             }
+        }
+
+        db_metas.insert(
+            db_name.clone(),
+            DbMeta {
+                db_name,
+                mod_statements: db_mod_statements,
+                schemas: schema_metas,
+            },
+        );
+    }
+
+    // ── Step 2: Process ─────────────────────────────────────────────────
+    // Read and parse each object file. Fail-fast on first error.
+
+    struct ParsedObject {
+        db_name: String,
+        schema_name: String,
+        object_name: String,
+        variants: Vec<ObjectVariant>,
+    }
+
+    let parsed_objects: Vec<ParsedObject> = parse_tasks
+        .into_iter()
+        .map(|task| {
+            let mut variants = Vec::new();
+            for vt in task.variants {
+                let sql_content =
+                    fs::read_to_string(&vt.file_path).map_err(|source| LoadError::FileReadFailed {
+                        path: vt.file_path.clone(),
+                        source,
+                    })?;
+                let statements = parse_statements_with_context(
+                    &sql_content,
+                    vt.file_path.clone(),
+                    variables,
+                )?;
+                variants.push(ObjectVariant {
+                    path: vt.file_path,
+                    profile: vt.profile,
+                    statements,
+                });
+            }
+            Ok(ParsedObject {
+                db_name: task.db_name,
+                schema_name: task.schema_name,
+                object_name: task.object_name,
+                variants,
+            })
+        })
+        .collect::<Result<Vec<_>, ProjectError>>()?;
+
+    // ── Step 3: Reassemble ──────────────────────────────────────────────
+    // Group parsed objects back into the hierarchical Project structure.
+
+    // Group objects by (db_name, schema_name)
+    let mut schema_objects: BTreeMap<(String, String), Vec<DatabaseObject>> = BTreeMap::new();
+    for parsed in parsed_objects {
+        schema_objects
+            .entry((parsed.db_name.clone(), parsed.schema_name.clone()))
+            .or_default()
+            .push(DatabaseObject {
+                name: parsed.object_name,
+                database: parsed.db_name,
+                schema: parsed.schema_name,
+                variants: parsed.variants,
+            });
+    }
+
+    let mut databases = BTreeMap::new();
+    for (_, meta) in db_metas {
+        let mut schemas = BTreeMap::new();
+
+        for (schema_name, schema_mod_statements) in &meta.schemas {
+            let objects = schema_objects
+                .remove(&(meta.db_name.clone(), schema_name.clone()))
+                .unwrap_or_default();
 
             // Only add schema if it has objects or mod statements
             if !objects.is_empty() || schema_mod_statements.is_some() {
                 schemas.insert(
                     schema_name.clone(),
                     Schema {
-                        name: schema_name,
-                        mod_statements: schema_mod_statements,
+                        name: schema_name.clone(),
+                        mod_statements: schema_mod_statements.clone(),
                         objects,
                     },
                 );
@@ -417,12 +507,12 @@ pub fn load_project<P: AsRef<Path>>(
         }
 
         // Only add database if it has schemas or mod statements
-        if !schemas.is_empty() || db_mod_statements.is_some() {
+        if !schemas.is_empty() || meta.mod_statements.is_some() {
             databases.insert(
-                db_name.clone(),
+                meta.db_name.clone(),
                 Database {
-                    name: db_name,
-                    mod_statements: db_mod_statements,
+                    name: meta.db_name,
+                    mod_statements: meta.mod_statements,
                     schemas,
                 },
             );

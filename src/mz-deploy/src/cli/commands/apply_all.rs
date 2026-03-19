@@ -1,6 +1,14 @@
 //! Apply-all orchestrator — runs all infrastructure apply steps in dependency order.
 //!
 //! Dependency order: clusters → roles → network policies → secrets → connections → sources → tables.
+//!
+//! **Key Insight:** The ordering ensures referential integrity — clusters must
+//! exist before MVs can reference them, connections must exist before sources
+//! and sinks can use them, and sources must exist before `CREATE TABLE FROM
+//! SOURCE` can reference them. On partial failure, objects created in earlier
+//! phases remain in place (all operations are idempotent) and re-running
+//! `apply-all` will skip already-existing objects and retry only the failed
+//! phase onward.
 
 use crate::cli::CliError;
 use crate::cli::executor::{ApplyPlan, DeploymentExecutor};
