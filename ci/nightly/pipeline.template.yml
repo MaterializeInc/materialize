@@ -537,8 +537,9 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: upsert-panic-repro
+        parallelism: 10
         agents:
-          queue: hetzner-x86-64-16cpu-32gb
+          queue: hetzner-x86-64-dedi-48cpu-192gb
 
   - id: ssh-connection-extended
     label: Extended SSH connection

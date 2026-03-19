@@ -257,6 +257,8 @@ where
                                     ?upper,
                                     "received persist progress");
                                 persist_upper = upper;
+
+                                fail::fail_point!("upsert_post_persist_progress_delay");
                             }
                         }
                     }

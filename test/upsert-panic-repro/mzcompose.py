@@ -53,6 +53,11 @@ SERVICES = [
     Materialized(
         sanity_restart=False,
         system_parameter_defaults=SYSTEM_PARAMS,
+        environment_extra=[
+            # Slow persist feedback processing so the correction -1
+            # arrives AFTER the corrupt diff_sum=2 SST is read by drain.
+            "FAILPOINTS=upsert_post_persist_progress_delay=sleep(500)",
+        ],
         metadata_store="cockroach",
         default_replication_factor=2,
     ),
@@ -89,7 +94,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--parallelism", type=int, default=25)
     parser.add_argument("--seed", type=int, default=None)
     # How many cycles between DROP/CREATE REPLICA
-    parser.add_argument("--replica-cycle", type=int, default=5)
+    parser.add_argument("--replica-cycle", type=int, default=10)
     args = parser.parse_args()
 
     seed = args.seed if args.seed is not None else random.randint(0, 2**31)
@@ -99,12 +104,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     n = args.num_sources
     end_time = datetime.now() + timedelta(seconds=args.runtime)
 
-    # Favor higher partition counts — more partitions = more concurrent
-    # Kafka consumers = more timing variability in message delivery
-    partitions = [random.choice([4, 8, 16, 32]) for _ in range(n)]
-    workers = random.choice([1, 2, 4, 8, 16])
+    # High partition counts + many workers = more timing variability.
+    # workers=16 is what triggered the first reproduction.
+    partitions = [random.choice([8, 16, 32]) for _ in range(n)]
+    workers = 16
     replication_factor = 1
-    num_pump_threads = random.choice([2, 4, 8])
+    num_pump_threads = 8
 
     print(
         f"Config: {n} sources, workers={workers}, rf={replication_factor}, "
@@ -295,7 +300,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     pass
 
             # Pump keeps running — data flows into Kafka while replicas are gone
-            time.sleep(random.uniform(1.0, 3.0))
+            time.sleep(random.uniform(0.5, 1.5))
 
             # Recreate replicas — triggers rehydration of all sources
             # while background pump keeps injecting data
