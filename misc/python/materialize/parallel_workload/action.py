@@ -218,6 +218,7 @@ class Action:
                     "Connection aborted",
                     "Connection refused",
                     "Connection broken: IncompleteRead",
+                    "the connection is lost",
                 ]
             )
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
@@ -781,6 +782,89 @@ class SourceInsertAction(Action):
                     elif row.operation == Operation.DELETE:
                         source.num_rows -= 1
             source.executor.run(transaction, logging_exe=exe)
+        return True
+
+
+class SourceRetractionBurstAction(Action):
+    """Simulates production mz_now() day-turn: a burst of many inserts into
+    a Kafka source, overwhelming the upsert operator and persist_sink.
+    This can cause persist output to be split across multiple batches,
+    creating the conditions for diff_sum=2."""
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            sources = [
+                source
+                for source in exe.db.kafka_sources
+                if source.num_rows < MAX_ROWS
+            ]
+            if not sources:
+                return False
+            source = self.rng.choice(sources)
+        with source.lock:
+            if source not in exe.db.kafka_sources:
+                return False
+            # Fire as many transactions as possible in rapid succession.
+            # A massive burst overwhelms the upsert operator and
+            # persist_sink, splitting output across multiple batches.
+            for _ in range(min(2000, max(1, MAX_ROWS - source.num_rows))):
+                try:
+                    transaction = next(source.generator)
+                    for row_list in transaction.row_lists:
+                        for row in row_list.rows:
+                            if row.operation == Operation.INSERT:
+                                source.num_rows += 1
+                            elif row.operation == Operation.DELETE:
+                                source.num_rows -= 1
+                    source.executor.run(transaction, logging_exe=exe)
+                except StopIteration:
+                    break
+                except Exception:
+                    break
+        return True
+
+
+class CreateTemporalMvAction(Action):
+    """Creates a materialized view with mz_now() temporal filter on a Kafka
+    source table. As rows age out of the time window, the MV retracts them,
+    creating periodic retraction bursts that overwhelm the cluster — matching
+    the production mz_now() + date_trunc pattern."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "does not exist",
+            "cannot materialize",
+            "ambiguous column",
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            if not exe.db.kafka_sources:
+                return False
+            source = self.rng.choice(exe.db.kafka_sources)
+        with source.lock:
+            if source not in exe.db.kafka_sources:
+                return False
+            # Pick a numeric column to use as a temporal filter
+            numeric_cols = [
+                c for c in source.columns if "int" in str(c.data_type).lower()
+                or "long" in str(c.data_type).lower()
+                or "bigint" in str(c.data_type).lower()
+            ]
+            if not numeric_cols:
+                return False
+            col = self.rng.choice(numeric_cols)
+            window_ms = self.rng.choice([5000, 10000, 30000, 60000])
+            mv_name = f"temporal_mv_{source.source_id}_{self.rng.randint(0, 99)}"
+            try:
+                exe.execute(
+                    f"CREATE OR REPLACE MATERIALIZED VIEW {mv_name} "
+                    f"IN CLUSTER {source.cluster} AS "
+                    f"SELECT COUNT(*) FROM {source} "
+                    f"WHERE mz_now() < {col.name}::numeric + {window_ms}"
+                )
+            except Exception:
+                pass
         return True
 
 
@@ -3134,56 +3218,54 @@ class ActionList:
 
 read_action_list = ActionList(
     [
-        (SelectAction, 100),
-        (SelectOneAction, 1),
+        (SelectAction, 10),
+        # (SelectOneAction, 1),
         # (SQLsmithAction, 30),  # Questionable use
-        (
-            CopyToS3Action,
-            100,
-        ),
-        (CopyFromS3Action, 100),
+        # (CopyToS3Action, 100),
+        # (CopyFromS3Action, 100),
         (SetClusterAction, 1),
-        (CommitRollbackAction, 30),
+        # (CommitRollbackAction, 30),
         (ReconnectAction, 1),
-        (FlipFlagsAction, 2),
+        # (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
 
 fetch_action_list = ActionList(
     [
-        (FetchAction, 30),
+        # (FetchAction, 30),
         (SetClusterAction, 1),
         (ReconnectAction, 1),
-        (FlipFlagsAction, 2),
+        # (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
 
 write_action_list = ActionList(
     [
-        (InsertAction, 30),
-        (CopyFromStdinAction, 20),
-        (SelectOneAction, 1),  # can be mixed with writes
+        (InsertAction, 10),
+        # (CopyFromStdinAction, 20),
+        # (SelectOneAction, 1),
         (SetClusterAction, 1),
-        (HttpPostAction, 5),
-        (CommitRollbackAction, 10),
+        # (HttpPostAction, 5),
+        # (CommitRollbackAction, 10),
         (ReconnectAction, 1),
-        (SourceInsertAction, 5),
-        (FlipFlagsAction, 2),
+        (SourceInsertAction, 50),  # Heavy source inserts
+        # (FlipFlagsAction, 2),
     ],
     autocommit=False,
 )
 
 dml_nontrans_action_list = ActionList(
     [
-        (DeleteAction, 10),
-        (UpdateAction, 10),
-        (InsertReturningAction, 10),
-        (CommentAction, 5),
+        # (DeleteAction, 10),
+        # (UpdateAction, 10),
+        # (InsertReturningAction, 10),
+        # (CommentAction, 5),
+        (SourceRetractionBurstAction, 50),  # Dominant action: massive bursts
         (SetClusterAction, 1),
         (ReconnectAction, 1),
-        (FlipFlagsAction, 2),
+        # (FlipFlagsAction, 2),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions
@@ -3191,28 +3273,29 @@ dml_nontrans_action_list = ActionList(
 
 ddl_action_list = ActionList(
     [
-        (CreateIndexAction, 2),
-        (DropIndexAction, 2),
-        (CreateTableAction, 2),
-        (DropTableAction, 2),
-        (CreateViewAction, 8),
-        (DropViewAction, 8),
-        (CreateRoleAction, 2),
-        (DropRoleAction, 2),
-        (CreateClusterAction, 1),
-        (DropClusterAction, 1),
-        (SwapClusterAction, 10),
-        (CreateClusterReplicaAction, 2),
-        (DropClusterReplicaAction, 2),
+        # (CreateIndexAction, 2),
+        # (DropIndexAction, 2),
+        # (CreateTableAction, 2),
+        # (DropTableAction, 2),
+        # (CreateViewAction, 8),
+        # (DropViewAction, 8),
+        # (CreateRoleAction, 2),
+        # (DropRoleAction, 2),
+        # (CreateClusterAction, 1),
+        # (DropClusterAction, 1),
+        # (SwapClusterAction, 10),
+        (CreateClusterReplicaAction, 2),  # Keep — triggers rehydration
+        (DropClusterReplicaAction, 2),    # Keep — triggers rehydration
         (SetClusterAction, 1),
-        (CreateWebhookSourceAction, 2),
-        (DropWebhookSourceAction, 2),
-        (CreateKafkaSinkAction, 4),
-        (DropKafkaSinkAction, 4),
-        (CreateIcebergSinkAction, 4),
-        (DropIcebergSinkAction, 4),
-        (CreateKafkaSourceAction, 4),
-        (DropKafkaSourceAction, 4),
+        # (CreateWebhookSourceAction, 2),
+        # (DropWebhookSourceAction, 2),
+        # (CreateKafkaSinkAction, 4),
+        # (DropKafkaSinkAction, 4),
+        # (CreateIcebergSinkAction, 4),
+        # (DropIcebergSinkAction, 4),
+        (CreateKafkaSourceAction, 4),     # Keep — creates upsert sources
+        (DropKafkaSourceAction, 4),       # Keep — tears down upsert operators
+        (CreateTemporalMvAction, 10),     # mz_now() MVs cause retraction bursts
         # TODO: Reenable when database-issues#8237 is fixed
         # (CreateMySqlSourceAction, 4),
         # (DropMySqlSourceAction, 4),

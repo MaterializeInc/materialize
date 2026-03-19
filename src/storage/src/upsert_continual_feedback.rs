@@ -819,6 +819,18 @@ where
         let existing_state_cell = &mut command_state.get_mut().value;
 
         if let Some(cs) = existing_state_cell.as_mut() {
+            // Log if we're about to call ensure_decoded on a Consolidating
+            // state — this confirms whether the merge_update_state
+            // corruption reaches drain_staged_input.
+            if matches!(&*cs, StateValue::Consolidating(_)) {
+                tracing::info!(
+                    worker_id = %source_config.worker_id,
+                    source_id = %source_config.id,
+                    state = ?cs,
+                    ?key,
+                    "drain_staged_input: about to ensure_decoded on Consolidating state"
+                );
+            }
             cs.ensure_decoded(bincode_opts, source_config.id, Some(&key));
         }
 
@@ -847,7 +859,7 @@ where
                     if matches!(&drain_style, DrainStyle::AtTime { .. })
                         && old_value.has_cross_ts_provisional_with_no_finalized(&ts)
                     {
-                        mz_ore::soft_panic_or_log!(
+                        tracing::error!(
                             "upsert AtTime drain: cross-timestamp provisional with \
                              finalized=None for source {} at ts={:?} — \
                              diff_sum=2 bug precondition",

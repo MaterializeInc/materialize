@@ -237,3 +237,4 @@ def toxiproxy_start(c: Composition, external: bool) -> None:
         },
     )
     assert r.status_code == 200, r
+
