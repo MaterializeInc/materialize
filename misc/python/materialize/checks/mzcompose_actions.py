@@ -369,12 +369,15 @@ class DropCreateDefaultReplica(MzcomposeAction):
 class WaitReadyMz(MzcomposeAction):
     """Wait until environmentd is ready, see https://github.com/MaterializeInc/cloud/blob/main/doc/design/20230418_upgrade_orchestration.md#get-apileaderstatus"""
 
-    def __init__(self, mz_service: str = "materialized") -> None:
+    def __init__(
+        self, mz_service: str = "materialized", timeout: int | None = None
+    ) -> None:
         self.mz_service = mz_service
+        self.timeout = timeout
 
     def execute(self, e: Executor) -> None:
         e.mzcompose_composition().await_mz_deployment_status(
-            DeploymentStatus.READY_TO_PROMOTE, self.mz_service
+            DeploymentStatus.READY_TO_PROMOTE, self.mz_service, timeout=self.timeout
         )
 
 
