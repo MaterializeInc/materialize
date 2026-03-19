@@ -812,6 +812,10 @@ impl Coordinator {
                 }
             };
 
+            // Auto-provision roles with the LOGIN attribute to distinguish
+            // them as users.
+            attributes.login = Some(true);
+
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,

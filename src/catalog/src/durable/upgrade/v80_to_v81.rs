@@ -63,11 +63,13 @@ pub fn upgrade(
         // `admin`, `prod_app`) almost certainly are not named to look like email
         // addresses.
         let email_regex_heuristic = Regex::new(r".+@.+\..+", true).expect("valid regex");
-        let auto_provision_source = if email_regex_heuristic.is_match(&role.value.name.clone()) {
-            Some(v81::AutoProvisionSource::Frontegg)
-        } else {
-            None
-        };
+        let (login, auto_provision_source) =
+            if email_regex_heuristic.is_match(&role.value.name.clone()) {
+                // Set login to true to differentiate users from other roles.
+                (Some(true), Some(v81::AutoProvisionSource::Frontegg))
+            } else {
+                (Some(false), None)
+            };
 
         let new_role = v81::StateUpdateKind::Role(v81::Role {
             key: JsonCompatible::convert(&role.key),
@@ -76,7 +78,7 @@ pub fn upgrade(
                 attributes: v81::RoleAttributes {
                     inherit: role.value.attributes.inherit,
                     superuser: role.value.attributes.superuser,
-                    login: role.value.attributes.login,
+                    login,
                     auto_provision_source,
                 },
                 membership: JsonCompatible::convert(&role.value.membership),
@@ -174,6 +176,7 @@ mod tests {
             user_role.value.attributes.auto_provision_source,
             Some(v81::AutoProvisionSource::Frontegg)
         );
+        assert_eq!(user_role.value.attributes.login, Some(true));
 
         let MigrationAction::Update(_, manually_created_role_action) = &migrations[1] else {
             panic!();
@@ -185,6 +188,8 @@ mod tests {
             manually_created_role.value.attributes.auto_provision_source,
             None
         );
+
+        assert_eq!(manually_created_role.value.attributes.login, Some(false));
     }
 
     #[mz_ore::test]

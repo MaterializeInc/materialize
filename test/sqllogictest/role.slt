@@ -60,9 +60,6 @@ COMPLETE 0
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
-statement error SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
-CREATE ROLE foo LOGIN
-
 simple
 CREATE ROLE foo SUPERUSER
 ----
@@ -179,10 +176,28 @@ CREATE ROLE mz_foo
 statement ok
 CREATE ROLE foo
 
+query TBB rowsort
+SELECT name, inherit, rolcanlogin FROM mz_roles WHERE name = 'foo'
+----
+foo true false
+
+# Verify ALTER ROLE ... WITH LOGIN attribute
+statement ok
+ALTER ROLE foo WITH LOGIN
+
 query TB rowsort
-SELECT name, inherit FROM mz_roles WHERE name = 'foo'
+SELECT name, rolcanlogin FROM mz_roles WHERE name = 'foo'
 ----
 foo true
+
+# Verify ALTER ROLE ... WITH NOLOGIN attribute
+statement ok
+ALTER ROLE foo WITH NOLOGIN
+
+query TB rowsort
+SELECT name, rolcanlogin FROM mz_roles WHERE name = 'foo'
+----
+foo false
 
 statement error non inherit roles not yet supported
 ALTER ROLE foo NOINHERIT
@@ -320,7 +335,7 @@ COMPLETE 0
 simple conn=mz_system,user=mz_system
 SELECT rolsuper, rolcanlogin FROM mz_roles WHERE name = 'password_user'
 ----
-f,t
+NULL,t
 COMPLETE 1
 
 simple conn=mz_system,user=mz_system
