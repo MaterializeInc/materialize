@@ -1393,14 +1393,16 @@ class ConsoleResources(Modification):
             }
 
         def check_pods() -> None:
-            console = get_console_data()["items"][0]
+            console_data = get_console_data()
+            assert console_data["items"], "No console pods found, expected at least one"
+            console = console_data["items"][0]
 
             resources = console["spec"]["containers"][0]["resources"]
             assert (
                 resources == expected
             ), f"Expected console resources {expected}, but got {resources}"
 
-        retry(check_pods, 240)
+        retry(check_pods, 360)
 
 
 class AuthenticatorKind(Modification):
@@ -1634,6 +1636,7 @@ def workflow_documentation_defaults(
 
     # Following https://materialize.com/docs/installation/install-on-local-kind/
     # orchestratord test can't run against future versions, so ignore those
+    # Pre-v26 versions don't have balancerd/console images on Docker Hub
     versions = buildkite.shard_list(
         list(
             reversed(
@@ -1641,6 +1644,7 @@ def workflow_documentation_defaults(
                     version
                     for version in get_self_managed_versions()
                     if version < current_version
+                    and version >= MzVersion.parse_mz("v26.0.0")
                 ]
                 + [current_version]
             )
@@ -2726,7 +2730,14 @@ def helm_install_operator(
 def init(definition: dict[str, Any]) -> None:
     try:
         spawn.capture(
-            ["kubectl", "delete", "namespace", "materialize-environment"],
+            [
+                "kubectl",
+                "delete",
+                "namespace",
+                "materialize-environment",
+                "--wait=true",
+                "--timeout=120s",
+            ],
             stderr=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError:
