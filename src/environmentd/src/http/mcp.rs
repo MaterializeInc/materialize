@@ -695,10 +695,8 @@ async fn read_data_product(
             name,
             clamped_limit,
         ),
-        None => format!(
-            "BEGIN READ ONLY; SELECT * FROM {} LIMIT {}; COMMIT;",
-            name, clamped_limit,
-        ),
+        // Single statement — skip explicit transaction for better performance.
+        None => format!("SELECT * FROM {} LIMIT {}", name, clamped_limit),
     };
 
     let rows = execute_sql(client, &read_query).await?;
