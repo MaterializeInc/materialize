@@ -138,7 +138,7 @@ pub(super) async fn handle_query_event(
             let schema_errors = verify_schemas(&mut *conn, expected).await?;
             is_complete_event = true;
             for (dropped_output, err) in schema_errors {
-                trace!(%id, "timely-{worker_id} DDL change \
+                tracing::info!(%id, "timely-{worker_id} DDL change \
                            dropped output: {dropped_output:?}: {err:?}");
                 let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                 ctx.data_output
