@@ -13,6 +13,7 @@
 use std::cmp::Reverse;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Duration;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, VecCollection};
@@ -221,12 +222,16 @@ where
 
         // A buffer for our output.
         let mut output_updates = vec![];
+        let mut emitted_source_updates = false;
+        let mut slept_after_progress_with_output = false;
 
         let mut error_emitter = (&mut health_output, &health_cap);
 
         loop {
             tokio::select! {
                 _ = persist_input.ready() => {
+                    let mut sleep_after_progress_with_output = false;
+
                     // Read away as much input as we can.
                     while let Some(persist_event) = persist_input.next_sync() {
                         match persist_event {
@@ -256,8 +261,32 @@ where
                                     source_id = %source_config.id,
                                     ?upper,
                                     "received persist progress");
+                                if !slept_after_progress_with_output
+                                    && emitted_source_updates
+                                    && persist_stash.is_empty()
+                                    && PartialOrder::less_than(&persist_upper, &upper)
+                                {
+                                    sleep_after_progress_with_output = true;
+                                }
                                 persist_upper = upper;
                             }
+                        }
+                    }
+
+                    if sleep_after_progress_with_output && persist_stash.is_empty() {
+                        let mut sleep = false;
+                        fail::fail_point!("upsert_sleep_after_progress_with_pending", |_| {
+                            sleep = true;
+                        });
+                        if sleep {
+                            slept_after_progress_with_output = true;
+                            tracing::info!(
+                                worker_id = %source_config.worker_id,
+                                source_id = %source_config.id,
+                                ?persist_upper,
+                                "sleeping after persist progress with locally emitted output due to failpoint",
+                            );
+                            tokio::time::sleep(Duration::from_millis(500)).await;
                         }
                     }
 
@@ -512,6 +541,9 @@ where
                     output_updates = %output_updates.len(),
                     "output updates for complete timestamp");
 
+                if !output_updates.is_empty() {
+                    emitted_source_updates = true;
+                }
                 for (update, ts, diff) in output_updates.drain(..) {
                     output_handle.give(cap, (update, ts, diff));
                 }
@@ -576,6 +608,9 @@ where
                         output_updates = %output_updates.len(),
                         "output updates for partial timestamp");
 
+                    if !output_updates.is_empty() {
+                        emitted_source_updates = true;
+                    }
                     for (update, ts, diff) in output_updates.drain(..) {
                         output_handle.give(cap, (update, ts, diff));
                     }

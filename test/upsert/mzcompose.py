@@ -15,6 +15,7 @@ Test Kafka Upsert sources using Testdrive.
 """
 
 import os
+import time
 from textwrap import dedent
 
 from materialize import MZ_ROOT, ci_util
@@ -54,6 +55,7 @@ SERVICES = [
     ),
     Testdrive(),
     Clusterd(name="clusterd1"),
+    Clusterd(name="clusterd2"),
     Redpanda(),
 ]
 
@@ -389,6 +391,66 @@ def workflow_incident_49(c: Composition) -> None:
             c.run_testdrive_files("incident-49/02-after-rehydration.td")
 
         c.run_testdrive_files("incident-49/03-reset.td")
+
+
+def workflow_continual_feedback_repro(c: Composition) -> None:
+    """Exercise the stale-state gap between source output and persist feedback."""
+
+    dependencies = [
+        "materialized",
+        "zookeeper",
+        "kafka",
+        "clusterd1",
+        "clusterd2",
+    ]
+
+    with c.override(
+        Materialized(
+            options=[
+                "--orchestrator-process-scratch-directory=/scratch",
+            ],
+            additional_system_parameter_defaults={
+                "min_timestamp_interval": "200ms",
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                "storage_dataflow_delay_sources_past_rehydration": "true",
+                "storage_use_continual_feedback_upsert": "true",
+                "storage_rocksdb_use_merge_operator": "true",
+                "memory_limiter_interval": "0",
+            },
+            environment_extra=materialized_environment_extra,
+            default_replication_factor=2,
+            support_external_clusterd=True,
+        ),
+        Clusterd(
+            name="clusterd1",
+            workers=1,
+            scratch_directory="/scratch/clusterd1",
+            environment_extra=["FAILPOINTS=upsert_sleep_after_progress_with_pending=return"],
+        ),
+        Clusterd(name="clusterd2", workers=1, scratch_directory="/scratch/clusterd2"),
+        Testdrive(no_reset=True, consistent_seed=True),
+    ):
+        c.rm("testdrive")
+        c.down(destroy_volumes=True)
+        c.up(*dependencies)
+
+        c.run_testdrive_files("continual-feedback-repro/00-reset.td")
+        c.run_testdrive_files("continual-feedback-repro/01-setup.td")
+
+        def ingest(records: list[str], pause_s: float) -> None:
+            c.testdrive(
+                "$ kafka-ingest format=bytes topic=continual-feedback-repro key-format=bytes key-terminator=:\n"
+                + "\n".join(records)
+                + "\n"
+            )
+            time.sleep(pause_s)
+
+        ingest(["key0:value0"], 1.0)
+        ingest(["key1:", "key0:value1"], 0.25)
+        ingest(["key0:value2"], 1.0)
+
+        c.run_testdrive_files("continual-feedback-repro/02-verify.td")
+        c.run_testdrive_files("continual-feedback-repro/00-reset.td")
 
 
 def workflow_rocksdb_cleanup(c: Composition) -> None:
