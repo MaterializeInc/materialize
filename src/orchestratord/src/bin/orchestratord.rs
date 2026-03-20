@@ -23,9 +23,11 @@ use k8s_openapi::{
         networking::v1::NetworkPolicy,
         rbac::v1::{Role, RoleBinding},
     },
-    apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition,
+    apiextensions_apiserver::pkg::apis::apiextensions::v1::{
+        CustomResourceColumnDefinition, CustomResourceDefinition,
+    },
 };
-use kube::{Api, runtime::watcher};
+use kube::{Api, api::ListParams, runtime::watcher};
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
 use tracing::info;
@@ -270,6 +272,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     )
     .await?;
 
+    let crd_api: Api<CustomResourceDefinition> = Api::all(client.clone());
+    let crds = crd_api.list(&ListParams::default()).await?;
+    let mut has_cert_manager = crds
+        .iter()
+        .any(|crd| crd.spec.group == "cert-manager.io" && crd.spec.names.kind == "Certificate");
+
     {
         let router = mz_prof_http::router(&BUILD_INFO);
         let address = args.profiling_listen_address.clone();
@@ -386,7 +394,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             watcher::Config::default().timeout(29),
         )
         .with_controller(|controller| {
-            controller
+            let controller = controller
                 .owns(
                     Api::<NetworkPolicy>::all(client.clone()),
                     watcher::Config::default()
@@ -410,13 +418,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     watcher::Config::default()
                         .labels("materialize.cloud/mz-resource-id")
                         .timeout(29),
-                )
-                .owns(
+                );
+            if has_cert_manager {
+                controller.owns(
                     Api::<Certificate>::all(client.clone()),
                     watcher::Config::default()
                         .labels("materialize.cloud/mz-resource-id")
                         .timeout(29),
                 )
+            } else {
+                controller
+            }
         })
         .run(),
     );
@@ -448,7 +460,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             watcher::Config::default().timeout(29),
         )
         .with_controller(|controller| {
-            controller
+            let controller = controller
                 .owns(
                     Api::<Deployment>::all(client.clone()),
                     watcher::Config::default()
@@ -460,13 +472,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     watcher::Config::default()
                         .labels("materialize.cloud/mz-resource-id")
                         .timeout(29),
-                )
-                .owns(
+                );
+            if has_cert_manager {
+                controller.owns(
                     Api::<Certificate>::all(client.clone()),
                     watcher::Config::default()
                         .labels("materialize.cloud/mz-resource-id")
                         .timeout(29),
                 )
+            } else {
+                controller
+            }
         })
         .run(),
     );
@@ -497,7 +513,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             watcher::Config::default().timeout(29),
         )
         .with_controller(|controller| {
-            controller
+            let controller = controller
                 .owns(
                     Api::<Deployment>::all(client.clone()),
                     watcher::Config::default()
@@ -506,12 +522,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 )
                 .owns(
                     Api::<Service>::all(client.clone()),
-                    watcher::Config::default()
-                        .labels("materialize.cloud/mz-resource-id")
-                        .timeout(29),
-                )
-                .owns(
-                    Api::<Certificate>::all(client.clone()),
                     watcher::Config::default()
                         .labels("materialize.cloud/mz-resource-id")
                         .timeout(29),
@@ -527,7 +537,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     watcher::Config::default()
                         .labels("materialize.cloud/mz-resource-id")
                         .timeout(29),
+                );
+            if has_cert_manager {
+                controller.owns(
+                    Api::<Certificate>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
                 )
+            } else {
+                controller
+            }
         })
         .run(),
     );
