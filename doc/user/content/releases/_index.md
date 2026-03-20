@@ -15,6 +15,70 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.16.0
+*Released to Materialize Cloud: 2026-03-19* <br>
+*Released to Materialize Self-Managed: 2026-03-20* <br>
+
+This release adds support for copying Parquet files from object storage, performance improvements, and bug fixes.
+
+### `COPY FROM` Parquet files in object storage
+
+`COPY FROM` now supports bulk importing data from Parquet files stored in Amazon
+S3 and any S3-compatible object storage service, such as Google Cloud Storage,
+Cloudflare R2, or MinIO. You can import Parquet files using an AWS connection or
+a presigned URL.
+
+```mzsql
+COPY INTO my_table
+FROM 's3://my_bucket/my_data.parquet'
+(FORMAT PARQUET, AWS CONNECTION = my_aws_conn);
+```
+
+For more information, refer to:
+- [Syntax: COPY FROM](/sql/copy-from/)
+- [Syntax: CREATE CONNECTION (S3-compatible)](/sql/create-connection/#s3-compatible-object-storage)
+
+### Improvements {#v26.16-improvements}
+
+- **Improved [`AS OF`](/sql/subscribe/#as-of) error messages**: Error messages
+  for `AS OF` queries now use user-facing terminology (e.g., "Indexed
+  input", "Storage inputs") instead of internal names.
+- **Streamed [WebSocket](/integrations/websocket-api/) query results**:
+  WebSocket query results are now streamed directly instead of buffered,
+  reducing memory usage for large result sets.
+
+### Bug Fixes {#v26.16-bug-fixes}
+
+- Fixed an RBAC security bypass that allowed a non-superuser with
+  `CREATEROLE` privilege to strip superuser status from any role via
+  `ALTER ROLE ... NOSUPERUSER`.
+- Fixed indexes on older versions of altered tables or replaced
+  materialized views being lost during environment bootstrap, which
+  could cause panics.
+- Fixed pgwire encoding errors leaving partial messages in the connection
+  buffer, which caused clients to see "lost synchronization" errors
+  instead of proper error messages.
+- Fixed unbounded queue growth in storage since-downgrade processing that
+  could lead to out-of-memory conditions in environments with many
+  storage collections.
+- Fixed a correctness bug when parsing large Avro fixed-size decimals
+  from Kafka sources, where values were returned as raw bytes instead of
+  decoded decimal numbers.
+- Fixed subqueries being incorrectly allowed in the `SET` clause of
+  `UPDATE` statements.
+- Fixed `COPY FROM S3` requiring manual column specification for tables
+  with `NOT NULL` columns by removing a redundant non-null check during
+  planning.
+- Fixed a correctness issue with `COPY FROM STDIN` when using headers.
+- Fixed column name deduplication bug in `COPY TO` / Parquet writer that
+  could produce duplicate column names.
+- Fixed `RETAIN HISTORY` value being ignored for webhook tables.
+- Fixed `DROP OWNED BY` and `REASSIGN OWNED BY` not including network
+  policies, which could block `DROP ROLE` for roles that own network
+  policies.
+- Fixed false positive wallclock lag reporting (showing ~56 years of lag)
+  during replica startup for compute introspection indexes.
+
 ## v26.15.0
 *Released to Materialize Cloud: 2026-03-12* <br>
 *Released to Materialize Self-Managed: 2026-03-13* <br>
