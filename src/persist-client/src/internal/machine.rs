@@ -47,7 +47,6 @@ use crate::internal::paths::PartialRollupKey;
 use crate::internal::state::{
     CompareAndAppendBreak, CriticalReaderState, HandleDebugState, HollowBatch, HollowRollup,
     IdempotencyToken, LeasedReaderState, NoOpStateTransition, Since, SnapshotErr, StateCollections,
-    Upper,
 };
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
@@ -800,132 +799,34 @@ where
         Ok(maintenance)
     }
 
-    pub async fn snapshot(&self, as_of: &Antichain<T>) -> Result<Vec<HollowBatch<T>>, Since<T>> {
-        let start = Instant::now();
-        let (mut seqno, mut upper) = match self.applier.snapshot(as_of) {
-            Ok(x) => return Ok(x),
-            Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => (seqno, upper),
-            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                return Err(Since(since));
-            }
-        };
-
-        // The latest state still couldn't serve this as_of: watch+sleep in a
-        // loop until it's ready.
-        let mut watch = self.applier.watch();
-        let watch = &mut watch;
-        let sleeps = self
-            .applier
-            .metrics
-            .retries
-            .snapshot
-            .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
-
-        enum Wake<'a, K, V, T, D> {
-            Watch(&'a mut StateWatch<K, V, T, D>),
-            Sleep(MetricsRetryStream),
+    /// Fetch a snapshot at the frontier without taking a lease on it. This may be useful for stats
+    /// or testing, but most callers will wish to wait for the frontier to advance and obtain the
+    /// snapshot separately.
+    pub async fn unleased_snapshot(
+        &self,
+        as_of: &Antichain<T>,
+    ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
+        if let Ok(data) = self.applier.snapshot(as_of) {
+            return Ok(data);
         }
-        let mut watch_fut = std::pin::pin!(
-            watch
-                .wait_for_seqno_ge(seqno.next())
-                .map(Wake::Watch)
-                .instrument(trace_span!("snapshot::watch")),
-        );
-        let mut sleep_fut = std::pin::pin!(
-            sleeps
-                .sleep()
-                .map(Wake::Sleep)
-                .instrument(trace_span!("snapshot::sleep")),
-        );
-
-        // To reduce log spam, we log "not yet available" only once at info if
-        // it passes a certain threshold. Then, if it did one info log, we log
-        // again at info when it resolves.
-        let mut logged_at_info = false;
-        loop {
-            // Use a duration based threshold here instead of the usual
-            // INFO_MIN_ATTEMPTS because here we're waiting on an
-            // external thing to arrive.
-            if !logged_at_info && start.elapsed() >= Duration::from_millis(1024) {
-                logged_at_info = true;
-                info!(
-                    "snapshot {} {} as of {:?} not yet available for {} upper {:?}",
-                    self.applier.shard_metrics.name,
-                    self.shard_id(),
-                    as_of.elements(),
-                    seqno,
-                    upper.elements(),
-                );
-            } else {
-                debug!(
-                    "snapshot {} {} as of {:?} not yet available for {} upper {:?}",
-                    self.applier.shard_metrics.name,
-                    self.shard_id(),
-                    as_of.elements(),
-                    seqno,
-                    upper.elements(),
-                );
-            }
-
-            let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
-                future::Either::Left((wake, _)) => wake,
-                future::Either::Right((wake, _)) => wake,
-            };
-            // Note that we don't need to fetch in the Watch case, because the
-            // Watch wakeup is a signal that the shared state has already been
-            // updated.
-            match &wake {
-                Wake::Watch(_) => self.applier.metrics.watch.snapshot_woken_via_watch.inc(),
-                Wake::Sleep(_) => {
-                    self.applier.metrics.watch.snapshot_woken_via_sleep.inc();
-                    self.applier.fetch_and_update_state(Some(seqno)).await;
-                }
-            }
-
-            (seqno, upper) = match self.applier.snapshot(as_of) {
-                Ok(x) => {
-                    if logged_at_info {
-                        info!(
-                            "snapshot {} {} as of {:?} now available",
-                            self.applier.shard_metrics.name,
-                            self.shard_id(),
-                            as_of.elements(),
-                        );
-                    }
-                    return Ok(x);
-                }
-                Err(SnapshotErr::AsOfNotYetAvailable(seqno, Upper(upper))) => {
-                    // The upper isn't ready yet, fall through and try again.
-                    (seqno, upper)
-                }
-                Err(SnapshotErr::AsOfHistoricalDistinctionsLost(Since(since))) => {
-                    return Err(Since(since));
-                }
-            };
-
-            match wake {
-                Wake::Watch(watch) => {
-                    watch_fut.set(
-                        watch
-                            .wait_for_seqno_ge(seqno.next())
-                            .map(Wake::Watch)
-                            .instrument(trace_span!("snapshot::watch")),
-                    );
-                }
-                Wake::Sleep(sleeps) => {
-                    debug!(
-                        "snapshot {} {} sleeping for {:?}",
-                        self.applier.shard_metrics.name,
-                        self.shard_id(),
-                        sleeps.next_sleep()
-                    );
-                    sleep_fut.set(
-                        sleeps
-                            .sleep()
-                            .map(Wake::Sleep)
-                            .instrument(trace_span!("snapshot::sleep")),
-                    );
-                }
+        let mut watch = self.applier.watch();
+        self.wait_for_upper_past(
+            as_of,
+            &mut watch,
+            None,
+            &self.applier.metrics.retries.snapshot,
+            RetryParameters::persist_defaults(),
+        )
+        .await;
+        match self.applier.snapshot(as_of) {
+            Ok(data) => Ok(data),
+            Err(SnapshotErr::AsOfHistoricalDistinctionsLost(since)) => Err(since),
+            Err(SnapshotErr::AsOfNotYetAvailable(seqno, upper)) => {
+                panic!(
+                    "waited for upper past {as_of:?}, but at latest seqno {seqno:?} the frontier was only {upper:?}",
+                    as_of = as_of.elements(),
+                    upper = upper.0.elements(),
+                )
             }
         }
     }
@@ -935,28 +836,30 @@ where
         self.applier.verify_listen(as_of)
     }
 
-    pub async fn next_listen_batch(
+    pub async fn wait_for_upper_past(
         &self,
         frontier: &Antichain<T>,
         watch: &mut StateWatch<K, V, T, D>,
         reader_id: Option<&LeasedReaderId>,
-        // If Some, an override for the default listen sleep retry parameters.
-        retry: Option<RetryParameters>,
-    ) -> HollowBatch<T> {
-        let mut seqno = match self.applier.next_listen_batch(frontier) {
-            Ok(b) => return b,
-            Err(seqno) => seqno,
+        metrics: &RetryMetrics,
+        retry: RetryParameters,
+    ) {
+        let start = Instant::now();
+        let wait_for_seqno_past = self.applier.upper(|seqno, upper| {
+            if PartialOrder::less_than(frontier, upper) {
+                None
+            } else {
+                Some((seqno, upper.clone()))
+            }
+        });
+        let Some((mut seqno, mut upper)) = wait_for_seqno_past else {
+            // The current state's upper is already past the given frontier.
+            return;
         };
 
         // The latest state still doesn't have a new frontier for us:
         // watch+sleep in a loop until it does.
-        let retry = retry.unwrap_or_else(|| next_listen_batch_retry_params(&self.applier.cfg));
-        let sleeps = self
-            .applier
-            .metrics
-            .retries
-            .next_listen_batch
-            .stream(retry.into_retry(SystemTime::now()).into_retry_stream());
+        let sleeps = metrics.stream(retry.into_retry(SystemTime::now()).into_retry_stream());
 
         enum Wake<'a, K, V, T, D> {
             Watch(&'a mut StateWatch<K, V, T, D>),
@@ -975,7 +878,42 @@ where
                 .instrument(trace_span!("snapshot::sleep"))
         );
 
+        // To reduce log spam, we log "not yet available" only once at info if
+        // it passes a certain threshold. Then, if it did one info log, we log
+        // again at info when it resolves.
+        let mut logged_at_info = false;
         loop {
+            // Use a duration based threshold here instead of the usual
+            // INFO_MIN_ATTEMPTS because here we're waiting on an
+            // external thing to arrive.
+            if !logged_at_info
+                && start.elapsed() >= Duration::from_millis(1024)
+                && metrics.name.as_str() == "snapshot"
+            {
+                logged_at_info = true;
+                info!(
+                    shard_id =? self.shard_id(),
+                    shard_name =? self.applier.shard_metrics.name,
+                    reader_id =? reader_id,
+                    wait_frontier =? frontier.elements(),
+                    current_upper =? upper.elements(),
+                    current_seqno =? seqno,
+                    wait_for = &metrics.name,
+                    "desired upper not yet available",
+                );
+            } else {
+                debug!(
+                    shard_id =? self.shard_id(),
+                    shard_name =? self.applier.shard_metrics.name,
+                    reader_id =? reader_id,
+                    wait_frontier =? frontier.elements(),
+                    current_upper =? upper.elements(),
+                    current_seqno =? seqno,
+                    wait_for = &metrics.name,
+                    "desired upper not yet available",
+                );
+            }
+
             let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
                 future::Either::Left((wake, _)) => wake,
                 future::Either::Right((wake, _)) => wake,
@@ -984,26 +922,32 @@ where
             // Watch wakeup is a signal that the shared state has already been
             // updated.
             match &wake {
-                Wake::Watch(_) => self.applier.metrics.watch.listen_woken_via_watch.inc(),
+                Wake::Watch(_) => self.applier.metrics.watch.wait_woken_via_watch.inc(),
                 Wake::Sleep(_) => {
-                    self.applier.metrics.watch.listen_woken_via_sleep.inc();
+                    self.applier.metrics.watch.wait_woken_via_sleep.inc();
                     self.applier.fetch_and_update_state(Some(seqno)).await;
                 }
             }
 
-            seqno = match self.applier.next_listen_batch(frontier) {
-                Ok(b) => {
-                    match &wake {
-                        Wake::Watch(_) => {
-                            self.applier.metrics.watch.listen_resolved_via_watch.inc()
-                        }
-                        Wake::Sleep(_) => {
-                            self.applier.metrics.watch.listen_resolved_via_sleep.inc()
-                        }
-                    }
-                    return b;
+            let wait_for_seqno_past = self.applier.upper(|seqno, upper| {
+                if PartialOrder::less_than(frontier, upper) {
+                    None
+                } else {
+                    Some((seqno, upper.clone()))
                 }
-                Err(seqno) => seqno,
+            });
+            match wait_for_seqno_past {
+                None => {
+                    match &wake {
+                        Wake::Watch(_) => self.applier.metrics.watch.wait_resolved_via_watch.inc(),
+                        Wake::Sleep(_) => self.applier.metrics.watch.wait_resolved_via_sleep.inc(),
+                    }
+                    return;
+                }
+                Some((s, u)) => {
+                    seqno = s;
+                    upper = u;
+                }
             };
 
             // Wait a bit and try again. Intentionally don't ever log
@@ -1019,11 +963,15 @@ where
                 }
                 Wake::Sleep(sleeps) => {
                     debug!(
-                        "{:?}: {} {} next_listen_batch didn't find new data, retrying in {:?}",
-                        reader_id,
-                        self.applier.shard_metrics.name,
-                        self.shard_id(),
-                        sleeps.next_sleep()
+                        shard_id =? self.shard_id(),
+                        shard_name =? self.applier.shard_metrics.name,
+                        reader_id =? reader_id,
+                        wait_frontier =? frontier.elements(),
+                        current_upper =? upper.elements(),
+                        current_seqno =? seqno,
+                        wait_for = &metrics.name,
+                        "didn't find new data, retrying in {:?}",
+                        sleeps.next_sleep(),
                     );
                     sleep_fut.set(
                         sleeps
@@ -1210,7 +1158,7 @@ pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new
     "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
 );
 
-fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
+pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
     RetryParameters {
         fixed_sleep: NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP.get(cfg),
         initial_backoff: NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.get(cfg),
@@ -1328,7 +1276,7 @@ pub mod datadriven {
     use crate::internal::encoding::Schemas;
     use crate::internal::gc::GcReq;
     use crate::internal::paths::{BlobKey, BlobKeyPrefix, PartialBlobKey};
-    use crate::internal::state::{BatchPart, RunOrder, RunPart};
+    use crate::internal::state::{BatchPart, RunOrder, RunPart, Upper};
     use crate::internal::state_versions::EncodedRollup;
     use crate::internal::trace::{CompactionInput, IdHollowBatch, SpineId};
     use crate::read::{Listen, ListenEvent, READER_LEASE_DURATION};
@@ -2078,7 +2026,7 @@ pub mod datadriven {
         let as_of = args.expect_antichain("as_of");
         let snapshot = datadriven
             .machine
-            .snapshot(&as_of)
+            .unleased_snapshot(&as_of)
             .await
             .map_err(|err| anyhow!("{:?}", err))?;
 

@@ -618,6 +618,19 @@ pub struct RetryParameters {
 }
 
 impl RetryParameters {
+    pub fn persist_defaults() -> Self {
+        Self {
+            fixed_sleep: Duration::ZERO,
+            // Chosen to meet the following arbitrary criteria: a power of two
+            // that's close to the AWS Aurora latency of 6ms.
+            initial_backoff: Duration::from_millis(4),
+            multiplier: 2,
+            // Chosen to meet the following arbitrary criteria: between 10s and
+            // 60s.
+            clamp: Duration::from_secs(16),
+        }
+    }
+
     pub(crate) fn into_retry(self, now: SystemTime) -> Retry {
         let seed = now
             .duration_since(UNIX_EPOCH)

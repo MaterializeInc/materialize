@@ -2299,12 +2299,10 @@ pub struct LockMetrics {
 
 #[derive(Debug)]
 pub struct WatchMetrics {
-    pub(crate) listen_woken_via_watch: IntCounter,
-    pub(crate) listen_woken_via_sleep: IntCounter,
-    pub(crate) listen_resolved_via_watch: IntCounter,
-    pub(crate) listen_resolved_via_sleep: IntCounter,
-    pub(crate) snapshot_woken_via_watch: IntCounter,
-    pub(crate) snapshot_woken_via_sleep: IntCounter,
+    pub(crate) wait_woken_via_watch: IntCounter,
+    pub(crate) wait_woken_via_sleep: IntCounter,
+    pub(crate) wait_resolved_via_watch: IntCounter,
+    pub(crate) wait_resolved_via_sleep: IntCounter,
     pub(crate) notify_sent: IntCounter,
     pub(crate) notify_noop: IntCounter,
     pub(crate) notify_recv: IntCounter,
@@ -2316,29 +2314,21 @@ pub struct WatchMetrics {
 impl WatchMetrics {
     fn new(registry: &MetricsRegistry) -> Self {
         WatchMetrics {
-            listen_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_watch",
-                help: "count of listen next batches wakes via watch notify",
+            wait_woken_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_watch",
+                help: "count of wait-for-uppers wakes via watch notify",
             )),
-            listen_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_woken_via_sleep",
-                help: "count of listen next batches wakes via sleep",
+            wait_woken_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_woken_via_sleep",
+                help: "count of wait-for-uppers wakes via sleep",
             )),
-            listen_resolved_via_watch: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_watch",
-                help: "count of listen next batches resolved via watch notify",
+            wait_resolved_via_watch: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_watch",
+                help: "count of wait-for-uppers resolved via watch notify",
             )),
-            listen_resolved_via_sleep: registry.register(metric!(
-                name: "mz_persist_listen_resolved_via_sleep",
-                help: "count of listen next batches resolved via sleep",
-            )),
-            snapshot_woken_via_watch: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_watch",
-                help: "count of snapshot wakes via watch notify",
-            )),
-            snapshot_woken_via_sleep: registry.register(metric!(
-                name: "mz_persist_snapshot_woken_via_sleep",
-                help: "count of snapshot wakes via sleep",
+            wait_resolved_via_sleep: registry.register(metric!(
+                name: "mz_persist_wait_resolved_via_sleep",
+                help: "count of wait-for-uppers resolved via sleep",
             )),
             notify_sent: registry.register(metric!(
                 name: "mz_persist_watch_notify_sent",
