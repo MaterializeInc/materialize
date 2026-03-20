@@ -99,6 +99,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--miri-fast", action="store_true")
     parser.add_argument("args", nargs="*")
     args = parser.parse_args()
+
+    # Delete stale junit xml before anything else, including c.up(). The
+    # mzcompose plugin cleanup hook uploads all junit_*.xml it finds, even
+    # when the build is canceled. If we only delete after c.up(), a
+    # cancellation during service startup leaves the previous build's xml
+    # on disk and it gets uploaded as if it belongs to this build.
+    junit_path = (
+        os.getenv("CARGO_TARGET_DIR", "target") + "/nextest/ci/junit_cargo-test.xml"
+    )
+    if os.path.exists(junit_path):
+        os.remove(junit_path)
+
     c.up(
         "zookeeper",
         "kafka",
@@ -142,13 +154,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
-
-    # Don't upload an out of date junit xml when the build fails
-    junit_path = (
-        os.getenv("CARGO_TARGET_DIR", "target") + "/nextest/ci/junit_cargo-test.xml"
-    )
-    if os.path.exists(junit_path):
-        os.remove(junit_path)
 
     metadata = json.loads(
         subprocess.check_output(
