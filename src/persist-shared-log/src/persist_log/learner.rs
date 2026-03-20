@@ -9,26 +9,39 @@
 
 //! Learner: tails a persist shard subscription, materializes state, serves reads.
 //!
-//! Receives proposals via a channel from a dedicated listen task, applies them
-//! to a [`StateMachine`], and serves reads and result queries. Recovery is
-//! implicit — `listen(as_of=since)` replays all history.
+//! A passive state machine that separates **mechanism** (applying events,
+//! serving reads, flushing retractions) from **policy** (when to fetch upper,
+//! when to sweep garbage). The production policy is implemented by
+//! [`PersistLearner::run()`], but callers can also drive the learner directly
+//! via [`on_events`](PersistLearner::on_events),
+//! [`on_upper`](PersistLearner::on_upper),
+//! [`on_command`](PersistLearner::on_command), and
+//! [`flush_garbage`](PersistLearner::flush_garbage) for deterministic testing.
+//!
+//! ## EventSource trait
+//!
+//! The learner is generic over [`EventSource`], which abstracts where listen
+//! events come from. In production, [`ChannelEventSource`] wraps a dedicated
+//! task running `Subscribe::fetch_next()`. In tests, a mock can deliver events
+//! deterministically.
 //!
 //! ## Read linearization
 //!
 //! Reads are linearized against the shard upper (the latest committed timestamp
-//! across all writers). The learner holds a read-only `WriteHandle` solely to
-//! call `fetch_recent_upper()`, then waits for the listen frontier to catch up.
+//! across all writers). The caller provides the upper via [`on_upper`] after
+//! fetching it — the learner does not own the upper handle.
 //!
-//! To amortize the cost of upper fetches across concurrent reads, the learner
-//! uses the "bus-stand" optimization: a single `fetch_recent_upper()` call is
-//! shared by all reads that arrive while it's in flight.
+//! To amortize the cost of upper fetches across concurrent reads, the
+//! production [`run()`](PersistLearner::run) loop uses the "bus-stand"
+//! optimization: a single `fetch_recent_upper()` call is shared by all reads
+//! that arrive while it's in flight.
 //!
 //! ## Listen task isolation
 //!
 //! `Listen::fetch_next()` is **not cancel-safe**: it mutates the listen frontier
-//! partway through execution, so dropping it mid-await can lose data. To avoid
-//! this, the listen runs on a dedicated task that feeds events through an mpsc
-//! channel. The select loop only polls `event_rx.recv()`, which is cancel-safe.
+//! partway through execution, so dropping it mid-await can lose data.
+//! [`ChannelEventSource`] isolates this by running the subscribe in a dedicated
+//! task that feeds events through an mpsc channel.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -301,30 +314,30 @@ pub enum PersistLearnerCommand {
     Head {
         key: String,
         reply: oneshot::Sender<ProtoHeadResponse>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     Scan {
         key: String,
         from: u64,
         limit: u64,
         reply: oneshot::Sender<ProtoScanResponse>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     ListKeys {
         reply: oneshot::Sender<Vec<String>>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     AwaitCasResult {
         batch_number: u64,
         position: u32,
         reply: oneshot::Sender<ProtoCompareAndSetResponse>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     AwaitTruncateResult {
         batch_number: u64,
         position: u32,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     /// Force a retraction sweep immediately. Returns the number of retractions
     /// written, or 0 if garbage was empty or the write failed.
@@ -339,18 +352,18 @@ enum ReadCommand {
     Head {
         key: String,
         reply: oneshot::Sender<ProtoHeadResponse>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     Scan {
         key: String,
         from: u64,
         limit: u64,
         reply: oneshot::Sender<ProtoScanResponse>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     ListKeys {
         reply: oneshot::Sender<Vec<String>>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
 }
 
@@ -382,7 +395,7 @@ impl PersistLearnerHandle {
             .send(PersistLearnerCommand::Head {
                 key,
                 reply: reply_tx,
-                received_at: std::time::Instant::now(),
+                received_at: tokio::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -402,7 +415,7 @@ impl PersistLearnerHandle {
                 from,
                 limit,
                 reply: reply_tx,
-                received_at: std::time::Instant::now(),
+                received_at: tokio::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -414,7 +427,7 @@ impl PersistLearnerHandle {
         self.tx
             .send(PersistLearnerCommand::ListKeys {
                 reply: reply_tx,
-                received_at: std::time::Instant::now(),
+                received_at: tokio::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -432,7 +445,7 @@ impl PersistLearnerHandle {
                 batch_number,
                 position,
                 reply: reply_tx,
-                received_at: std::time::Instant::now(),
+                received_at: tokio::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -450,7 +463,7 @@ impl PersistLearnerHandle {
                 batch_number,
                 position,
                 reply: reply_tx,
-                received_at: std::time::Instant::now(),
+                received_at: tokio::time::Instant::now(),
             })
             .await
             .map_err(|_| LearnerError::Shutdown)?;
@@ -521,28 +534,68 @@ enum ResultWaiter {
     Cas {
         position: u32,
         reply: oneshot::Sender<ProtoCompareAndSetResponse>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
     Truncate {
         position: u32,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
-        received_at: std::time::Instant,
+        received_at: tokio::time::Instant,
     },
 }
 
 // ---------------------------------------------------------------------------
-// Listen task
+// EventSource
 // ---------------------------------------------------------------------------
+
+/// A source of listen events for the learner.
+///
+/// In production, [`ChannelEventSource`] wraps a dedicated task running
+/// `Subscribe::fetch_next()` with events fed through an mpsc channel. In tests,
+/// a mock can deliver events deterministically.
+#[async_trait::async_trait]
+pub trait EventSource: Send {
+    /// Wait for the next batch of listen events.
+    /// Returns `None` when the source is exhausted or shut down.
+    async fn next_events(
+        &mut self,
+    ) -> Option<Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>>;
+}
+
+/// Production event source: receives events from a dedicated listen task via an
+/// mpsc channel. The task isolates the non-cancel-safe `Subscribe::fetch_next()`
+/// from the learner's select loop.
+pub struct ChannelEventSource {
+    event_rx: mpsc::Receiver<Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>>,
+    _listen_task: mz_ore::task::JoinHandle<()>,
+}
+
+impl ChannelEventSource {
+    /// Create a new channel event source from a persist `Subscribe`.
+    ///
+    /// Spawns a dedicated task that calls `fetch_next()` in a loop and feeds
+    /// events through an mpsc channel. The `Subscribe` first delivers a
+    /// snapshot of all existing data, then switches to incremental updates.
+    pub fn new(subscribe: Subscribe<OrderedKey, Proposal, u64, i64>) -> Self {
+        let (event_tx, event_rx) = mpsc::channel(256);
+        let listen_task = spawn_listen_task(subscribe, event_tx);
+        ChannelEventSource {
+            event_rx,
+            _listen_task: listen_task,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl EventSource for ChannelEventSource {
+    async fn next_events(
+        &mut self,
+    ) -> Option<Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>> {
+        self.event_rx.recv().await
+    }
+}
 
 /// Spawns a dedicated task that runs `Subscribe::fetch_next()` in a loop,
 /// sending events through a channel.
-///
-/// `Subscribe` first delivers a snapshot of all existing data, then switches to
-/// incremental updates. This ensures the learner materializes the full shard
-/// state on startup, even if persist has compacted earlier batches.
-///
-/// Runs in a dedicated task to isolate the non-cancel-safe `fetch_next()` from
-/// the learner's select loop.
 fn spawn_listen_task(
     mut subscribe: Subscribe<OrderedKey, Proposal, u64, i64>,
     event_tx: mpsc::Sender<Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>>,
@@ -564,13 +617,17 @@ fn spawn_listen_task(
 
 /// The learner.
 ///
-/// Tails a persist shard via a dedicated listen task, applies proposals to a
-/// [`StateMachine`], and serves reads and result queries.
+/// A passive state machine that applies proposals from a persist shard
+/// subscription and serves reads. Generic over [`EventSource`] to allow both
+/// production (channel-backed) and test (mock) event delivery.
 ///
-/// Reads are linearized via the "bus-stand" pattern: `fetch_recent_upper()` runs
-/// continuously, and all reads that arrive while it's in flight share the same
-/// linearization target.
-pub struct PersistLearner {
+/// Separates **mechanism** (applying events, serving reads, flushing
+/// retractions) from **policy** (when to fetch upper, when to sweep garbage).
+/// The caller drives the learner via [`on_events`](Self::on_events),
+/// [`on_upper`](Self::on_upper), [`on_command`](Self::on_command), and
+/// [`flush_garbage`](Self::flush_garbage). The production
+/// [`run()`](Self::run) method is one such driver.
+pub struct PersistLearner<E: EventSource = ChannelEventSource> {
     state: StateMachine,
 
     // --- Result cache ---
@@ -585,21 +642,18 @@ pub struct PersistLearner {
 
     // --- Channels ---
     cmd_rx: mpsc::Receiver<PersistLearnerCommand>,
-    /// Events from the dedicated listen task.
-    event_rx: mpsc::Receiver<Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>>,
+
+    // --- Event source ---
+    event_source: E,
 
     // --- Persist handles ---
-    /// Read-only WriteHandle used solely for `fetch_recent_upper()`.
-    upper_handle: WriteHandle<OrderedKey, Proposal, u64, i64>,
     /// WriteHandle for writing retractions (-1 diffs) during periodic sweeps.
     retraction_write: WriteHandle<OrderedKey, Proposal, u64, i64>,
-    /// Handle to the dedicated listen task (kept alive for the learner's lifetime).
-    _listen_task: mz_ore::task::JoinHandle<()>,
 
     // --- Listen frontier tracking ---
     /// The listen frontier, mirrored from Progress events delivered through the
-    /// channel. This tracks the same value as `Listen::frontier()` on the
-    /// dedicated task side.
+    /// event source. This tracks the same value as `Listen::frontier()` on the
+    /// dedicated task side (when using `ChannelEventSource`).
     listen_frontier: Antichain<u64>,
 
     // --- Bus-stand linearization ---
@@ -609,8 +663,9 @@ pub struct PersistLearner {
     linearizing_reads: Vec<LinearizingRead>,
 }
 
-impl PersistLearner {
-    /// Creates a new persist-backed learner and returns a handle.
+impl PersistLearner<ChannelEventSource> {
+    /// Creates a new persist-backed learner with a [`ChannelEventSource`] and
+    /// returns a handle.
     ///
     /// The `Subscribe` delivers a snapshot of existing shard state followed by
     /// incremental updates. A dedicated task feeds events through a channel to
@@ -618,14 +673,26 @@ impl PersistLearner {
     pub fn new(
         config: PersistLearnerConfig,
         subscribe: Subscribe<OrderedKey, Proposal, u64, i64>,
-        upper_handle: WriteHandle<OrderedKey, Proposal, u64, i64>,
+        retraction_write: WriteHandle<OrderedKey, Proposal, u64, i64>,
+        metrics: LearnerMetrics,
+    ) -> (Self, PersistLearnerHandle) {
+        let event_source = ChannelEventSource::new(subscribe);
+        Self::new_with_event_source(config, event_source, retraction_write, metrics)
+    }
+}
+
+impl<E: EventSource> PersistLearner<E> {
+    /// Creates a new learner with a custom event source and returns a handle.
+    ///
+    /// This constructor allows tests to inject a mock [`EventSource`] for
+    /// deterministic event delivery.
+    pub fn new_with_event_source(
+        config: PersistLearnerConfig,
+        event_source: E,
         retraction_write: WriteHandle<OrderedKey, Proposal, u64, i64>,
         metrics: LearnerMetrics,
     ) -> (Self, PersistLearnerHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(config.queue_depth);
-        let (event_tx, event_rx) = mpsc::channel(256);
-
-        let listen_task = spawn_listen_task(subscribe, event_tx);
 
         let learner = PersistLearner {
             state: StateMachine::new(),
@@ -634,10 +701,8 @@ impl PersistLearner {
             config,
             metrics,
             cmd_rx,
-            event_rx,
-            upper_handle,
+            event_source,
             retraction_write,
-            _listen_task: listen_task,
             listen_frontier: Antichain::from_elem(0),
             pending_reads: Vec::new(),
             linearizing_reads: Vec::new(),
@@ -646,8 +711,70 @@ impl PersistLearner {
         (learner, handle)
     }
 
-    /// Runs the learner loop.
-    pub async fn run(mut self) {
+    // -------------------------------------------------------------------
+    // Event-level public API
+    // -------------------------------------------------------------------
+
+    /// Process a batch of listen events and wake any linearizing reads.
+    ///
+    /// This is the primary entry point for advancing the learner's state.
+    /// Internally calls `process_listen_events` (applies proposals to the
+    /// state machine, updates the listen frontier) then `wake_linearizing_reads`
+    /// (serves any reads whose linearization target has been reached).
+    pub fn on_events(
+        &mut self,
+        events: Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>,
+    ) {
+        self.process_listen_events(events);
+        self.wake_linearizing_reads();
+    }
+
+    /// An upper fetch completed: assign linearization targets and wake reads.
+    ///
+    /// Moves all pending reads into the linearizing set with the given upper
+    /// as their target, then checks whether any can already be served.
+    pub fn on_upper(&mut self, upper: Antichain<u64>) {
+        self.assign_linearization_target(upper);
+        self.wake_linearizing_reads();
+    }
+
+    /// Handle a learner command.
+    ///
+    /// Read commands go into the pending reads set (awaiting an upper fetch).
+    /// Result-await commands are resolved immediately if the result is cached,
+    /// or buffered for later wakeup.
+    pub fn on_command(&mut self, cmd: PersistLearnerCommand) {
+        self.handle_command(cmd);
+    }
+
+    /// Returns true if there are reads waiting for an upper fetch.
+    ///
+    /// When this returns true, the caller should fetch the shard upper and
+    /// pass it to [`on_upper`](Self::on_upper).
+    pub fn has_pending_reads(&self) -> bool {
+        !self.pending_reads.is_empty()
+    }
+
+    /// Returns true if there is garbage waiting to be retracted.
+    ///
+    /// When this returns true, the caller may choose to call
+    /// [`flush_garbage`](Self::flush_garbage).
+    pub fn has_garbage(&self) -> bool {
+        !self.state.garbage.is_empty()
+    }
+
+    // -------------------------------------------------------------------
+    // Production policy: run loop
+    // -------------------------------------------------------------------
+
+    /// Runs the learner loop. This is the **production policy**.
+    ///
+    /// Fetches events from the event source, fetches upper when reads are
+    /// pending, sweeps retractions on a timer, and handles commands.
+    pub async fn run(
+        mut self,
+        mut upper_handle: WriteHandle<OrderedKey, Proposal, u64, i64>,
+    ) {
         let mut retraction_ticker =
             tokio::time::interval(self.config.retraction_interval);
         retraction_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -658,14 +785,11 @@ impl PersistLearner {
             tokio::select! {
                 biased;
                 // cancel-safety: per tokio docs
-                events = self.event_rx.recv() => {
+                events = self.event_source.next_events() => {
                     match events {
-                        Some(events) => {
-                            self.process_listen_events(events);
-                            self.wake_linearizing_reads();
-                        }
+                        Some(events) => self.on_events(events),
                         None => {
-                            warn!("listen task channel closed");
+                            warn!("event source closed");
                             return;
                         }
                     }
@@ -673,16 +797,14 @@ impl PersistLearner {
                 // cancel-safety: stale upper on cancel just delays linearization
                 // Guard: only fetch when reads are waiting for a linearization target,
                 // otherwise this branch completes immediately and busy-spins.
-                upper = self.upper_handle.fetch_recent_upper(),
-                    if !self.pending_reads.is_empty() =>
+                upper = upper_handle.fetch_recent_upper(),
+                    if self.has_pending_reads() =>
                 {
-                    let upper = upper.clone();
-                    self.assign_linearization_target(upper);
-                    self.wake_linearizing_reads();
+                    self.on_upper(upper.clone());
                 }
                 // Periodic retraction sweep.
                 _ = retraction_ticker.tick(),
-                    if !self.state.garbage.is_empty() =>
+                    if self.has_garbage() =>
                 {
                     self.flush_garbage().await;
                 }
@@ -694,7 +816,7 @@ impl PersistLearner {
                             self.flush_garbage().await;
                             let _ = reply.send(count);
                         }
-                        Some(cmd) => self.handle_command(cmd),
+                        Some(cmd) => self.on_command(cmd),
                         None => return,
                     }
                 }
@@ -749,7 +871,7 @@ impl PersistLearner {
         batch_number: u64,
         entries: Vec<(OrderedKey, Proposal, i64)>,
     ) {
-        let batch_start = std::time::Instant::now();
+        let batch_start = tokio::time::Instant::now();
         let num_entries = entries.len();
         debug!(
             batch_number,
@@ -985,11 +1107,13 @@ impl PersistLearner {
     /// Flush pending garbage entries as retractions (-1 diffs) via the
     /// retraction WriteHandle.
     ///
-    /// On UpperMismatch, discards the batch and puts entries back into garbage.
-    /// The subscription will deliver any competing -1 diffs before the next
-    /// sweep, pruning already-retracted entries from the garbage set.
-    async fn flush_garbage(&mut self) {
-        let sweep_start = std::time::Instant::now();
+    /// The caller decides when to call this — that's the policy. This method
+    /// is the mechanism. On UpperMismatch, discards the batch and puts entries
+    /// back into garbage. The subscription will deliver any competing -1 diffs
+    /// before the next sweep, pruning already-retracted entries from the
+    /// garbage set.
+    pub async fn flush_garbage(&mut self) {
+        let sweep_start = tokio::time::Instant::now();
         self.metrics.retraction_sweeps.inc();
 
         let garbage = std::mem::take(&mut self.state.garbage);
@@ -1171,7 +1295,7 @@ impl PersistLearner {
 
 }
 
-impl PersistLearner {
+impl PersistLearner<ChannelEventSource> {
     /// Opens a persist shard and spawns the learner as a tokio task.
     ///
     /// Handles shard subscription and upper-handle creation internally —
@@ -1218,8 +1342,8 @@ impl PersistLearner {
         let subscribe = read.subscribe(since).await.expect("subscribe should succeed");
 
         let (learner, handle) =
-            Self::new(config, subscribe, upper_handle, retraction_write, metrics);
-        let task = mz_ore::task::spawn(|| "persist-learner", learner.run());
+            Self::new(config, subscribe, retraction_write, metrics);
+        let task = mz_ore::task::spawn(|| "persist-learner", learner.run(upper_handle));
         (handle, task)
     }
 }

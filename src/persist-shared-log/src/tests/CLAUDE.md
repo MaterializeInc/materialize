@@ -21,10 +21,12 @@ When investigating:
 3. **Check for inter-seed contamination**: does the failure depend on which seeds
    ran before it? Try `SEED=<n> SIM_SEEDS=1` vs running as part of a larger
    batch. If it only fails in the batch, something is leaking between iterations.
-4. **Check for tokio nondeterminism**: the tests run on `current_thread` runtime,
-   which should be deterministic within a single seed. But spawned tasks from
-   prior seeds that haven't fully shut down can interfere. The
-   `persist_sim_deterministic` test exists specifically to catch this.
+4. **Check for tokio nondeterminism**: the tests run on a `current_thread`
+   runtime and persist uses a disabled `IsolatedRuntime` (via
+   `PersistClientCache::new_for_turmoil()`), so all async work — acceptor,
+   learner, and persist internals — runs on one thread. This eliminates
+   scheduling nondeterminism. The `persist_sim_deterministic` test verifies
+   both observational and scheduling determinism.
 5. **Never dismiss**: if you cannot reproduce a failure, add the seed to a
    tracked list and increase the `persist_sim_deterministic` iteration count
    around that seed range.
@@ -38,6 +40,14 @@ When investigating:
 - `trace.rs` — structured operation trace (`SimTrace`) printed on failure.
 - `persist_sim.rs` — the simulation harness. Every operation is checked against
   the oracle and fed through Stateright's `LinearizabilityTester`.
+
+## Coverage
+
+- **CAS rejection**: `OpGenerator::gen_cas()` generates ~15% stale expected
+  seqnos, exercising the rejected CAS → garbage → retraction pipeline.
+- **Multi-writer contention**: `persist_sim_multi_writer` runs two acceptors
+  against the same shard pool. Each writer maintains its own stale snapshot,
+  so one writer's commit causes the other's next CAS to be rejected.
 
 ## Running
 

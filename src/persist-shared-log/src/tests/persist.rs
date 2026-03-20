@@ -14,8 +14,8 @@ use std::sync::Arc;
 use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
-use mz_persist_client::Diagnostics;
-use mz_persist_client::PersistClient;
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_persist_types::ShardId;
 
 use mz_ore::metrics::MetricsRegistry;
@@ -26,6 +26,22 @@ use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistL
 use crate::persist_log::{OrderedKey, OrderedKeySchema, Proposal, ProposalSchema};
 use crate::Acceptor as _;
 use crate::AcceptorConfig;
+
+// ---------------------------------------------------------------------------
+// Persist client helper
+// ---------------------------------------------------------------------------
+
+/// Create a [`PersistClient`] that runs all internal work on the current
+/// runtime instead of spawning a separate multi-threaded `IsolatedRuntime`.
+/// Also pauses tokio time so that `tokio::time::Instant` uses the mock clock.
+async fn new_persist_client_for_test() -> PersistClient {
+    tokio::time::pause();
+    let cache = PersistClientCache::new_for_turmoil();
+    cache
+        .open(PersistLocation::new_in_mem())
+        .await
+        .expect("in-mem persist client")
+}
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -40,7 +56,7 @@ struct PersistTestHarness {
 
 impl PersistTestHarness {
     async fn new() -> Self {
-        let client = PersistClient::new_for_tests().await;
+        let client = new_persist_client_for_test().await;
         let shard_id = ShardId::new();
         Self::new_with_client(&client, shard_id).await
     }
@@ -105,9 +121,9 @@ impl PersistTestHarness {
             mz_ore::task::spawn(|| "test-persist-acceptor", acceptor.run(write)).abort_on_drop();
 
         let learner_config = PersistLearnerConfig::default();
-        let (learner, learner_handle) = PersistLearner::new(learner_config, subscribe, upper_handle, retraction_write, learner_metrics);
+        let (learner, learner_handle) = PersistLearner::new(learner_config, subscribe, retraction_write, learner_metrics);
         let learner_task =
-            mz_ore::task::spawn(|| "test-persist-learner", learner.run()).abort_on_drop();
+            mz_ore::task::spawn(|| "test-persist-learner", learner.run(upper_handle)).abort_on_drop();
 
         PersistTestHarness {
             acceptor_handle,
@@ -383,7 +399,7 @@ async fn test_persist_list_keys() {
 #[mz_ore::test(tokio::test)]
 async fn test_persist_recovery() {
     // Write data, drop everything, re-open and verify learner replays history.
-    let client = PersistClient::new_for_tests().await;
+    let client = new_persist_client_for_test().await;
     let shard_id = ShardId::new();
 
     // Phase 1: write data.
@@ -436,7 +452,7 @@ async fn test_persist_recovery() {
 /// the state matches.
 #[mz_ore::test(tokio::test)]
 async fn test_persist_ordering_through_compaction() {
-    let client = PersistClient::new_for_tests().await;
+    let client = new_persist_client_for_test().await;
     let shard_id = ShardId::new();
 
     // Phase 1: write data across multiple batches (one proposal per batch,
@@ -533,7 +549,7 @@ async fn test_persist_ordering_through_compaction() {
 /// and a new learner replays correctly from a shard containing -1 diffs.
 #[mz_ore::test(tokio::test)]
 async fn test_persist_retraction_rejected_cas() {
-    let client = PersistClient::new_for_tests().await;
+    let client = new_persist_client_for_test().await;
     let shard_id = ShardId::new();
 
     // Phase 1: write data including rejected CAS proposals, then retract.
@@ -583,7 +599,7 @@ async fn test_persist_retraction_rejected_cas() {
 /// itself. After retraction + recovery, scan only returns surviving entries.
 #[mz_ore::test(tokio::test)]
 async fn test_persist_retraction_truncate() {
-    let client = PersistClient::new_for_tests().await;
+    let client = new_persist_client_for_test().await;
     let shard_id = ShardId::new();
 
     // Phase 1: write, truncate, retract.

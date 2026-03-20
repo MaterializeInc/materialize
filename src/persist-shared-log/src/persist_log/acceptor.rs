@@ -129,7 +129,7 @@ struct PendingAppend {
     proposal: Proposal,
     encoded_len: usize,
     reply: oneshot::Sender<Result<ProtoAppendResponse, String>>,
-    received_at: std::time::Instant,
+    received_at: tokio::time::Instant,
 }
 
 // ---------------------------------------------------------------------------
@@ -138,9 +138,14 @@ struct PendingAppend {
 
 /// The acceptor.
 ///
-/// Owns a `WriteHandle` and performs blind group commits via
+/// A passive state machine that buffers proposals and flushes them via
 /// `compare_and_append`. The persist shard upper frontier serves as the batch
 /// number — batch number derives from upper, not the other way around.
+///
+/// Separates **mechanism** (buffering and flushing) from **policy** (when to
+/// flush). The production policy is implemented by [`run()`](Self::run), but
+/// callers can also drive the acceptor directly via [`handle_command`],
+/// [`flush`], and [`drain_ready_commands`] for deterministic testing.
 pub struct PersistAcceptor {
     pending: Vec<PendingItem>,
     rx: mpsc::Receiver<PersistAcceptorCommand>,
@@ -168,23 +173,69 @@ impl PersistAcceptor {
         (acceptor, write, handle)
     }
 
+    /// Returns true if there are pending proposals or flush barriers.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Push a command into the pending buffer.
+    pub fn handle_command(&mut self, cmd: PersistAcceptorCommand) {
+        match cmd {
+            PersistAcceptorCommand::Append {
+                proposal,
+                encoded_len,
+                reply,
+            } => {
+                self.pending.push(PendingItem::Append(PendingAppend {
+                    proposal,
+                    encoded_len,
+                    reply,
+                    received_at: tokio::time::Instant::now(),
+                }));
+            }
+            PersistAcceptorCommand::Flush { reply } => {
+                self.metrics.flush_explicit_triggered.inc();
+                self.pending.push(PendingItem::FlushBarrier(reply));
+            }
+        }
+    }
+
+    /// Drain all immediately-available commands from the channel without
+    /// blocking. Maximizes batching after a flush completes.
+    pub fn drain_ready_commands(&mut self) {
+        while let Ok(cmd) = self.rx.try_recv() {
+            self.handle_command(cmd);
+        }
+    }
+
+    /// Flush all pending proposals via `compare_and_append`.
+    ///
+    /// Takes the pending buffer, resolves reply oneshots, and returns. Retry
+    /// logic for `UpperMismatch` is handled internally. Returns `Err` on fatal
+    /// error (InvalidUsage or retries exhausted).
+    ///
+    /// The caller decides when to call this — that's the policy. This method
+    /// is the mechanism.
+    pub async fn flush(
+        &mut self,
+        write: &mut WriteHandle<OrderedKey, Proposal, u64, i64>,
+    ) -> Result<(), String> {
+        let pending = std::mem::take(&mut self.pending);
+        flush_inner(write, pending, &self.metrics).await
+    }
+
     /// Runs the acceptor loop until the channel closes or a fatal error occurs.
     ///
-    /// Open-loop: when there are pending proposals, flush immediately. When the
-    /// flush completes, drain any commands that arrived during the flush, then
-    /// flush again if there's more work.
+    /// This is the **production policy**: open-loop, flush immediately when
+    /// there are pending proposals, drain commands after each flush.
     pub async fn run(mut self, mut write: WriteHandle<OrderedKey, Proposal, u64, i64>) {
         info!("persist acceptor starting");
         loop {
-            // Flush if we have pending work.
-            if !self.pending.is_empty() {
-                let pending = std::mem::take(&mut self.pending);
-                if let Err(e) = flush(&mut write, pending, &self.metrics).await {
+            if self.has_pending() {
+                if let Err(e) = self.flush(&mut write).await {
                     error!("acceptor shutting down: {}", e);
                     break;
                 }
-                // Drain any commands that arrived during the flush before
-                // looping back to check pending again.
                 self.drain_ready_commands();
                 continue;
             }
@@ -197,39 +248,8 @@ impl PersistAcceptor {
         }
 
         // Drain any remaining pending items before shutting down.
-        if !self.pending.is_empty() {
-            let pending = std::mem::take(&mut self.pending);
-            let _ = flush(&mut write, pending, &self.metrics).await;
-        }
-    }
-
-    /// Push a command into the pending buffer.
-    fn handle_command(&mut self, cmd: PersistAcceptorCommand) {
-        match cmd {
-            PersistAcceptorCommand::Append {
-                proposal,
-                encoded_len,
-                reply,
-            } => {
-                self.pending.push(PendingItem::Append(PendingAppend {
-                    proposal,
-                    encoded_len,
-                    reply,
-                    received_at: std::time::Instant::now(),
-                }));
-            }
-            PersistAcceptorCommand::Flush { reply } => {
-                self.metrics.flush_explicit_triggered.inc();
-                self.pending.push(PendingItem::FlushBarrier(reply));
-            }
-        }
-    }
-
-    /// Drain all immediately-available commands from the channel without
-    /// blocking. Maximizes batching after a flush completes.
-    fn drain_ready_commands(&mut self) {
-        while let Ok(cmd) = self.rx.try_recv() {
-            self.handle_command(cmd);
+        if self.has_pending() {
+            let _ = self.flush(&mut write).await;
         }
     }
 }
@@ -242,7 +262,7 @@ impl PersistAcceptor {
 ///
 /// Proposal reply oneshots and flush barrier oneshots are resolved inside this
 /// function. Returns `Err` on fatal error (InvalidUsage or retries exhausted).
-async fn flush(
+async fn flush_inner(
     write: &mut WriteHandle<OrderedKey, Proposal, u64, i64>,
     pending: Vec<PendingItem>,
     metrics: &AcceptorMetrics,
@@ -251,7 +271,7 @@ async fn flush(
         return Ok(());
     }
 
-    let flush_start = std::time::Instant::now();
+    let flush_start = tokio::time::Instant::now();
 
     // Split pending items into proposals and flush barriers.
     let mut proposals = Vec::new();
@@ -291,7 +311,7 @@ async fn flush(
         .into_retry_stream();
     tokio::pin!(retry);
 
-    let write_start = std::time::Instant::now();
+    let write_start = tokio::time::Instant::now();
 
     while let Some(state) = retry.next().await {
         // Read the (possibly updated) upper and derive batch_number.

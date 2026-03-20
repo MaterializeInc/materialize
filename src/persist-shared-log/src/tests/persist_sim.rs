@@ -47,7 +47,8 @@ use timely::progress::Antichain;
 use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
-use mz_persist_client::{Diagnostics, PersistClient};
+use mz_persist_client::cache::PersistClientCache;
+use mz_persist_client::{Diagnostics, PersistClient, PersistLocation};
 use mz_persist_types::ShardId;
 
 use mz_ore::metrics::MetricsRegistry;
@@ -61,6 +62,22 @@ use crate::AcceptorConfig;
 
 use super::scenario::{SharedLogObservation, SharedLogOp, SharedLogOracle, SystemEvent, VersionedData};
 use super::trace::{SimThread, SimTrace};
+
+// ---------------------------------------------------------------------------
+// Persist client helper
+// ---------------------------------------------------------------------------
+
+/// Create a [`PersistClient`] that runs all internal work on the current
+/// runtime instead of spawning a separate multi-threaded `IsolatedRuntime`.
+/// This collapses all async work onto the test's `current_thread` runtime,
+/// making scheduling fully deterministic.
+async fn new_persist_client_for_sim() -> PersistClient {
+    let cache = PersistClientCache::new_for_turmoil();
+    cache
+        .open(PersistLocation::new_in_mem())
+        .await
+        .expect("in-mem persist client")
+}
 
 // ---------------------------------------------------------------------------
 // Operations
@@ -115,13 +132,31 @@ impl OpGenerator {
     fn gen_cas(&mut self) -> SharedLogOp {
         let shard = self.random_shard();
         let current = self.shard_seqno.get(&shard).copied();
-        let seqno = current.map_or(1, |s| s + 1);
+
+        // ~15% chance of generating a stale expected seqno to exercise CAS
+        // rejection → garbage → retraction pipeline.
+        let (expected, seqno) = if current.is_some() && self.rng.r#gen_bool(0.15) {
+            // Use a stale expected — this CAS will be rejected.
+            let stale = current.map(|s| s.saturating_sub(1));
+            let seqno = current.map_or(1, |s| s + 1);
+            (stale, seqno)
+        } else {
+            // Normal: correct expected, advance seqno.
+            let seqno = current.map_or(1, |s| s + 1);
+            (current, seqno)
+        };
+
         let data_len = self.rng.r#gen_range(1..=64);
         let data: Vec<u8> = (0..data_len).map(|_| self.rng.r#gen()).collect();
-        self.shard_seqno.insert(shard.clone(), seqno);
+
+        // Only update tracking if we expect this CAS to succeed.
+        if expected == current {
+            self.shard_seqno.insert(shard.clone(), seqno);
+        }
+
         SharedLogOp::Cas {
             shard,
-            expected: current,
+            expected,
             seqno,
             data,
         }
@@ -289,9 +324,9 @@ async fn spawn_persist_pair(
         ..Default::default()
     };
     let (learner, learner_handle) =
-        PersistLearner::new(learner_config, subscribe, upper_handle, retraction_write, learner_metrics);
+        PersistLearner::new(learner_config, subscribe, retraction_write, learner_metrics);
     let learner_task =
-        mz_ore::task::spawn(|| "persist-sim-learner", learner.run()).abort_on_drop();
+        mz_ore::task::spawn(|| "persist-sim-learner", learner.run(upper_handle)).abort_on_drop();
 
     (acceptor_handle, learner_handle, acceptor_task, learner_task)
 }
@@ -319,7 +354,7 @@ struct PersistSimulator {
 
 impl PersistSimulator {
     async fn new(seed: u64) -> Self {
-        let client = PersistClient::new_for_tests().await;
+        let client = new_persist_client_for_sim().await;
         let shard_id = ShardId::new();
 
         let (acceptor_handle, learner_handle, acceptor_task, learner_task) =
@@ -596,6 +631,7 @@ fn seed_range() -> std::ops::Range<u64> {
 /// independent oracle and checks linearizability via Stateright.
 #[mz_ore::test(tokio::test)]
 async fn persist_sim_single() {
+    tokio::time::pause();
     for seed in seed_range() {
         let mut sim = PersistSimulator::new(seed).await;
         let mut op_gen = OpGenerator::new(seed);
@@ -607,13 +643,14 @@ async fn persist_sim_single() {
     }
 }
 
-/// Tests multi-writer behavior. Both writers coexist — `UpperMismatch`
-/// triggers a retry, not a fence. Verify all committed proposals
-/// from both writers are consistent via the oracle.
+/// Tests multi-writer behavior on the same shard pool. Both writers target
+/// the same shards — when writer A commits, writer B's stale CAS is rejected.
+/// Verifies all observations match the oracle.
 #[mz_ore::test(tokio::test)]
 async fn persist_sim_multi_writer() {
+    tokio::time::pause();
     for seed in seed_range() {
-        let client = PersistClient::new_for_tests().await;
+        let client = new_persist_client_for_sim().await;
         let shard_id = ShardId::new();
 
         let key_schema = Arc::new(OrderedKeySchema);
@@ -690,9 +727,9 @@ async fn persist_sim_multi_writer() {
             ..Default::default()
         };
         let (learner, learner_handle) =
-            PersistLearner::new(learner_config, subscribe, upper_handle, retraction_write, learner_metrics);
+            PersistLearner::new(learner_config, subscribe, retraction_write, learner_metrics);
         let _learner_task =
-            mz_ore::task::spawn(|| "persist-sim-learner", learner.run()).abort_on_drop();
+            mz_ore::task::spawn(|| "persist-sim-learner", learner.run(upper_handle)).abort_on_drop();
 
         let mut oracle = SharedLogOracle::new();
         let mut trace = SimTrace::new(seed);
@@ -700,21 +737,34 @@ async fn persist_sim_multi_writer() {
         let mut rng = SmallRng::seed_from_u64(seed);
         let num_ops = 50;
 
+        // Each writer maintains its own snapshot of the shard head, updated
+        // only when its own CAS succeeds. This naturally creates contention:
+        // when writer A commits, writer B's snapshot becomes stale and its
+        // next CAS on that shard will be rejected.
+        let mut snapshot_a: std::collections::BTreeMap<String, u64> =
+            std::collections::BTreeMap::new();
+        let mut snapshot_b: std::collections::BTreeMap<String, u64> =
+            std::collections::BTreeMap::new();
+
         for step in 0u64..num_ops {
-            // Alternate between writer A and writer B.
-            let (handle, shard, thread) = if rng.r#gen_bool(0.5) {
-                (&handle_a, "sa", SimThread::Client(0))
+            // Pick a writer and a shard from the shared pool.
+            let is_writer_a = rng.r#gen_bool(0.5);
+            let shard_idx = rng.r#gen_range(0..SHARD_NAMES.len());
+            let shard = SHARD_NAMES[shard_idx];
+
+            let (handle, snapshot, thread) = if is_writer_a {
+                (&handle_a, &mut snapshot_a, SimThread::Client(0))
             } else {
-                (&handle_b, "sb", SimThread::Client(1))
+                (&handle_b, &mut snapshot_b, SimThread::Client(1))
             };
 
-            let current = oracle.head_seqno(shard);
-            let seqno = current.map_or(1, |s| s + 1);
+            let expected = snapshot.get(shard).copied();
+            let seqno = expected.map_or(1, |s| s + 1);
             let data = format!("v{}-s{}", step, seed).into_bytes();
 
             let op = SharedLogOp::Cas {
                 shard: shard.to_string(),
-                expected: current,
+                expected,
                 seqno,
                 data: data.clone(),
             };
@@ -726,7 +776,7 @@ async fn persist_sim_multi_writer() {
                 .append(ProtoLogProposal {
                     op: Some(proto_log_proposal::Op::Cas(ProtoCasProposal {
                         key: shard.to_string(),
-                        expected: current,
+                        expected,
                         new_seqno: seqno,
                         data,
                     })),
@@ -740,15 +790,21 @@ async fn persist_sim_multi_writer() {
                 .unwrap();
 
             let actual = cas_observation(&result);
-            let expected = oracle.apply(&op);
+            let expected_obs = oracle.apply(&op);
 
-            trace.record_return(step_usize, thread, &op, &actual, &expected);
+            trace.record_return(step_usize, thread, &op, &actual, &expected_obs);
 
             assert_eq!(
-                actual, expected,
+                actual, expected_obs,
                 "seed={}: oracle mismatch at step {}.\nOp: {}\n\nTrace:\n{}",
                 seed, step, op, trace,
             );
+
+            // Update this writer's snapshot from the oracle's ground truth
+            // only if the CAS committed.
+            if result.committed {
+                snapshot.insert(shard.to_string(), seqno);
+            }
         }
 
         // Verify: all committed data is visible and consistent via scan.
@@ -776,6 +832,7 @@ async fn persist_sim_multi_writer() {
 /// Verifies determinism: running with the same seed produces the same trace.
 #[mz_ore::test(tokio::test)]
 async fn persist_sim_deterministic() {
+    tokio::time::pause();
     for seed in seed_range() {
         let run = |seed: u64| async move {
             let mut sim = PersistSimulator::new(seed).await;
@@ -807,6 +864,7 @@ async fn persist_sim_deterministic() {
 #[mz_ore::test(tokio::test)]
 #[ignore]
 async fn persist_sim_fuzz() {
+    tokio::time::pause();
     let start = specific_seed().unwrap_or(0);
     let mut seed = start;
     loop {
