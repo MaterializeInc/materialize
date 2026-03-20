@@ -1221,13 +1221,13 @@ impl<'w, A: Allocate> Worker<'w, A> {
             .oneshot_ingestions
             .keys()
             .filter(|ingestion_id| {
-                let created = create_oneshot_ingestions.contains(ingestion_id);
-                let dropped = cancel_oneshot_ingestions.contains(ingestion_id);
+                let to_create = create_oneshot_ingestions.contains(ingestion_id);
+                let to_drop = cancel_oneshot_ingestions.contains(ingestion_id);
                 mz_ore::soft_assert_or_log!(
-                    !created && dropped,
-                    "dropped non-existent oneshot source"
+                    !(!to_create && to_drop),
+                    "attempting to drop oneshot source {ingestion_id} that is not expected to be created during reconciliation"
                 );
-                !created && !dropped
+                !to_create && !to_drop
             })
             .copied()
             .collect::<Vec<_>>();
