@@ -159,9 +159,10 @@ impl SourceRender for MySqlSourceConnection {
             config.clone(),
             self.clone(),
             source_outputs.clone(),
+            metrics.snapshot_metrics.clone(),
         );
 
-        let (repl_updates, repl_err, repl_token) = replication::render(
+        let (repl_updates, _repl_probe, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self.clone(),

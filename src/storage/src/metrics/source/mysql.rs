@@ -9,12 +9,15 @@
 
 //! Metrics for MySQL.
 
+use std::sync::Arc;
+use std::sync::Mutex;
+
 use mz_ore::metric;
 use mz_ore::metrics::{
-    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, MetricsRegistry, UIntGaugeVec,
+    DeleteOnDropCounter, DeleteOnDropGauge, GaugeVec, IntCounterVec, MetricsRegistry, UIntGaugeVec,
 };
 use mz_repr::GlobalId;
-use prometheus::core::AtomicU64;
+use prometheus::core::{AtomicF64, AtomicU64};
 
 #[derive(Clone, Debug)]
 pub(crate) struct MySqlSourceMetricDefs {
@@ -25,6 +28,8 @@ pub(crate) struct MySqlSourceMetricDefs {
     pub(crate) delete_rows: IntCounterVec,
     pub(crate) tables: UIntGaugeVec,
     pub(crate) gtid_txids: UIntGaugeVec,
+
+    pub(crate) snapshot_defs: MySqlSnapshotMetricDefs,
 }
 
 impl MySqlSourceMetricDefs {
@@ -65,6 +70,7 @@ impl MySqlSourceMetricDefs {
                 help: "The sum of all transaction-ids committed for each GTID Source-ID UUID seen for this source",
                 var_labels: ["source_id"],
             )),
+            snapshot_defs: MySqlSnapshotMetricDefs::register_with(registry),
         }
     }
 }
@@ -78,6 +84,7 @@ pub(crate) struct MySqlSourceMetrics {
     pub(crate) total: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) tables: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub(crate) gtid_txids: DeleteOnDropGauge<AtomicU64, Vec<String>>,
+    pub(crate) snapshot_metrics: MySqlSnapshotMetrics,
 }
 
 impl MySqlSourceMetrics {
@@ -96,6 +103,54 @@ impl MySqlSourceMetrics {
                 .get_delete_on_drop_metric(labels.to_vec()),
             tables: defs.tables.get_delete_on_drop_metric(labels.to_vec()),
             gtid_txids: defs.gtid_txids.get_delete_on_drop_metric(labels.to_vec()),
+            snapshot_metrics: MySqlSnapshotMetrics {
+                source_id,
+                gauges: Default::default(),
+                defs: defs.snapshot_defs.clone(),
+            },
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MySqlSnapshotMetricDefs {
+    pub(crate) table_count_latency: GaugeVec,
+}
+
+impl MySqlSnapshotMetricDefs {
+    pub(crate) fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            table_count_latency: registry.register(metric!(
+                name: "mz_mysql_snapshot_count_latency",
+                help: "The wall time used to obtain snapshot sizes.",
+                var_labels: ["source_id", "table_name", "schema"],
+            )),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct MySqlSnapshotMetrics {
+    source_id: GlobalId,
+    // This has to be shared between tokio tasks and the replication operator, as the collection
+    // of these metrics happens once in those tasks, which do not live long enough to keep them
+    // alive.
+    gauges: Arc<Mutex<Vec<DeleteOnDropGauge<AtomicF64, Vec<String>>>>>,
+    defs: MySqlSnapshotMetricDefs,
+}
+
+impl MySqlSnapshotMetrics {
+    pub(crate) fn record_table_count_latency(
+        &self,
+        table_name: String,
+        schema: String,
+        latency: f64,
+    ) {
+        let latency_gauge = self
+            .defs
+            .table_count_latency
+            .get_delete_on_drop_metric(vec![self.source_id.to_string(), table_name, schema]);
+        latency_gauge.set(latency);
+        self.gauges.lock().expect("poisoned").push(latency_gauge)
     }
 }
