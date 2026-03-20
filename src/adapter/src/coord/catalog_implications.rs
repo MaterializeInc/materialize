@@ -375,14 +375,16 @@ impl Coordinator {
                         dropped_item_names.insert(gid, full_name.clone());
                     }
                 }
-                CatalogImplication::View(CatalogImplicationKind::Added(view)) => {
-                    tracing::debug!(?view, "not handling AddView in here yet");
+                CatalogImplication::View(CatalogImplicationKind::Added(_view)) => {
+                    // No action needed: views are catalog-only objects with no
+                    // storage collections or dataflows to create.
                 }
                 CatalogImplication::View(CatalogImplicationKind::Altered {
-                    prev: prev_view,
-                    new: new_view,
+                    prev: _prev_view,
+                    new: _new_view,
                 }) => {
-                    tracing::debug!(?prev_view, ?new_view, "not handling AlterView in here yet");
+                    // No action needed: view alterations (e.g. renames) are
+                    // catalog-only and require no controller changes.
                 }
                 CatalogImplication::View(CatalogImplicationKind::Dropped(view, full_name)) => {
                     view_gids_to_drop.push(view.global_id());
