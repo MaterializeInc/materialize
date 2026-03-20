@@ -33,8 +33,6 @@ DEFAULT_MINIO = "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012
 
 def main():
     os.chdir(MZ_ROOT)
-    # Console is not on GHCR yet
-    os.environ["MZ_GHCR"] = "0"
 
     parser = argparse.ArgumentParser(
         prog="orchestratord",
@@ -195,7 +193,7 @@ def environment(args: argparse.Namespace):
     if args.environmentd_version:
         image_tag = args.environmentd_version
     else:
-        for image in ["environmentd", "clusterd", "balancerd"]:
+        for image in ["environmentd", "clusterd", "balancerd", "console"]:
             acquire(
                 image,
                 dev=args.dev,
