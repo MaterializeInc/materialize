@@ -21,6 +21,7 @@ cryptography==46.0.5
 colored==2.3.1
 docker==7.1.0
 ec2instanceconnectcli==1.0.3
+hcloud==2.17.0
 python-frontmatter==1.1.0
 humanize==4.15.0
 ipympl==0.10.0

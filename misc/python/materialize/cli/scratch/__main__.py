@@ -8,37 +8,48 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import os
+import sys
 
 import shtab
 
 from materialize.cli.scratch import (
+    claude,
     create,
     destroy,
     forward,
+    go,
+    list_cmd,
     login,
     push,
     sftp,
     ssh,
 )
-from materialize.cli.scratch import (
-    list as list_cmd,
-)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser("scratch")
-    subparsers = parser.add_subparsers(
-        dest="subcommand", required=True, description="", help="subparsers"
+    parser.add_argument(
+        "--provider",
+        choices=["aws", "hetzner"],
+        default=os.environ.get("MZ_SCRATCH_PROVIDER"),
+        help="Cloud provider (default: both for list/destroy, aws for other commands; or MZ_SCRATCH_PROVIDER env var)",
     )
-    for name, configure, run, description in [
-        ("login", login.configure_parser, login.run, "Log in to AWS SSO"),
+    commands = [
+        ("login", login.configure_parser, login.run, "Log in to cloud provider"),
         (
             "create",
             create.configure_parser,
             create.run,
             "Create a new scratch instance",
         ),
-        ("list", list_cmd.configure_parser, list_cmd.run, "List scratch instances"),
+        (
+            "list",
+            list_cmd.configure_parser,
+            list_cmd.run,
+            "List scratch instances",
+            ["ls"],
+        ),
         ("ssh", ssh.configure_parser, ssh.run, "Connect to scratch instance via ssh"),
         (
             "sftp",
@@ -51,6 +62,7 @@ def main() -> None:
             destroy.configure_parser,
             destroy.run,
             "Destroy a scratch instance",
+            ["rm"],
         ),
         (
             "push",
@@ -70,14 +82,44 @@ def main() -> None:
             forward.run,
             "Forward local ports remotely",
         ),
-    ]:
-        s = subparsers.add_parser(name, description=description, help=description)
+        (
+            "go",
+            go.configure_parser,
+            go.run,
+            "Create-or-connect: reuse existing instance or create a new one and SSH in",
+        ),
+        (
+            "claude",
+            claude.configure_parser,
+            claude.run,
+            "Create-or-reuse a scratch instance and start Claude Code",
+        ),
+    ]
+    primary_names = [entry[0] for entry in commands]
+    subparsers = parser.add_subparsers(
+        dest="subcommand",
+        required=True,
+        metavar="{" + ",".join(primary_names) + "}",
+    )
+    for entry in commands:
+        name, configure, run, description = entry[:4]
+        aliases = entry[4] if len(entry) > 4 else []
+        s = subparsers.add_parser(
+            name, aliases=aliases, description=description, help=description
+        )
         configure(s)
         s.set_defaults(run=run)
 
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+    args.extra_args = extra
     args.run(args)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as e:
+        print(f"scratch: error: {e}", file=sys.stderr)
+        sys.exit(1)

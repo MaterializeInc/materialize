@@ -8,16 +8,13 @@
 # by the Apache License, Version 2.0.
 
 import argparse
+import sys
 
-import boto3
-from mypy_boto3_ec2.type_defs import FilterTypeDef
-
-from materialize.cli.scratch import check_required_vars
-from materialize.scratch import print_instances, whoami
+from materialize.cli.scratch import list_all_instances
+from materialize.scratch import print_instances
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    check_required_vars()
     parser.add_argument(
         "owner",
         nargs="*",
@@ -28,10 +25,10 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    filters: list[FilterTypeDef] = []
-    if not args.all:
-        filters.append({"Name": "tag:LaunchedBy", "Values": args.owner or [whoami()]})
-    print_instances(
-        list(boto3.resource("ec2").instances.filter(Filters=filters)),
-        args.output_format,
+    provider = getattr(args, "provider", None)
+    instances, warnings = list_all_instances(
+        provider=provider, owners=args.owner or None, all=args.all
     )
+    print_instances(instances, args.output_format)
+    for w in warnings:
+        print(f"WARNING: Could not list instances from {w}", file=sys.stderr)

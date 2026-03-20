@@ -1,5 +1,6 @@
 {
     "name": "production-like ARM",
+    "provider": "aws",
     "launch_script": "true",
     "instance_type": "r6g.4xlarge",
     "ami": "ami-05d47d29a4c2d19e1",

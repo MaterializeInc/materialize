@@ -10,11 +10,8 @@
 import argparse
 import sys
 
-import boto3
-from mypy_boto3_ec2.type_defs import FilterTypeDef
-
-from materialize.cli.scratch import check_required_vars
-from materialize.scratch import print_instances, ui, whoami
+from materialize.cli.scratch import get_instance, list_all_instances, pick_instance
+from materialize.scratch import print_instances, ui
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
@@ -38,36 +35,34 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    check_required_vars()
-    instance_ids = []
-    filters: list[FilterTypeDef] = [
-        {
-            "Name": "instance-state-name",
-            "Values": ["pending", "running", "stopping", "stopped"],
-        }
-    ]
-    if args.all_mine:
-        if args.instances:
-            print(
-                "scratch: error: cannot specify --all-mine and instance IDs",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        filters.append({"Name": "tag:LaunchedBy", "Values": [whoami()]})
-    elif not args.instances:
+    provider = getattr(args, "provider", None)
+
+    if args.all_mine and args.instances:
         print(
-            "scratch: error: must supply at least one instance ID to destroy",
+            "scratch: error: cannot specify --all-mine and instance IDs",
             file=sys.stderr,
         )
         sys.exit(1)
-    else:
-        instance_ids.extend(args.instances)
 
-    instances = list(
-        boto3.resource("ec2").instances.filter(
-            Filters=filters, InstanceIds=instance_ids
-        )
-    )
+    if args.all_mine:
+        instances, warnings = list_all_instances(provider=provider)
+        instances = [
+            i
+            for i in instances
+            if i.state in ("pending", "running", "stopping", "stopped")
+        ]
+    elif args.instances:
+        instances = [get_instance(id, provider) for id in args.instances]
+        warnings = []
+    else:
+        instances = [pick_instance(provider)]
+        warnings = []
+
+    if not instances:
+        print("No instances to destroy.")
+        for w in warnings:
+            print(f"WARNING: Could not list instances from {w}", file=sys.stderr)
+        return
 
     print("Destroying instances:")
     print_instances(instances, args.output_format)
@@ -75,6 +70,20 @@ def run(args: argparse.Namespace) -> None:
     if not args.yes and not ui.confirm("Would you like to continue?"):
         sys.exit(0)
 
-    for instance in instances:
-        instance.terminate()
+    aws_instances = [i for i in instances if i.provider == "aws"]
+    hetzner_instances = [i for i in instances if i.provider == "hetzner"]
+
+    if aws_instances:
+        from materialize.scratch import terminate_instances
+
+        terminate_instances(aws_instances)
+
+    if hetzner_instances:
+        from materialize import scratch_hetzner
+
+        scratch_hetzner.terminate_instances(hetzner_instances)
+
     print("Instances destroyed.")
+
+    for w in warnings:
+        print(f"WARNING: Could not list instances from {w}", file=sys.stderr)

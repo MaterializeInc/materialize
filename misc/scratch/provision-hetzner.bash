@@ -9,10 +9,20 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Install necessary prerequisites for a remote EC2 host to run Materialize
-# demos, load tests, etc.
+# Install necessary prerequisites for a remote Hetzner Cloud host to run
+# Materialize demos, load tests, etc.
 
 set -euo pipefail
+
+# Hetzner images default to root; create ubuntu user and copy SSH keys
+# immediately so SSH access works while the rest of provisioning runs.
+id -u ubuntu &>/dev/null || useradd -m -s /bin/bash ubuntu
+echo "ubuntu ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/ubuntu
+mkdir -p /home/ubuntu/.ssh
+cp /root/.ssh/authorized_keys /home/ubuntu/.ssh/authorized_keys
+chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+chmod 700 /home/ubuntu/.ssh
+chmod 600 /home/ubuntu/.ssh/authorized_keys
 
 ARCH=$(uname -m)
 ARCH_GO=$(echo "$ARCH" | sed -e "s/aarch64/arm64/" -e "s/x86_64/amd64/")
@@ -63,21 +73,8 @@ apt-get install -y -qq --no-install-recommends \
     screen \
     unzip) &
 
-# Update ec2-instance-connect scripts to a version that works with OpenSSL 3.
-# https://github.com/aws/aws-ec2-instance-connect-config/issues/38
-(curl -fsSL "https://github.com/aws/aws-ec2-instance-connect-config/archive/refs/tags/1.1.17.zip" -o /tmp/ec2-ic.zip
-unzip -q -o /tmp/ec2-ic.zip -d /tmp
-cp /tmp/aws-ec2-instance-connect-config-1.1.17/src/bin/* /usr/share/ec2-instance-connect/
-rm -rf /tmp/ec2-ic.zip /tmp/aws-ec2-instance-connect-config-1.1.17) &
-
 # Rust
 (sudo -u ubuntu sh -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -q -y" >/dev/null 2>&1) &
-
-# AWS CLI
-(curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$ARCH.zip" -o /tmp/awscli.zip
-unzip -q -o /tmp/awscli.zip -d /tmp
-/tmp/aws/install >/dev/null
-rm -rf /tmp/awscli.zip /tmp/aws) &
 
 # uv
 (curl -fsSL https://astral.sh/uv/install.sh | sudo -u ubuntu sh >/dev/null 2>&1) &
@@ -104,6 +101,7 @@ PATHSETUP
 sed -i 's|^PATH="\(.*\)"|PATH="/home/ubuntu/.cargo/bin:/home/ubuntu/.local/bin:\1"|' /etc/environment
 
 # Set up shell completions for bin/scratch and bin/mzcompose.
+# The repo will be cloned to ~/materialize by the scratch tool after provisioning.
 cat >> /home/ubuntu/.bashrc <<'BASH_COMP'
 source /etc/profile.d/scratch-path.sh
 [ -f ~/materialize/misc/completions/bash/_scratch ] && source ~/materialize/misc/completions/bash/_scratch
@@ -113,7 +111,7 @@ cat >> /home/ubuntu/.zshrc <<'ZSH_COMP'
 source /etc/profile.d/scratch-path.sh
 fpath=(~/materialize/misc/completions/zsh $fpath)
 ZSH_COMP
-chown ubuntu:ubuntu /home/ubuntu/.bashrc /home/ubuntu/.zshrc
+chown -R ubuntu:ubuntu /home/ubuntu/.bashrc /home/ubuntu/.zshrc
 
 # Report that provisioning has completed.
 mkdir /opt/provision

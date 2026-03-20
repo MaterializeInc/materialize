@@ -1,5 +1,6 @@
 {
     "name": "c8g.4xlarge as used by CI, when a medium box is needed (aarch64-medium)",
+    "provider": "aws",
     "launch_script": "true",
     "instance_type": "c8g.4xlarge",
     "ami": "ami-01b9f1e7dc427266e",

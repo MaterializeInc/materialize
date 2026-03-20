@@ -1,5 +1,6 @@
 {
   "name": "vs code remote dev",
+  "provider": "aws",
   "launch_script": "true",
   "instance_type": "c7a.4xlarge",
   "ami": "ami-0ecb62995f68bb549",
