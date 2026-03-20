@@ -357,12 +357,25 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
     /// Normalize expressions (handles subqueries in WHERE, CASE, etc.).
     pub fn normalize_expr(&self, expr: &mut Expr<Raw>) {
         match expr {
-            Expr::Subquery(query) | Expr::Exists(query) => {
+            Expr::Subquery(query)
+            | Expr::Exists(query)
+            | Expr::ArraySubquery(query)
+            | Expr::ListSubquery(query)
+            | Expr::MapSubquery(query) => {
                 self.normalize_query(query);
             }
             Expr::InSubquery { expr, subquery, .. } => {
                 self.normalize_expr(expr);
                 self.normalize_query(subquery);
+            }
+            Expr::AnySubquery {
+                left, right: query, ..
+            }
+            | Expr::AllSubquery {
+                left, right: query, ..
+            } => {
+                self.normalize_expr(left);
+                self.normalize_query(query);
             }
             Expr::Between {
                 expr, low, high, ..
@@ -403,6 +416,52 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
                     }
                 }
             }
+            Expr::HomogenizingFunction { exprs, .. } => {
+                for expr in exprs {
+                    self.normalize_expr(expr);
+                }
+            }
+            Expr::NullIf { l_expr, r_expr } => {
+                self.normalize_expr(l_expr);
+                self.normalize_expr(r_expr);
+            }
+            Expr::Nested(expr) => {
+                self.normalize_expr(expr);
+            }
+            Expr::Not { expr } => {
+                self.normalize_expr(expr);
+            }
+            Expr::And { left, right } | Expr::Or { left, right } => {
+                self.normalize_expr(left);
+                self.normalize_expr(right);
+            }
+            Expr::InList { expr, list, .. } => {
+                self.normalize_expr(expr);
+                for item in list {
+                    self.normalize_expr(item);
+                }
+            }
+            Expr::Like {
+                expr,
+                pattern,
+                escape,
+                ..
+            } => {
+                self.normalize_expr(expr);
+                self.normalize_expr(pattern);
+                if let Some(escape) = escape {
+                    self.normalize_expr(escape);
+                }
+            }
+            Expr::AnyExpr {
+                left, right: expr, ..
+            }
+            | Expr::AllExpr {
+                left, right: expr, ..
+            } => {
+                self.normalize_expr(left);
+                self.normalize_expr(expr);
+            }
             Expr::Array(exprs) | Expr::List(exprs) => {
                 for expr in exprs {
                     self.normalize_expr(expr);
@@ -425,19 +484,27 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
                 }
             }
             Expr::Op { expr1, expr2, .. } => {
-                // Recursively normalize operands of binary/unary operations (e.g., AND, OR, =, >, <, +, etc.)
-                // This ensures subqueries in comparisons like "COUNT(*) > (SELECT ...)" are normalized
                 self.normalize_expr(expr1);
                 if let Some(expr2) = expr2 {
                     self.normalize_expr(expr2);
                 }
             }
-            // Note: We intentionally don't transform Expr::Identifier or Expr::QualifiedWildcard
-            // because qualified column references (like `alias.column`) should reference table
-            // aliases from the FROM clause, not fully qualified table names. The aliases themselves
-            // are already attached to transformed table names in the FROM clause.
-            //
-            // These don't contain subqueries or table references
+            Expr::Subscript { expr, positions } => {
+                self.normalize_expr(expr);
+                for pos in positions {
+                    match pos {
+                        SubscriptPosition { start: Some(e), .. } => self.normalize_expr(e),
+                        _ => {}
+                    }
+                    match pos {
+                        SubscriptPosition { end: Some(e), .. } => self.normalize_expr(e),
+                        _ => {}
+                    }
+                }
+            }
+            // Leaf nodes: identifiers, literals, parameters, wildcards, field access.
+            // Identifier and QualifiedWildcard are intentionally NOT transformed —
+            // they reference column aliases from the FROM clause, not table names.
             _ => {}
         }
     }

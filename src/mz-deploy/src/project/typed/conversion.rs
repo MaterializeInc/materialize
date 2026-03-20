@@ -616,6 +616,7 @@ impl TryFrom<super::super::raw::Project> for Project {
 
         // ── Step 1: Collect ─────────────────────────────────────────────
         // Flatten all objects and validate mod statements inline.
+        let collect_start = std::time::Instant::now();
 
         let mut object_tasks = Vec::new();
 
@@ -681,8 +682,11 @@ impl TryFrom<super::super::raw::Project> for Project {
             });
         }
 
+        crate::timing!("  typed: collect", collect_start.elapsed());
+
         // ── Step 2: Process ─────────────────────────────────────────────
         // Validate each object in parallel, collecting all errors.
+        let process_start = std::time::Instant::now();
 
         enum ValidatedResult {
             Ok {
@@ -723,8 +727,11 @@ impl TryFrom<super::super::raw::Project> for Project {
             }
         }
 
+        crate::timing!("  typed: process", process_start.elapsed());
+
         // ── Step 3: Reassemble ──────────────────────────────────────────
         // Group validated objects by (db, schema), run per-schema checks, build Project.
+        let reassemble_start = std::time::Instant::now();
 
         // Group objects by (db_name, schema_name)
         let mut objects_by_location: BTreeMap<(String, String), Vec<DatabaseObject>> =
@@ -778,6 +785,8 @@ impl TryFrom<super::super::raw::Project> for Project {
 
         // Validate replacement schemas only contain MVs
         validate_replacement_schemas(&replacement_schemas, &databases, &mut all_errors);
+
+        crate::timing!("  typed: reassemble", reassemble_start.elapsed());
 
         if !all_errors.is_empty() {
             return Err(ValidationErrors::new(all_errors));

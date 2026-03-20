@@ -45,6 +45,26 @@ impl Project {
             .map(|object| object.id.clone())
     }
 
+    /// Returns only `CREATE TABLE ... FROM SOURCE` objects.
+    ///
+    /// Unlike [`get_tables`](Self::get_tables), this excludes plain `CREATE TABLE`
+    /// objects whose schemas can be derived from the SQL AST. Only
+    /// `CreateTableFromSource` tables need their columns queried from the live
+    /// server (via `types.lock`), because their columns depend on the external source.
+    pub fn get_tables_from_source(&self) -> impl Iterator<Item = ObjectId> + '_ {
+        self.databases
+            .iter()
+            .flat_map(|db| db.schemas.iter())
+            .flat_map(|schema| schema.objects.iter())
+            .filter(|object| {
+                matches!(
+                    object.typed_object.stmt,
+                    Statement::CreateTableFromSource(_)
+                )
+            })
+            .map(|object| object.id.clone())
+    }
+
     fn visit(
         &self,
         object_id: &ObjectId,

@@ -102,6 +102,7 @@ impl From<typed::Project> for Project {
     fn from(typed_project: typed::Project) -> Self {
         // ── Step 1: Collect ─────────────────────────────────────────────
         // Flatten all typed objects and collect defined object IDs.
+        let collect_start = std::time::Instant::now();
 
         let mut object_tasks = Vec::new();
         let mut defined_objects = BTreeSet::new();
@@ -156,8 +157,11 @@ impl From<typed::Project> for Project {
             });
         }
 
+        crate::timing!("  planned: collect", collect_start.elapsed());
+
         // ── Step 2: Process ─────────────────────────────────────────────
         // Extract dependencies and clusters from each object.
+        let process_start = std::time::Instant::now();
 
         let processed: Vec<ProcessedObject> = object_tasks
             .into_par_iter()
@@ -209,8 +213,11 @@ impl From<typed::Project> for Project {
             })
             .collect();
 
+        crate::timing!("  planned: process", process_start.elapsed());
+
         // ── Step 3: Reassemble ──────────────────────────────────────────
         // Merge results into dependency graph and hierarchical structure.
+        let reassemble_start = std::time::Instant::now();
 
         let mut dependency_graph = BTreeMap::new();
         let mut external_dependencies = BTreeSet::new();
@@ -318,6 +325,8 @@ impl From<typed::Project> for Project {
                 mod_statements: meta.mod_statements,
             });
         }
+
+        crate::timing!("  planned: reassemble", reassemble_start.elapsed());
 
         Project {
             databases,
@@ -852,7 +861,10 @@ fn extract_expr_dependencies_with_ctes(
                 }
             }
         }
-        Expr::Array(exprs) | Expr::List(exprs) | Expr::Row { exprs } => {
+        Expr::HomogenizingFunction { exprs, .. }
+        | Expr::Array(exprs)
+        | Expr::List(exprs)
+        | Expr::Row { exprs } => {
             for expr in exprs {
                 extract_expr_dependencies_with_ctes(
                     expr,
@@ -863,7 +875,157 @@ fn extract_expr_dependencies_with_ctes(
                 );
             }
         }
-        // Other expression types don't contain subqueries
+        Expr::NullIf { l_expr, r_expr }
+        | Expr::And {
+            left: l_expr,
+            right: r_expr,
+        }
+        | Expr::Or {
+            left: l_expr,
+            right: r_expr,
+        } => {
+            extract_expr_dependencies_with_ctes(
+                l_expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+            extract_expr_dependencies_with_ctes(
+                r_expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+        }
+        Expr::Nested(expr) | Expr::Not { expr } => {
+            extract_expr_dependencies_with_ctes(
+                expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+        }
+        Expr::InList { expr, list, .. } => {
+            extract_expr_dependencies_with_ctes(
+                expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+            for item in list {
+                extract_expr_dependencies_with_ctes(
+                    item,
+                    default_database,
+                    default_schema,
+                    deps,
+                    cte_names,
+                );
+            }
+        }
+        Expr::Like {
+            expr,
+            pattern,
+            escape,
+            ..
+        } => {
+            extract_expr_dependencies_with_ctes(
+                expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+            extract_expr_dependencies_with_ctes(
+                pattern,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+            if let Some(escape) = escape {
+                extract_expr_dependencies_with_ctes(
+                    escape,
+                    default_database,
+                    default_schema,
+                    deps,
+                    cte_names,
+                );
+            }
+        }
+        Expr::Collate { expr, .. } | Expr::IsExpr { expr, .. } => {
+            extract_expr_dependencies_with_ctes(
+                expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+        }
+        Expr::AnySubquery {
+            left, right: query, ..
+        }
+        | Expr::AllSubquery {
+            left, right: query, ..
+        } => {
+            extract_expr_dependencies_with_ctes(
+                left,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+            extract_query_dependencies_with_ctes(
+                query,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+        }
+        Expr::AnyExpr {
+            left, right: expr, ..
+        }
+        | Expr::AllExpr {
+            left, right: expr, ..
+        } => {
+            extract_expr_dependencies_with_ctes(
+                left,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+            extract_expr_dependencies_with_ctes(
+                expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+        }
+        Expr::ArraySubquery(query) | Expr::ListSubquery(query) | Expr::MapSubquery(query) => {
+            extract_query_dependencies_with_ctes(
+                query,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+        }
+        Expr::Subscript { expr, .. } => {
+            extract_expr_dependencies_with_ctes(
+                expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+        }
+        // Leaf nodes: identifiers, literals, parameters, wildcards, field access
         _ => {}
     }
 }

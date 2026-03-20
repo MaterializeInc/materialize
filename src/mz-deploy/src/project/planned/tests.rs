@@ -2874,3 +2874,227 @@ fn test_fk_referenced_table_not_in_parent_dependencies() {
         "FK companion MV should depend on customers"
     );
 }
+
+// ============================================================================
+// Regression tests: expression traversal coverage
+//
+// These tests verify that dependencies nested inside expression variants
+// (COALESCE, NOT, AND/OR, NULLIF, GREATEST/LEAST, parenthesized expressions)
+// are properly extracted. A previous bug had a `_ => {}` catch-all that
+// silently skipped these variants.
+// ============================================================================
+
+#[test]
+fn test_extract_dependencies_coalesce_with_in_subquery() {
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT COALESCE(
+          CASE WHEN x IN (SELECT label FROM timezones) THEN x END,
+          'UTC'
+        ) AS tz FROM source_table
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "source_table".to_string()
+            )),
+            "Should detect source_table dependency, got: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "timezones".to_string()
+            )),
+            "Should detect timezones dependency inside COALESCE/CASE/IN, got: {:?}",
+            deps
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_nested_expr() {
+    let sql = r#"
+        CREATE VIEW v AS SELECT * FROM t1 WHERE (id IN (SELECT id FROM t2))
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "t2".to_string()
+            )),
+            "Should detect t2 inside parenthesized expression, got: {:?}",
+            deps
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_not_exists() {
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT * FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t2.id = t1.id)
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "t2".to_string()
+            )),
+            "Should detect t2 inside NOT EXISTS, got: {:?}",
+            deps
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_and_or_subqueries() {
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT * FROM t1
+        WHERE id IN (SELECT id FROM t2) OR name IN (SELECT name FROM t3)
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "t2".to_string()
+            )),
+            "Should detect t2 inside OR left operand, got: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "t3".to_string()
+            )),
+            "Should detect t3 inside OR right operand, got: {:?}",
+            deps
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_nullif_subquery() {
+    let sql = r#"
+        CREATE VIEW v AS SELECT NULLIF(x, (SELECT max(y) FROM t2)) FROM t1
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "t2".to_string()
+            )),
+            "Should detect t2 inside NULLIF, got: {:?}",
+            deps
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_greatest_subquery() {
+    let sql = r#"
+        CREATE VIEW v AS SELECT GREATEST(a, (SELECT max(b) FROM t2)) FROM t1
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "t2".to_string()
+            )),
+            "Should detect t2 inside GREATEST, got: {:?}",
+            deps
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_extract_dependencies_deeply_nested_coalesce_case_in() {
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT
+          (col::date::text || ' ' || COALESCE(
+            CASE WHEN tz IN (SELECT label FROM tz_lookup) THEN tz END,
+            'UTC'
+          ))::timestamptz AS ts
+        FROM raw_data
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "raw_data".to_string()
+            )),
+            "Should detect raw_data dependency, got: {:?}",
+            deps
+        );
+        assert!(
+            deps.contains(&ObjectId::new(
+                "db".to_string(),
+                "public".to_string(),
+                "tz_lookup".to_string()
+            )),
+            "Should detect tz_lookup inside deeply nested COALESCE/CASE/IN, got: {:?}",
+            deps
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}

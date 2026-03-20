@@ -84,6 +84,14 @@ struct Args {
     #[arg(short, long, global = true)]
     verbose: bool,
 
+    /// Show per-step timing breakdown on stderr
+    #[arg(long, global = true)]
+    timing: bool,
+
+    /// Suppress informational output (info messages and command output)
+    #[arg(short, long, global = true)]
+    quiet: bool,
+
     /// Database connection profile to use (from profiles.toml)
     #[arg(short, long, global = true, env = "MZ_DEPLOY_PROFILE")]
     profile: Option<String>,
@@ -709,6 +717,8 @@ enum DeleteCommand {
 async fn main() {
     let args = Args::parse();
     log::set_verbose(args.verbose);
+    log::set_timing(args.timing);
+    log::set_quiet(args.quiet);
     log::set_json_output(matches!(args.output, OutputFormat::Json));
 
     if let Err(e) = run(args).await {

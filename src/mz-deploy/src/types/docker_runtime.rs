@@ -6,7 +6,7 @@
 use crate::client::{Client, Profile};
 use crate::config::DEFAULT_DOCKER_IMAGE;
 use crate::types::{TypeCheckError, Types};
-use crate::verbose;
+use crate::{timing, verbose};
 use tokio::process::Command;
 use tokio::time::{Duration, sleep};
 
@@ -68,11 +68,11 @@ impl DockerRuntime {
         self
     }
 
-    /// Get a connected client with external dependencies staged
+    /// Get a connected client with external dependencies staged.
     ///
     /// This method:
-    /// 1. Ensures the Docker container is running and healthy
-    /// 2. Connects to the Materialize database
+    /// 1. Attempts a fast-path direct connection (skips Docker CLI if container is already healthy)
+    /// 2. Falls back to Docker CLI checks to create/restart the container if needed
     /// 3. Creates temporary tables for all external dependencies from types.lock
     /// 4. Returns the connected client ready for use
     ///
@@ -82,31 +82,75 @@ impl DockerRuntime {
     /// # Returns
     /// A connected Client with tables from types.lock already staged
     pub async fn get_client(&self, types: &Types) -> Result<Client, TypeCheckError> {
-        // Ensure the persistent container is running and healthy
-        self.ensure_container().await?;
+        let start = std::time::Instant::now();
 
-        // Connect to Materialize (using fixed port)
-        let profile = Profile {
-            name: "docker-typecheck".to_string(),
-            host: "localhost".to_string(),
-            port: CONTAINER_PORT,
-            username: Some("materialize".to_string()),
-            password: None,
+        // Fast path: try connecting directly. If it works, the container is
+        // already running and healthy — skip all Docker CLI process spawns.
+        let profile = Self::make_profile();
+        let client = match Client::connect_with_profile(profile).await {
+            Ok(client) => {
+                timing!("  connect (fast-path)", start.elapsed());
+                verbose!(
+                    "Fast-path connect succeeded ({}ms)",
+                    start.elapsed().as_millis()
+                );
+                client
+            }
+            Err(_) => {
+                timing!("  connect (fast-path fail)", start.elapsed());
+                verbose!(
+                    "Fast-path connect failed ({}ms), falling back to Docker CLI",
+                    start.elapsed().as_millis()
+                );
+                // Slow path: container not reachable. Use Docker CLI to fix it.
+                let ensure_start = std::time::Instant::now();
+                self.ensure_container().await?;
+                timing!("  ensure_container", ensure_start.elapsed());
+
+                let connect_start = std::time::Instant::now();
+                let profile = Self::make_profile();
+                verbose!("Connecting to Materialize...");
+                let client = Client::connect_with_profile(profile).await?;
+                timing!("  connect (slow-path)", connect_start.elapsed());
+                verbose!(
+                    "Connected ({}ms)",
+                    connect_start.elapsed().as_millis()
+                );
+                client
+            }
         };
-
-        verbose!("Connecting to Materialize...");
-        let client = Client::connect_with_profile(profile).await?;
 
         // Create temporary tables from types.lock (includes external deps and project tables)
         if !types.tables.is_empty() {
+            let staging_start = std::time::Instant::now();
             verbose!(
                 "Creating {} temporary tables from types.lock",
                 types.tables.len()
             );
             self.create_tables_from_types_lock(&client, types).await?;
+            timing!("  stage_types_lock", staging_start.elapsed());
+            verbose!(
+                "Staged types.lock tables ({}ms)",
+                staging_start.elapsed().as_millis()
+            );
         }
 
+        verbose!(
+            "get_client total ({}ms)",
+            start.elapsed().as_millis()
+        );
         Ok(client)
+    }
+
+    /// Build the connection profile for the persistent container.
+    fn make_profile() -> Profile {
+        Profile {
+            name: "docker-typecheck".to_string(),
+            host: "localhost".to_string(),
+            port: CONTAINER_PORT,
+            username: Some("materialize".to_string()),
+            password: None,
+        }
     }
 
     /// Check if the persistent container exists
@@ -146,19 +190,10 @@ impl DockerRuntime {
 
     /// Check if the container is healthy by attempting a connection
     async fn container_is_healthy(&self) -> bool {
-        let profile = Profile {
-            name: "docker-typecheck".to_string(),
-            host: "localhost".to_string(),
-            port: CONTAINER_PORT,
-            username: Some("materialize".to_string()),
-            password: None,
-        };
-
         // Try to connect - if this succeeds, container is healthy
-        match Client::connect_with_profile(profile).await {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+        Client::connect_with_profile(Self::make_profile())
+            .await
+            .is_ok()
     }
 
     /// Remove the persistent container
@@ -197,6 +232,8 @@ impl DockerRuntime {
                 "-p",
                 &format!("{}:6875", CONTAINER_PORT),
                 &self.image,
+                "--system-parameter-default=max_tables=10000",
+                "--system-parameter-default=max_objects_per_schema=10000",
             ])
             .output()
             .await
@@ -293,12 +330,17 @@ impl DockerRuntime {
         Ok(())
     }
 
-    /// Create temporary tables from types.lock for type checking
+    /// Create temporary tables from types.lock for type checking.
+    ///
+    /// All CREATE TEMPORARY TABLE statements are batched into a single
+    /// `batch_execute` call to minimize round-trip overhead.
     async fn create_tables_from_types_lock(
         &self,
         client: &Client,
         types: &Types,
     ) -> Result<(), TypeCheckError> {
+        let mut statements = Vec::with_capacity(types.tables.len());
+
         for (fqn, columns) in &types.tables {
             let mut col_defs = Vec::new();
             for (col_name, col_type) in columns {
@@ -306,20 +348,22 @@ impl DockerRuntime {
                 col_defs.push(format!("{} {}{}", col_name, col_type.r#type, nullable));
             }
 
-            let create_sql = format!(
+            statements.push(format!(
                 "CREATE TEMPORARY TABLE \"{}\" ({})",
                 fqn,
                 col_defs.join(", ")
-            );
+            ));
 
             verbose!("Creating temporary table: {}", fqn);
-            client.execute(&create_sql, &[]).await.map_err(|e| {
-                TypeCheckError::DatabaseSetupError(format!(
-                    "failed to create temporary table for '{}': {}",
-                    fqn, e
-                ))
-            })?;
         }
+
+        let batch_sql = statements.join(";\n");
+        client.batch_execute(&batch_sql).await.map_err(|e| {
+            TypeCheckError::DatabaseSetupError(format!(
+                "failed to create temporary tables from types.lock: {}",
+                e
+            ))
+        })?;
 
         Ok(())
     }

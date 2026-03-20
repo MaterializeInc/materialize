@@ -6387,6 +6387,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-secretsmanager",
+ "bincode",
  "chrono",
  "clap",
  "clap_complete",

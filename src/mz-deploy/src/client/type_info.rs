@@ -1,11 +1,14 @@
 //! Column-schema introspection for the data-contract and type-checking systems.
 //!
 //! Methods on [`TypeInfoClient`] run `SHOW COLUMNS` against external
-//! dependencies and project tables, returning their column names, types, and
-//! nullability as a [`Types`](crate::types::Types) snapshot.
+//! dependencies and `CREATE TABLE FROM SOURCE` tables, returning their column
+//! names, types, and nullability as a [`Types`](crate::types::Types) snapshot.
+//!
+//! Plain `CREATE TABLE` objects are excluded — their schemas are derived from
+//! the SQL AST during type checking and do not need server queries.
 //!
 //! - **`gen-data-contracts`** uses [`query_external_types`](TypeInfoClient::query_external_types)
-//!   to generate `types.lock` from the live region.
+//!   to generate `types.lock` for external dependencies and source tables.
 //! - **Incremental type checking** uses [`query_object_columns`](TypeInfoClient::query_object_columns)
 //!   to query a single view's output columns inline after validation, enabling
 //!   type-hash comparison for dirty propagation.
@@ -19,10 +22,14 @@ use crate::types::{ColumnType, ObjectKind, Types};
 use std::collections::BTreeMap;
 
 impl TypeInfoClient<'_> {
-    /// Query SHOW COLUMNS for all external dependencies and return their schemas as a Types object.
+    /// Query SHOW COLUMNS for external dependencies and `CREATE TABLE FROM SOURCE` tables.
+    ///
+    /// Plain `CREATE TABLE` objects are excluded — their schemas are derived from
+    /// the SQL AST during type checking. Only `CreateTableFromSource` tables need
+    /// their columns queried from the live server.
     ///
     /// Also queries `mz_catalog.mz_objects` to determine each object's kind.
-    /// Project tables are always recorded as `ObjectKind::Table`.
+    /// Source tables are always recorded as `ObjectKind::Table`.
     pub async fn query_external_types(
         &self,
         project: &planned::Project,
@@ -30,9 +37,9 @@ impl TypeInfoClient<'_> {
         let mut objects = BTreeMap::new();
         let mut kinds = BTreeMap::new();
 
-        // Project tables are always Table kind
-        let project_table_oids: Vec<ObjectId> = project.get_tables().collect();
-        for oid in &project_table_oids {
+        // Source tables are always Table kind
+        let source_table_oids: Vec<ObjectId> = project.get_tables_from_source().collect();
+        for oid in &source_table_oids {
             kinds.insert(oid.to_string(), ObjectKind::Table);
         }
 
@@ -40,7 +47,7 @@ impl TypeInfoClient<'_> {
             .external_dependencies
             .iter()
             .cloned()
-            .chain(project_table_oids.into_iter())
+            .chain(source_table_oids.into_iter())
             .collect();
 
         for oid in &oids {

@@ -287,6 +287,7 @@ pub fn load_project<P: AsRef<Path>>(
     // ── Step 1: Collect ─────────────────────────────────────────────────
     // Walk directories, collect ParseTasks with file paths + metadata.
     // Mod statements are parsed inline since they are few.
+    let collect_start = std::time::Instant::now();
 
     let mut database_name_map = BTreeMap::new();
     let mut parse_tasks = Vec::new();
@@ -428,8 +429,11 @@ pub fn load_project<P: AsRef<Path>>(
         );
     }
 
+    crate::timing!("  raw: collect", collect_start.elapsed());
+
     // ── Step 2: Process ─────────────────────────────────────────────────
     // Read and parse each object file in parallel. Collect all errors.
+    let process_start = std::time::Instant::now();
 
     struct ParsedObject {
         db_name: String,
@@ -478,8 +482,11 @@ pub fn load_project<P: AsRef<Path>>(
         return Err(first_error);
     }
 
+    crate::timing!("  raw: process", process_start.elapsed());
+
     // ── Step 3: Reassemble ──────────────────────────────────────────────
     // Group parsed objects back into the hierarchical Project structure.
+    let reassemble_start = std::time::Instant::now();
 
     // Group objects by (db_name, schema_name)
     let mut schema_objects: BTreeMap<(String, String), Vec<DatabaseObject>> = BTreeMap::new();
@@ -529,6 +536,8 @@ pub fn load_project<P: AsRef<Path>>(
             );
         }
     }
+
+    crate::timing!("  raw: reassemble", reassemble_start.elapsed());
 
     Ok(Project {
         root: root.to_path_buf(),

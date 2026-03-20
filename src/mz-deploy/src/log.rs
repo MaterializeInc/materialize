@@ -14,8 +14,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// timing of when verbose mode is enabled/disabled doesn't matter.
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 
+/// Global timing output flag.
+static TIMING: AtomicBool = AtomicBool::new(false);
+
 /// Global JSON output flag.
 static JSON_OUTPUT: AtomicBool = AtomicBool::new(false);
+
+/// Global quiet mode flag.
+static QUIET: AtomicBool = AtomicBool::new(false);
 
 /// Enable or disable JSON output mode.
 pub fn set_json_output(v: bool) {
@@ -25,6 +31,16 @@ pub fn set_json_output(v: bool) {
 /// Check if JSON output mode is currently enabled.
 pub fn json_output_enabled() -> bool {
     JSON_OUTPUT.load(Ordering::Relaxed)
+}
+
+/// Enable or disable quiet mode.
+pub fn set_quiet(v: bool) {
+    QUIET.store(v, Ordering::Relaxed);
+}
+
+/// Check if quiet mode is currently enabled.
+pub fn quiet_enabled() -> bool {
+    QUIET.load(Ordering::Relaxed)
 }
 
 /// Enable or disable verbose logging.
@@ -37,6 +53,16 @@ pub fn verbose_enabled() -> bool {
     VERBOSE.load(Ordering::Relaxed)
 }
 
+/// Enable or disable timing output.
+pub fn set_timing(v: bool) {
+    TIMING.store(v, Ordering::Relaxed);
+}
+
+/// Check if timing output is currently enabled.
+pub fn timing_enabled() -> bool {
+    TIMING.load(Ordering::Relaxed)
+}
+
 /// Print a message only when verbose mode is enabled.
 #[macro_export]
 #[allow(clippy::print_stderr)]
@@ -44,6 +70,24 @@ macro_rules! verbose {
     ($($arg:tt)*) => {
         if $crate::log::verbose_enabled() {
             eprintln!($($arg)*);
+        }
+    };
+}
+
+/// Print a timing measurement when timing mode is enabled.
+///
+/// Emits a single line to stderr with a dotted-leader format:
+/// ```text
+///   ⏱ plan_typecheck............ 8ms
+/// ```
+///
+/// The label can include leading spaces for visual nesting.
+#[macro_export]
+#[allow(clippy::print_stderr)]
+macro_rules! timing {
+    ($label:expr, $duration:expr) => {
+        if $crate::log::timing_enabled() {
+            eprintln!("  ⏱ {:.<28} {:>5}ms", $label, $duration.as_millis());
         }
     };
 }
@@ -82,8 +126,13 @@ pub trait Render: std::fmt::Display + serde::Serialize {}
 impl<T: std::fmt::Display + serde::Serialize> Render for T {}
 
 /// Output a value: JSON to stdout when `--output json`, human text to stderr otherwise.
+///
+/// Silenced by `--quiet`.
 #[allow(clippy::print_stdout, clippy::print_stderr)]
 pub fn output(value: &impl Render) {
+    if quiet_enabled() {
+        return;
+    }
     if json_output_enabled() {
         println!("{}", serde_json::to_string(value).unwrap());
     } else {
@@ -91,12 +140,14 @@ pub fn output(value: &impl Render) {
     }
 }
 
-/// Print an informational message unconditionally to stderr.
+/// Print an informational message to stderr. Silenced by `--quiet`.
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        #[allow(clippy::print_stderr)]
-        { eprintln!($($arg)*); }
+        if !$crate::log::quiet_enabled() {
+            #[allow(clippy::print_stderr)]
+            { eprintln!($($arg)*); }
+        }
     };
 }
 
@@ -110,11 +161,13 @@ pub fn output_json(value: &impl serde::Serialize) {
     println!("{}", serde_json::to_string(value).unwrap());
 }
 
-/// Print an informational message to stderr without a trailing newline.
+/// Print an informational message to stderr without a trailing newline. Silenced by `--quiet`.
 #[macro_export]
 macro_rules! info_nonl {
     ($($arg:tt)*) => {
-        #[allow(clippy::print_stderr)]
-        { eprint!($($arg)*); }
+        if !$crate::log::quiet_enabled() {
+            #[allow(clippy::print_stderr)]
+            { eprint!($($arg)*); }
+        }
     };
 }

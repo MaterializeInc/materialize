@@ -1,4 +1,8 @@
-//! Generate data contracts command - creates types.lock for external dependencies.
+//! Generate data contracts command - creates types.lock for external dependencies
+//! and `CREATE TABLE FROM SOURCE` tables.
+//!
+//! Plain `CREATE TABLE` objects are excluded from `types.lock` because their
+//! column schemas are derived from the SQL AST during type checking.
 
 use crate::cli::CliError;
 use crate::cli::progress;
@@ -49,17 +53,17 @@ pub async fn run(settings: &Settings) -> Result<(), CliError> {
     )
     .await?;
 
-    let has_tables = planned_project.get_tables().next().is_some();
-    if planned_project.external_dependencies.is_empty() && !has_tables {
-        progress::info("No external dependencies or tables found - types.lock not needed");
+    let has_source_tables = planned_project.get_tables_from_source().next().is_some();
+    if planned_project.external_dependencies.is_empty() && !has_source_tables {
+        progress::info("No external dependencies or source tables found - types.lock not needed");
         return Ok(());
     }
 
-    let table_count = planned_project.get_tables().count();
+    let source_table_count = planned_project.get_tables_from_source().count();
     progress::info(&format!(
-        "Found {} external dependencies and {} tables",
+        "Found {} external dependencies and {} source tables",
         planned_project.external_dependencies.len(),
-        table_count
+        source_table_count
     ));
 
     // Query external types and write types.lock

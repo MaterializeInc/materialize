@@ -5,8 +5,8 @@ use crate::cli::TypeCheckMode;
 use crate::cli::progress;
 use crate::config::Settings;
 use crate::project::object_id::ObjectId;
-use crate::{project, verbose};
-use std::collections::{BTreeMap, BTreeSet};
+use crate::{project, timing, verbose};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -66,6 +66,7 @@ pub async fn run(
     )
     .await?;
     let parse_duration = parse_start.elapsed();
+    timing!("project::plan", parse_duration);
 
     // Count objects and schemas
     let object_count: usize = planned_project
@@ -96,6 +97,7 @@ pub async fn run(
     // Topological sort validates the project (detects cycles)
     let sorted = planned_project.topological_sort()?;
     let validate_duration = validate_start.elapsed();
+    timing!("topological_sort", validate_duration);
 
     if show_progress {
         progress::stage_success(
@@ -188,133 +190,6 @@ pub async fn run(
     Ok(planned_project)
 }
 
-/// Build the incremental state by comparing current AST hashes against the snapshot.
-///
-/// Returns `None` if there are no dirty objects and the object set hasn't changed,
-/// meaning the typecheck can be skipped entirely. Returns `Some(IncrementalState)`
-/// with the dirty set when incremental checking is needed.
-fn build_incremental_state(
-    directory: &Path,
-    planned_project: &project::planned::Project,
-) -> Result<Option<crate::types::IncrementalState>, CliError> {
-    use crate::project::ast::Statement;
-    use crate::project::deployment_snapshot::compute_typed_hash;
-
-    // Load previous snapshot and cache
-    let cached_types = crate::types::load_types_cache(directory).unwrap_or_default();
-    let old_snapshot = crate::types::load_typecheck_snapshot(directory)
-        .map_err(|e| CliError::Message(format!("failed to load typecheck snapshot: {}", e)))?;
-
-    let old_hashes = match old_snapshot {
-        Some(h) => h,
-        None => {
-            // No snapshot exists — full check needed, but we still provide
-            // IncrementalState so the incremental path writes the snapshot afterward.
-            // All views/MVs are dirty.
-            let mut dirty = BTreeSet::new();
-            let sorted = planned_project.get_sorted_objects()?;
-            for (oid, typed_obj) in &sorted {
-                if matches!(
-                    typed_obj.stmt,
-                    Statement::CreateView(_) | Statement::CreateMaterializedView(_)
-                ) {
-                    dirty.insert(oid.clone());
-                }
-            }
-            return Ok(Some(crate::types::IncrementalState {
-                cached_types,
-                dirty,
-            }));
-        }
-    };
-
-    // Compute current AST hashes for all views/MVs
-    let sorted = planned_project.get_sorted_objects()?;
-    let mut current_hashes = BTreeMap::new();
-    for (oid, typed_obj) in &sorted {
-        if matches!(
-            typed_obj.stmt,
-            Statement::CreateView(_) | Statement::CreateMaterializedView(_)
-        ) {
-            let hash = compute_typed_hash(typed_obj);
-            current_hashes.insert(oid.to_string(), hash);
-        }
-    }
-
-    // Diff: find dirty objects (changed, new, or removed AST hashes)
-    let mut dirty = BTreeSet::new();
-
-    for (fqn, current_hash) in &current_hashes {
-        match old_hashes.get(fqn) {
-            Some(old_hash) if old_hash == current_hash => {} // unchanged
-            _ => {
-                // Changed or new — parse back to ObjectId
-                if let Some(oid) = fqn_to_object_id(fqn) {
-                    dirty.insert(oid);
-                }
-            }
-        }
-    }
-
-    // Check for removed objects
-    let current_fqns: BTreeSet<&String> = current_hashes.keys().collect();
-    let old_fqns: BTreeSet<&String> = old_hashes.keys().collect();
-    let has_removals = old_fqns.difference(&current_fqns).next().is_some();
-
-    if dirty.is_empty() && !has_removals {
-        // Nothing changed — skip typecheck entirely
-        return Ok(None);
-    }
-
-    verbose!(
-        "Incremental typecheck: {} dirty object(s), {} removed",
-        dirty.len(),
-        old_fqns.difference(&current_fqns).count()
-    );
-
-    Ok(Some(crate::types::IncrementalState {
-        cached_types,
-        dirty,
-    }))
-}
-
-/// Write the typecheck snapshot with current AST hashes for all views/MVs.
-fn write_current_snapshot(
-    directory: &Path,
-    planned_project: &project::planned::Project,
-) -> Result<(), CliError> {
-    use crate::project::ast::Statement;
-    use crate::project::deployment_snapshot::compute_typed_hash;
-
-    let sorted = planned_project.get_sorted_objects()?;
-    let mut hashes = BTreeMap::new();
-    for (oid, typed_obj) in &sorted {
-        if matches!(
-            typed_obj.stmt,
-            Statement::CreateView(_) | Statement::CreateMaterializedView(_)
-        ) {
-            hashes.insert(oid.to_string(), compute_typed_hash(typed_obj));
-        }
-    }
-
-    crate::types::write_typecheck_snapshot(directory, &hashes)
-        .map_err(|e| CliError::Message(format!("failed to write typecheck snapshot: {}", e)))
-}
-
-/// Parse a `database.schema.object` FQN string back into an `ObjectId`.
-fn fqn_to_object_id(fqn: &str) -> Option<ObjectId> {
-    let parts: Vec<&str> = fqn.splitn(3, '.').collect();
-    if parts.len() == 3 {
-        Some(ObjectId {
-            database: parts[0].to_string(),
-            schema: parts[1].to_string(),
-            object: parts[2].to_string(),
-        })
-    } else {
-        None
-    }
-}
-
 /// Perform type checking using Docker
 async fn typecheck_with_docker(
     directory: &Path,
@@ -323,18 +198,22 @@ async fn typecheck_with_docker(
     show_progress: bool,
 ) -> Result<Option<Duration>, CliError> {
     use crate::types::docker_runtime::DockerRuntime;
-    use crate::types::{TypeCheckError, typecheck_with_client};
+    use crate::types::{
+        TypeCheckError, plan_typecheck, typecheck_with_client, write_snapshot_from_plan,
+    };
 
     if show_progress {
         progress::stage_start("Type checking with Docker");
     }
     let typecheck_start = Instant::now();
 
-    // Build incremental state before starting Docker
-    let incremental = build_incremental_state(directory, planned_project)?;
+    // Plan incremental typecheck before starting Docker
+    let plan_start = Instant::now();
+    let plan = plan_typecheck(directory, planned_project)
+        .map_err(|e| CliError::Message(format!("failed to plan typecheck: {}", e)))?;
+    timing!("plan_typecheck", plan_start.elapsed());
 
-    // If incremental analysis says nothing changed, skip entirely
-    if incremental.is_none() {
+    if plan.is_up_to_date() {
         verbose!("Typecheck snapshot unchanged — skipping type check");
         if show_progress {
             progress::info("Types unchanged, skipping type check");
@@ -355,6 +234,7 @@ async fn typecheck_with_docker(
     let runtime = DockerRuntime::new().with_image(docker_image);
 
     // Get connected client with staged dependencies
+    let client_start = Instant::now();
     let mut client = match runtime.get_client(&types).await {
         Ok(client) => client,
         Err(TypeCheckError::ContainerStartFailed(e)) => {
@@ -369,12 +249,23 @@ async fn typecheck_with_docker(
             return Err(e.into());
         }
     };
+    timing!("get_client", client_start.elapsed());
 
-    // Run type checking with incremental state
-    match typecheck_with_client(&mut client, planned_project, directory, incremental).await {
-        Ok(()) => {
-            // Write the snapshot after successful typecheck
-            write_current_snapshot(directory, planned_project)?;
+    // Build the set of FQNs already staged from types.lock
+    let staged_fqns: BTreeSet<String> = types.tables.keys().cloned().collect();
+
+    // Run type checking
+    let tc_start = Instant::now();
+    match typecheck_with_client(&mut client, planned_project, directory, &staged_fqns, plan).await {
+        Ok(plan) => {
+            timing!("typecheck", tc_start.elapsed());
+
+            // Write the snapshot using precomputed hashes (avoids redundant rehash)
+            let snap_start = Instant::now();
+            write_snapshot_from_plan(directory, &plan).map_err(|e| {
+                CliError::Message(format!("failed to write typecheck snapshot: {}", e))
+            })?;
+            timing!("write_snapshot", snap_start.elapsed());
 
             let duration = typecheck_start.elapsed();
             Ok(Some(duration))

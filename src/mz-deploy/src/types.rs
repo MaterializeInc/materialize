@@ -20,20 +20,17 @@
 //!
 //! To avoid re-validating every view on each compile, mz-deploy supports
 //! incremental type checking via a `typecheck.snapshot` file stored in the
-//! build directory alongside `types.cache`.
+//! build directory alongside `types.cache`. The incremental logic is
+//! encapsulated in the [`incremental`] submodule with a minimal public API:
 //!
+//! - **[`plan_typecheck`]** — Compares current AST hashes against the snapshot
+//!   and returns a [`TypecheckPlan`] that is either up-to-date (skip Docker)
+//!   or carries the dirty set for [`typecheck_with_client`].
+//! - **[`write_snapshot`]** — Writes the `typecheck.snapshot` after a
+//!   successful typecheck.
 //! - **[`type_hash`]** — Computes a deterministic SHA-256 hash of a column
-//!   schema map. Used to detect whether a view's output type changed after
-//!   re-checking, which determines whether downstream dependents need
-//!   re-validation.
-//! - **[`IncrementalState`]** — Bundles the cached column types and dirty set
-//!   for [`typecheck_with_client`]. Clean objects are stubbed as temporary
-//!   tables from cached types; dirty objects are validated and their output
-//!   columns queried inline.
-//! - **[`load_typecheck_snapshot`]** / **[`write_typecheck_snapshot`]** —
-//!   Read/write the `typecheck.snapshot` file, which maps fully-qualified
-//!   object names to AST content hashes. The compile command diffs current
-//!   hashes against this snapshot to determine the initial dirty set.
+//!   schema map. Used internally by dirty propagation to detect whether a
+//!   view's output type changed.
 //!
 //! ## Key Types
 //!
@@ -42,24 +39,28 @@
 //! - [`ColumnType`] — A single column's type name and nullability.
 //! - [`TypeChecker`] — Trait for validating a planned project's SQL against a
 //!   real Materialize instance (implemented via a Docker container).
-//! - [`IncrementalState`] — Cached types plus dirty set for incremental
-//!   type checking.
+//! - [`TypecheckPlan`] — The result of comparing current project state against
+//!   the typecheck snapshot. Callers inspect it to decide whether Docker is
+//!   needed.
 //!
 //! ## Submodules
 //!
+//! - **[`incremental`]** — Plan computation, dirty propagation, and snapshot
+//!   management for incremental type checking.
 //! - **[`typechecker`]** — [`TypeChecker`] trait definition, the
-//!   [`typecheck_with_client`] helper, [`IncrementalState`], and structured
-//!   error types for per-object type-check failures.
+//!   [`typecheck_with_client`] helper, and structured error types for
+//!   per-object type-check failures.
 //! - **Build artifacts** — The `target/` directory holds `types.cache` (column
 //!   schemas after type checking) and `typecheck.snapshot` (AST hashes for
 //!   incremental diffing).
 
 pub mod docker_runtime;
+mod incremental;
 mod typechecker;
 
+pub use incremental::{TypecheckPlan, plan_typecheck, write_snapshot, write_snapshot_from_plan};
 pub use typechecker::{
-    IncrementalState, ObjectTypeCheckError, TypeCheckError, TypeCheckErrors, TypeChecker,
-    typecheck_with_client,
+    ObjectTypeCheckError, TypeCheckError, TypeCheckErrors, TypeChecker, typecheck_with_client,
 };
 
 use serde::{Deserialize, Serialize};
@@ -146,11 +147,11 @@ pub enum TypesError {
         #[source]
         source: toml::de::Error,
     },
-    #[error("failed to parse types.cache at {path}")]
-    CacheParseFailed {
+    #[error("failed to deserialize binary cache at {path}")]
+    BincodeParseFailed {
         path: PathBuf,
         #[source]
-        source: toml::de::Error,
+        source: bincode::Error,
     },
     #[error("failed to create directory {path}")]
     DirectoryCreationFailed {
@@ -158,6 +159,8 @@ pub enum TypesError {
         #[source]
         source: std::io::Error,
     },
+    #[error(transparent)]
+    DependencyError(#[from] crate::project::error::DependencyError),
 }
 
 /// A single column's type name and nullability in a data contract.
@@ -372,7 +375,7 @@ impl Types {
         fs::write(&path, contents).map_err(|source| TypesError::FileWriteFailed { path, source })
     }
 
-    /// Write the types.cache file to the target directory.
+    /// Write the types.cache file to the target directory in bincode format.
     ///
     /// This cache stores the column types of internal project views after type checking.
     /// It is used by the test command to validate unit tests without re-typechecking.
@@ -389,11 +392,12 @@ impl Types {
             })?;
         }
 
-        let path = cache_dir.join("types.cache");
-        let lock = TypesLock::from(self);
-        let contents = write_toml(&lock);
+        let path = cache_dir.join(TYPES_CACHE_BIN_FILE);
+        let bin = TypesCacheBin::from(self);
+        let bytes =
+            bincode::serialize(&bin).expect("TypesCacheBin should always serialize to bincode");
 
-        fs::write(&path, contents).map_err(|source| TypesError::FileWriteFailed { path, source })
+        fs::write(&path, bytes).map_err(|source| TypesError::FileWriteFailed { path, source })
     }
 
     /// Merge another Types instance into this one.
@@ -436,8 +440,43 @@ pub fn type_hash(columns: &BTreeMap<String, ColumnType>) -> String {
     format!("sha256:{:x}", result)
 }
 
-/// The filename for the typecheck snapshot inside the build directory.
-const TYPECHECK_SNAPSHOT_FILE: &str = "typecheck.snapshot";
+/// Cache filename for types.cache (bincode format).
+const TYPES_CACHE_BIN_FILE: &str = "types.cache.bin";
+
+/// Snapshot filename for typecheck.snapshot (bincode format).
+const TYPECHECK_SNAPSHOT_BIN_FILE: &str = "typecheck.snapshot.bin";
+
+/// Bincode-friendly representation of [`Types`] for the types.cache.
+///
+/// The main [`Types`] struct uses `#[serde(skip_serializing)]` on its `kinds`
+/// field, which works for self-describing formats (TOML/JSON) but breaks
+/// bincode's positional deserialization. This wrapper carries only the fields
+/// that the cache actually needs (version + tables), making bincode
+/// round-trips safe. The `kinds` map is always empty in cache files.
+#[derive(Serialize, Deserialize)]
+struct TypesCacheBin {
+    version: u8,
+    tables: BTreeMap<String, BTreeMap<String, ColumnType>>,
+}
+
+impl From<&Types> for TypesCacheBin {
+    fn from(types: &Types) -> Self {
+        Self {
+            version: types.version,
+            tables: types.tables.clone(),
+        }
+    }
+}
+
+impl From<TypesCacheBin> for Types {
+    fn from(bin: TypesCacheBin) -> Self {
+        Types {
+            version: bin.version,
+            tables: bin.tables,
+            kinds: BTreeMap::new(),
+        }
+    }
+}
 
 /// Serialization wrapper for the typecheck snapshot file.
 #[derive(Serialize, Deserialize)]
@@ -452,22 +491,23 @@ struct TypecheckSnapshot {
 pub fn load_typecheck_snapshot(
     directory: &Path,
 ) -> Result<Option<BTreeMap<String, String>>, TypesError> {
-    let path = directory.join(BUILD_DIR).join(TYPECHECK_SNAPSHOT_FILE);
+    let path = directory.join(BUILD_DIR).join(TYPECHECK_SNAPSHOT_BIN_FILE);
 
-    let contents = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(TypesError::FileReadFailed { path, source });
+    match fs::read(&path) {
+        Ok(bytes) => {
+            let snapshot: TypecheckSnapshot = bincode::deserialize(&bytes)
+                .map_err(|source| TypesError::BincodeParseFailed {
+                    path,
+                    source,
+                })?;
+            Ok(Some(snapshot.hashes))
         }
-    };
-
-    let snapshot: TypecheckSnapshot = toml::from_str(&contents)
-        .map_err(|source| TypesError::CacheParseFailed { path, source })?;
-    Ok(Some(snapshot.hashes))
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(TypesError::FileReadFailed { path, source }),
+    }
 }
 
-/// Write a typecheck snapshot to the build directory.
+/// Write a typecheck snapshot to the build directory in bincode format.
 ///
 /// Creates the build directory if it does not exist.
 pub fn write_typecheck_snapshot(
@@ -485,35 +525,37 @@ pub fn write_typecheck_snapshot(
     let snapshot = TypecheckSnapshot {
         hashes: hashes.clone(),
     };
-    let contents = toml::to_string_pretty(&snapshot)
-        .expect("TypecheckSnapshot should always serialize to valid TOML");
+    let bytes = bincode::serialize(&snapshot)
+        .expect("TypecheckSnapshot should always serialize to bincode");
 
-    let path = cache_dir.join(TYPECHECK_SNAPSHOT_FILE);
-    fs::write(&path, contents).map_err(|source| TypesError::FileWriteFailed { path, source })
+    let path = cache_dir.join(TYPECHECK_SNAPSHOT_BIN_FILE);
+    fs::write(&path, bytes).map_err(|source| TypesError::FileWriteFailed { path, source })
 }
 
 /// Load the types.cache file from the target directory.
 ///
-/// This cache contains column types for internal project views, generated during type checking.
-/// Returns an error if the file doesn't exist or cannot be parsed.
+/// Returns an error if the file does not exist or cannot be parsed.
 pub fn load_types_cache(directory: &Path) -> Result<Types, TypesError> {
-    let path = directory.join(BUILD_DIR).join("types.cache");
+    let path = directory.join(BUILD_DIR).join(TYPES_CACHE_BIN_FILE);
 
-    let contents = fs::read_to_string(&path).map_err(|source| TypesError::FileReadFailed {
+    let bytes = fs::read(&path).map_err(|source| TypesError::FileReadFailed {
         path: path.clone(),
         source,
     })?;
 
-    let lock: TypesLock = toml::from_str(&contents)
-        .map_err(|source| TypesError::CacheParseFailed { path, source })?;
-    Ok(lock.into())
+    let bin: TypesCacheBin =
+        bincode::deserialize(&bytes).map_err(|source| TypesError::BincodeParseFailed {
+            path,
+            source,
+        })?;
+    Ok(bin.into())
 }
 
 /// Check if the types.cache is stale compared to the project source files.
 ///
 /// Returns true if any SQL file in the project directory is newer than the cache file.
 pub fn is_types_cache_stale(directory: &Path) -> bool {
-    let cache_path = directory.join(BUILD_DIR).join("types.cache");
+    let cache_path = directory.join(BUILD_DIR).join(TYPES_CACHE_BIN_FILE);
 
     // If cache doesn't exist, it's considered stale
     let cache_metadata = match fs::metadata(&cache_path) {

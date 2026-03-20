@@ -2206,3 +2206,215 @@ fn test_nested_cte_in_exists_subquery() {
         panic!("Expected CreateView statement");
     }
 }
+
+// ============================================================================
+// Regression tests: expression traversal coverage
+//
+// These tests verify that table references nested inside expression variants
+// (COALESCE, NOT, AND/OR, NULLIF, GREATEST/LEAST, parenthesized expressions)
+// are properly normalized. A previous bug had a `_ => {}` catch-all that
+// silently skipped these variants.
+// ============================================================================
+
+#[test]
+fn test_coalesce_with_subquery_normalized() {
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT COALESCE(
+          CASE WHEN x IN (SELECT label FROM other_schema.timezones) THEN x END,
+          'UTC'
+        ) AS tz FROM source_table
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        assert!(
+            normalized_sql.contains("materialize.other_schema.timezones"),
+            "Table inside COALESCE/CASE/IN subquery should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_nested_expr_with_subquery_normalized() {
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM t1 WHERE (id IN (SELECT id FROM t2))
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        assert!(
+            normalized_sql.contains("materialize.public.t2"),
+            "Table inside parenthesized expression should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_not_expr_with_subquery_normalized() {
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t2.id = t1.id)
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        assert!(
+            normalized_sql.contains("materialize.public.t2"),
+            "Table inside NOT EXISTS subquery should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_and_or_with_subquery_normalized() {
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM t1
+        WHERE id IN (SELECT id FROM t2) AND name IN (SELECT name FROM t3)
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        assert!(
+            normalized_sql.contains("materialize.public.t2"),
+            "Table inside AND left operand should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.t3"),
+            "Table inside AND right operand should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_nullif_with_subquery_normalized() {
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT NULLIF(x, (SELECT max(y) FROM t2)) FROM t1
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        assert!(
+            normalized_sql.contains("materialize.public.t2"),
+            "Table inside NULLIF subquery should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_greatest_least_with_subquery_normalized() {
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT GREATEST(a, (SELECT max(b) FROM t2)) FROM t1
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        assert!(
+            normalized_sql.contains("materialize.public.t2"),
+            "Table inside GREATEST subquery should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_in_list_with_subquery_normalized() {
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM t1 WHERE x IN ((SELECT a FROM t2), (SELECT b FROM t3))
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        assert!(
+            normalized_sql.contains("materialize.public.t2"),
+            "Table inside IN list first subquery should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.t3"),
+            "Table inside IN list second subquery should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
