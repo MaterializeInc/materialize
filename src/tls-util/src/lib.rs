@@ -79,9 +79,9 @@ pub fn make_tls(config: &tokio_postgres::Config) -> Result<MakeTlsConnector, Tls
         _ => {}
     }
     if let Some(ssl_root_cert) = config.get_ssl_root_cert() {
-        builder
-            .cert_store_mut()
-            .add_cert(X509::from_pem(ssl_root_cert)?)?;
+        for cert in X509::stack_from_pem(ssl_root_cert)? {
+            builder.cert_store_mut().add_cert(cert)?;
+        }
     }
 
     let mut tls_connector = MakeTlsConnector::new(builder.build());
