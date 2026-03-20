@@ -41,6 +41,13 @@ class Clusterd(Service):
             "CLUSTERD_USE_CTP=true",
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
+            # Defaults that were previously set by the clusterd entrypoint.sh.
+            "CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100",
+            "CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101",
+            "CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
+            "CLUSTERD_SECRETS_READER=local-file",
+            "CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets",
+            "LD_PRELOAD=libeatmydata.so",
             f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
             *environment_extra,
         ]
@@ -61,14 +68,19 @@ class Clusterd(Service):
             f"CLUSTERD_STORAGE_TIMELY_CONFIG={storage_timely_config}",
         ]
 
-        options = [f"--scratch-directory={scratch_directory}", *options]
+        options = ["clusterd", f"--scratch-directory={scratch_directory}", *options]
 
         config: ServiceConfig = {}
 
         if image:
             config["image"] = image
         else:
-            config["mzbuild"] = "clusterd"
+            config["mzbuild"] = "materialized"
+
+        # Override the materialized entrypoint so that `clusterd` is invoked
+        # via the command rather than via the entrypoint. This keeps
+        # `c.exec()` working (it prepends the entrypoint to exec commands).
+        config["entrypoint"] = ["tini", "--"]
 
         # Depending on the Docker Compose version, this may either work or be
         # ignored with a warning. Unfortunately no portable way of setting the

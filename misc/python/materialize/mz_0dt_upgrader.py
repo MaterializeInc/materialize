@@ -71,6 +71,7 @@ def generate_materialized_upgrade_args(
 def generate_random_upgrade_path(
     versions: list[MzVersion],
     rng: Random | None = None,
+    max_versions: int = 6,
 ) -> list[MzVersion]:
     """
     Generates a random upgrade path between the given versions.
@@ -78,14 +79,18 @@ def generate_random_upgrade_path(
     selected_versions = []
 
     rng = rng or Random()
-    # For each version in the input list, randomly select it with a 50% chance.
+    # For each version in the input list, randomly select it with a 1/3 chance.
     for v in versions:
-        if rng.random() < 0.5:
+        if rng.random() < 0.33:
             selected_versions.append(v)
 
     # Always include at least one version to avoid empty paths.
     if len(selected_versions) == 0:
         selected_versions.append(rng.choice(versions))
+
+    # Cap the number of versions to keep test runtime bounded.
+    if len(selected_versions) > max_versions:
+        selected_versions = sorted(rng.sample(selected_versions, max_versions))
 
     return selected_versions
 

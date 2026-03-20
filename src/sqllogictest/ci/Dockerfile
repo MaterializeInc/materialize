@@ -9,8 +9,11 @@
 
 MZFROM prod-base
 
-COPY clusterd sqllogictest /usr/local/bin/
+COPY sqllogictest /usr/local/bin/
 
 WORKDIR /workdir
 
 USER materialize
+
+# clusterd changes more often than sqllogictest, so it goes last.
+COPY clusterd /usr/local/bin/

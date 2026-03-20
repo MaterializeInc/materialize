@@ -249,6 +249,9 @@ class BenchmarkExecutor:
         df_details = DfDetails()
 
         concurrencies = self._get_concurrencies()
+        workload_max = workload.max_concurrency()
+        if workload_max is not None:
+            concurrencies = [c for c in concurrencies if c <= workload_max]
         print(f"Concurrencies: {concurrencies}")
 
         for concurrency in concurrencies:

@@ -41,6 +41,23 @@ steps:
           queue: builder-linux-x86_64
 
 
+  - id: testdrive-in-cloudtest
+    label: "Full Testdrive in Cloudtest (K8s)"
+    depends_on: build-aarch64
+    timeout_in_minutes: 180
+    parallelism: 2
+    env:
+      CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
+    agents:
+      # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
+      # queue: hetzner-aarch64-4cpu-8gb
+      queue: linux-aarch64
+    plugins:
+      - ./ci/plugins/cloudtest:
+          # Uses .td-file based parallelism instead
+          args: [-m=long, test/cloudtest/test_full_testdrive.py, --no-test-parallelism]
+    sanitizer: skip
+
   - group: Zippy
     key: zippy
     steps:
@@ -339,6 +356,42 @@ steps:
   - group: "Platform checks"
     key: platform-checks
     steps:
+      - id: checks-restart-environmentd-clusterd-storage
+        label: "Checks + restart of environmentd & storage clusterd"
+        depends_on: build-x86_64
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  --default-replication-factor=1, # faster
+                  "--seed=$BUILDKITE_JOB_ID",
+                ]
+
+      - id: checks-restart-environmentd-clusterd-storage-azurite
+        label: "Checks + restart of environmentd & storage clusterd with :azure: blob store"
+        depends_on: build-x86_64
+        inputs: [misc/python/materialize/checks]
+        timeout_in_minutes: 45
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args:
+                [
+                  --scenario=RestartEnvironmentdClusterdStorage,
+                  "--seed=$BUILDKITE_JOB_ID",
+                  --features=azurite,
+                ]
+
       - id: checks-restart-cockroach
         label: "Checks + restart Cockroach"
         depends_on: build-x86_64
@@ -389,6 +442,30 @@ steps:
               composition: platform-checks
               args: [--scenario=BackupAndRestoreMulti, "--seed=$BUILDKITE_JOB_ID"]
         skip: "Too flaky"
+
+      - id: checks-upgrade-entire-mz-two-versions
+        label: "Checks upgrade across two versions"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMzTwoVersions, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-upgrade-entire-mz-four-versions
+        label: "Checks upgrade across four versions"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=UpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
       - id: checks-preflight-check-continue
         label: "Checks preflight-check and continue upgrade"
@@ -485,6 +562,44 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeRestartEntireMz, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-self-managed-linear-upgrade-path-manipulate-before-upgrade
+        label: "Checks Self-Managed upgrade across all supported patch releases, manipulate before upgrade"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedLinearUpgradePathManipulateBeforeUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-self-managed-linear-upgrade-path-manipulate-during-upgrade
+        label: "Checks Self-Managed upgrade across all supported patch releases, manipulate during upgrade"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedLinearUpgradePathManipulateDuringUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+
+      - id: checks-0dt-bump-version
+        label: "Checks 0dt upgrade to a bumped version"
+        depends_on: build-x86_64
+        timeout_in_minutes: 240
+        agents:
+          # building is expensive
+          queue: hetzner-x86-64-16cpu-32gb
+        env:
+          # New versions of Docker don't work with GHCR + local builds
+          MZ_GHCR: 0
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=ZeroDowntimeBumpedVersion, "--seed=$BUILDKITE_JOB_ID"]
+              ci-builder: stable
 
   - id: limits
     label: "Product limits (finding new limits)"

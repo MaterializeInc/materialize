@@ -45,6 +45,15 @@ class Workload:
     def name(self) -> str:
         return self.__class__.__name__
 
+    def max_concurrency(self) -> int | None:
+        """Optional upper bound on concurrency levels for this workload.
+
+        Return None (default) for no limit. Workloads that serialize
+        (e.g. single-row UPDATE) gain nothing from high concurrency and
+        can override this to cut benchmark wall-clock time.
+        """
+        return None
+
     def version(self) -> WorkloadVersion:
         return WorkloadVersion.create(1, 0, 0)
 

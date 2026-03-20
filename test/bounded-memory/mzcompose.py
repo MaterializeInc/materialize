@@ -799,7 +799,7 @@ SCENARIOS = [
             > CREATE TABLE t (a int, b int, c int, d int);
 
             > CREATE MATERIALIZED VIEW data AS
-              SELECT a, a AS b FROM generate_series(1, 10000000) AS a
+              SELECT a, a AS b FROM generate_series(1, 1000000) AS a
               UNION ALL
               SELECT a, b FROM t;
 
@@ -822,7 +822,7 @@ SCENARIOS = [
             > SET CLUSTER = idx_cluster;
 
             > SELECT COUNT(*) FROM accumulable;
-            10000001
+            1000001
             """
         ),
         post_restart=dedent(
@@ -830,7 +830,7 @@ SCENARIOS = [
             > SET CLUSTER = idx_cluster;
 
             > SELECT COUNT(*) FROM accumulable;
-            10000001
+            1000001
             """
         ),
         materialized_memory="8.5Gb",

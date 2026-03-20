@@ -385,21 +385,6 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-  - id: sql-server-cdc
-    label: SQL Server
-    depends_on: build-x86_64
-    timeout_in_minutes: 30
-    inputs: [test/sql-server-cdc]
-    parallelism: 4
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: sql-server-cdc
-    agents:
-      # The SQL Server Docker image isn't available on ARM.
-      #
-      # See: <https://github.com/microsoft/mssql-docker/issues/864>
-      queue: hetzner-x86-64-8cpu-16gb
-
   - group: Connection
     key: connection-tests
     steps:

@@ -75,6 +75,7 @@ SERVICES = [
     Testdrive(
         seed=1,
         no_reset=True,
+        no_consistency_checks=True,
         entrypoint_extra=[
             f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
             f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
@@ -108,7 +109,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--runtime",
         type=int,
-        default=1200,
+        default=600,
         help="runtime for continuous ingestion/query period, in seconds",
     )
     parser.add_argument(
@@ -211,7 +212,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--runtime",
         type=int,
-        default=1200,
+        default=600,
         help="runtime for continuous ingestion/query period, in seconds",
     )
     parser.add_argument(

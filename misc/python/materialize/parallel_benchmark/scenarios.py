@@ -113,7 +113,7 @@ class CreateKafkaSink(Scenario):
                     """
                 ),
                 LoadPhase(
-                    duration=900,
+                    duration=300,
                     actions=[
                         ClosedLoop(
                             action=TdAction(

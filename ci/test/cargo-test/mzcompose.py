@@ -23,8 +23,8 @@ from typing import Any, Literal
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.azurite import Azurite
-from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
@@ -70,7 +70,9 @@ SERVICES = [
         ports=["40111:10000"],
         allow_host_ports=True,
     ),
-    Clusterd(),  # Only to attempt to download the binary
+    MzComposeService(
+        "clusterd", {"mzbuild": "clusterd"}
+    ),  # Only to download the binary
 ]
 
 

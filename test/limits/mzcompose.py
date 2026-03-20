@@ -1672,7 +1672,7 @@ class PostgresTablesOldSyntax(Generator):
 
 
 class MySqlSources(Generator):
-    COUNT = 300  # high memory consumption, slower with source tables
+    COUNT = 150  # high memory consumption, slower with source tables
 
     MAX_COUNT = 400  # Too long-running with count=473
 

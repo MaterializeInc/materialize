@@ -2401,6 +2401,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             for mod_class in mod_classes
             if mod_class.__name__ in args.modification
         ]
+    mod_classes = buildkite.shard_list(mod_classes, lambda mod: mod.__name__)
 
     if args.scenario:
         assert not args.runtime
@@ -2447,12 +2448,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 run_scenario(scenario, definition)
 
             elif action == Action.UpgradeChain:
+                max_chain_length = 6
                 current_version = rng.choice(versions)
                 chain = [current_version]
                 next_version = current_version
 
                 try:
                     for _ in range(len(versions)):
+                        if len(chain) >= max_chain_length:
+                            break
                         next_version = get_upgrade_target(rng, next_version, versions)
                         chain.append(next_version)
                 except ValueError:
