@@ -35,13 +35,14 @@ pub(super) struct Ticker<G> {
 
 impl<G: Fn() -> Duration> Ticker<G> {
     pub fn new(get_interval: G, now: NowFn) -> Self {
-        let interval = get_interval().as_millis().try_into().unwrap();
-        Self {
-            interval,
+        let mut ticker = Self {
+            interval: Default::default(),
             now,
             last_tick: None,
             get_interval,
-        }
+        };
+        ticker.refresh_interval();
+        ticker
     }
 
     /// Wait until it is time for the next probe, returning a suitable probe timestamp.
@@ -79,6 +80,11 @@ impl<G: Fn() -> Duration> Ticker<G> {
         self.apply_tick(now)
     }
 
+    fn refresh_interval(&mut self) {
+        let ms = (self.get_interval)().as_millis().try_into().unwrap();
+        self.interval = std::cmp::max(ms, 1);
+    }
+
     /// Return the desired time of the next tick.
     fn next_tick_target(&self) -> EpochMillis {
         let target = match self.last_tick {
@@ -94,7 +100,7 @@ impl<G: Fn() -> Duration> Ticker<G> {
         self.last_tick = Some(time);
 
         // Refresh the interval for the next tick.
-        self.interval = (self.get_interval)().as_millis().try_into().unwrap();
+        self.refresh_interval();
         trace!("probe ticker interval: {}ms", self.interval);
 
         time.into()
