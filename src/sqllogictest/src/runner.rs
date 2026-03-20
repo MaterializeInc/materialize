@@ -121,6 +121,7 @@ pub enum Outcome<'a> {
     },
     PlanFailure {
         error: anyhow::Error,
+        expected_error: Option<String>,
         location: Location,
     },
     UnexpectedPlanSuccess {
@@ -243,7 +244,23 @@ impl fmt::Display for Outcome<'_> {
                     error.display_with_causes()
                 )
             }
-            PlanFailure { error, location } => write!(f, "PlanFailure:{}:\n{:#}", location, error),
+            PlanFailure {
+                error,
+                expected_error,
+                location,
+            } => {
+                if let Some(expected_error) = expected_error {
+                    write!(
+                        f,
+                        "PlanFailure:{}:\nerror does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
+                        location,
+                        expected_error,
+                        error.display_with_causes()
+                    )
+                } else {
+                    write!(f, "PlanFailure:{}:\n{:#}", location, error)
+                }
+            }
             UnexpectedPlanSuccess {
                 expected_error,
                 location,
@@ -1473,9 +1490,15 @@ impl<'a> RunnerInner<'a> {
                     if Regex::new(expected_error)?.is_match(&error.to_string_with_causes()) {
                         return Ok(Outcome::Success);
                     }
+                    return Ok(Outcome::PlanFailure {
+                        error: anyhow!(error),
+                        expected_error: Some(expected_error.to_string()),
+                        location,
+                    });
                 }
                 Ok(Outcome::PlanFailure {
                     error: anyhow!(error),
+                    expected_error: None,
                     location,
                 })
             }
@@ -1576,6 +1599,7 @@ impl<'a> RunnerInner<'a> {
                         } else {
                             Ok(Outcome::PlanFailure {
                                 error: anyhow!(error),
+                                expected_error: None,
                                 location,
                             })
                         }
@@ -1585,11 +1609,8 @@ impl<'a> RunnerInner<'a> {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure {
-                                error: anyhow!(
-                                    "error does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
-                                    expected_error,
-                                    error_string
-                                ),
+                                error: anyhow!(error),
+                                expected_error: Some(expected_error.to_string()),
                                 location,
                             })
                         }
@@ -1714,17 +1735,15 @@ impl<'a> RunnerInner<'a> {
                     Some(Outcome::Success)
                 } else {
                     Some(Outcome::PlanFailure {
-                        error: anyhow!(
-                            "error does not match expected pattern:\n  expected: /{}/\n  actual:    {}",
-                            expected_error,
-                            view_error.to_string_with_causes()
-                        ),
+                        error: view_error.into(),
+                        expected_error: Some(expected_error.to_string()),
                         location: location.clone(),
                     })
                 }
             } else {
                 Some(Outcome::PlanFailure {
                     error: view_error.into(),
+                    expected_error: None,
                     location: location.clone(),
                 })
             }
