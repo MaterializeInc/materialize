@@ -3721,11 +3721,12 @@ impl RowSetFinishingIncremental {
         let response_size: usize = iter.clone().map(|row| row.data().len()).sum();
 
         // Bail if we would end up returning more data to the client than they can support.
-        if let Some(max) = self.remaining_max_returned_query_size {
-            if response_size > usize::cast_from(max) {
+        if let Some(remaining) = self.remaining_max_returned_query_size.as_mut() {
+            if response_size > usize::cast_from(*remaining) {
                 let max_bytes = ByteSize::b(self.max_returned_query_size.expect("known to exist"));
                 return Err(format!("total result exceeds max size of {max_bytes}"));
             }
+            *remaining -= u64::cast_from(response_size);
         }
 
         Ok(iter)

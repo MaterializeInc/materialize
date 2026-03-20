@@ -52,3 +52,57 @@ SELECT * FROM t1;
 # For SUBSCRIBE, we need to add a GROUP BY to force an exchange in the dataflow.
 query error total result exceeds max size of 1\.0 MiB
 SUBSCRIBE (SELECT * FROM t1 GROUP BY a, b)
+
+# Test that max_query_result_size is enforced across multiple batches when using
+# the peek response stash (incremental finishing). We set the read batch size
+# small enough to force multiple batches, and set max_query_result_size to a
+# value that individual batches would pass but the total result exceeds.
+
+# Set max_result_size to the default 1GB so it doesn't interfere.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_result_size TO '1GB';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_response_stash TO true;
+----
+COMPLETE 0
+
+# Set a low stash threshold so stashing is triggered for our ~1MB result.
+# (The test runner overrides the default to 1MB, so we need to lower it.)
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_response_stash_threshold_bytes TO 10000;
+----
+COMPLETE 0
+
+# Set a small read batch size to force multiple batches when streaming results.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_response_stash_read_batch_size_bytes TO 50000;
+----
+COMPLETE 0
+
+# Set max_query_result_size to 500KiB. The total result from t1 is ~1MB, so it
+# should exceed this limit across batches, even though each individual ~50KB
+# batch is well under it.
+# The "total" in the error message confirms we went through the incremental
+# finishing path (the stash), as opposed to the non-incremental path.
+statement ok
+SET max_query_result_size = 512000;
+
+query error total result exceeds max size of 500\.0 KiB
+SELECT * FROM t1;
+
+# Clean up.
+statement ok
+RESET max_query_result_size;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_peek_response_stash_read_batch_size_bytes;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_peek_response_stash_threshold_bytes;
+----
+COMPLETE 0
