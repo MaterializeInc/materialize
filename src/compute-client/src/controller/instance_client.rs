@@ -169,7 +169,7 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
             Arc::new(move |id, change: ChangeBatch<_>| {
                 let cmd: Command<_> = {
                     let change = change.clone();
-                    Box::new(move |i| i.apply_read_hold_change(id, change.clone()))
+                    Box::new(move |i| i.apply_read_hold_change(id, change))
                 };
                 command_tx.send(cmd).map_err(|_| SendError((id, change)))
             })
