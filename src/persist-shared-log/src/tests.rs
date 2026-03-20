@@ -11,3 +11,5 @@
 
 mod persist;
 mod persist_sim;
+mod scenario;
+mod trace;

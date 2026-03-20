@@ -53,7 +53,8 @@ impl PersistTestHarness {
         // Open all handles before spawning tasks. Persist handle creation
         // involves consensus RPCs that can deadlock with a running acceptor
         // task on a current_thread tokio runtime.
-        let write = client
+        #[allow(unused_mut)]
+        let mut write = client
             .open_writer::<Proposal, (), u64, i64>(
                 shard_id,
                 Arc::clone(&key_schema),
@@ -63,7 +64,8 @@ impl PersistTestHarness {
             .await
             .expect("open acceptor writer");
 
-        let (upper_handle, read) = client
+        #[allow(unused_mut)]
+        let (mut upper_handle, read) = client
             .open::<Proposal, (), u64, i64>(
                 shard_id,
                 key_schema,
@@ -74,8 +76,14 @@ impl PersistTestHarness {
             .await
             .expect("open learner handles");
 
+        if write.upper().as_option() == Some(&0) {
+            write
+                .advance_upper(&timely::progress::Antichain::from_elem(1))
+                .await;
+        }
+
         let since = read.since().clone();
-        let listen = read.listen(since).await.expect("listen");
+        let subscribe = read.subscribe(since).await.expect("subscribe");
 
         // Now spawn tasks.
         let acceptor_config = AcceptorConfig::default();
@@ -91,7 +99,7 @@ impl PersistTestHarness {
             result_retention_batches: 1_000_000,
             ..Default::default()
         };
-        let (learner, learner_handle) = PersistLearner::new(learner_config, listen, upper_handle, learner_metrics);
+        let (learner, learner_handle) = PersistLearner::new(learner_config, subscribe, upper_handle, learner_metrics);
         let learner_task =
             mz_ore::task::spawn(|| "test-persist-learner", learner.run()).abort_on_drop();
 

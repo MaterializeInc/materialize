@@ -44,7 +44,7 @@ use mz_persist::generated::consensus_service::{
     ProtoCompareAndSetResponse, ProtoHeadResponse, ProtoLogProposal, ProtoScanResponse,
     ProtoTruncateResponse, ProtoVersionedData, proto_log_proposal,
 };
-use mz_persist_client::read::{Listen, ListenEvent};
+use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
@@ -438,19 +438,22 @@ enum ResultWaiter {
 // Listen task
 // ---------------------------------------------------------------------------
 
-/// Spawns a dedicated task that runs `Listen::fetch_next()` in a loop, sending
-/// events through a channel.
+/// Spawns a dedicated task that runs `Subscribe::fetch_next()` in a loop,
+/// sending events through a channel.
 ///
-/// This isolates the non-cancel-safe `fetch_next()` from the learner's select
-/// loop. The listen task runs each `fetch_next()` call to completion, so the
-/// listen frontier is always consistent with the data delivered.
+/// `Subscribe` first delivers a snapshot of all existing data, then switches to
+/// incremental updates. This ensures the learner materializes the full shard
+/// state on startup, even if persist has compacted earlier batches.
+///
+/// Runs in a dedicated task to isolate the non-cancel-safe `fetch_next()` from
+/// the learner's select loop.
 fn spawn_listen_task(
-    mut listen: Listen<Proposal, (), u64, i64>,
+    mut subscribe: Subscribe<Proposal, (), u64, i64>,
     event_tx: mpsc::Sender<Vec<ListenEvent<u64, ((Proposal, ()), u64, i64)>>>,
 ) -> mz_ore::task::JoinHandle<()> {
-    mz_ore::task::spawn(|| "persist-listen", async move {
+    mz_ore::task::spawn(|| "persist-subscribe", async move {
         loop {
-            let events = listen.fetch_next().await;
+            let events = subscribe.fetch_next().await;
             if event_tx.send(events).await.is_err() {
                 // Learner dropped the receiver — shut down.
                 break;
@@ -511,19 +514,19 @@ pub struct PersistLearner {
 impl PersistLearner {
     /// Creates a new persist-backed learner and returns a handle.
     ///
-    /// Spawns a dedicated listen task that feeds events through a channel,
-    /// avoiding the cancel-safety issues of polling `Listen::fetch_next()`
-    /// directly in a `select!`.
+    /// The `Subscribe` delivers a snapshot of existing shard state followed by
+    /// incremental updates. A dedicated task feeds events through a channel to
+    /// avoid cancel-safety issues with `fetch_next()` in a `select!`.
     pub fn new(
         config: PersistLearnerConfig,
-        listen: Listen<Proposal, (), u64, i64>,
+        subscribe: Subscribe<Proposal, (), u64, i64>,
         upper_handle: WriteHandle<Proposal, (), u64, i64>,
         metrics: LearnerMetrics,
     ) -> (Self, PersistLearnerHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(config.queue_depth);
         let (event_tx, event_rx) = mpsc::channel(256);
 
-        let listen_task = spawn_listen_task(listen, event_tx);
+        let listen_task = spawn_listen_task(subscribe, event_tx);
 
         let learner = PersistLearner {
             state: StateMachine::new(),
@@ -916,7 +919,7 @@ impl PersistLearner {
         let key_schema = Arc::new(ProposalSchema);
         let val_schema = Arc::new(UnitSchema);
 
-        let (upper_handle, read) = client
+        let (mut upper_handle, read) = client
             .open::<Proposal, (), u64, i64>(
                 shard_id,
                 key_schema,
@@ -927,10 +930,18 @@ impl PersistLearner {
             .await
             .expect("failed to open persist shard for learner");
 
-        let since = read.since().clone();
-        let listen = read.listen(since).await.expect("listen should succeed");
+        // Advance upper past T=0 if this is a fresh shard, so that
+        // subscribe's snapshot doesn't block waiting for data.
+        if upper_handle.upper().as_option() == Some(&0) {
+            upper_handle
+                .advance_upper(&Antichain::from_elem(1))
+                .await;
+        }
 
-        let (learner, handle) = Self::new(config, listen, upper_handle, metrics);
+        let since = read.since().clone();
+        let subscribe = read.subscribe(since).await.expect("subscribe should succeed");
+
+        let (learner, handle) = Self::new(config, subscribe, upper_handle, metrics);
         let task = mz_ore::task::spawn(|| "persist-learner", learner.run());
         (handle, task)
     }
