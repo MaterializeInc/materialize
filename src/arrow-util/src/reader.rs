@@ -15,18 +15,20 @@ use anyhow::Context;
 use arrow::array::{
     Array, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
     Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int8Array,
-    Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeStringArray,
-    ListArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
+    Int16Array, Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
+    MapArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
     Time32SecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
     TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
     UInt64Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
-use arrow::datatypes::{DataType, TimeUnit};
+use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use dec::OrderedDecimal;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
+use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
@@ -366,6 +368,45 @@ fn scalar_type_and_array_to_reader(
                 nulls: null_mask.cloned(),
             })
         }
+        (
+            SqlScalarType::Map {
+                value_type,
+                custom_id: _,
+            },
+            DataType::Map(_, _),
+        ) => {
+            let map_array = downcast_array::<MapArray>(array);
+            let keys = map_array
+                .keys()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("map keys should be Utf8 strings")
+                .clone();
+            let values_reader =
+                scalar_type_and_array_to_reader(value_type, Arc::clone(map_array.values()))
+                    .context("map values")?;
+            Ok(ColReader::Map {
+                offsets: map_array.offsets().clone(),
+                keys,
+                values: Box::new(values_reader),
+                nulls: map_array.nulls().cloned(),
+            })
+        }
+        (SqlScalarType::Interval, DataType::Interval(IntervalUnit::YearMonth)) => {
+            Ok(ColReader::IntervalYearMonth(
+                downcast_array::<IntervalYearMonthArray>(array),
+            ))
+        }
+        (SqlScalarType::Interval, DataType::Interval(IntervalUnit::DayTime)) => {
+            Ok(ColReader::IntervalDayTime(
+                downcast_array::<IntervalDayTimeArray>(array),
+            ))
+        }
+        (SqlScalarType::Interval, DataType::Interval(IntervalUnit::MonthDayNano)) => {
+            Ok(ColReader::IntervalMonthDayNano(
+                downcast_array::<IntervalMonthDayNanoArray>(array),
+            ))
+        }
         other => anyhow::bail!("unsupported: {other:?}"),
     }
 }
@@ -448,6 +489,17 @@ enum ColReader {
         fields: Vec<Box<ColReader>>,
         nulls: Option<NullBuffer>,
     },
+
+    Map {
+        offsets: OffsetBuffer<i32>,
+        keys: StringArray,
+        values: Box<ColReader>,
+        nulls: Option<NullBuffer>,
+    },
+
+    IntervalYearMonth(IntervalYearMonthArray),
+    IntervalDayTime(IntervalDayTimeArray),
+    IntervalMonthDayNano(IntervalMonthDayNanoArray),
 }
 
 impl ColReader {
@@ -765,6 +817,52 @@ impl ColReader {
                 // Return early because we've already packed the necessasry Datums.
                 return Ok(());
             }
+            ColReader::Map {
+                offsets,
+                keys,
+                values,
+                nulls,
+            } => {
+                let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
+                if !is_valid {
+                    packer.push(Datum::Null);
+                    return Ok(());
+                }
+
+                let start: usize = offsets[idx].try_into().context("map start offset")?;
+                let end: usize = offsets[idx + 1].try_into().context("map end offset")?;
+
+                packer
+                    .push_dict_with(|packer| {
+                        for i in start..end {
+                            packer.push(Datum::String(keys.value(i)));
+                            values.read(i, packer)?;
+                        }
+                        Ok::<_, anyhow::Error>(())
+                    })
+                    .context("pack map")?;
+
+                // Return early because we've already packed the necessary Datums.
+                return Ok(());
+            }
+            ColReader::IntervalYearMonth(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|months| Datum::Interval(Interval::new(months, 0, 0))),
+            ColReader::IntervalDayTime(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|v| {
+                    let micros = i64::from(v.milliseconds) * 1_000;
+                    Datum::Interval(Interval::new(0, v.days, micros))
+                }),
+            ColReader::IntervalMonthDayNano(array) => array
+                .is_valid(idx)
+                .then(|| array.value(idx))
+                .map(|v| {
+                    let micros = v.nanoseconds / 1_000;
+                    Datum::Interval(Interval::new(v.months, v.days, micros))
+                }),
         };
 
         match datum {
