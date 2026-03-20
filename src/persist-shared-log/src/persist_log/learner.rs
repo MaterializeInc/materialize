@@ -30,14 +30,15 @@
 //! this, the listen runs on a dedicated task that feeds events through an mpsc
 //! channel. The select loop only polls `event_rx.recv()`, which is cancel-safe.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use prost::Message;
 use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
-use tracing::{debug, warn};
+use tracing::{debug, error, info, warn};
 
 use mz_ore::cast::CastFrom;
 use mz_persist::generated::consensus_service::{
@@ -47,9 +48,8 @@ use mz_persist::generated::consensus_service::{
 use mz_persist_client::read::{ListenEvent, Subscribe};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::UnitSchema;
 
-use super::{Proposal, ProposalSchema};
+use super::{OrderedKey, OrderedKeySchema, Proposal, ProposalSchema};
 use crate::metrics::LearnerMetrics;
 use crate::LearnerError;
 
@@ -65,6 +65,10 @@ struct ShardState {
 struct VersionedEntry {
     seqno: u64,
     data: Bytes,
+    /// The persist-level key for this entry, needed for retraction.
+    ordered_key: OrderedKey,
+    /// The persist-level value for this entry, needed for retraction.
+    proposal: Proposal,
 }
 
 /// Configuration for the persist-backed learner.
@@ -72,15 +76,15 @@ struct VersionedEntry {
 pub struct PersistLearnerConfig {
     /// Depth of the command channel.
     pub queue_depth: usize,
-    /// Number of batch results to retain for await queries.
-    pub result_retention_batches: u64,
+    /// How often the learner flushes pending retractions.
+    pub retraction_interval: Duration,
 }
 
 impl Default for PersistLearnerConfig {
     fn default() -> Self {
         PersistLearnerConfig {
             queue_depth: 4096,
-            result_retention_batches: 10_000,
+            retraction_interval: Duration::from_secs(5),
         }
     }
 }
@@ -102,6 +106,14 @@ struct StateMachine {
     /// Running total of approximate bytes across all shards, maintained
     /// incrementally. Avoids an O(total_entries) traversal on every batch.
     approx_bytes: usize,
+
+    /// Proposals eligible for retraction. Accumulated by apply_cas/apply_truncate,
+    /// drained by the periodic retraction sweep.
+    garbage: Vec<(OrderedKey, Proposal)>,
+
+    /// Every OrderedKey we've seen with diff=+1 that hasn't been retracted (-1).
+    /// Used to assert no negative multiplicities.
+    live_keys: BTreeSet<OrderedKey>,
 }
 
 impl StateMachine {
@@ -110,12 +122,20 @@ impl StateMachine {
             shards: BTreeMap::new(),
             total_entries: 0,
             approx_bytes: 0,
+            garbage: Vec::new(),
+            live_keys: BTreeSet::new(),
         }
     }
 
+    /// Apply a CAS proposal with diff=+1. Returns the CAS result.
+    ///
+    /// If committed, the entry is stored for scan(). If rejected, the proposal
+    /// is added to garbage for retraction.
     fn apply_cas(
         &mut self,
         cas: mz_persist::generated::consensus_service::ProtoCasProposal,
+        ordered_key: OrderedKey,
+        proposal: Proposal,
     ) -> ProtoCompareAndSetResponse {
         let current_seqno = self
             .shards
@@ -130,22 +150,35 @@ impl StateMachine {
             let entry = VersionedEntry {
                 seqno: cas.new_seqno,
                 data: Bytes::from(cas.data),
+                ordered_key,
+                proposal,
             };
             self.shards.entry(cas.key).or_default().entries.push(entry);
             self.total_entries += 1;
             self.approx_bytes += data_len;
+        } else {
+            // Rejected CAS — the proposal is waste, retract it.
+            self.garbage.push((ordered_key, proposal));
         }
 
         ProtoCompareAndSetResponse { committed }
     }
 
+    /// Apply a truncate proposal with diff=+1. Returns the truncate result.
+    ///
+    /// On success, removed entries and the truncate proposal itself are garbage.
+    /// On failure, the truncate proposal is garbage.
     fn apply_truncate(
         &mut self,
         trunc: &mz_persist::generated::consensus_service::ProtoTruncateProposal,
+        ordered_key: OrderedKey,
+        proposal: Proposal,
     ) -> Result<ProtoTruncateResponse, String> {
         let shard = match self.shards.get(&trunc.key) {
             Some(s) if !s.entries.is_empty() => s,
             _ => {
+                // Failed truncate — the proposal is waste.
+                self.garbage.push((ordered_key, proposal));
                 return Err(format!("no data at key: {}", trunc.key));
             }
         };
@@ -153,6 +186,8 @@ impl StateMachine {
         let head_seqno = shard.entries.last().unwrap().seqno;
 
         if trunc.seqno > head_seqno {
+            // Failed truncate — the proposal is waste.
+            self.garbage.push((ordered_key, proposal));
             return Err(format!(
                 "upper bound too high for truncate: {}",
                 trunc.seqno
@@ -166,13 +201,59 @@ impl StateMachine {
             .iter()
             .map(|e| e.data.len())
             .sum();
+        // Add removed entries to garbage for retraction.
+        for entry in &shard.entries[..keep_from] {
+            self.garbage
+                .push((entry.ordered_key.clone(), entry.proposal.clone()));
+        }
         shard.entries.drain(..keep_from);
         self.total_entries -= keep_from;
         self.approx_bytes -= removed_bytes;
 
+        // The truncate proposal itself is also garbage after application.
+        self.garbage.push((ordered_key, proposal));
+
         Ok(ProtoTruncateResponse {
             deleted: Some(u64::cast_from(keep_from)),
         })
+    }
+
+    /// Handle a retraction (diff=-1). Removes the entry from live_keys, prunes
+    /// garbage if present, and removes the entry from state if applicable.
+    fn apply_retraction(
+        &mut self,
+        ordered_key: &OrderedKey,
+        proposal_data: &Proposal,
+    ) {
+        // Assert: we must have seen this key with +1 before.
+        assert!(
+            self.live_keys.remove(ordered_key),
+            "negative multiplicity: retraction for OrderedKey not in live_keys: {:?}",
+            ordered_key,
+        );
+
+        // Prune from garbage set if present (another learner may have retracted it).
+        self.garbage.retain(|(k, _)| k != ordered_key);
+
+        // If this was a committed CAS entry still in state, remove it.
+        // Decode the proposal to find the shard key and seqno.
+        use mz_persist::generated::consensus_service::{ProtoLogProposal, proto_log_proposal};
+        if let Ok(proto) = ProtoLogProposal::decode(proposal_data.encoded.as_ref()) {
+            if let Some(proto_log_proposal::Op::Cas(cas)) = proto.op {
+                if let Some(shard) = self.shards.get_mut(&cas.key) {
+                    if let Some(idx) = shard
+                        .entries
+                        .iter()
+                        .position(|e| e.seqno == cas.new_seqno && e.ordered_key == *ordered_key)
+                    {
+                        let removed = shard.entries.remove(idx);
+                        self.total_entries -= 1;
+                        self.approx_bytes -= removed.data.len();
+                    }
+                }
+            }
+            // Truncate proposals don't create entries — nothing to remove.
+        }
     }
 
     fn head(&self, key: &str) -> ProtoHeadResponse {
@@ -244,6 +325,11 @@ pub enum PersistLearnerCommand {
         position: u32,
         reply: oneshot::Sender<Result<ProtoTruncateResponse, String>>,
         received_at: std::time::Instant,
+    },
+    /// Force a retraction sweep immediately. Returns the number of retractions
+    /// written, or 0 if garbage was empty or the write failed.
+    ForceRetractionSweep {
+        reply: oneshot::Sender<usize>,
     },
 }
 
@@ -373,6 +459,16 @@ impl PersistLearnerHandle {
             .map_err(|_| LearnerError::DroppedReply)?
             .map_err(LearnerError::Command)
     }
+
+    /// Force a retraction sweep. Returns the number of retractions written.
+    pub async fn force_retraction_sweep(&self) -> Result<usize, LearnerError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(PersistLearnerCommand::ForceRetractionSweep { reply: reply_tx })
+            .await
+            .map_err(|_| LearnerError::Shutdown)?;
+        reply_rx.await.map_err(|_| LearnerError::DroppedReply)
+    }
 }
 
 #[async_trait::async_trait]
@@ -448,8 +544,8 @@ enum ResultWaiter {
 /// Runs in a dedicated task to isolate the non-cancel-safe `fetch_next()` from
 /// the learner's select loop.
 fn spawn_listen_task(
-    mut subscribe: Subscribe<Proposal, (), u64, i64>,
-    event_tx: mpsc::Sender<Vec<ListenEvent<u64, ((Proposal, ()), u64, i64)>>>,
+    mut subscribe: Subscribe<OrderedKey, Proposal, u64, i64>,
+    event_tx: mpsc::Sender<Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>>,
 ) -> mz_ore::task::JoinHandle<()> {
     mz_ore::task::spawn(|| "persist-subscribe", async move {
         loop {
@@ -490,11 +586,13 @@ pub struct PersistLearner {
     // --- Channels ---
     cmd_rx: mpsc::Receiver<PersistLearnerCommand>,
     /// Events from the dedicated listen task.
-    event_rx: mpsc::Receiver<Vec<ListenEvent<u64, ((Proposal, ()), u64, i64)>>>,
+    event_rx: mpsc::Receiver<Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>>,
 
     // --- Persist handles ---
     /// Read-only WriteHandle used solely for `fetch_recent_upper()`.
-    upper_handle: WriteHandle<Proposal, (), u64, i64>,
+    upper_handle: WriteHandle<OrderedKey, Proposal, u64, i64>,
+    /// WriteHandle for writing retractions (-1 diffs) during periodic sweeps.
+    retraction_write: WriteHandle<OrderedKey, Proposal, u64, i64>,
     /// Handle to the dedicated listen task (kept alive for the learner's lifetime).
     _listen_task: mz_ore::task::JoinHandle<()>,
 
@@ -519,8 +617,9 @@ impl PersistLearner {
     /// avoid cancel-safety issues with `fetch_next()` in a `select!`.
     pub fn new(
         config: PersistLearnerConfig,
-        subscribe: Subscribe<Proposal, (), u64, i64>,
-        upper_handle: WriteHandle<Proposal, (), u64, i64>,
+        subscribe: Subscribe<OrderedKey, Proposal, u64, i64>,
+        upper_handle: WriteHandle<OrderedKey, Proposal, u64, i64>,
+        retraction_write: WriteHandle<OrderedKey, Proposal, u64, i64>,
         metrics: LearnerMetrics,
     ) -> (Self, PersistLearnerHandle) {
         let (cmd_tx, cmd_rx) = mpsc::channel(config.queue_depth);
@@ -537,6 +636,7 @@ impl PersistLearner {
             cmd_rx,
             event_rx,
             upper_handle,
+            retraction_write,
             _listen_task: listen_task,
             listen_frontier: Antichain::from_elem(0),
             pending_reads: Vec::new(),
@@ -548,6 +648,12 @@ impl PersistLearner {
 
     /// Runs the learner loop.
     pub async fn run(mut self) {
+        let mut retraction_ticker =
+            tokio::time::interval(self.config.retraction_interval);
+        retraction_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // Skip the initial tick that fires immediately.
+        retraction_ticker.tick().await;
+
         loop {
             tokio::select! {
                 biased;
@@ -574,9 +680,20 @@ impl PersistLearner {
                     self.assign_linearization_target(upper);
                     self.wake_linearizing_reads();
                 }
+                // Periodic retraction sweep.
+                _ = retraction_ticker.tick(),
+                    if !self.state.garbage.is_empty() =>
+                {
+                    self.flush_garbage().await;
+                }
                 // cancel-safety: per tokio docs
                 cmd = self.cmd_rx.recv() => {
                     match cmd {
+                        Some(PersistLearnerCommand::ForceRetractionSweep { reply }) => {
+                            let count = self.state.garbage.len();
+                            self.flush_garbage().await;
+                            let _ = reply.send(count);
+                        }
                         Some(cmd) => self.handle_command(cmd),
                         None => return,
                     }
@@ -588,16 +705,22 @@ impl PersistLearner {
     /// Process a batch of listen events from the listen task channel.
     fn process_listen_events(
         &mut self,
-        events: Vec<ListenEvent<u64, ((Proposal, ()), u64, i64)>>,
+        events: Vec<ListenEvent<u64, ((OrderedKey, Proposal), u64, i64)>>,
     ) {
         // Collect updates grouped by timestamp (batch number).
-        let mut updates_by_ts: BTreeMap<u64, Vec<Proposal>> = BTreeMap::new();
+        let mut updates_by_ts: BTreeMap<u64, Vec<(OrderedKey, Proposal, i64)>> = BTreeMap::new();
         for event in events {
             match event {
                 ListenEvent::Updates(updates) => {
-                    for ((proposal, ()), ts, diff) in updates {
-                        debug_assert_eq!(diff, 1, "proposals are append-only");
-                        updates_by_ts.entry(ts).or_default().push(proposal);
+                    for ((key, proposal), ts, diff) in updates {
+                        assert!(
+                            diff == 1 || diff == -1,
+                            "unexpected diff: {diff}"
+                        );
+                        updates_by_ts
+                            .entry(ts)
+                            .or_default()
+                            .push((key, proposal, diff));
                     }
                 }
                 ListenEvent::Progress(frontier) => {
@@ -607,55 +730,127 @@ impl PersistLearner {
         }
 
         // Apply each batch in timestamp order.
-        for (batch_number, proposals) in updates_by_ts {
-            self.apply_batch(batch_number, proposals);
+        for (batch_number, mut entries) in updates_by_ts {
+            // Sort by (batch_id, position) for stable ordering through
+            // compaction, then by diff descending so +1s precede -1s.
+            entries.sort_by(|a, b| {
+                a.0.batch_id
+                    .cmp(&b.0.batch_id)
+                    .then(a.0.position.cmp(&b.0.position))
+                    .then(b.2.cmp(&a.2))
+            });
+            self.apply_batch(batch_number, entries);
         }
     }
 
     /// Apply a single batch of proposals at the given timestamp.
-    fn apply_batch(&mut self, batch_number: u64, proposals: Vec<Proposal>) {
+    fn apply_batch(
+        &mut self,
+        batch_number: u64,
+        entries: Vec<(OrderedKey, Proposal, i64)>,
+    ) {
         let batch_start = std::time::Instant::now();
-        let num_proposals = proposals.len();
+        let num_entries = entries.len();
         debug!(
             batch_number,
-            proposals = num_proposals,
+            entries = num_entries,
             "applying persist batch"
         );
 
-        let mut batch_results = Vec::with_capacity(num_proposals);
+        // Results are indexed by position within the batch.
+        // Only +1 diff entries produce results.
+        let mut batch_results = Vec::new();
 
-        for proposal_data in proposals {
-            match ProtoLogProposal::decode(proposal_data.encoded.as_ref()) {
-                Ok(proposal) => match proposal.op {
-                    Some(proto_log_proposal::Op::Cas(cas)) => {
-                        let result = self.state.apply_cas(cas);
-                        if result.committed {
-                            self.metrics.cas_committed.inc();
-                        } else {
-                            self.metrics.cas_rejected.inc();
+        for (key, proposal_data, diff) in entries {
+            if diff == 1 {
+                // Insertion: track in live_keys, apply proposal, produce result.
+                self.state.live_keys.insert(key.clone());
+
+                match ProtoLogProposal::decode(proposal_data.encoded.as_ref()) {
+                    Ok(proposal) => match proposal.op {
+                        Some(proto_log_proposal::Op::Cas(cas)) => {
+                            let result = self.state.apply_cas(
+                                cas,
+                                key.clone(),
+                                proposal_data,
+                            );
+                            if result.committed {
+                                self.metrics.cas_committed.inc();
+                            } else {
+                                self.metrics.cas_rejected.inc();
+                            }
+                            while batch_results.len() <= key.position as usize {
+                                batch_results.push(None);
+                            }
+                            batch_results[key.position as usize] =
+                                Some(ProposalResult::Cas(result));
                         }
-                        batch_results.push(ProposalResult::Cas(result));
+                        Some(proto_log_proposal::Op::Truncate(trunc)) => {
+                            let result = self.state.apply_truncate(
+                                &trunc,
+                                key.clone(),
+                                proposal_data,
+                            );
+                            self.metrics.truncate_ops.inc();
+                            while batch_results.len() <= key.position as usize {
+                                batch_results.push(None);
+                            }
+                            batch_results[key.position as usize] =
+                                Some(ProposalResult::Truncate(result));
+                        }
+                        None => {
+                            warn!(batch_number, "proposal with no op, skipping");
+                            self.state
+                                .garbage
+                                .push((key.clone(), proposal_data));
+                            while batch_results.len() <= key.position as usize {
+                                batch_results.push(None);
+                            }
+                            batch_results[key.position as usize] =
+                                Some(ProposalResult::Cas(ProtoCompareAndSetResponse {
+                                    committed: false,
+                                }));
+                        }
+                    },
+                    Err(e) => {
+                        warn!(batch_number, "failed to decode proposal: {}, skipping", e);
+                        self.state
+                            .garbage
+                            .push((key.clone(), proposal_data));
+                        while batch_results.len() <= key.position as usize {
+                            batch_results.push(None);
+                        }
+                        batch_results[key.position as usize] =
+                            Some(ProposalResult::Cas(ProtoCompareAndSetResponse {
+                                committed: false,
+                            }));
                     }
-                    Some(proto_log_proposal::Op::Truncate(trunc)) => {
-                        let result = self.state.apply_truncate(&trunc);
-                        self.metrics.truncate_ops.inc();
-                        batch_results.push(ProposalResult::Truncate(result));
-                    }
-                    None => {
-                        warn!(batch_number, "proposal with no op, skipping");
-                        batch_results.push(ProposalResult::Cas(ProtoCompareAndSetResponse {
-                            committed: false,
-                        }));
-                    }
-                },
-                Err(e) => {
-                    warn!(batch_number, "failed to decode proposal: {}, skipping", e);
-                    batch_results.push(ProposalResult::Cas(ProtoCompareAndSetResponse {
-                        committed: false,
-                    }));
                 }
+            } else {
+                debug_assert_eq!(diff, -1);
+                // Retraction: remove from live_keys, clean up state and results.
+                self.state.apply_retraction(&key, &proposal_data);
+
+                // Clean up the result for this retracted proposal.
+                self.results
+                    .get_mut(&key.batch_id)
+                    .map(|results| {
+                        if let Some(slot) = results.get_mut(key.position as usize) {
+                            // Replace with a tombstone-like value; the vec
+                            // is position-indexed so we can't remove.
+                            *slot = ProposalResult::Cas(ProtoCompareAndSetResponse {
+                                committed: false,
+                            });
+                        }
+                    });
             }
         }
+
+        // Convert Option<ProposalResult> to ProposalResult for storage.
+        let batch_results: Vec<ProposalResult> = batch_results
+            .into_iter()
+            .flatten()
+            .collect();
 
         self.results.insert(batch_number, batch_results);
         self.metrics.batches_materialized.inc();
@@ -675,7 +870,6 @@ impl PersistLearner {
             .set(i64::try_from(self.state.approx_bytes).expect("byte count"));
 
         self.wake_result_waiters(batch_number);
-        self.prune_old_results();
     }
 
     // -----------------------------------------------------------------------
@@ -777,6 +971,88 @@ impl PersistLearner {
                         reply,
                         received_at,
                     });
+            }
+            PersistLearnerCommand::ForceRetractionSweep { .. } => {
+                unreachable!("ForceRetractionSweep handled in run() select loop")
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Learner retractions
+    // -----------------------------------------------------------------------
+
+    /// Flush pending garbage entries as retractions (-1 diffs) via the
+    /// retraction WriteHandle.
+    ///
+    /// On UpperMismatch, discards the batch and puts entries back into garbage.
+    /// The subscription will deliver any competing -1 diffs before the next
+    /// sweep, pruning already-retracted entries from the garbage set.
+    async fn flush_garbage(&mut self) {
+        let sweep_start = std::time::Instant::now();
+        self.metrics.retraction_sweeps.inc();
+
+        let garbage = std::mem::take(&mut self.state.garbage);
+        if garbage.is_empty() {
+            return;
+        }
+
+        let upper = self.retraction_write.upper().clone();
+        let raw_upper = match upper.as_option() {
+            Some(ts) => (*ts).max(1),
+            None => {
+                warn!("retraction write upper is empty, skipping sweep");
+                self.state.garbage = garbage;
+                return;
+            }
+        };
+
+        let num_retractions = garbage.len();
+        let updates: Vec<_> = garbage
+            .iter()
+            .map(|(key, proposal)| ((key.clone(), proposal.clone()), raw_upper, -1i64))
+            .collect();
+
+        let new_upper = Antichain::from_elem(raw_upper + 1);
+
+        match self
+            .retraction_write
+            .compare_and_append(&updates, upper, new_upper)
+            .await
+        {
+            Ok(Ok(())) => {
+                self.metrics
+                    .retraction_rows_written
+                    .inc_by(u64::try_from(num_retractions).unwrap_or(u64::MAX));
+                self.metrics
+                    .retraction_sweep_latency_seconds
+                    .observe(sweep_start.elapsed().as_secs_f64());
+                info!(
+                    retractions = num_retractions,
+                    "learner retraction sweep committed"
+                );
+            }
+            Ok(Err(upper_mismatch)) => {
+                // Discard batch, put garbage back, try next sweep.
+                let actual = upper_mismatch
+                    .current
+                    .as_option()
+                    .copied()
+                    .unwrap_or(u64::MAX);
+                warn!(
+                    expected = raw_upper,
+                    actual_upper = actual,
+                    retractions = num_retractions,
+                    "learner retraction upper mismatch, discarding batch"
+                );
+                self.state.garbage = garbage;
+            }
+            Err(invalid_usage) => {
+                error!(
+                    "learner retraction invalid usage: {}",
+                    invalid_usage
+                );
+                self.state.garbage = garbage;
             }
         }
     }
@@ -893,16 +1169,6 @@ impl PersistLearner {
         }
     }
 
-    fn prune_old_results(&mut self) {
-        if let Some(frontier_ts) = self.listen_frontier.as_option().copied() {
-            // frontier_ts means all ts < frontier_ts have been delivered.
-            let through = frontier_ts.saturating_sub(1);
-            if through >= self.config.result_retention_batches {
-                let cutoff = through - self.config.result_retention_batches;
-                self.results = self.results.split_off(&cutoff);
-            }
-        }
-    }
 }
 
 impl PersistLearner {
@@ -916,19 +1182,29 @@ impl PersistLearner {
         shard_id: ShardId,
         metrics: LearnerMetrics,
     ) -> (PersistLearnerHandle, mz_ore::task::JoinHandle<()>) {
-        let key_schema = Arc::new(ProposalSchema);
-        let val_schema = Arc::new(UnitSchema);
+        let key_schema = Arc::new(OrderedKeySchema);
+        let val_schema = Arc::new(ProposalSchema);
 
         let (mut upper_handle, read) = client
-            .open::<Proposal, (), u64, i64>(
+            .open::<OrderedKey, Proposal, u64, i64>(
                 shard_id,
-                key_schema,
-                val_schema,
+                Arc::clone(&key_schema),
+                Arc::clone(&val_schema),
                 Diagnostics::from_purpose("persist-shared-log-learner"),
                 false,
             )
             .await
             .expect("failed to open persist shard for learner");
+
+        let retraction_write = client
+            .open_writer::<OrderedKey, Proposal, u64, i64>(
+                shard_id,
+                key_schema,
+                val_schema,
+                Diagnostics::from_purpose("persist-shared-log-learner-retraction"),
+            )
+            .await
+            .expect("failed to open retraction writer for learner");
 
         // Advance upper past T=0 if this is a fresh shard, so that
         // subscribe's snapshot doesn't block waiting for data.
@@ -941,7 +1217,8 @@ impl PersistLearner {
         let since = read.since().clone();
         let subscribe = read.subscribe(since).await.expect("subscribe should succeed");
 
-        let (learner, handle) = Self::new(config, subscribe, upper_handle, metrics);
+        let (learner, handle) =
+            Self::new(config, subscribe, upper_handle, retraction_write, metrics);
         let task = mz_ore::task::spawn(|| "persist-learner", learner.run());
         (handle, task)
     }

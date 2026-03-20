@@ -39,10 +39,9 @@ use mz_ore::retry::Retry;
 use mz_persist::generated::consensus_service::{ProtoAppendResponse, ProtoLogProposal};
 use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient, ShardId};
-use mz_persist_types::codec_impls::UnitSchema;
 use prost::Message;
 
-use super::{Proposal, ProposalSchema};
+use super::{OrderedKey, OrderedKeySchema, Proposal, ProposalSchema, extract_shard_name};
 use crate::metrics::AcceptorMetrics;
 use crate::{AcceptorConfig, AcceptorError};
 
@@ -155,9 +154,9 @@ impl PersistAcceptor {
     /// number — no explicit `set_batch_number` needed.
     pub fn new(
         config: AcceptorConfig,
-        write: WriteHandle<Proposal, (), u64, i64>,
+        write: WriteHandle<OrderedKey, Proposal, u64, i64>,
         metrics: AcceptorMetrics,
-    ) -> (Self, WriteHandle<Proposal, (), u64, i64>, PersistAcceptorHandle) {
+    ) -> (Self, WriteHandle<OrderedKey, Proposal, u64, i64>, PersistAcceptorHandle) {
         let (tx, rx) = mpsc::channel(config.queue_depth);
 
         let acceptor = PersistAcceptor {
@@ -174,7 +173,7 @@ impl PersistAcceptor {
     /// Open-loop: when there are pending proposals, flush immediately. When the
     /// flush completes, drain any commands that arrived during the flush, then
     /// flush again if there's more work.
-    pub async fn run(mut self, mut write: WriteHandle<Proposal, (), u64, i64>) {
+    pub async fn run(mut self, mut write: WriteHandle<OrderedKey, Proposal, u64, i64>) {
         info!("persist acceptor starting");
         loop {
             // Flush if we have pending work.
@@ -244,7 +243,7 @@ impl PersistAcceptor {
 /// Proposal reply oneshots and flush barrier oneshots are resolved inside this
 /// function. Returns `Err` on fatal error (InvalidUsage or retries exhausted).
 async fn flush(
-    write: &mut WriteHandle<Proposal, (), u64, i64>,
+    write: &mut WriteHandle<OrderedKey, Proposal, u64, i64>,
     pending: Vec<PendingItem>,
     metrics: &AcceptorMetrics,
 ) -> Result<(), String> {
@@ -311,11 +310,21 @@ async fn flush(
             "persist acceptor flush"
         );
 
-        // Build updates at the current batch_number. Proposals are already
-        // pre-encoded; clone() is O(1) thanks to Bytes refcounting.
+        // Build updates at the current batch_number. Each proposal gets an
+        // OrderedKey with (batch_id, position, shard) for stable ordering
+        // through compaction. Proposal clone is O(1) via Bytes refcounting.
         let updates: Vec<_> = proposals
             .iter()
-            .map(|p| ((p.clone(), ()), batch_number, 1i64))
+            .enumerate()
+            .map(|(position, p)| {
+                let shard = extract_shard_name(&p.encoded);
+                let key = OrderedKey {
+                    batch_id: batch_number,
+                    position: u32::try_from(position).expect("batch position fits u32"),
+                    shard,
+                };
+                ((key, p.clone()), batch_number, 1i64)
+            })
             .collect();
 
         let new_upper = Antichain::from_elem(batch_number + 1);
@@ -406,10 +415,10 @@ impl PersistAcceptor {
         metrics: AcceptorMetrics,
     ) -> (PersistAcceptorHandle, mz_ore::task::JoinHandle<()>) {
         let write = client
-            .open_writer::<Proposal, (), u64, i64>(
+            .open_writer::<OrderedKey, Proposal, u64, i64>(
                 shard_id,
+                Arc::new(OrderedKeySchema),
                 Arc::new(ProposalSchema),
-                Arc::new(UnitSchema),
                 Diagnostics::from_purpose("persist-shared-log-acceptor"),
             )
             .await

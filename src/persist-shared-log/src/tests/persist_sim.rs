@@ -37,6 +37,7 @@
 //! [`SimTrace`]: super::trace::SimTrace
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
@@ -48,14 +49,13 @@ use mz_persist::generated::consensus_service::{
 };
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::ShardId;
-use mz_persist_types::codec_impls::UnitSchema;
 
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
-use crate::persist_log::{Proposal, ProposalSchema};
+use crate::persist_log::{OrderedKey, OrderedKeySchema, Proposal, ProposalSchema};
 use crate::Acceptor as _;
 use crate::AcceptorConfig;
 
@@ -103,8 +103,10 @@ impl OpGenerator {
         } else if r < 0.85 {
             // Extra CAS to exercise the write path under contention.
             SimAction::Op(self.gen_cas())
-        } else if r < 0.95 {
+        } else if r < 0.90 {
             SimAction::System(SystemEvent::CrashAndRecover)
+        } else if r < 0.95 {
+            SimAction::System(SystemEvent::RetractionSweep)
         } else {
             SimAction::Op(self.gen_cas())
         }
@@ -228,13 +230,13 @@ async fn spawn_persist_pair(
     mz_ore::task::AbortOnDropHandle<()>,
     mz_ore::task::AbortOnDropHandle<()>,
 ) {
-    let key_schema = Arc::new(ProposalSchema);
-    let val_schema = Arc::new(UnitSchema);
+    let key_schema = Arc::new(OrderedKeySchema);
+    let val_schema = Arc::new(ProposalSchema);
 
     // Open all handles before spawning tasks to avoid deadlocks on
     // current_thread tokio runtimes.
     let mut write = client
-        .open_writer::<Proposal, (), u64, i64>(
+        .open_writer::<OrderedKey, Proposal, u64, i64>(
             shard_id,
             Arc::clone(&key_schema),
             Arc::clone(&val_schema),
@@ -244,7 +246,7 @@ async fn spawn_persist_pair(
         .expect("open acceptor writer");
 
     let (upper_handle, read) = client
-        .open::<Proposal, (), u64, i64>(
+        .open::<OrderedKey, Proposal, u64, i64>(
             shard_id,
             key_schema,
             val_schema,
@@ -265,6 +267,16 @@ async fn spawn_persist_pair(
     let since = read.since().clone();
     let subscribe = read.subscribe(since).await.expect("subscribe");
 
+    let retraction_write = client
+        .open_writer::<OrderedKey, Proposal, u64, i64>(
+            shard_id,
+            Arc::new(OrderedKeySchema),
+            Arc::new(ProposalSchema),
+            Diagnostics::from_purpose("persist-sim-learner-retraction"),
+        )
+        .await
+        .expect("open retraction writer");
+
     let (acceptor_metrics, learner_metrics) = test_metrics();
 
     let (acceptor, write, acceptor_handle) =
@@ -273,11 +285,11 @@ async fn spawn_persist_pair(
         mz_ore::task::spawn(|| "persist-sim-acceptor", acceptor.run(write)).abort_on_drop();
 
     let learner_config = PersistLearnerConfig {
-        result_retention_batches: 1_000_000,
+        retraction_interval: Duration::from_millis(100),
         ..Default::default()
     };
     let (learner, learner_handle) =
-        PersistLearner::new(learner_config, subscribe, upper_handle, learner_metrics);
+        PersistLearner::new(learner_config, subscribe, upper_handle, retraction_write, learner_metrics);
     let learner_task =
         mz_ore::task::spawn(|| "persist-sim-learner", learner.run()).abort_on_drop();
 
@@ -335,6 +347,9 @@ impl PersistSimulator {
             SimAction::Op(op) => self.apply_op(op, step).await,
             SimAction::System(SystemEvent::CrashAndRecover) => {
                 self.crash_and_recover(step, op_gen).await;
+            }
+            SimAction::System(SystemEvent::RetractionSweep) => {
+                self.retraction_sweep(step).await;
             }
         }
     }
@@ -535,6 +550,22 @@ impl PersistSimulator {
 
         op_gen.sync_from_oracle(&self.oracle);
     }
+
+    async fn retraction_sweep(&mut self, step: usize) {
+        self.trace
+            .record_system(step, &SystemEvent::RetractionSweep);
+
+        let count = self
+            .learner_handle
+            .force_retraction_sweep()
+            .await
+            .unwrap();
+
+        self.trace.record_note(
+            step,
+            format!("retraction sweep: {} entries retracted", count),
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -585,12 +616,12 @@ async fn persist_sim_multi_writer() {
         let client = PersistClient::new_for_tests().await;
         let shard_id = ShardId::new();
 
-        let key_schema = Arc::new(ProposalSchema);
-        let val_schema = Arc::new(UnitSchema);
+        let key_schema = Arc::new(OrderedKeySchema);
+        let val_schema = Arc::new(ProposalSchema);
 
         // Open all handles before spawning tasks.
         let write_a = client
-            .open_writer::<Proposal, (), u64, i64>(
+            .open_writer::<OrderedKey, Proposal, u64, i64>(
                 shard_id,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
@@ -600,7 +631,7 @@ async fn persist_sim_multi_writer() {
             .expect("open writer A");
 
         let write_b = client
-            .open_writer::<Proposal, (), u64, i64>(
+            .open_writer::<OrderedKey, Proposal, u64, i64>(
                 shard_id,
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
@@ -610,7 +641,7 @@ async fn persist_sim_multi_writer() {
             .expect("open writer B");
 
         let (mut upper_handle, read) = client
-            .open::<Proposal, (), u64, i64>(
+            .open::<OrderedKey, Proposal, u64, i64>(
                 shard_id,
                 key_schema,
                 val_schema,
@@ -629,6 +660,16 @@ async fn persist_sim_multi_writer() {
         let since = read.since().clone();
         let subscribe = read.subscribe(since).await.expect("subscribe");
 
+        let retraction_write = client
+            .open_writer::<OrderedKey, Proposal, u64, i64>(
+                shard_id,
+                Arc::new(OrderedKeySchema),
+                Arc::new(ProposalSchema),
+                Diagnostics::from_purpose("persist-sim-learner-retraction"),
+            )
+            .await
+            .expect("open retraction writer");
+
         let (acceptor_metrics_a, learner_metrics) = test_metrics();
         let (acceptor_metrics_b, _) = test_metrics();
 
@@ -645,11 +686,11 @@ async fn persist_sim_multi_writer() {
                 .abort_on_drop();
 
         let learner_config = PersistLearnerConfig {
-            result_retention_batches: 1_000_000,
+            retraction_interval: Duration::from_millis(100),
             ..Default::default()
         };
         let (learner, learner_handle) =
-            PersistLearner::new(learner_config, subscribe, upper_handle, learner_metrics);
+            PersistLearner::new(learner_config, subscribe, upper_handle, retraction_write, learner_metrics);
         let _learner_task =
             mz_ore::task::spawn(|| "persist-sim-learner", learner.run()).abort_on_drop();
 

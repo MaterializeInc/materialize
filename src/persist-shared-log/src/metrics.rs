@@ -124,6 +124,11 @@ pub struct LearnerMetrics {
     pub active_shards: IntGauge,
     pub total_entries: IntGauge,
     pub approx_bytes: IntGauge,
+
+    // --- Learner retractions ---
+    pub retraction_sweeps: IntCounter,
+    pub retraction_rows_written: IntCounter,
+    pub retraction_sweep_latency_seconds: Histogram,
 }
 
 impl LearnerMetrics {
@@ -199,6 +204,19 @@ impl LearnerMetrics {
             approx_bytes: registry.register(metric!(
                 name: "mz_consensus_svc_learner_approx_bytes",
                 help: "Approximate bytes of data held in memory.",
+            )),
+            retraction_sweeps: registry.register(metric!(
+                name: "mz_consensus_svc_learner_retraction_sweeps_total",
+                help: "Total learner retraction sweep attempts.",
+            )),
+            retraction_rows_written: registry.register(metric!(
+                name: "mz_consensus_svc_learner_retraction_rows_written_total",
+                help: "Total retraction rows (-1 diffs) written to the shard.",
+            )),
+            retraction_sweep_latency_seconds: registry.register(metric!(
+                name: "mz_consensus_svc_learner_retraction_sweep_latency_seconds",
+                help: "Histogram of learner retraction sweep latency in seconds.",
+                buckets: latency_buckets(),
             )),
         }
     }
