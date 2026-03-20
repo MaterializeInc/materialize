@@ -359,7 +359,7 @@ where
         let machine = self.machine.clone();
         async move {
             let batches = match as_of {
-                Some(as_of) => machine.snapshot(&as_of).await?,
+                Some(as_of) => machine.unleased_snapshot(&as_of).await?,
                 None => machine.applier.all_batches(),
             };
             let num_updates = batches.iter().map(|b| b.len).sum();
