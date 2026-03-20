@@ -213,7 +213,9 @@ impl StashingPeek {
     /// `rows_tx`. Will pump at most `batch_size` rows in one batch, and at most
     /// the given `num_batches` batches.
     pub fn pump_rows(&mut self, mut num_batches: usize, batch_size: usize) {
-        while let Some(row_iter) = self.peek_iterator.as_mut() {
+        while num_batches > 0
+            && let Some(row_iter) = self.peek_iterator.as_mut()
+        {
             // Try to reserve space in the channel before pulling rows from the
             // iterator.
             let permit = match self
@@ -247,9 +249,6 @@ impl StashingPeek {
             }
 
             num_batches -= 1;
-            if num_batches == 0 {
-                break;
-            }
         }
     }
 }
