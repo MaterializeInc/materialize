@@ -34,7 +34,7 @@
         }
 
         @media(max-width: 850px) {
-            height: calc(100vh - var(--nav-height));
+            height: calc(145vh - var(--nav-height));
 
             .row {
                 display: flex;
@@ -48,7 +48,7 @@
         justify-content: space-between;
         flex: 0 0 100%;
         align-items: center;
-        height: var(--nav-height);
+        height: calc(var(--nav-height) - 35px);
     }
 
     a:not([class*="btn"]) {

@@ -7,8 +7,8 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = ""
-bannerLink = ""
+bannerMessage = "Register for the upcoming webinar: Real-World Context Engineering – AI Agents in the Enterprise. March 31, 2026 at 3:00 PM ET"
+bannerLink = "https://materialize.com/events/webinar-real-world-context-engineering-ai-agents-enterprise/?utm_medium=event&utm_source=webinar-promo&utm_campaign=Webinars&sf_campaign=701TR00000NMvxUYAT&utm_term=Docs&utm_content="
 
 [frontmatter]
 publishDate = ["publishDate"]
