@@ -19,7 +19,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-03-19* <br>
 *Released to Materialize Self-Managed: 2026-03-20* <br>
 
-This release adds support for copying Parquet files from object storage, performance improvements and bugfixes.
+This release adds support for copying Parquet files from object storage, performance improvements, and bug fixes.
 
 ### `COPY FROM` Parquet files in object storage
 
@@ -40,12 +40,12 @@ For more information, refer to:
 
 ### Improvements {#v26.16-improvements}
 
-- Improved error messages for `AS OF` queries to use user-facing
-  terminology (e.g., "Indexed input", "Storage inputs") instead of
-  internal names.
-- WebSocket query results are now streamed directly instead of buffered,
-  reducing memory usage for large result sets.
-- Improved precision of pgwire encoding error messages sent to clients.
+- **Improved `AS OF` error messages**: Error messages for `AS OF` queries
+  now use user-facing terminology (e.g., "Indexed input", "Storage inputs")
+  instead of internal names.
+- **Streamed WebSocket query results**: WebSocket query results are now
+  streamed directly instead of buffered, reducing memory usage for large
+  result sets.
 
 ### Bug Fixes {#v26.16-bug-fixes}
 
@@ -67,7 +67,7 @@ For more information, refer to:
 - Fixed subqueries being incorrectly allowed in the `SET` clause of
   `UPDATE` statements.
 - Fixed `COPY FROM S3` requiring manual column specification for tables
-  with `NON NULL` columns by removing a redundant non-null check during
+  with `NOT NULL` columns by removing a redundant non-null check during
   planning.
 - Fixed a correctness issue with `COPY FROM STDIN` when using headers.
 - Fixed column name deduplication bug in `COPY TO` / Parquet writer that
