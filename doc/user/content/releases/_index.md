@@ -22,7 +22,21 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 This release adds support for copying Parquet files from object storage, performance improvements and bugfixes.
 
 ### `COPY FROM` Parquet files in object storage
-You can now use `COPY INTO ... FROM ... (FORMAT PARQUET)` to copy data from Parquet files stored in S3 compatible object storage. Refer to our documentation on [`COPY FROM`](/sql/copy-from/).
+
+`COPY FROM` now supports bulk importing data from Parquet files stored in Amazon
+S3 and any S3-compatible object storage service, such as Google Cloud Storage,
+Cloudflare R2, or MinIO. You can import Parquet files using an AWS connection or
+a presigned URL.
+
+```mzsql
+COPY INTO my_table
+FROM 's3://my_bucket/my_data.parquet'
+(FORMAT PARQUET, AWS CONNECTION = my_aws_conn);
+```
+
+For more information, refer to:
+- [Syntax: COPY FROM](/sql/copy-from/)
+- [Syntax: CREATE CONNECTION (S3-compatible)](/sql/create-connection/#s3-compatible-object-storage)
 
 ### Improvements {#v26.16-improvements}
 
