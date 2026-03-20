@@ -160,3 +160,38 @@ query T
 SELECT * FROM ct_const_mv
 ----
 1
+
+# Regression test for a panic when dropping a continual task while a subscribe
+# is active on it. The bug was that the CT's name was not recorded in
+# dropped_item_names, causing a panic in apply_catalog_implications_inner.
+
+statement ok
+CREATE TABLE drop_ct_input (key INT)
+
+statement ok
+CREATE CONTINUAL TASK drop_ct (key INT) ON INPUT drop_ct_input AS (
+    INSERT INTO drop_ct SELECT * FROM drop_ct_input;
+)
+
+statement ok
+BEGIN
+
+statement ok
+DECLARE c CURSOR FOR SUBSCRIBE drop_ct
+
+statement ok
+FETCH 0 c WITH (TIMEOUT = '1s')
+
+simple conn=conn_drop_ct
+DROP CONTINUAL TASK drop_ct CASCADE;
+----
+COMPLETE 0
+
+statement error subscribe has been terminated because underlying relation
+FETCH 1 c WITH (TIMEOUT = '5s')
+
+statement ok
+ROLLBACK
+
+statement ok
+DROP TABLE drop_ct_input CASCADE

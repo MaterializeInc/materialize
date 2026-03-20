@@ -403,10 +403,11 @@ impl Coordinator {
                 }
                 CatalogImplication::ContinualTask(CatalogImplicationKind::Dropped(
                     ct,
-                    _full_name,
+                    full_name,
                 )) => {
                     compute_sinks_to_drop.push((ct.cluster_id, ct.global_id()));
                     sources_to_drop.push((catalog_id, ct.global_id()));
+                    dropped_item_names.insert(ct.global_id(), full_name);
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
                     // No action needed: the secret payload is stored in
