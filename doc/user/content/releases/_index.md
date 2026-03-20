@@ -40,12 +40,12 @@ For more information, refer to:
 
 ### Improvements {#v26.16-improvements}
 
-- **Improved `AS OF` error messages**: Error messages for `AS OF` queries
-  now use user-facing terminology (e.g., "Indexed input", "Storage inputs")
-  instead of internal names.
-- **Streamed WebSocket query results**: WebSocket query results are now
-  streamed directly instead of buffered, reducing memory usage for large
-  result sets.
+- **Improved [`AS OF`](/sql/subscribe/#as-of) error messages**: Error messages
+  for `AS OF` queries now use user-facing terminology (e.g., "Indexed
+  input", "Storage inputs") instead of internal names.
+- **Streamed [WebSocket](/integrations/websocket-api/) query results**:
+  WebSocket query results are now streamed directly instead of buffered,
+  reducing memory usage for large result sets.
 
 ### Bug Fixes {#v26.16-bug-fixes}
 
