@@ -572,14 +572,12 @@ impl Coordinator {
                     tracing::debug!(?replica, "not handling AddClusterReplica in here yet");
                 }
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Altered {
-                    prev: prev_replica,
-                    new: new_replica,
+                    prev: _prev_replica,
+                    new: _new_replica,
                 }) => {
-                    tracing::debug!(
-                        ?prev_replica,
-                        ?new_replica,
-                        "not handling AlterClusterReplica in here yet"
-                    );
+                    // No action needed: cluster replica alterations (e.g.
+                    // renames, owner changes, pending flag changes) are
+                    // catalog-only and require no controller changes.
                 }
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Dropped(
                     _replica,
