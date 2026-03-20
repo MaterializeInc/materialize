@@ -32,7 +32,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument};
+use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -3092,39 +3092,20 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         plan: plan::AlterRetainHistoryPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        soft_assert_or_log!(
+            !matches!(
+                self.catalog().get_entry(&plan.id).item(),
+                CatalogItem::ContinualTask(_)
+            ),
+            "RETAIN HISTORY is not supported on continual tasks"
+        );
         let ops = vec![catalog::Op::AlterRetainHistory {
             id: plan.id,
             value: plan.value,
             window: plan.window,
         }];
-        self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-            Box::pin(async move {
-                let catalog_item = coord.catalog().get_entry(&plan.id).item();
-                let cluster = match catalog_item {
-                    CatalogItem::Table(_)
-                    | CatalogItem::MaterializedView(_)
-                    | CatalogItem::Source(_)
-                    | CatalogItem::ContinualTask(_) => None,
-                    CatalogItem::Index(index) => Some(index.cluster_id),
-                    CatalogItem::Log(_)
-                    | CatalogItem::View(_)
-                    | CatalogItem::Sink(_)
-                    | CatalogItem::Type(_)
-                    | CatalogItem::Func(_)
-                    | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => unreachable!(),
-                };
-                match cluster {
-                    Some(cluster) => {
-                        coord.update_compute_read_policy(cluster, plan.id, plan.window.into());
-                    }
-                    None => {
-                        coord.update_storage_read_policies(vec![(plan.id, plan.window.into())]);
-                    }
-                }
-            })
-        })
-        .await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
         Ok(ExecuteResponse::AlteredObject(plan.object_type))
     }
 

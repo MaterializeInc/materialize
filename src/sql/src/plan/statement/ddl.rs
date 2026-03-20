@@ -7010,7 +7010,7 @@ fn alter_retain_history(
             UnresolvedObjectName::Item(name),
         ) => name,
         (object_type, _) => {
-            sql_bail!("{object_type} does not support RETAIN HISTORY")
+            bail_unsupported!(format!("RETAIN HISTORY on {object_type}"))
         }
     };
     match resolve_item_or_type(scx, object_type, name.clone(), if_exists)? {
