@@ -65,7 +65,10 @@ sudo sysctl -w kernel.core_pattern="|/usr/bin/ci-filter-core.sh %s $cores/core.%
 # Since we have `pipefail` set in this script, this would lead to a failure and
 # we would attempt to bring up the workflow, which will fail with `no such
 # service: default`.
-if ! mzcompose --mz-quiet list-workflows | grep "$service" > /dev/null; then
+# Store list-workflows output so we can distinguish "not a workflow" from
+# "command failed" (e.g. due to a network error pulling ci-builder).
+workflows=$(mzcompose --mz-quiet list-workflows)
+if ! echo "$workflows" | grep "$service" > /dev/null; then
     ci_collapsed_heading ":docker: Starting dependencies"
     mzcompose up -d --scale "$service=0" "$service"
 fi
