@@ -19,22 +19,13 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-03-19* <br>
 *Released to Materialize Self-Managed: 2026-03-20* <br>
 
-This release adds support for copying Parquet files from S3 into tables,
-introduces OIDC authentication for Self-Managed deployments with support
-for multiple audiences, and includes numerous bug fixes including a
-security fix for an RBAC privilege escalation bypass and a fix for indexes
-being lost during environment bootstrap.
+This release adds support for copying Parquet files from S3 into tables
 
 ### Features {#v26.16-features}
 
 - **COPY FROM S3: Parquet file support**: You can now use
   `COPY INTO ... FROM ... (FORMAT PARQUET)` to copy data from Parquet
   files stored in S3 into tables.
-
-- **OIDC authentication for Self-Managed**: Self-Managed deployments now
-  support OIDC-based authentication, including orchestratord integration
-  with OIDC identity providers, credential-based authentication separate
-  from session management, and support for configuring multiple audiences.
 
 ### Improvements {#v26.16-improvements}
 
@@ -76,8 +67,6 @@ being lost during environment bootstrap.
   policies.
 - Fixed false positive wallclock lag reporting (showing ~56 years of lag)
   during replica startup for compute introspection indexes.
-- Fixed orchestratord OIDC deployment failures caused by using an
-  incorrect internal port for the OIDC HTTP client.
 
 ## v26.15.0
 *Released to Materialize Cloud: 2026-03-12* <br>
