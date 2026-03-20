@@ -1311,4 +1311,177 @@ mod test {
             handle.join().expect("threads completed successfully");
         }
     }
+
+    /// Reproduces the diff_sum=2 panic via ToUpper double-retraction.
+    ///
+    /// When the same key has updates at two different timestamps and both are
+    /// eligible for a ToUpper drain, the drain retracts the old value TWICE
+    /// because ToUpper doesn't update `existing_state_cell` between processing
+    /// the two timestamps. The second retraction sees the same stale state.
+    ///
+    /// Sequence:
+    ///   1. Key 0 = value 0 at T=0, feedback confirms it
+    ///   2. Key 0 = value 1 at T=2 AND key 0 = value 2 at T=3 arrive
+    ///   3. Another replica advances persist_upper to {4}
+    ///   4. ToUpper drain: both T=2 and T=3 are eligible → retracts value 0 TWICE
+    ///   5. Persist feedback with double retraction → diff_sum imbalance
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn to_upper_double_retraction_repro() {
+        let new_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+
+        let output_handle = timely::execute_directly(move |worker| {
+            let (mut input_handle, mut persist_handle, output_handle) = worker
+                .dataflow::<MzTimestamp, _, _>(|scope| {
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let (output, _, _, button) = upsert_inner(
+                            input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            || async { InMemoryHashMap::default() },
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        (input_handle, persist_handle, output.inner.capture())
+                    })
+                });
+
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+
+            let value0 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+            let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
+            let value2 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+
+            // Step 1: Key 0 = value 0 at T=0. Advance input past T=0.
+            input_handle.send(((key0, Some(Ok(value0.clone())), 1), new_ts(0), Diff::ONE));
+            input_handle.advance_to(new_ts(1));
+            worker.step();
+
+            // Step 2: Persist feedback confirms value 0 at T=0.
+            // Advance persist_upper to {1} so the drain can process T=0.
+            persist_handle.send((Ok(value0.clone()), new_ts(0), Diff::ONE));
+            persist_handle.advance_to(new_ts(1));
+            worker.step();
+
+            // Step 3: Key 0 gets new values at T=2 and T=3 (two different timestamps).
+            input_handle.send(((key0, Some(Ok(value1)), 2), new_ts(2), Diff::ONE));
+            input_handle.send(((key0, Some(Ok(value2)), 3), new_ts(3), Diff::ONE));
+            input_handle.advance_to(new_ts(4));
+            worker.step();
+
+            // Step 4: Advance persist_upper gradually. The other replica
+            // processed data and advanced the shard frontier. We advance
+            // persist step by step so the operator processes each frontier.
+            //
+            // At persist_upper={2}: T=0 output feedback already processed.
+            // Now T=2 data for key 0 is NOT yet eligible (needs persist_upper > 2).
+            persist_handle.advance_to(new_ts(2));
+            for _ in 0..5 { worker.step(); }
+
+            // At persist_upper={3}: T=2 becomes eligible for ToUpper.
+            persist_handle.advance_to(new_ts(3));
+            for _ in 0..5 { worker.step(); }
+
+            // At persist_upper={4}: T=3 also becomes eligible.
+            // If both T=2 and T=3 are still in the stash, the ToUpper drain
+            // processes them together → double retraction.
+            persist_handle.advance_to(new_ts(4));
+            for _ in 0..5 { worker.step(); }
+
+            // Now the drain processes key 0 at T=2 and T=3 in the SAME call.
+            // T=2: multi_get returns value 0 → retracts value 0, inserts value 1
+            // T=3: state cell NOT updated (ToUpper) → multi_get still has value 0
+            //       → retracts value 0 AGAIN, inserts value 2
+            // Double retraction of value 0!
+
+            output_handle
+        });
+
+        let mut actual_output: Vec<_> = output_handle
+            .extract()
+            .into_iter()
+            .flat_map(|(_cap, container)| container)
+            .collect();
+        differential_dataflow::consolidation::consolidate_updates(&mut actual_output);
+
+        let value0 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(0)]);
+        let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
+        let value2 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+
+        // The correct output: value 0 retracted exactly once.
+        // Only the latest value (value 2 at T=3) should survive.
+        // The intermediate value 1 at T=2 is superseded by value 2 at T=3,
+        // so after consolidation the output should be:
+        //   (value 0, T=0, +1)  — initial insert
+        //   (value 0, T=2, -1)  — retraction of value 0 (once!)
+        //   (value 1, T=2, +1)  — insert value 1
+        //   (value 1, T=3, -1)  — retraction of value 1
+        //   (value 2, T=3, +1)  — insert value 2
+        //
+        // BUG: currently value 0 is retracted at BOTH T=2 and T=3 because
+        // ToUpper drain doesn't update existing_state_cell between
+        // processing the two timestamps. The second retraction sees stale
+        // state and retracts value 0 again instead of value 1.
+        // This causes diff_sum=2 in the RocksDB merge operator, leading to:
+        //   "invalid upsert state: non 0/1 diff_sum: 2"
+        let expected_output: Vec<(Result<Row, DataflowError>, _, _)> = vec![
+            (Ok(value0.clone()), new_ts(0), Diff::ONE),
+            (Ok(value0), new_ts(2), Diff::MINUS_ONE),
+            (Ok(value1.clone()), new_ts(2), Diff::ONE),
+            (Ok(value1), new_ts(3), Diff::MINUS_ONE),
+            (Ok(value2), new_ts(3), Diff::ONE),
+        ];
+        assert_eq!(
+            actual_output, expected_output,
+            "ToUpper double retraction: value 0 should be retracted exactly once, \
+             but is retracted at both T=2 and T=3 due to stale state in drain"
+        );
+    }
 }
