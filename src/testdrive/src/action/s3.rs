@@ -465,9 +465,18 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
 
     // interval(day-time): stored as (days: i32, milliseconds: i32)
     let interval_dt_array = Arc::new(IntervalDayTimeArray::from(vec![
-        IntervalDayTime { days: 1, milliseconds: 500 },
-        IntervalDayTime { days: 30, milliseconds: 0 },
-        IntervalDayTime { days: -1, milliseconds: -1000 },
+        IntervalDayTime {
+            days: 1,
+            milliseconds: 500,
+        },
+        IntervalDayTime {
+            days: 30,
+            milliseconds: 0,
+        },
+        IntervalDayTime {
+            days: -1,
+            milliseconds: -1000,
+        },
     ]));
 
     // map<utf8, utf8>: {"k1": "v1", "k2": "v2"}, {"k3": "v3"}, {}

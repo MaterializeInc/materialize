@@ -17,10 +17,9 @@ use arrow::array::{
     Decimal256Array, FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int8Array,
     Int16Array, Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
     IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
-    MapArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray,
-    Time32SecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array,
+    MapArray, StringArray, StringViewArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
@@ -393,19 +392,19 @@ fn scalar_type_and_array_to_reader(
             })
         }
         (SqlScalarType::Interval, DataType::Interval(IntervalUnit::YearMonth)) => {
-            Ok(ColReader::IntervalYearMonth(
-                downcast_array::<IntervalYearMonthArray>(array),
-            ))
+            Ok(ColReader::IntervalYearMonth(downcast_array::<
+                IntervalYearMonthArray,
+            >(array)))
         }
         (SqlScalarType::Interval, DataType::Interval(IntervalUnit::DayTime)) => {
-            Ok(ColReader::IntervalDayTime(
-                downcast_array::<IntervalDayTimeArray>(array),
-            ))
+            Ok(ColReader::IntervalDayTime(downcast_array::<
+                IntervalDayTimeArray,
+            >(array)))
         }
         (SqlScalarType::Interval, DataType::Interval(IntervalUnit::MonthDayNano)) => {
-            Ok(ColReader::IntervalMonthDayNano(
-                downcast_array::<IntervalMonthDayNanoArray>(array),
-            ))
+            Ok(ColReader::IntervalMonthDayNano(downcast_array::<
+                IntervalMonthDayNanoArray,
+            >(array)))
         }
         other => anyhow::bail!("unsupported: {other:?}"),
     }
@@ -849,20 +848,18 @@ impl ColReader {
                 .is_valid(idx)
                 .then(|| array.value(idx))
                 .map(|months| Datum::Interval(Interval::new(months, 0, 0))),
-            ColReader::IntervalDayTime(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(|v| {
+            ColReader::IntervalDayTime(array) => {
+                array.is_valid(idx).then(|| array.value(idx)).map(|v| {
                     let micros = i64::from(v.milliseconds) * 1_000;
                     Datum::Interval(Interval::new(0, v.days, micros))
-                }),
-            ColReader::IntervalMonthDayNano(array) => array
-                .is_valid(idx)
-                .then(|| array.value(idx))
-                .map(|v| {
+                })
+            }
+            ColReader::IntervalMonthDayNano(array) => {
+                array.is_valid(idx).then(|| array.value(idx)).map(|v| {
                     let micros = v.nanoseconds / 1_000;
                     Datum::Interval(Interval::new(v.months, v.days, micros))
-                }),
+                })
+            }
         };
 
         match datum {
