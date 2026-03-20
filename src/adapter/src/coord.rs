@@ -4542,9 +4542,36 @@ pub fn serve(
         };
 
         let clusters_caught_up_check =
-            clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
-                trigger,
-                exclude_collections: new_builtin_collections.into_iter().collect(),
+            clusters_caught_up_trigger.map(|trigger| {
+                let mut exclude_collections: BTreeSet<GlobalId> =
+                    new_builtin_collections.into_iter().collect();
+
+                // Migrated MVs can't make progress in read-only mode. Exclude them and all their
+                // transitive dependents.
+                //
+                // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
+                //       would allow them to make progress even in read-only mode. This doesn't
+                //       work for MVs based on `mz_catalog_raw`, if the leader's version is less
+                //       than v26.17, since before that version the catalog shard's frontier wasn't
+                //       kept up-to-date with the current time. So this workaround has to remain in
+                //       place upgrades from a version less than v26.17 are no longer supported.
+                let mut todo: Vec<_> = migrated_storage_collections_0dt
+                    .iter()
+                    .filter(|id| {
+                        catalog.state().get_entry(id).is_materialized_view()
+                    })
+                    .copied()
+                    .collect();
+                while let Some(item_id) = todo.pop() {
+                    let entry = catalog.state().get_entry(&item_id);
+                    exclude_collections.extend(entry.global_ids());
+                    todo.extend_from_slice(entry.used_by());
+                }
+
+                CaughtUpCheckContext {
+                    trigger,
+                    exclude_collections,
+                }
             });
 
         if let Some(TimestampOracleConfig::Postgres(pg_config)) =
