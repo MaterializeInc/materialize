@@ -951,8 +951,14 @@ where
     }
 
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
-    /// "leased out" to a `LeasedBatchPart`, and cannot be garbage
-    /// collected until its lease has been returned.
+    /// "leased out" to a `LeasedBatchPart`. This ensures that until the reader is expired or the
+    /// [Lease] is dropped, we will hold onto all versions of the state with this sequence number
+    /// or larger. In particular, this means that any batches that are present in the state at
+    /// the leased seqno _or in any future state_ will be preserved as long as the lease is active.
+    ///
+    /// Note that this doesn't present batches from earlier versions of state from being GCed,
+    /// even if they were observed just before the lease call. Callers should generally take a lease
+    /// first, and then inspect state to find any batches to return or process.
     async fn lease_seqno(&mut self) -> Lease {
         let current_seqno = self.machine.seqno();
         let lease = self.hold_state.modify(|s| {

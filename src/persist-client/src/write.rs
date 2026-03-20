@@ -39,14 +39,15 @@ use crate::batch::{
     Added, BATCH_DELETE_ENABLED, Batch, BatchBuilder, BatchBuilderConfig, BatchBuilderInternal,
     BatchParts, ProtoBatch, validate_truncate_batch,
 };
-use crate::cfg::RetryParameters;
 use crate::error::{InvalidUsage, UpperMismatch};
 use crate::fetch::{
     EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat, VALIDATE_PART_BOUNDS_ON_READ,
 };
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, assert_code_can_read_data};
-use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
+use crate::internal::machine::{
+    CompareAndAppendRes, ExpireFn, Machine, next_listen_batch_retry_params,
+};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
@@ -986,7 +987,7 @@ where
                 &mut watch,
                 None,
                 &self.metrics.retries.next_listen_batch, // TODO: new retry metrics for these?
-                RetryParameters::persist_defaults(),
+                next_listen_batch_retry_params(&self.cfg),
             )
             .await;
         let upper = self.machine.applier.clone_upper();

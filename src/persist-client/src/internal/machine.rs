@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
@@ -806,6 +806,9 @@ where
         &self,
         as_of: &Antichain<T>,
     ) -> Result<Vec<HollowBatch<T>>, Since<T>> {
+        if let Ok(data) = self.applier.snapshot(as_of) {
+            return Ok(data);
+        }
         let mut watch = self.applier.watch();
         self.wait_for_upper_past(
             as_of,
@@ -841,14 +844,15 @@ where
         metrics: &RetryMetrics,
         retry: RetryParameters,
     ) {
+        let start = Instant::now();
         let wait_for_seqno_past = self.applier.upper(|seqno, upper| {
             if PartialOrder::less_than(frontier, upper) {
                 None
             } else {
-                Some(seqno)
+                Some((seqno, upper.clone()))
             }
         });
-        let Some(mut seqno) = wait_for_seqno_past else {
+        let Some((mut seqno, mut upper)) = wait_for_seqno_past else {
             // The current state's upper is already past the given frontier.
             return;
         };
@@ -874,7 +878,42 @@ where
                 .instrument(trace_span!("snapshot::sleep"))
         );
 
+        // To reduce log spam, we log "not yet available" only once at info if
+        // it passes a certain threshold. Then, if it did one info log, we log
+        // again at info when it resolves.
+        let mut logged_at_info = false;
         loop {
+            // Use a duration based threshold here instead of the usual
+            // INFO_MIN_ATTEMPTS because here we're waiting on an
+            // external thing to arrive.
+            if !logged_at_info
+                && start.elapsed() >= Duration::from_millis(1024)
+                && metrics.name.as_str() == "snapshot"
+            {
+                logged_at_info = true;
+                info!(
+                    shard_id =? self.shard_id(),
+                    shard_name =? self.applier.shard_metrics.name,
+                    reader_id =? reader_id,
+                    wait_frontier =? frontier.elements(),
+                    current_upper =? upper.elements(),
+                    current_seqno =? seqno,
+                    wait_for = &metrics.name,
+                    "desired upper not yet available",
+                );
+            } else {
+                debug!(
+                    shard_id =? self.shard_id(),
+                    shard_name =? self.applier.shard_metrics.name,
+                    reader_id =? reader_id,
+                    wait_frontier =? frontier.elements(),
+                    current_upper =? upper.elements(),
+                    current_seqno =? seqno,
+                    wait_for = &metrics.name,
+                    "desired upper not yet available",
+                );
+            }
+
             let wake = match future::select(watch_fut.as_mut(), sleep_fut.as_mut()).await {
                 future::Either::Left((wake, _)) => wake,
                 future::Either::Right((wake, _)) => wake,
@@ -894,10 +933,10 @@ where
                 if PartialOrder::less_than(frontier, upper) {
                     None
                 } else {
-                    Some(seqno)
+                    Some((seqno, upper.clone()))
                 }
             });
-            seqno = match wait_for_seqno_past {
+            match wait_for_seqno_past {
                 None => {
                     match &wake {
                         Wake::Watch(_) => self.applier.metrics.watch.wait_resolved_via_watch.inc(),
@@ -905,7 +944,10 @@ where
                     }
                     return;
                 }
-                Some(seqno) => seqno,
+                Some((s, u)) => {
+                    seqno = s;
+                    upper = u;
+                }
             };
 
             // Wait a bit and try again. Intentionally don't ever log
@@ -921,11 +963,15 @@ where
                 }
                 Wake::Sleep(sleeps) => {
                     debug!(
-                        "{:?}: {} {} next_listen_batch didn't find new data, retrying in {:?}",
-                        reader_id,
-                        self.applier.shard_metrics.name,
-                        self.shard_id(),
-                        sleeps.next_sleep()
+                        shard_id =? self.shard_id(),
+                        shard_name =? self.applier.shard_metrics.name,
+                        reader_id =? reader_id,
+                        wait_frontier =? frontier.elements(),
+                        current_upper =? upper.elements(),
+                        current_seqno =? seqno,
+                        wait_for = &metrics.name,
+                        "didn't find new data, retrying in {:?}",
+                        sleeps.next_sleep(),
                     );
                     sleep_fut.set(
                         sleeps
