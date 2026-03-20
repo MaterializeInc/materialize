@@ -15,6 +15,70 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.16.0
+*Released to Materialize Cloud: 2026-03-19* <br>
+*Released to Materialize Self-Managed: 2026-03-20* <br>
+
+This release adds support for copying Parquet files from S3 into tables,
+introduces OIDC authentication for Self-Managed deployments with support
+for multiple audiences, and includes numerous bug fixes including a
+security fix for an RBAC privilege escalation bypass and a fix for indexes
+being lost during environment bootstrap.
+
+### Features {#v26.16-features}
+
+- **COPY FROM S3: Parquet file support**: You can now use
+  `COPY INTO ... FROM ... (FORMAT PARQUET)` to copy data from Parquet
+  files stored in S3 into tables.
+
+- **OIDC authentication for Self-Managed**: Self-Managed deployments now
+  support OIDC-based authentication, including orchestratord integration
+  with OIDC identity providers, credential-based authentication separate
+  from session management, and support for configuring multiple audiences.
+
+### Improvements {#v26.16-improvements}
+
+- Improved error messages for `AS OF` queries to use user-facing
+  terminology (e.g., "Indexed input", "Storage inputs") instead of
+  internal names.
+- WebSocket query results are now streamed directly instead of buffered,
+  reducing memory usage for large result sets.
+- Improved precision of pgwire encoding error messages sent to clients.
+
+### Bug Fixes {#v26.16-bug-fixes}
+
+- Fixed an RBAC security bypass that allowed a non-superuser with
+  `CREATEROLE` privilege to strip superuser status from any role via
+  `ALTER ROLE ... NOSUPERUSER`.
+- Fixed indexes on older versions of altered tables or replaced
+  materialized views being lost during environment bootstrap, which
+  could cause panics.
+- Fixed pgwire encoding errors leaving partial messages in the connection
+  buffer, which caused clients to see "lost synchronization" errors
+  instead of proper error messages.
+- Fixed unbounded queue growth in storage since-downgrade processing that
+  could lead to out-of-memory conditions in environments with many
+  storage collections.
+- Fixed a correctness bug when parsing large Avro fixed-size decimals
+  from Kafka sources, where values were returned as raw bytes instead of
+  decoded decimal numbers.
+- Fixed subqueries being incorrectly allowed in the `SET` clause of
+  `UPDATE` statements.
+- Fixed `COPY FROM S3` requiring manual column specification for tables
+  with `NON NULL` columns by removing a redundant non-null check during
+  planning.
+- Fixed a correctness issue with `COPY FROM STDIN` when using headers.
+- Fixed column name deduplication bug in `COPY TO` / Parquet writer that
+  could produce duplicate column names.
+- Fixed `RETAIN HISTORY` value being ignored for webhook tables.
+- Fixed `DROP OWNED BY` and `REASSIGN OWNED BY` not including network
+  policies, which could block `DROP ROLE` for roles that own network
+  policies.
+- Fixed false positive wallclock lag reporting (showing ~56 years of lag)
+  during replica startup for compute introspection indexes.
+- Fixed orchestratord OIDC deployment failures caused by using an
+  incorrect internal port for the OIDC HTTP client.
+
 ## v26.15.0
 *Released to Materialize Cloud: 2026-03-12* <br>
 *Released to Materialize Self-Managed: 2026-03-13* <br>
