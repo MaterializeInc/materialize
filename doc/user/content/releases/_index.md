@@ -19,13 +19,10 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-03-19* <br>
 *Released to Materialize Self-Managed: 2026-03-20* <br>
 
-This release adds support for copying Parquet files from S3 into tables
+This release adds support for copying Parquet files from object storage, performance improvements and bugfixes.
 
-### Features {#v26.16-features}
-
-- **COPY FROM S3: Parquet file support**: You can now use
-  `COPY INTO ... FROM ... (FORMAT PARQUET)` to copy data from Parquet
-  files stored in S3 into tables.
+### `COPY FROM` Parquet files in object storage
+You can now use `COPY INTO ... FROM ... (FORMAT PARQUET)` to copy data from Parquet files stored in S3 compatible object storage. Refer to our documentation on [`COPY FROM`](/sql/copy-from/).
 
 ### Improvements {#v26.16-improvements}
 
