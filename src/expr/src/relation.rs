@@ -21,7 +21,7 @@ use bytesize::ByteSize;
 use differential_dataflow::containers::{Columnation, CopyRegion};
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastInto};
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::IdGen;
 use mz_ore::metrics::Histogram;
@@ -3721,8 +3721,10 @@ impl RowSetFinishingIncremental {
         let response_size: usize = iter.clone().map(|row| row.data().len()).sum();
 
         // Bail if we would end up returning more data to the client than they can support.
-        if let Some(max) = self.remaining_max_returned_query_size {
-            if response_size > usize::cast_from(max) {
+        if let Some(max) = &mut self.remaining_max_returned_query_size {
+            if let Some(remaining) = max.checked_sub(response_size.cast_into()) {
+                *max = remaining;
+            } else {
                 let max_bytes = ByteSize::b(self.max_returned_query_size.expect("known to exist"));
                 return Err(format!("total result exceeds max size of {max_bytes}"));
             }
@@ -4019,6 +4021,8 @@ pub enum AccessStrategy {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
     use mz_repr::explain::text::text_string_at;
 
     use crate::explain::HumanizedExplain;
@@ -4055,6 +4059,30 @@ mod tests {
         };
 
         assert_eq!(act, exp);
+    }
+
+    #[mz_ore::test]
+    fn test_row_set_finishing_incremental_max_returned_query_size() {
+        let row = Row::pack_slice(&[Datum::String("hello")]);
+        let row_size = u64::cast_from(row.data().len());
+        let diff = NonZeroUsize::new(1).unwrap();
+        let batch = RowCollection::new(vec![(row, diff)], &[]);
+
+        // Set max_returned_query_size to hold exactly 2 batches worth of rows.
+        let mut finishing = RowSetFinishingIncremental::new(0, None, vec![0], Some(row_size * 2));
+
+        let max_result_size = u64::MAX;
+
+        let r = finishing.finish_incremental_inner(batch.clone(), max_result_size);
+        assert!(r.is_ok());
+        assert_eq!(finishing.remaining_max_returned_query_size, Some(row_size));
+
+        let r = finishing.finish_incremental_inner(batch.clone(), max_result_size);
+        assert!(r.is_ok());
+        assert_eq!(finishing.remaining_max_returned_query_size, Some(0));
+
+        let r = finishing.finish_incremental_inner(batch, max_result_size);
+        assert!(r.unwrap_err().contains("total result exceeds max size"));
     }
 }
 
