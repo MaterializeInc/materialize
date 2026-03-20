@@ -582,7 +582,7 @@ def annotate_logged_errors(
 
         for issue in known_issues:
             match = issue.regex.search(for_github_re(search_string))
-            if match and issue.info["state"] == "open":
+            if match and issue.info["state"] == "OPEN":
                 if issue.apply_to and issue.apply_to not in (
                     step_key.lower(),
                     buildkite_label.lower().rstrip("01234567889 "),
@@ -598,7 +598,7 @@ def annotate_logged_errors(
                             error_details=error_details,
                             error_type="Known issue",
                             internal_error_type="KNOWN_ISSUE",
-                            issue_url=issue.info["html_url"],
+                            issue_url=issue.info["url"],
                             issue_title=issue.info["title"],
                             issue_number=issue.info["number"],
                             issue_is_closed=False,
@@ -614,7 +614,7 @@ def annotate_logged_errors(
         else:
             for issue in known_issues:
                 match = issue.regex.search(for_github_re(search_string))
-                if match and issue.info["state"] == "closed":
+                if match and issue.info["state"] == "CLOSED":
                     if issue.apply_to and issue.apply_to not in (
                         step_key.lower(),
                         buildkite_label.lower(),
@@ -628,7 +628,7 @@ def annotate_logged_errors(
                                 error_details=error_details,
                                 error_type="Potential regression",
                                 internal_error_type="POTENTIAL_REGRESSION",
-                                issue_url=issue.info["html_url"],
+                                issue_url=issue.info["url"],
                                 issue_title=issue.info["title"],
                                 issue_number=issue.info["number"],
                                 issue_is_closed=True,
