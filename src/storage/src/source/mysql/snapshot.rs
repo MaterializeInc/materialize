@@ -33,12 +33,13 @@
 //! transaction is running at. As far as we know there isn't such API so we achieve this using
 //! table locks instead.
 //!
-//! Each worker initiates a connection to the server and acquires a table lock on all the tables
-//! that are meant to be snapshotted. By doing so we establish a moment in time where we know no
-//! writes are happening to the tables we are interested in. After the locks are taken each worker
-//! reads the current upper frontier (`snapshot_upper`) using the `@@gtid_executed` system
-//! variable. This frontier establishes an upper bound on any possible write to the tables of
-//! interest until the lock is released.
+//! The full set of tables that are meant to be snapshotted are partitioned among the workers. Each
+//! worker initiates a connection to the server and acquires a table lock on all the tables that
+//! have been assigned to it. By doing so we establish a moment in time where we know no writes are
+//! happening to the tables we are interested in. After the locks are taken each worker reads the
+//! current upper frontier (`snapshot_upper`) using the `@@gtid_executed` system variable. This
+//! frontier establishes an upper bound on any possible write to the tables of interest until the
+//! lock is released.
 //!
 //! Each worker now starts a transaction via a new connection with 'REPEATABLE READ' and
 //! 'CONSISTENT SNAPSHOT' semantics. Due to linearizability we know that this transaction's view of
@@ -51,9 +52,7 @@
 //!
 //! At this point it is safe for each worker to unlock the tables, since the transaction has
 //! established a point in time, and close the initial connection. Each worker can then read the
-//! snapshot rows it is responsible for and publish them downstream. For tables with a single-column
-//! integer primary key this is a disjoint primary-key range per worker; other tables fall back to
-//! the existing single-worker read path.
+//! snapshot of the tables it is responsible for and publish it downstream.
 //!
 //! TODO: Other software products hold the table lock for the duration of the snapshot, and some do
 //! not. We should figure out why and if we need to hold the lock longer. This may be because of a
@@ -100,6 +99,7 @@ use mz_mysql_util::{
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
+use mz_ore::metrics::MetricsFutureExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::MySqlSourceConnection;
@@ -114,6 +114,7 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
 use tracing::trace;
 
+use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
@@ -124,235 +125,75 @@ use super::{
     TransientError, return_definite_error, validate_mysql_repl_settings,
 };
 
-/// PK range for a single worker's partition of a table.
-enum PkRange {
-    Signed {
-        pk_expr: String,
-        lower: i64,
-        upper_inclusive: i64,
-    },
-    Unsigned {
-        pk_expr: String,
-        lower: u64,
-        upper_inclusive: u64,
-    },
+/// If `desc` has a single-column integer PK, return the column name.
+fn integer_pk_col(desc: &mz_mysql_util::MySqlTableDesc) -> Option<&str> {
+    let pk = match desc.keys.iter().find(|k| k.is_primary) {
+        Some(pk) if pk.columns.len() == 1 => pk,
+        _ => return None,
+    };
+    let col = desc.columns.iter().find(|c| c.name == pk.columns[0])?;
+    let scalar = &col.column_type.as_ref()?.scalar_type;
+    use mz_repr::SqlScalarType;
+    if matches!(
+        scalar,
+        SqlScalarType::Int16
+            | SqlScalarType::Int32
+            | SqlScalarType::Int64
+            | SqlScalarType::UInt16
+            | SqlScalarType::UInt32
+    ) {
+        Some(&pk.columns[0])
+    } else {
+        None
+    }
 }
 
-struct PkChunk {
+/// PK range for a single worker's partition of a table.
+struct PkRange {
     pk_expr: String,
     lower: mysql_async::Value,
     upper: Option<mysql_async::Value>,
 }
 
-enum PkBounds {
-    Signed { pk_expr: String, min: i64, max: i64 },
-    Unsigned { pk_expr: String, min: u64, max: u64 },
-}
-
-enum SnapshotReadPlan {
-    FullTable,
-    PkRange(Option<PkRange>),
-}
-
-const SNAPSHOT_PK_CHUNK_SPAN: u64 = 100_000;
-const SNAPSHOT_OUTPUT_YIELD_INTERVAL: u64 = 10_000;
-
-/// Query MIN/MAX of a single-column integer PK. Returns None if the table has no suitable PK or
-/// is empty.
-async fn query_pk_bounds<Q: Queryable>(
+/// Query MIN/MAX of a table's integer PK and compute this worker's
+/// range.  Returns `None` when the table is empty or this worker has
+/// no work.
+async fn worker_pk_range<Q: Queryable>(
     conn: &mut Q,
     table: &MySqlTableName,
-    outputs: &[SourceOutputInfo],
-) -> Result<Option<PkBounds>, anyhow::Error> {
-    let desc = &outputs[0].desc;
-    let pk = desc.keys.iter().find(|k| k.is_primary);
-    let pk = match pk {
-        Some(pk) if pk.columns.len() == 1 => pk,
-        _ => return Ok(None),
-    };
-    let col_name = &pk.columns[0];
-    let scalar_type = desc
-        .columns
-        .iter()
-        .find(|c| c.name == *col_name)
-        .and_then(|c| c.column_type.as_ref())
-        .map(|ct| &ct.scalar_type);
-    let pk_quoted = quote_identifier(col_name);
+    pk_col: &str,
+    worker_id: usize,
+    worker_count: usize,
+) -> Result<Option<PkRange>, anyhow::Error> {
+    let pk_quoted = quote_identifier(pk_col);
     let query = format!(
         "SELECT MIN({}), MAX({}) FROM {}",
-        pk_quoted, pk_quoted, table,
+        pk_quoted, pk_quoted, table
     );
-    match scalar_type {
-        Some(mz_repr::SqlScalarType::Int16)
-        | Some(mz_repr::SqlScalarType::Int32)
-        | Some(mz_repr::SqlScalarType::Int64) => {
-            let row: Option<(Option<i64>, Option<i64>)> = conn.query_first(&query).await?;
-            Ok(row.and_then(|(min, max)| {
-                Some(PkBounds::Signed {
-                    pk_expr: pk_quoted.clone(),
-                    min: min?,
-                    max: max?,
-                })
-            }))
-        }
-        Some(mz_repr::SqlScalarType::UInt16)
-        | Some(mz_repr::SqlScalarType::UInt32)
-        | Some(mz_repr::SqlScalarType::UInt64) => {
-            let row: Option<(Option<u64>, Option<u64>)> = conn.query_first(&query).await?;
-            Ok(row.and_then(|(min, max)| {
-                Some(PkBounds::Unsigned {
-                    pk_expr: pk_quoted.clone(),
-                    min: min?,
-                    max: max?,
-                })
-            }))
-        }
-        _ => Ok(None),
-    }
-}
-
-/// Compute this worker's PK range given signed min/max bounds.
-fn compute_pk_range_signed(
-    pk_expr: &str,
-    min_val: i64,
-    max_val: i64,
-    worker_id: usize,
-    worker_count: usize,
-) -> Option<PkRange> {
-    let range_size = i128::from(max_val) - i128::from(min_val) + 1;
-    if range_size <= 0 {
-        return None;
-    }
-    let wid = i128::try_from(worker_id).expect("worker_id fits in i128");
-    let wcnt = i128::try_from(worker_count).expect("worker_count fits in i128");
+    let row: Option<(Option<i64>, Option<i64>)> = conn.query_first(&query).await?;
+    let (min, max) = match row {
+        Some((Some(min), Some(max))) if max >= min => (min, max),
+        _ => return Ok(None),
+    };
+    let range_size = max - min + 1;
+    let wid = i64::try_from(worker_id).expect("worker_id fits in i64");
+    let wcnt = i64::try_from(worker_count).expect("worker_count fits in i64");
     let effective = std::cmp::min(wcnt, range_size);
     if wid >= effective {
-        return None;
+        return Ok(None);
     }
-    let start = i128::from(min_val) + wid * range_size / effective;
-    let next_start = i128::from(min_val) + (wid + 1) * range_size / effective;
-    Some(PkRange::Signed {
-        pk_expr: pk_expr.to_string(),
-        lower: i64::try_from(start).expect("range start fits in i64"),
-        upper_inclusive: i64::try_from(next_start - 1).expect("range end fits in i64"),
-    })
-}
-
-/// Compute this worker's PK range given unsigned min/max bounds.
-fn compute_pk_range_unsigned(
-    pk_expr: &str,
-    min_val: u64,
-    max_val: u64,
-    worker_id: usize,
-    worker_count: usize,
-) -> Option<PkRange> {
-    let range_size = u128::from(max_val) - u128::from(min_val) + 1;
-    let wid = u128::try_from(worker_id).expect("worker_id fits in u128");
-    let wcnt = u128::try_from(worker_count).expect("worker_count fits in u128");
-    let effective = std::cmp::min(wcnt, range_size);
-    if wid >= effective {
-        return None;
-    }
-    let start = u128::from(min_val) + wid * range_size / effective;
-    let next_start = u128::from(min_val) + (wid + 1) * range_size / effective;
-    Some(PkRange::Unsigned {
-        pk_expr: pk_expr.to_string(),
-        lower: u64::try_from(start).expect("range start fits in u64"),
-        upper_inclusive: u64::try_from(next_start - 1).expect("range end fits in u64"),
-    })
-}
-
-impl PkRange {
-    fn chunks(&self, span: u64) -> Vec<PkChunk> {
-        match self {
-            PkRange::Signed {
-                pk_expr,
-                lower,
-                upper_inclusive,
-            } => {
-                let span = i128::from(span);
-                let mut chunks = Vec::new();
-                let mut chunk_lower = i128::from(*lower);
-                let end = i128::from(*upper_inclusive);
-                while chunk_lower <= end {
-                    let chunk_upper = std::cmp::min(chunk_lower + span - 1, end);
-                    chunks.push(PkChunk {
-                        pk_expr: pk_expr.clone(),
-                        lower: mysql_async::Value::Int(
-                            i64::try_from(chunk_lower).expect("chunk lower fits in i64"),
-                        ),
-                        upper: if chunk_upper == i128::from(i64::MAX) {
-                            None
-                        } else {
-                            Some(mysql_async::Value::Int(
-                                i64::try_from(chunk_upper + 1).expect("chunk upper fits in i64"),
-                            ))
-                        },
-                    });
-                    if chunk_upper == end {
-                        break;
-                    }
-                    chunk_lower = chunk_upper + 1;
-                }
-                chunks
-            }
-            PkRange::Unsigned {
-                pk_expr,
-                lower,
-                upper_inclusive,
-            } => {
-                let span = u128::from(span);
-                let mut chunks = Vec::new();
-                let mut chunk_lower = u128::from(*lower);
-                let end = u128::from(*upper_inclusive);
-                while chunk_lower <= end {
-                    let chunk_upper = std::cmp::min(chunk_lower + span - 1, end);
-                    chunks.push(PkChunk {
-                        pk_expr: pk_expr.clone(),
-                        lower: mysql_async::Value::UInt(
-                            u64::try_from(chunk_lower).expect("chunk lower fits in u64"),
-                        ),
-                        upper: if chunk_upper == u128::from(u64::MAX) {
-                            None
-                        } else {
-                            Some(mysql_async::Value::UInt(
-                                u64::try_from(chunk_upper + 1).expect("chunk upper fits in u64"),
-                            ))
-                        },
-                    });
-                    if chunk_upper == end {
-                        break;
-                    }
-                    chunk_lower = chunk_upper + 1;
-                }
-                chunks
-            }
-        }
-    }
-}
-
-fn snapshot_query_chunks(pk_range: Option<&PkRange>) -> Vec<Option<PkChunk>> {
-    match pk_range {
-        Some(pk_range) => pk_range
-            .chunks(SNAPSHOT_PK_CHUNK_SPAN)
-            .into_iter()
-            .map(Some)
-            .collect(),
-        None => vec![None],
-    }
-}
-
-fn update_snapshot_stats(
-    export_statistics: &BTreeMap<MySqlTableName, Vec<SourceStatistics>>,
-    table: &MySqlTableName,
-    snapshot_staged: u64,
-) {
-    if let Some(stats) = export_statistics.get(table) {
-        for stat in stats {
-            stat.set_snapshot_records_staged(snapshot_staged);
-            stat.set_snapshot_records_known(snapshot_staged);
-        }
-    }
+    let start = min + wid * range_size / effective;
+    Ok(Some(PkRange {
+        pk_expr: pk_quoted,
+        lower: mysql_async::Value::Int(start),
+        upper: if wid == effective - 1 {
+            None
+        } else {
+            Some(mysql_async::Value::Int(
+                min + (wid + 1) * range_size / effective,
+            ))
+        },
+    }))
 }
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
@@ -361,6 +202,7 @@ pub(crate) fn render<'scope>(
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
+    metrics: MySqlSnapshotMetrics,
 ) -> (
     StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
     StreamVec<'scope, GtidPartition, RewindRequest>,
@@ -378,19 +220,38 @@ pub(crate) fn render<'scope>(
 
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
-    // ALL tables to snapshot — every worker gets every table so that
-    // PK-range partitioning can distribute rows within a single table.
     let mut reader_snapshot_table_info = BTreeMap::new();
-    // Maps MySQL table name to export `SourceStatistics`.
     let mut export_statistics = BTreeMap::new();
+
+    // Decide whether PK-range partitioning should be used.  When
+    // there are fewer tables than workers, idle workers can help by
+    // reading disjoint PK ranges.  When tables >= workers the
+    // default `responsible_for` distribution is sufficient and extra
+    // connections would hurt (e.g. limits test with 300 sources).
+    let mut table_count = 0usize;
+    let mut pk_tables: BTreeSet<MySqlTableName> = BTreeSet::new();
+    for output in &source_outputs {
+        if *output.resume_upper == [GtidPartition::minimum()] {
+            if pk_tables.insert(output.table_name.clone()) {
+                table_count += 1;
+            }
+            if integer_pk_col(&output.desc).is_none() {
+                pk_tables.remove(&output.table_name);
+            }
+        }
+    }
+    let use_pk_range = table_count < config.worker_count && !pk_tables.is_empty();
+
     for output in source_outputs.into_iter() {
         if *output.resume_upper != [GtidPartition::minimum()] {
             continue;
         }
         all_outputs.push(output.output_index);
-
-        // Statistics are only reported by the responsible worker.
-        if config.responsible_for(&output.table_name) {
+        let is_responsible = config.responsible_for(&output.table_name);
+        if !is_responsible && !(use_pk_range && pk_tables.contains(&output.table_name)) {
+            continue;
+        }
+        if is_responsible {
             let export_stats = config
                 .statistics
                 .get(&output.export_id)
@@ -401,7 +262,6 @@ pub(crate) fn render<'scope>(
                 .or_insert_with(Vec::new)
                 .push(export_stats);
         }
-
         reader_snapshot_table_info
             .entry(output.table_name.clone())
             .or_insert_with(Vec::new)
@@ -523,37 +383,26 @@ pub(crate) fn render<'scope>(
                     }
                 };
 
-                // TODO(roshan): Insert metric for how long it took to acquire the locks
                 trace!(%id, "timely-{worker_id} acquired table locks at: {}",
                        snapshot_gtid_frontier.pretty());
 
-                // Query PK bounds while locks are held (MIN/MAX
-                // are O(1) index seeks on InnoDB).  Each worker
-                // does this independently — no coordination needed.
-                let mut read_plans: BTreeMap<MySqlTableName, SnapshotReadPlan> = BTreeMap::new();
+                // Query PK bounds while locks are held (MIN/MAX are O(1) on InnoDB).
+                let mut pk_ranges: BTreeMap<MySqlTableName, Option<PkRange>> = BTreeMap::new();
                 for (table, outputs) in &reader_snapshot_table_info {
-                    let read_plan = match query_pk_bounds(&mut *lock_conn, table, outputs).await? {
-                        Some(PkBounds::Signed { pk_expr, min, max }) => {
-                            SnapshotReadPlan::PkRange(compute_pk_range_signed(
-                                &pk_expr,
-                                min,
-                                max,
+                    let range = match integer_pk_col(&outputs[0].desc) {
+                        Some(col) => {
+                            worker_pk_range(
+                                &mut *lock_conn,
+                                table,
+                                col,
                                 config.worker_id,
                                 config.worker_count,
-                            ))
+                            )
+                            .await?
                         }
-                        Some(PkBounds::Unsigned { pk_expr, min, max }) => {
-                            SnapshotReadPlan::PkRange(compute_pk_range_unsigned(
-                                &pk_expr,
-                                min,
-                                max,
-                                config.worker_id,
-                                config.worker_count,
-                            ))
-                        }
-                        None => SnapshotReadPlan::FullTable,
+                        None => None,
                     };
-                    read_plans.insert(table.clone(), read_plan);
+                    pk_ranges.insert(table.clone(), range);
                 }
 
                 let mut conn = connection_config
@@ -644,65 +493,90 @@ pub(crate) fn render<'scope>(
                 }
                 reader_snapshot_table_info.retain(|_, outputs| !outputs.is_empty());
 
+                // Only the responsible worker fetches snapshot size.
+                if !export_statistics.is_empty() {
+                    let _snapshot_total = fetch_snapshot_size(
+                        &mut tx,
+                        reader_snapshot_table_info
+                            .iter()
+                            .filter(|(name, _)| export_statistics.contains_key(*name))
+                            .map(|(name, outputs)| {
+                                (
+                                    name.clone(),
+                                    outputs.len(),
+                                    export_statistics.get(name).unwrap(),
+                                )
+                            })
+                            .collect(),
+                        metrics,
+                    )
+                    .await?;
+                }
+
+                // This worker has nothing else to do
+                if reader_snapshot_table_info.is_empty() {
+                    return Ok(());
+                }
+
                 // Read the snapshot data from the tables
                 let mut final_row = Row::default();
 
                 let mut snapshot_staged_total = 0;
-                let mut output_updates_since_yield = 0;
                 for (table, outputs) in &reader_snapshot_table_info {
-                    let pk_range = match read_plans.get(table) {
-                        Some(SnapshotReadPlan::FullTable) if config.responsible_for(table) => None,
-                        Some(SnapshotReadPlan::FullTable) => continue,
-                        Some(SnapshotReadPlan::PkRange(Some(pk_range))) => Some(pk_range),
-                        Some(SnapshotReadPlan::PkRange(None)) => continue,
-                        None => unreachable!("missing snapshot read plan for {table}"),
-                    };
+                    let pk_range = pk_ranges.get(table).and_then(|r| r.as_ref());
+                    // A non-responsible worker with no PK range has nothing to read.
+                    if pk_range.is_none() && !export_statistics.contains_key(table) {
+                        continue;
+                    }
 
                     let mut snapshot_staged = 0;
-                    for query_chunk in snapshot_query_chunks(pk_range) {
-                        let (query, params) = build_snapshot_query(outputs, query_chunk.as_ref());
-                        trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
-                        let mut results = tx.exec_stream(query, params).await?;
-                        while let Some(row) = results.try_next().await? {
-                            let row: MySqlRow = row;
-                            snapshot_staged += 1;
-                            for (output, row_val) in outputs.iter().repeat_clone(row) {
-                                let event =
-                                    match pack_mysql_row(&mut final_row, row_val, &output.desc) {
-                                        Ok(row) => Ok(SourceMessage {
-                                            key: Row::default(),
-                                            value: row,
-                                            metadata: Row::default(),
-                                        }),
-                                        // Produce a DefiniteError in the stream for any rows that fail to decode
-                                        Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                                            Err(DataflowError::from(
-                                                DefiniteError::ValueDecodeError(err.to_string()),
-                                            ))
-                                        }
-                                        Err(err) => Err(err)?,
-                                    };
-                                raw_handle.give(
+                    let (query, params) = build_snapshot_query(outputs, pk_range);
+                    trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
+                    let mut results = tx.exec_stream(query, params).await?;
+                    while let Some(row) = results.try_next().await? {
+                        let row: MySqlRow = row;
+                        snapshot_staged += 1;
+                        for (output, row_val) in outputs.iter().repeat_clone(row) {
+                            let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
+                            {
+                                Ok(row) => Ok(SourceMessage {
+                                    key: Row::default(),
+                                    value: row,
+                                    metadata: Row::default(),
+                                }),
+                                // Produce a DefiniteError in the stream for any rows that fail to decode
+                                Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                                    Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                                        err.to_string(),
+                                    )))
+                                }
+                                Err(err) => Err(err)?,
+                            };
+                            raw_handle
+                                .give_fueled(
                                     &data_cap_set[0],
                                     (
                                         (output.output_index, event),
                                         GtidPartition::minimum(),
                                         Diff::ONE,
                                     ),
-                                );
-                                output_updates_since_yield += 1;
-                            }
-                            snapshot_staged_total += u64::cast_from(outputs.len());
-                            if snapshot_staged_total % 1000 == 0 {
-                                update_snapshot_stats(&export_statistics, table, snapshot_staged);
-                            }
-                            if output_updates_since_yield >= SNAPSHOT_OUTPUT_YIELD_INTERVAL {
-                                output_updates_since_yield = 0;
-                                tokio::task::yield_now().await;
+                                )
+                                .await;
+                        }
+                        snapshot_staged_total += u64::cast_from(outputs.len());
+                        if snapshot_staged_total % 1000 == 0 {
+                            if let Some(stats) = export_statistics.get(table) {
+                                for s in stats {
+                                    s.set_snapshot_records_staged(snapshot_staged);
+                                }
                             }
                         }
                     }
-                    update_snapshot_stats(&export_statistics, table, snapshot_staged);
+                    if let Some(stats) = export_statistics.get(table) {
+                        for s in stats {
+                            s.set_snapshot_records_staged(snapshot_staged);
+                        }
+                    }
                     trace!(%id, "timely-{worker_id} snapshotted {} records from \
                                  table '{table}'", snapshot_staged * u64::cast_from(outputs.len()));
                 }
@@ -714,8 +588,7 @@ pub(crate) fn render<'scope>(
                 // snapshot but it actually leads to a lot of data being staged for the future,
                 // which needlesly consumed memory in the cluster.
                 for (table, outputs) in reader_snapshot_table_info {
-                    // Only one worker per output emits the rewind.
-                    if !config.responsible_for(&table) {
+                    if !export_statistics.contains_key(&table) {
                         continue;
                     }
                     for output in outputs {
@@ -746,19 +619,36 @@ pub(crate) fn render<'scope>(
     )
 }
 
-/// Builds the SQL query to be used for creating the snapshot using the first entry in outputs.
-///
-/// Expect `outputs` to contain entries for a single table, and to have at least 1 entry.
-/// Expect that each MySqlTableDesc entry contains all columns described in information_schema.columns.
-#[must_use]
+/// Fetch the size of the snapshot on this worker and emits the appropriate emtrics and statistics
+/// for each table.
+async fn fetch_snapshot_size<Q>(
+    conn: &mut Q,
+    tables: Vec<(MySqlTableName, usize, &Vec<SourceStatistics>)>,
+    metrics: MySqlSnapshotMetrics,
+) -> Result<u64, anyhow::Error>
+where
+    Q: Queryable,
+{
+    let mut total = 0;
+    for (table, num_outputs, export_statistics) in tables {
+        let stats = collect_table_statistics(conn, &table).await?;
+        metrics.record_table_count_latency(table.1, table.0, stats.count_latency);
+        for export_stat in export_statistics {
+            export_stat.set_snapshot_records_known(stats.count);
+            export_stat.set_snapshot_records_staged(0);
+        }
+        total += stats.count * u64::cast_from(num_outputs);
+    }
+    Ok(total)
+}
+
+/// Build snapshot query with optional PK range filter.
 fn build_snapshot_query(
     outputs: &[SourceOutputInfo],
-    pk_range: Option<&PkChunk>,
+    pk_range: Option<&PkRange>,
 ) -> (String, mysql_async::Params) {
     let info = outputs.first().expect("MySQL table info");
     for output in &outputs[1..] {
-        // the columns are decoded solely based on position, so we just need to ensure that
-        // all columns are accounted for.
         assert!(
             info.desc.columns.len() == output.desc.columns.len(),
             "Mismatch in table descriptions for {}",
@@ -771,24 +661,54 @@ fn build_snapshot_query(
         .iter()
         .map(|col| quote_identifier(&col.name))
         .join(", ");
-    let mut query = format!("SELECT {} FROM {}", columns, info.table_name);
-    let params = match pk_range {
-        Some(pk_range) => {
-            query.push_str(" WHERE ");
-            query.push_str(&pk_range.pk_expr);
-            query.push_str(" >= ?");
-            let mut params = vec![pk_range.lower.clone()];
-            if let Some(upper) = &pk_range.upper {
-                query.push_str(" AND ");
-                query.push_str(&pk_range.pk_expr);
-                query.push_str(" < ?");
+    match pk_range {
+        Some(range) => {
+            let mut params: Vec<mysql_async::Value> = Vec::new();
+            let mut clauses = Vec::new();
+            clauses.push(format!("{} >= ?", range.pk_expr));
+            params.push(range.lower.clone());
+            if let Some(upper) = &range.upper {
+                clauses.push(format!("{} < ?", range.pk_expr));
                 params.push(upper.clone());
             }
-            mysql_async::Params::Positional(params)
+            let query = format!(
+                "SELECT {} FROM {} WHERE {}",
+                columns,
+                info.table_name,
+                clauses.join(" AND ")
+            );
+            (query, mysql_async::Params::Positional(params))
         }
-        None => mysql_async::Params::Empty,
-    };
-    (query, params)
+        None => (
+            format!("SELECT {} FROM {}", columns, info.table_name),
+            mysql_async::Params::Empty,
+        ),
+    }
+}
+
+#[derive(Default)]
+struct TableStatistics {
+    count_latency: f64,
+    count: u64,
+}
+
+async fn collect_table_statistics<Q>(
+    conn: &mut Q,
+    table: &MySqlTableName,
+) -> Result<TableStatistics, anyhow::Error>
+where
+    Q: Queryable,
+{
+    let mut stats = TableStatistics::default();
+
+    let count_row: Option<u64> = conn
+        .query_first(format!("SELECT COUNT(*) FROM {}", table))
+        .wall_time()
+        .set_at(&mut stats.count_latency)
+        .await?;
+    stats.count = count_row.ok_or_else(|| anyhow::anyhow!("failed to COUNT(*) {table}"))?;
+
+    Ok(stats)
 }
 
 #[cfg(test)]
@@ -834,66 +754,5 @@ mod tests {
             ),
             query
         );
-    }
-
-    #[mz_ore::test]
-    fn snapshot_query_pk_range() {
-        let schema_name = "myschema".to_string();
-        let table_name = "mytable".to_string();
-        let table = MySqlTableName(schema_name.clone(), table_name.clone());
-        let columns = ["c1"]
-            .iter()
-            .map(|col| MySqlColumnDesc {
-                name: col.to_string(),
-                column_type: None,
-                meta: None,
-            })
-            .collect::<Vec<_>>();
-        let desc = MySqlTableDesc {
-            schema_name: schema_name.clone(),
-            name: table_name.clone(),
-            columns,
-            keys: BTreeSet::default(),
-        };
-        let info = SourceOutputInfo {
-            output_index: 1,
-            table_name: table,
-            desc,
-            text_columns: vec![],
-            exclude_columns: vec![],
-            initial_gtid_set: Antichain::default(),
-            resume_upper: Antichain::default(),
-            export_id: mz_repr::GlobalId::User(1),
-        };
-        let pk_range = PkChunk {
-            pk_expr: "`c1`".to_string(),
-            lower: mysql_async::Value::Int(10),
-            upper: Some(mysql_async::Value::Int(20)),
-        };
-
-        let (query, _) = build_snapshot_query(&[info], Some(&pk_range));
-        assert_eq!(
-            format!(
-                "SELECT `c1` FROM `{}`.`{}` WHERE `c1` >= ? AND `c1` < ?",
-                schema_name, table_name
-            ),
-            query
-        );
-    }
-
-    #[mz_ore::test]
-    fn pk_range_chunks_signed() {
-        let pk_range = PkRange::Signed {
-            pk_expr: "`c1`".to_string(),
-            lower: 10,
-            upper_inclusive: 24,
-        };
-
-        let chunks = pk_range.chunks(10);
-        assert_eq!(chunks.len(), 2);
-        assert!(matches!(chunks[0].lower, mysql_async::Value::Int(10)));
-        assert!(matches!(chunks[0].upper, Some(mysql_async::Value::Int(20))));
-        assert!(matches!(chunks[1].lower, mysql_async::Value::Int(20)));
-        assert!(matches!(chunks[1].upper, Some(mysql_async::Value::Int(25))));
     }
 }
