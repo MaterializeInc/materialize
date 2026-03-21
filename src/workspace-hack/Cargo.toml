@@ -188,7 +188,6 @@ futures-task = { version = "0.3.31" }
 futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
-hashbrown-986da7b5efc2b80e = { package = "hashbrown", version = "0.16.1" }
 indexmap = { version = "2.11.4", features = ["serde"] }
 insta = { version = "1.45.1", features = ["json"] }
 itertools = { version = "0.13.0" }
