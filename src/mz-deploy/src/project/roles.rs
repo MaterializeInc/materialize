@@ -7,7 +7,9 @@
 use crate::project::error::{
     LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
 };
-use crate::project::parser::{parse_statements_with_context, statement_type_name};
+use crate::project::parser::{
+    LocatedStatement, parse_statements_with_context, statement_type_name,
+};
 use crate::project::profile_files::collect_all_sql_files;
 use mz_sql_parser::ast::{
     AlterRoleStatement, CommentObjectType, CommentStatement, CreateRoleStatement,
@@ -72,13 +74,9 @@ pub fn load_roles(
                 path: path.clone(),
                 source: e,
             })?;
-            let statements: Vec<Statement<Raw>> =
-                parse_statements_with_context(&sql, path.clone(), variables)?
-                    .into_iter()
-                    .map(|ls| ls.ast)
-                    .collect();
+            let located = parse_statements_with_context(&sql, path.clone(), variables)?;
 
-            if let Err(mut errs) = classify_role_statements(expected_name, path, statements) {
+            if let Err(mut errs) = classify_role_statements(expected_name, path, located) {
                 errors.append(&mut errs);
             }
         }
@@ -98,13 +96,9 @@ pub fn load_roles(
             path: active_path.clone(),
             source: e,
         })?;
-        let statements: Vec<Statement<Raw>> =
-            parse_statements_with_context(&sql, active_path.clone(), variables)?
-                .into_iter()
-                .map(|ls| ls.ast)
-                .collect();
+        let located = parse_statements_with_context(&sql, active_path.clone(), variables)?;
 
-        match classify_role_statements(expected_name, &active_path, statements) {
+        match classify_role_statements(expected_name, &active_path, located) {
             Ok(def) => definitions.push(def),
             Err(mut errs) => errors.append(&mut errs),
         }
@@ -121,30 +115,35 @@ pub fn load_roles(
 fn classify_role_statements(
     expected_name: &str,
     path: &Path,
-    statements: Vec<Statement<Raw>>,
+    located_statements: Vec<LocatedStatement>,
 ) -> Result<RoleDefinition, Vec<ValidationError>> {
-    let mut create_stmts: Vec<CreateRoleStatement> = Vec::new();
+    let mut create_stmts: Vec<(CreateRoleStatement, usize)> = Vec::new();
     let mut alter_stmts: Vec<AlterRoleStatement<Raw>> = Vec::new();
     let mut grants: Vec<GrantRoleStatement<Raw>> = Vec::new();
     let mut comments: Vec<CommentStatement<Raw>> = Vec::new();
     let mut errors = Vec::new();
 
-    for stmt in statements {
+    for LocatedStatement {
+        ast: stmt,
+        byte_offset,
+    } in located_statements
+    {
         match stmt {
             Statement::CreateRole(s) => {
-                create_stmts.push(s);
+                create_stmts.push((s, byte_offset));
             }
             Statement::AlterRole(s) => {
                 // Validate that the ALTER targets this role
                 let target_name = s.name.to_string();
                 if target_name.to_lowercase() != expected_name.to_lowercase() {
-                    errors.push(ValidationError::with_file_and_sql(
+                    errors.push(ValidationError::with_file_sql_and_offset(
                         ValidationErrorKind::RoleAlterTargetMismatch {
                             target: target_name,
                             role_name: expected_name.to_string(),
                         },
                         path.to_path_buf(),
                         s.to_string(),
+                        byte_offset,
                     ));
                 } else {
                     alter_stmts.push(s);
@@ -159,13 +158,14 @@ fn classify_role_statements(
                 if !has_match {
                     let target_names: Vec<String> =
                         s.role_names.iter().map(|r| r.to_string()).collect();
-                    errors.push(ValidationError::with_file_and_sql(
+                    errors.push(ValidationError::with_file_sql_and_offset(
                         ValidationErrorKind::RoleGrantTargetMismatch {
                             target: target_names.join(", "),
                             role_name: expected_name.to_string(),
                         },
                         path.to_path_buf(),
                         s.to_string(),
+                        byte_offset,
                     ));
                 } else {
                     grants.push(s);
@@ -177,43 +177,46 @@ fn classify_role_statements(
                     CommentObjectType::Role { name } => {
                         let target_name = name.to_string();
                         if target_name.to_lowercase() != expected_name.to_lowercase() {
-                            errors.push(ValidationError::with_file_and_sql(
+                            errors.push(ValidationError::with_file_sql_and_offset(
                                 ValidationErrorKind::RoleCommentTargetMismatch {
                                     target: target_name,
                                     role_name: expected_name.to_string(),
                                 },
                                 path.to_path_buf(),
                                 s.to_string(),
+                                byte_offset,
                             ));
                         }
                         comments.push(s);
                     }
                     _ => {
-                        errors.push(ValidationError::with_file_and_sql(
+                        errors.push(ValidationError::with_file_sql_and_offset(
                             ValidationErrorKind::InvalidRoleStatement {
                                 statement_type: "COMMENT (not targeting a role)".to_string(),
                                 role_name: expected_name.to_string(),
                             },
                             path.to_path_buf(),
                             s.to_string(),
+                            byte_offset,
                         ));
                     }
                 }
             }
             other => {
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::InvalidRoleStatement {
                         statement_type: statement_type_name(&other).to_string(),
                         role_name: expected_name.to_string(),
                     },
                     path.to_path_buf(),
                     other.to_string(),
+                    byte_offset,
                 ));
             }
         }
     }
 
-    // Validate exactly one CREATE ROLE
+    // Validate exactly one CREATE ROLE (file-level errors)
     if create_stmts.is_empty() {
         errors.push(ValidationError::with_file(
             ValidationErrorKind::RoleMissingCreateStatement {
@@ -222,11 +225,13 @@ fn classify_role_statements(
             path.to_path_buf(),
         ));
     } else if create_stmts.len() > 1 {
-        errors.push(ValidationError::with_file(
+        // Point to the second CREATE ROLE
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::RoleMultipleCreateStatements {
                 role_name: expected_name.to_string(),
             },
             path.to_path_buf(),
+            create_stmts[1].1,
         ));
     }
 
@@ -234,17 +239,18 @@ fn classify_role_statements(
         return Err(errors);
     }
 
-    let create_stmt = create_stmts.into_iter().next().unwrap();
+    let (create_stmt, create_offset) = create_stmts.into_iter().next().unwrap();
 
     // Validate role name matches filename
     let declared_name = create_stmt.name.to_string();
     if declared_name.to_lowercase() != expected_name.to_lowercase() {
-        return Err(vec![ValidationError::with_file(
+        return Err(vec![ValidationError::with_file_and_offset(
             ValidationErrorKind::RoleNameMismatch {
                 declared: declared_name,
                 expected: expected_name.to_string(),
             },
             path.to_path_buf(),
+            create_offset,
         )]);
     }
 

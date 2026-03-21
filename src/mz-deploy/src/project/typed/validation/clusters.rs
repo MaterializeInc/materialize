@@ -28,9 +28,11 @@ use mz_sql_parser::ast::*;
 pub(in super::super) fn validate_index_clusters(
     fqn: &FullyQualifiedName,
     indexes: &[CreateIndexStatement<Raw>],
+    offsets: &[usize],
     errors: &mut Vec<ValidationError>,
 ) {
-    for index in indexes.iter() {
+    for (i, index) in indexes.iter().enumerate() {
+        let offset = offsets[i];
         match &index.in_cluster {
             None => {
                 let index_sql = format!("{};", index);
@@ -40,16 +42,17 @@ pub(in super::super) fn validate_index_clusters(
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| "<unnamed>".to_string());
 
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::IndexMissingCluster { index_name },
                     fqn.path.clone(),
                     index_sql,
+                    offset,
                 ));
             }
             Some(cluster) => {
                 // Validate cluster name format
                 let cluster_name = cluster.to_string();
-                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path, offset) {
                     errors.push(e);
                 }
             }
@@ -64,9 +67,11 @@ pub(in super::super) fn validate_index_clusters(
 pub(in super::super) fn validate_constraint_clusters(
     fqn: &FullyQualifiedName,
     constraints: &[CreateConstraintStatement<Raw>],
+    offsets: &[usize],
     errors: &mut Vec<ValidationError>,
 ) {
-    for constraint in constraints.iter() {
+    for (i, constraint) in constraints.iter().enumerate() {
+        let offset = offsets[i];
         let constraint_name = constraint
             .name
             .as_ref()
@@ -78,15 +83,16 @@ pub(in super::super) fn validate_constraint_clusters(
             match &constraint.in_cluster {
                 None => {
                     let constraint_sql = format!("{};", constraint);
-                    errors.push(ValidationError::with_file_and_sql(
+                    errors.push(ValidationError::with_file_sql_and_offset(
                         ValidationErrorKind::EnforcedConstraintMissingCluster { constraint_name },
                         fqn.path.clone(),
                         constraint_sql,
+                        offset,
                     ));
                 }
                 Some(cluster) => {
                     let cluster_name = cluster.to_string();
-                    if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                    if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path, offset) {
                         errors.push(e);
                     }
                 }
@@ -95,10 +101,11 @@ pub(in super::super) fn validate_constraint_clusters(
             // Not-enforced constraints must NOT have IN CLUSTER
             if constraint.in_cluster.is_some() {
                 let constraint_sql = format!("{};", constraint);
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::NotEnforcedConstraintHasCluster { constraint_name },
                     fqn.path.clone(),
                     constraint_sql,
+                    offset,
                 ));
             }
         }
@@ -124,6 +131,7 @@ pub(in super::super) fn validate_constraint_clusters(
 pub(in super::super) fn validate_mv_cluster(
     fqn: &FullyQualifiedName,
     stmt: &Statement,
+    main_offset: usize,
     errors: &mut Vec<ValidationError>,
 ) {
     if let Statement::CreateMaterializedView(mv) = stmt {
@@ -132,16 +140,17 @@ pub(in super::super) fn validate_mv_cluster(
                 let mv_sql = format!("{};", mv);
                 let view_name = mv.name.to_string();
 
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::MaterializedViewMissingCluster { view_name },
                     fqn.path.clone(),
                     mv_sql,
+                    main_offset,
                 ));
             }
             Some(cluster) => {
                 // Validate cluster name format
                 let cluster_name = cluster.to_string();
-                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path, main_offset) {
                     errors.push(e);
                 }
             }
@@ -168,6 +177,7 @@ pub(in super::super) fn validate_mv_cluster(
 pub(in super::super) fn validate_sink_cluster(
     fqn: &FullyQualifiedName,
     stmt: &Statement,
+    main_offset: usize,
     errors: &mut Vec<ValidationError>,
 ) {
     if let Statement::CreateSink(sink) = stmt {
@@ -180,16 +190,17 @@ pub(in super::super) fn validate_sink_cluster(
                     .map(|n| n.to_string())
                     .unwrap_or_else(|| "<unnamed>".to_string());
 
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::SinkMissingCluster { sink_name },
                     fqn.path.clone(),
                     sink_sql,
+                    main_offset,
                 ));
             }
             Some(cluster) => {
                 // Validate cluster name format
                 let cluster_name = cluster.to_string();
-                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path, main_offset) {
                     errors.push(e);
                 }
             }
@@ -201,23 +212,25 @@ pub(in super::super) fn validate_sink_cluster(
 pub(in super::super) fn validate_source_cluster(
     fqn: &FullyQualifiedName,
     stmt: &Statement,
+    main_offset: usize,
     errors: &mut Vec<ValidationError>,
 ) {
     if let Statement::CreateSource(source) = stmt {
         match &source.in_cluster {
             None => {
                 let source_sql = format!("{};", source);
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::SourceMissingCluster {
                         source_name: source.name.to_string(),
                     },
                     fqn.path.clone(),
                     source_sql,
+                    main_offset,
                 ));
             }
             Some(cluster) => {
                 let cluster_name = cluster.to_string();
-                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path, main_offset) {
                     errors.push(e);
                 }
             }
@@ -225,12 +238,13 @@ pub(in super::super) fn validate_source_cluster(
 
         if source.external_references.is_some() {
             let source_sql = format!("{};", source);
-            errors.push(ValidationError::with_file_and_sql(
+            errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::SourceExternalReferences {
                     source_name: source.name.to_string(),
                 },
                 fqn.path.clone(),
                 source_sql,
+                main_offset,
             ));
         }
     }

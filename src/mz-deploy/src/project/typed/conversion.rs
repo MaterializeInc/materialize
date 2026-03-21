@@ -35,6 +35,7 @@
 
 use super::super::ast::Statement;
 use super::super::normalize::NormalizingVisitor;
+use super::super::parser::LocatedStatement;
 use super::types::{Database, DatabaseObject, FullyQualifiedName, Project, Schema};
 use super::validation::{
     validate_comment_references, validate_constraint_clusters, validate_constraint_enforcement,
@@ -142,148 +143,163 @@ fn object_type_name(t: ObjectType) -> &'static str {
 /// Validate a single variant's statements fully and produce a typed `DatabaseObject`.
 ///
 /// This runs all existing validation (classify statements, check name/fqn, indexes,
-/// grants, comments, clusters, etc.)
+/// grants, comments, clusters, etc.). Each statement carries its byte offset from
+/// the source file so that validation errors can point to the exact location.
 fn validate_single_variant(
     name: &str,
     database: &str,
     schema: &str,
     path: &std::path::Path,
-    statements: Vec<mz_sql_parser::ast::Statement<Raw>>,
+    located_statements: Vec<LocatedStatement>,
 ) -> Result<DatabaseObject, ValidationErrors> {
     let mut errors = Vec::new();
-    let mut main_stmt: Option<Statement> = None;
+    let mut main_stmt: Option<(Statement, usize)> = None;
     let mut object_type: Option<ObjectType> = None;
     let mut indexes = Vec::new();
+    let mut index_offsets = Vec::new();
     let mut constraints = Vec::new();
+    let mut constraint_offsets = Vec::new();
     let mut grants = Vec::new();
+    let mut grant_offsets = Vec::new();
     let mut comments = Vec::new();
+    let mut comment_offsets = Vec::new();
     let mut tests = Vec::new();
 
-    /// Try to set the main statement, recording an error if one is already set.
-    fn set_main_statement(
-        main_stmt: &mut Option<Statement>,
-        object_type: &mut Option<ObjectType>,
-        new_stmt: Statement,
-        new_type: ObjectType,
-        name: &str,
-        path: &std::path::Path,
-        errors: &mut Vec<ValidationError>,
-    ) {
-        if main_stmt.is_some() {
-            errors.push(ValidationError::with_file(
-                ValidationErrorKind::MultipleMainStatements {
-                    object_name: name.to_string(),
-                },
-                path.to_path_buf(),
-            ));
-        } else {
-            *main_stmt = Some(new_stmt);
-            *object_type = Some(new_type);
-        }
-    }
-
-    for stmt in statements {
+    for LocatedStatement {
+        ast: stmt,
+        byte_offset,
+    } in located_statements
+    {
         match stmt {
+            // Main CREATE statements
             mz_sql_parser::ast::Statement::CreateSink(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateSink(s),
-                    ObjectType::Sink,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateSink(s), byte_offset));
+                    object_type = Some(ObjectType::Sink);
+                }
             }
             mz_sql_parser::ast::Statement::CreateView(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateView(s),
-                    ObjectType::View,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateView(s), byte_offset));
+                    object_type = Some(ObjectType::View);
+                }
             }
             mz_sql_parser::ast::Statement::CreateMaterializedView(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateMaterializedView(s),
-                    ObjectType::MaterializedView,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateMaterializedView(s), byte_offset));
+                    object_type = Some(ObjectType::MaterializedView);
+                }
             }
             mz_sql_parser::ast::Statement::CreateTable(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateTable(s),
-                    ObjectType::Table,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateTable(s), byte_offset));
+                    object_type = Some(ObjectType::Table);
+                }
             }
             mz_sql_parser::ast::Statement::CreateTableFromSource(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateTableFromSource(s),
-                    ObjectType::Table,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateTableFromSource(s), byte_offset));
+                    object_type = Some(ObjectType::Table);
+                }
             }
             mz_sql_parser::ast::Statement::CreateSource(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateSource(s),
-                    ObjectType::Source,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateSource(s), byte_offset));
+                    object_type = Some(ObjectType::Source);
+                }
             }
             mz_sql_parser::ast::Statement::CreateSecret(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateSecret(s),
-                    ObjectType::Secret,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateSecret(s), byte_offset));
+                    object_type = Some(ObjectType::Secret);
+                }
             }
             mz_sql_parser::ast::Statement::CreateConnection(s) => {
-                set_main_statement(
-                    &mut main_stmt,
-                    &mut object_type,
-                    Statement::CreateConnection(s),
-                    ObjectType::Connection,
-                    name,
-                    path,
-                    &mut errors,
-                );
+                if main_stmt.is_some() {
+                    errors.push(ValidationError::with_file_and_offset(
+                        ValidationErrorKind::MultipleMainStatements {
+                            object_name: name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        byte_offset,
+                    ));
+                } else {
+                    main_stmt = Some((Statement::CreateConnection(s), byte_offset));
+                    object_type = Some(ObjectType::Connection);
+                }
             }
 
-            // Supporting statements
+            // Supporting statements — track byte offsets in parallel vectors
             mz_sql_parser::ast::Statement::CreateIndex(s) => {
+                index_offsets.push(byte_offset);
                 indexes.push(s);
             }
             mz_sql_parser::ast::Statement::CreateConstraint(s) => {
+                constraint_offsets.push(byte_offset);
                 constraints.push(s);
             }
             mz_sql_parser::ast::Statement::GrantPrivileges(s) => {
+                grant_offsets.push(byte_offset);
                 grants.push(s);
             }
             mz_sql_parser::ast::Statement::Comment(s) => {
+                comment_offsets.push(byte_offset);
                 comments.push(s);
             }
 
@@ -294,18 +310,19 @@ fn validate_single_variant(
 
             // Unsupported statements
             other => {
-                errors.push(ValidationError::with_file(
+                errors.push(ValidationError::with_file_and_offset(
                     ValidationErrorKind::UnsupportedStatement {
                         object_name: name.to_string(),
                         statement_type: format!("{:?}", other),
                     },
                     path.to_path_buf(),
+                    byte_offset,
                 ));
             }
         }
     }
 
-    // Check for main statement
+    // Check for main statement (file-level — no single statement to point at)
     if main_stmt.is_none() {
         errors.push(ValidationError::with_file(
             ValidationErrorKind::NoMainStatement {
@@ -315,7 +332,6 @@ fn validate_single_variant(
         ));
     }
 
-    // Check for object type
     if object_type.is_none() {
         errors.push(ValidationError::with_file(
             ValidationErrorKind::NoObjectType,
@@ -329,7 +345,7 @@ fn validate_single_variant(
     }
 
     // Unwrap is safe here because we checked above
-    let stmt = main_stmt.unwrap();
+    let (stmt, main_offset) = main_stmt.unwrap();
     let obj_type = object_type.unwrap();
 
     let fqn = match FullyQualifiedName::with_names(path, name, database, schema) {
@@ -344,10 +360,10 @@ fn validate_single_variant(
     let main_ident = stmt.ident();
 
     // Validate the original statement identifier against FQN
-    validate_ident(&stmt, &fqn, &mut errors);
+    validate_ident(&stmt, &fqn, main_offset, &mut errors);
 
     // Validate identifier format (lowercase, valid characters)
-    validate_fqn_identifiers(&fqn, &mut errors);
+    validate_fqn_identifiers(&fqn, main_offset, &mut errors);
 
     // Normalize statement name and dependencies
     let stmt = stmt.normalize_stmt(&fqn);
@@ -360,17 +376,43 @@ fn validate_single_variant(
     visitor.normalize_comment_references(&mut comments);
 
     // Validate cluster requirements
-    validate_index_clusters(&fqn, &indexes, &mut errors);
-    validate_constraint_clusters(&fqn, &constraints, &mut errors);
-    validate_mv_cluster(&fqn, &stmt, &mut errors);
-    validate_sink_cluster(&fqn, &stmt, &mut errors);
-    validate_source_cluster(&fqn, &stmt, &mut errors);
+    validate_index_clusters(&fqn, &indexes, &index_offsets, &mut errors);
+    validate_constraint_clusters(&fqn, &constraints, &constraint_offsets, &mut errors);
+    validate_mv_cluster(&fqn, &stmt, main_offset, &mut errors);
+    validate_sink_cluster(&fqn, &stmt, main_offset, &mut errors);
+    validate_source_cluster(&fqn, &stmt, main_offset, &mut errors);
 
-    validate_index_references(&fqn, &indexes, &main_ident, &mut errors);
-    validate_constraint_references(&fqn, &constraints, &main_ident, &mut errors);
-    validate_constraint_enforcement(&fqn, &constraints, obj_type, &mut errors);
-    validate_grant_references(&fqn, &grants, &main_ident, obj_type, &mut errors);
-    validate_comment_references(&fqn, &comments, &main_ident, &obj_type, &mut errors);
+    validate_index_references(&fqn, &indexes, &index_offsets, &main_ident, &mut errors);
+    validate_constraint_references(
+        &fqn,
+        &constraints,
+        &constraint_offsets,
+        &main_ident,
+        &mut errors,
+    );
+    validate_constraint_enforcement(
+        &fqn,
+        &constraints,
+        &constraint_offsets,
+        obj_type,
+        &mut errors,
+    );
+    validate_grant_references(
+        &fqn,
+        &grants,
+        &grant_offsets,
+        &main_ident,
+        obj_type,
+        &mut errors,
+    );
+    validate_comment_references(
+        &fqn,
+        &comments,
+        &comment_offsets,
+        &main_ident,
+        &obj_type,
+        &mut errors,
+    );
 
     if !errors.is_empty() {
         return Err(ValidationErrors::new(errors));
@@ -490,17 +532,12 @@ impl DatabaseObject {
         };
 
         // Step 5: Fully validate the active variant
-        let stmts: Vec<_> = active_variant
-            .statements
-            .iter()
-            .map(|ls| ls.ast.clone())
-            .collect();
         validate_single_variant(
             &value.name,
             &value.database,
             &value.schema,
             &active_variant.path,
-            stmts,
+            active_variant.statements.clone(),
         )
         .map(Some)
     }

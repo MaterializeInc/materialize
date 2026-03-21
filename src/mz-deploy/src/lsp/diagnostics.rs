@@ -10,8 +10,9 @@
 //!
 //! - **On-save validation errors** ([`validation_diagnostics()`]) — Converts
 //!   project-level [`ValidationError`]s into LSP diagnostics grouped by file.
-//!   All validation diagnostics are positioned at line 0, col 0 since the
-//!   errors don't carry byte offsets.
+//!   When an error carries a byte offset (most statement-level errors), the
+//!   diagnostic is positioned at the correct line/column. File-level errors
+//!   (e.g., missing CREATE statement) fall back to `(0, 0)`.
 
 use crate::project::error::ValidationError;
 use ropey::Rope;
@@ -52,20 +53,37 @@ pub fn diagnose(text: &str, rope: &Rope) -> Vec<Diagnostic> {
 
 /// Convert [`ValidationError`]s into LSP diagnostics grouped by file path.
 ///
-/// Each error becomes a [`Diagnostic`] at position `(0, 0)` with `ERROR` severity
-/// and the error kind's short message. Errors are grouped by the file in their
-/// [`ErrorContext`](crate::project::error::ErrorContext).
+/// When an error carries a `byte_offset`, the file is read and a [`Rope`] is
+/// built so the offset can be converted to a precise line/column position.
+/// Errors without an offset (file-level) fall back to `(0, 0)`.
 ///
 /// Returns an empty map when `errors` is empty.
 pub fn validation_diagnostics(errors: &[ValidationError]) -> BTreeMap<PathBuf, Vec<Diagnostic>> {
     let mut map: BTreeMap<PathBuf, Vec<Diagnostic>> = BTreeMap::new();
+    // Cache ropes per file so we only read each file once.
+    let mut rope_cache: BTreeMap<PathBuf, Option<Rope>> = BTreeMap::new();
     let zero = Position::new(0, 0);
 
     for error in errors {
+        let position = if let Some(offset) = error.context.byte_offset {
+            let rope = rope_cache
+                .entry(error.context.file.clone())
+                .or_insert_with(|| {
+                    std::fs::read_to_string(&error.context.file)
+                        .ok()
+                        .map(|s| Rope::from_str(&s))
+                });
+            rope.as_ref()
+                .and_then(|r| offset_to_position(offset, r))
+                .unwrap_or(zero)
+        } else {
+            zero
+        };
+
         map.entry(error.context.file.clone())
             .or_default()
             .push(Diagnostic {
-                range: Range::new(zero, zero),
+                range: Range::new(position, position),
                 severity: Some(DiagnosticSeverity::ERROR),
                 source: Some("mz-deploy".to_string()),
                 message: error.kind.message(),
@@ -77,7 +95,7 @@ pub fn validation_diagnostics(errors: &[ValidationError]) -> BTreeMap<PathBuf, V
 }
 
 /// Convert a byte offset to an LSP [`Position`] (line, column) using a [`Rope`].
-fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
+pub(crate) fn offset_to_position(offset: usize, rope: &Rope) -> Option<Position> {
     let line = rope.try_char_to_line(offset).ok()?;
     let first_char_of_line = rope.try_line_to_char(line).ok()?;
     let column = offset - first_char_of_line;

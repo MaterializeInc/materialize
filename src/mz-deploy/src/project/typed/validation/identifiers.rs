@@ -127,38 +127,46 @@ pub fn validate_identifier_format(name: &str, kind: IdentifierKind) -> Result<()
 /// # Arguments
 ///
 /// * `fqn` - The fully qualified name to validate
+/// * `main_offset` - Byte offset of the CREATE statement being validated
 /// * `errors` - Vector to collect validation errors
-pub fn validate_fqn_identifiers(fqn: &FullyQualifiedName, errors: &mut Vec<ValidationError>) {
+pub fn validate_fqn_identifiers(
+    fqn: &FullyQualifiedName,
+    main_offset: usize,
+    errors: &mut Vec<ValidationError>,
+) {
     // Validate database name
     if let Err(reason) = validate_identifier_format(fqn.database(), IdentifierKind::Database) {
-        errors.push(ValidationError::with_file(
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::InvalidIdentifier {
                 name: fqn.database().to_string(),
                 reason,
             },
             fqn.path.clone(),
+            main_offset,
         ));
     }
 
     // Validate schema name
     if let Err(reason) = validate_identifier_format(fqn.schema(), IdentifierKind::Schema) {
-        errors.push(ValidationError::with_file(
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::InvalidIdentifier {
                 name: fqn.schema().to_string(),
                 reason,
             },
             fqn.path.clone(),
+            main_offset,
         ));
     }
 
     // Validate object name
     if let Err(reason) = validate_identifier_format(fqn.object(), IdentifierKind::Object) {
-        errors.push(ValidationError::with_file(
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::InvalidIdentifier {
                 name: fqn.object().to_string(),
                 reason,
             },
             fqn.path.clone(),
+            main_offset,
         ));
     }
 }
@@ -174,14 +182,19 @@ pub fn validate_fqn_identifiers(fqn: &FullyQualifiedName, errors: &mut Vec<Valid
 ///
 /// * `Ok(())` if valid
 /// * `Err(ValidationError)` if invalid
-pub fn validate_cluster_name(cluster_name: &str, path: &PathBuf) -> Result<(), ValidationError> {
+pub fn validate_cluster_name(
+    cluster_name: &str,
+    path: &PathBuf,
+    byte_offset: usize,
+) -> Result<(), ValidationError> {
     validate_identifier_format(cluster_name, IdentifierKind::Cluster).map_err(|reason| {
-        ValidationError::with_file(
+        ValidationError::with_file_and_offset(
             ValidationErrorKind::InvalidIdentifier {
                 name: cluster_name.to_string(),
                 reason,
             },
             path.clone(),
+            byte_offset,
         )
     })
 }
@@ -215,18 +228,20 @@ pub fn validate_cluster_name(cluster_name: &str, path: &PathBuf) -> Result<(), V
 pub(in super::super) fn validate_ident(
     stmt: &super::super::super::ast::Statement,
     fqn: &FullyQualifiedName,
+    main_offset: usize,
     errors: &mut Vec<ValidationError>,
 ) {
     let ident = stmt.ident();
 
     // The object name in the statement must match the file name
     if ident.object != fqn.object() {
-        errors.push(ValidationError::with_file(
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::ObjectNameMismatch {
                 declared: ident.object.clone(),
                 expected: fqn.object().to_string(),
             },
             fqn.path.clone(),
+            main_offset,
         ));
     }
 
@@ -234,12 +249,13 @@ pub(in super::super) fn validate_ident(
     if let Some(ref stmt_schema) = ident.schema
         && stmt_schema != fqn.schema()
     {
-        errors.push(ValidationError::with_file(
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::SchemaMismatch {
                 declared: stmt_schema.clone(),
                 expected: fqn.schema().to_string(),
             },
             fqn.path.clone(),
+            main_offset,
         ));
     }
 
@@ -247,12 +263,13 @@ pub(in super::super) fn validate_ident(
     if let Some(ref stmt_database) = ident.database
         && stmt_database != fqn.database()
     {
-        errors.push(ValidationError::with_file(
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::DatabaseMismatch {
                 declared: stmt_database.clone(),
                 expected: fqn.database().to_string(),
             },
             fqn.path.clone(),
+            main_offset,
         ));
     }
 }

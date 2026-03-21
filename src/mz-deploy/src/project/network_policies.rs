@@ -7,7 +7,9 @@
 use crate::project::error::{
     LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
 };
-use crate::project::parser::{parse_statements_with_context, statement_type_name};
+use crate::project::parser::{
+    LocatedStatement, parse_statements_with_context, statement_type_name,
+};
 use crate::project::profile_files::collect_all_sql_files;
 use mz_sql_parser::ast::{
     CommentObjectType, CommentStatement, CreateNetworkPolicyStatement, GrantPrivilegesStatement,
@@ -71,14 +73,9 @@ pub fn load_network_policies(
                 path: path.clone(),
                 source: e,
             })?;
-            let statements: Vec<Statement<Raw>> =
-                parse_statements_with_context(&sql, path.clone(), variables)?
-                    .into_iter()
-                    .map(|ls| ls.ast)
-                    .collect();
+            let located = parse_statements_with_context(&sql, path.clone(), variables)?;
 
-            if let Err(mut errs) =
-                classify_network_policy_statements(expected_name, path, statements)
+            if let Err(mut errs) = classify_network_policy_statements(expected_name, path, located)
             {
                 errors.append(&mut errs);
             }
@@ -99,13 +96,9 @@ pub fn load_network_policies(
             path: active_path.clone(),
             source: e,
         })?;
-        let statements: Vec<Statement<Raw>> =
-            parse_statements_with_context(&sql, active_path.clone(), variables)?
-                .into_iter()
-                .map(|ls| ls.ast)
-                .collect();
+        let located = parse_statements_with_context(&sql, active_path.clone(), variables)?;
 
-        match classify_network_policy_statements(expected_name, &active_path, statements) {
+        match classify_network_policy_statements(expected_name, &active_path, located) {
             Ok(def) => definitions.push(def),
             Err(mut errs) => errors.append(&mut errs),
         }
@@ -122,17 +115,21 @@ pub fn load_network_policies(
 fn classify_network_policy_statements(
     expected_name: &str,
     path: &Path,
-    statements: Vec<Statement<Raw>>,
+    located_statements: Vec<LocatedStatement>,
 ) -> Result<NetworkPolicyDefinition, Vec<ValidationError>> {
-    let mut create_stmts: Vec<CreateNetworkPolicyStatement<Raw>> = Vec::new();
+    let mut create_stmts: Vec<(CreateNetworkPolicyStatement<Raw>, usize)> = Vec::new();
     let mut grants: Vec<GrantPrivilegesStatement<Raw>> = Vec::new();
     let mut comments: Vec<CommentStatement<Raw>> = Vec::new();
     let mut errors = Vec::new();
 
-    for stmt in statements {
+    for LocatedStatement {
+        ast: stmt,
+        byte_offset,
+    } in located_statements
+    {
         match stmt {
             Statement::CreateNetworkPolicy(s) => {
-                create_stmts.push(s);
+                create_stmts.push((s, byte_offset));
             }
             Statement::GrantPrivileges(s) => {
                 // Validate that the grant targets a network policy
@@ -145,20 +142,21 @@ fn classify_network_policy_statements(
                         for name in names {
                             let target_name = name.to_string();
                             if target_name.to_lowercase() != expected_name.to_lowercase() {
-                                errors.push(ValidationError::with_file_and_sql(
+                                errors.push(ValidationError::with_file_sql_and_offset(
                                     ValidationErrorKind::NetworkPolicyGrantTargetMismatch {
                                         target: target_name,
                                         policy_name: expected_name.to_string(),
                                     },
                                     path.to_path_buf(),
                                     s.to_string(),
+                                    byte_offset,
                                 ));
                             }
                         }
                         grants.push(s);
                     }
                     _ => {
-                        errors.push(ValidationError::with_file_and_sql(
+                        errors.push(ValidationError::with_file_sql_and_offset(
                             ValidationErrorKind::InvalidNetworkPolicyStatement {
                                 statement_type: "GRANT (not targeting a network policy)"
                                     .to_string(),
@@ -166,6 +164,7 @@ fn classify_network_policy_statements(
                             },
                             path.to_path_buf(),
                             s.to_string(),
+                            byte_offset,
                         ));
                     }
                 }
@@ -179,19 +178,20 @@ fn classify_network_policy_statements(
                             RawNetworkPolicyName::Resolved(id) => id.clone(),
                         };
                         if target_name.to_lowercase() != expected_name.to_lowercase() {
-                            errors.push(ValidationError::with_file_and_sql(
+                            errors.push(ValidationError::with_file_sql_and_offset(
                                 ValidationErrorKind::NetworkPolicyCommentTargetMismatch {
                                     target: target_name,
                                     policy_name: expected_name.to_string(),
                                 },
                                 path.to_path_buf(),
                                 s.to_string(),
+                                byte_offset,
                             ));
                         }
                         comments.push(s);
                     }
                     _ => {
-                        errors.push(ValidationError::with_file_and_sql(
+                        errors.push(ValidationError::with_file_sql_and_offset(
                             ValidationErrorKind::InvalidNetworkPolicyStatement {
                                 statement_type: "COMMENT (not targeting a network policy)"
                                     .to_string(),
@@ -199,18 +199,20 @@ fn classify_network_policy_statements(
                             },
                             path.to_path_buf(),
                             s.to_string(),
+                            byte_offset,
                         ));
                     }
                 }
             }
             other => {
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::InvalidNetworkPolicyStatement {
                         statement_type: statement_type_name(&other).to_string(),
                         policy_name: expected_name.to_string(),
                     },
                     path.to_path_buf(),
                     other.to_string(),
+                    byte_offset,
                 ));
             }
         }
@@ -225,11 +227,13 @@ fn classify_network_policy_statements(
             path.to_path_buf(),
         ));
     } else if create_stmts.len() > 1 {
-        errors.push(ValidationError::with_file(
+        // Point to the second CREATE NETWORK POLICY
+        errors.push(ValidationError::with_file_and_offset(
             ValidationErrorKind::NetworkPolicyMultipleCreateStatements {
                 policy_name: expected_name.to_string(),
             },
             path.to_path_buf(),
+            create_stmts[1].1,
         ));
     }
 
@@ -237,17 +241,18 @@ fn classify_network_policy_statements(
         return Err(errors);
     }
 
-    let create_stmt = create_stmts.into_iter().next().unwrap();
+    let (create_stmt, create_offset) = create_stmts.into_iter().next().unwrap();
 
     // Validate policy name matches filename
     let declared_name = create_stmt.name.to_string();
     if declared_name.to_lowercase() != expected_name.to_lowercase() {
-        return Err(vec![ValidationError::with_file(
+        return Err(vec![ValidationError::with_file_and_offset(
             ValidationErrorKind::NetworkPolicyNameMismatch {
                 declared: declared_name,
                 expected: expected_name.to_string(),
             },
             path.to_path_buf(),
+            create_offset,
         )]);
     }
 

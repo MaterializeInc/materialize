@@ -22,10 +22,12 @@ use std::path::PathBuf;
 pub(in super::super) fn validate_constraint_enforcement(
     fqn: &FullyQualifiedName,
     constraints: &[CreateConstraintStatement<Raw>],
+    offsets: &[usize],
     obj_type: ObjectType,
     errors: &mut Vec<ValidationError>,
 ) {
-    for constraint in constraints {
+    for (i, constraint) in constraints.iter().enumerate() {
+        let offset = offsets[i];
         let constraint_sql = format!("{};", constraint);
         let constraint_name = constraint
             .name
@@ -35,26 +37,28 @@ pub(in super::super) fn validate_constraint_enforcement(
 
         // Constraints are not allowed on tables (includes table-from-source)
         if matches!(obj_type, ObjectType::Table) {
-            errors.push(ValidationError::with_file_and_sql(
+            errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::ConstraintNotAllowedOnTable {
                     constraint_name,
                     object_type: "table".to_string(),
                 },
                 fqn.path.clone(),
                 constraint_sql,
+                offset,
             ));
             continue;
         }
 
         // Enforced constraints are not allowed on views
         if constraint.enforced && matches!(obj_type, ObjectType::View) {
-            errors.push(ValidationError::with_file_and_sql(
+            errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::EnforcedConstraintNotAllowed {
                     constraint_name,
                     object_type: "view".to_string(),
                 },
                 fqn.path.clone(),
                 constraint_sql,
+                offset,
             ));
         }
     }

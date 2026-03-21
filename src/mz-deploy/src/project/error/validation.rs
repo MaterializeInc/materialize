@@ -126,6 +126,45 @@ impl ValidationError {
             },
         }
     }
+
+    /// Create a new validation error positioned at a specific byte offset.
+    ///
+    /// Used for errors that point to a specific statement. The byte offset
+    /// lets the LSP place the diagnostic on the correct line/column.
+    pub fn with_file_and_offset(
+        kind: ValidationErrorKind,
+        file: PathBuf,
+        byte_offset: usize,
+    ) -> Self {
+        Self {
+            kind,
+            context: ErrorContext {
+                file,
+                sql_statement: None,
+                byte_offset: Some(byte_offset),
+            },
+        }
+    }
+
+    /// Create a new validation error with file, SQL statement, and byte offset.
+    ///
+    /// The most precise constructor: the SQL is shown in CLI output, the byte
+    /// offset positions the diagnostic in the LSP.
+    pub fn with_file_sql_and_offset(
+        kind: ValidationErrorKind,
+        file: PathBuf,
+        sql: String,
+        byte_offset: usize,
+    ) -> Self {
+        Self {
+            kind,
+            context: ErrorContext {
+                file,
+                sql_statement: Some(sql),
+                byte_offset: Some(byte_offset),
+            },
+        }
+    }
 }
 
 /// The specific kind of validation error that occurred.

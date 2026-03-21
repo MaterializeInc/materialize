@@ -30,20 +30,22 @@ use mz_sql_parser::ast::*;
 pub(in super::super) fn validate_index_references(
     fqn: &FullyQualifiedName,
     indexes: &[CreateIndexStatement<Raw>],
+    offsets: &[usize],
     main_ident: &DatabaseIdent,
     errors: &mut Vec<ValidationError>,
 ) {
-    for index in indexes.iter() {
+    for (i, index) in indexes.iter().enumerate() {
         let on: DatabaseIdent = index.on_name.name().clone().into();
         if !on.matches(main_ident) {
             let index_sql = format!("{};", index);
-            errors.push(ValidationError::with_file_and_sql(
+            errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::IndexReferenceMismatch {
                     referenced: on.object,
                     expected: main_ident.object.clone(),
                 },
                 fqn.path.clone(),
                 index_sql,
+                offsets[i],
             ));
         }
     }
@@ -56,20 +58,22 @@ pub(in super::super) fn validate_index_references(
 pub(in super::super) fn validate_constraint_references(
     fqn: &FullyQualifiedName,
     constraints: &[CreateConstraintStatement<Raw>],
+    offsets: &[usize],
     main_ident: &DatabaseIdent,
     errors: &mut Vec<ValidationError>,
 ) {
-    for constraint in constraints.iter() {
+    for (i, constraint) in constraints.iter().enumerate() {
         let on: DatabaseIdent = constraint.on_name.name().clone().into();
         if !on.matches(main_ident) {
             let constraint_sql = format!("{};", constraint);
-            errors.push(ValidationError::with_file_and_sql(
+            errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::ConstraintReferenceMismatch {
                     referenced: on.object,
                     expected: main_ident.object.clone(),
                 },
                 fqn.path.clone(),
                 constraint_sql,
+                offsets[i],
             ));
         }
     }
@@ -111,11 +115,13 @@ pub(in super::super) fn validate_constraint_references(
 pub(in super::super) fn validate_grant_references(
     fqn: &FullyQualifiedName,
     grants: &[GrantPrivilegesStatement<Raw>],
+    offsets: &[usize],
     main_ident: &DatabaseIdent,
     main_object_type: ObjectType,
     errors: &mut Vec<ValidationError>,
 ) {
-    for grant in grants.iter() {
+    for (i, grant) in grants.iter().enumerate() {
+        let offset = offsets[i];
         let grant_sql = format!("{};", grant);
 
         match &grant.target {
@@ -130,6 +136,7 @@ pub(in super::super) fn validate_grant_references(
                         main_object_type,
                         *object_type,
                         &grant_sql,
+                        offset,
                         errors,
                     );
 
@@ -138,13 +145,14 @@ pub(in super::super) fn validate_grant_references(
                             UnresolvedObjectName::Item(item_name) => {
                                 let grant_target: DatabaseIdent = item_name.clone().into();
                                 if !grant_target.matches(main_ident) {
-                                    errors.push(ValidationError::with_file_and_sql(
+                                    errors.push(ValidationError::with_file_sql_and_offset(
                                         ValidationErrorKind::GrantReferenceMismatch {
                                             referenced: grant_target.object,
                                             expected: main_ident.object.clone(),
                                         },
                                         fqn.path.clone(),
                                         grant_sql.clone(),
+                                        offset,
                                     ));
                                 }
                             }
@@ -155,18 +163,20 @@ pub(in super::super) fn validate_grant_references(
                     }
                 }
                 _ => {
-                    errors.push(ValidationError::with_file_and_sql(
+                    errors.push(ValidationError::with_file_sql_and_offset(
                         ValidationErrorKind::GrantMustTargetObject,
                         fqn.path.clone(),
                         grant_sql.clone(),
+                        offset,
                     ));
                 }
             },
             _ => {
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::SystemGrantUnsupported,
                     fqn.path.clone(),
                     grant_sql,
+                    offset,
                 ));
             }
         }
@@ -202,6 +212,7 @@ fn check_grant_object_type(
     main_object_type: ObjectType,
     grant_object_type: ObjectType,
     grant_sql: &str,
+    offset: usize,
     errors: &mut Vec<ValidationError>,
 ) {
     if matches!(
@@ -209,23 +220,25 @@ fn check_grant_object_type(
         ObjectType::Table | ObjectType::Source | ObjectType::View | ObjectType::MaterializedView
     ) {
         if grant_object_type != ObjectType::Table {
-            errors.push(ValidationError::with_file_and_sql(
+            errors.push(ValidationError::with_file_sql_and_offset(
                 ValidationErrorKind::GrantTypeMismatch {
                     grant_type: format!("{}", grant_object_type),
                     expected_type: "TABLE".to_string(),
                 },
                 fqn.path.clone(),
                 grant_sql.to_string(),
+                offset,
             ));
         }
     } else if grant_object_type != main_object_type {
-        errors.push(ValidationError::with_file_and_sql(
+        errors.push(ValidationError::with_file_sql_and_offset(
             ValidationErrorKind::GrantTypeMismatch {
                 grant_type: format!("{}", grant_object_type),
                 expected_type: format!("{}", main_object_type),
             },
             fqn.path.clone(),
             grant_sql.to_string(),
+            offset,
         ));
     }
 }
@@ -242,31 +255,34 @@ fn validate_comment_target(
     comment_obj_type: ObjectType,
     fqn: &FullyQualifiedName,
     comment_sql: &str,
+    offset: usize,
     errors: &mut Vec<ValidationError>,
 ) {
     let comment_target: DatabaseIdent = comment_name.name().clone().into();
 
     // Check that the comment references the main object
     if !comment_target.matches(main_ident) {
-        errors.push(ValidationError::with_file_and_sql(
+        errors.push(ValidationError::with_file_sql_and_offset(
             ValidationErrorKind::CommentReferenceMismatch {
                 referenced: comment_target.object,
                 expected: main_ident.object.clone(),
             },
             fqn.path.clone(),
             comment_sql.to_string(),
+            offset,
         ));
     }
 
     // Check that the comment type matches the object type
     if *main_obj_type != comment_obj_type {
-        errors.push(ValidationError::with_file_and_sql(
+        errors.push(ValidationError::with_file_sql_and_offset(
             ValidationErrorKind::CommentTypeMismatch {
                 comment_type: format!("{:?}", comment_obj_type),
                 object_type: format!("{:?}", main_obj_type),
             },
             fqn.path.clone(),
             comment_sql.to_string(),
+            offset,
         ));
     }
 }
@@ -319,24 +335,27 @@ fn comment_object_to_target(obj: &CommentObjectType<Raw>) -> Option<(&RawItemNam
 pub(in super::super) fn validate_comment_references(
     fqn: &FullyQualifiedName,
     comments: &[CommentStatement<Raw>],
+    offsets: &[usize],
     main_ident: &DatabaseIdent,
     obj_type: &ObjectType,
     errors: &mut Vec<ValidationError>,
 ) {
-    for comment in comments.iter() {
+    for (i, comment) in comments.iter().enumerate() {
+        let offset = offsets[i];
         let comment_sql = format!("{};", comment);
 
         // Handle column comments specially (they reference the parent table)
         if let CommentObjectType::Column { name } = &comment.object {
             let column_parent: DatabaseIdent = name.relation.name().clone().into();
             if !column_parent.matches(main_ident) {
-                errors.push(ValidationError::with_file_and_sql(
+                errors.push(ValidationError::with_file_sql_and_offset(
                     ValidationErrorKind::ColumnCommentReferenceMismatch {
                         referenced: column_parent.object,
                         expected: main_ident.object.clone(),
                     },
                     fqn.path.clone(),
                     comment_sql,
+                    offset,
                 ));
             }
             continue;
@@ -351,16 +370,18 @@ pub(in super::super) fn validate_comment_references(
                 comment_obj_type,
                 fqn,
                 &comment_sql,
+                offset,
                 errors,
             );
             continue;
         }
 
         // Unsupported comment type
-        errors.push(ValidationError::with_file_and_sql(
+        errors.push(ValidationError::with_file_sql_and_offset(
             ValidationErrorKind::UnsupportedCommentType,
             fqn.path.clone(),
             comment_sql,
+            offset,
         ));
     }
 }
