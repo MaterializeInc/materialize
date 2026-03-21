@@ -33,12 +33,11 @@ use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::CollectionMissing;
-use crate::controller::instance::{Command, Instance, SharedCollectionState};
+use crate::controller::instance::{Command, Instance};
 use crate::controller::{
     ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, ReplicaId,
     StorageCollections,
 };
-use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
 use crate::protocol::command::PeekTarget;
 use crate::protocol::response::PeekResponse;
@@ -153,7 +152,6 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
         peek_stash_persist_location: PersistLocation,
-        arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         metrics: InstanceMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -181,7 +179,6 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
                 build_info,
                 storage,
                 peek_stash_persist_location,
-                arranged_logs,
                 metrics,
                 now,
                 wallclock_lag,
