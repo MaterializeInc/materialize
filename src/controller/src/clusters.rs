@@ -267,6 +267,7 @@ impl ReplicaLocation {
 
 /// The "role" of a cluster, which is currently used to determine the
 /// severity of alerts for problems with its replicas.
+#[derive(Debug, Clone)]
 pub enum ClusterRole {
     /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
