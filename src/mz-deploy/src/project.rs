@@ -63,7 +63,7 @@ pub mod profile_files;
 pub mod raw;
 pub mod roles;
 pub mod typed;
-mod variables;
+pub mod variables;
 
 // Re-export commonly used types
 pub use planned::ModStatement;

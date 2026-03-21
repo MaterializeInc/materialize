@@ -106,7 +106,7 @@ pub fn parse_statements_with_context(
             let formatted: Vec<String> = resolved
                 .unresolved
                 .iter()
-                .map(|v| format!(":{}", v))
+                .map(|v| format!(":{}", v.name))
                 .collect();
             info!(
                 "\x1b[33mwarning\x1b[0m: unresolved variables in {}: {}",

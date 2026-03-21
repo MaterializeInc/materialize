@@ -18,8 +18,13 @@
 //!    [`resolve_variables`]. This map is populated from `project.toml`'s
 //!    `[profiles.<name>.variables]` section.
 //! 2. If a referenced variable has no definition, it is left as-is in the
-//!    output and its name is recorded in `ResolvedSql::unresolved`.
-//! 3. The caller decides whether unresolved variables are errors or warnings
+//!    output and an [`UnresolvedVariable`] (with byte offset and length) is
+//!    recorded in `ResolvedSql::unresolved`. Each occurrence is tracked
+//!    separately (not deduplicated) so the LSP can highlight every reference.
+//! 3. Every resolved substitution is recorded as a [`Substitution`] in
+//!    `ResolvedSql::substitutions`, enabling [`resolved_to_original`] to map
+//!    byte offsets in the resolved text back to the original source positions.
+//! 4. The caller decides whether unresolved variables are errors or warnings
 //!    based on the `PRAGMA WARN_ON_MISSING_VARIABLES;` directive.
 //!
 //! ## Context Awareness
@@ -35,13 +40,35 @@
 //! reference.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+/// An unresolved variable reference with its location in the original SQL.
+#[derive(Debug, Clone)]
+pub struct UnresolvedVariable {
+    /// The variable name (without the leading `:` or surrounding quotes).
+    pub name: String,
+    /// Byte offset of the `:` in the original SQL.
+    pub byte_offset: usize,
+    /// Byte length of the full reference (`:foo` = 4, `:'foo'` = 6).
+    pub byte_len: usize,
+}
+
+/// A resolved variable substitution, for mapping offsets between original and resolved text.
+#[derive(Debug, Clone)]
+pub struct Substitution {
+    /// Byte offset of the `:` in the original SQL.
+    pub original_start: usize,
+    /// Byte length of the variable reference in the original SQL.
+    pub original_len: usize,
+    /// Byte length of the replacement in the resolved SQL.
+    pub resolved_len: usize,
+}
 
 /// Error returned when SQL contains variable references that have no definition.
 #[derive(Debug)]
 pub struct VariableError {
-    pub unresolved: Vec<String>,
+    pub unresolved: Vec<UnresolvedVariable>,
     pub path: PathBuf,
 }
 
@@ -50,10 +77,45 @@ pub struct VariableError {
 pub struct ResolvedSql<'a> {
     /// The SQL text with resolved variables (unresolved ones left as-is).
     pub sql: Cow<'a, str>,
-    /// Variable names that were referenced but had no definition.
-    pub unresolved: Vec<String>,
+    /// Variable references that had no definition, with their positions.
+    pub unresolved: Vec<UnresolvedVariable>,
+    /// Substitutions performed, for mapping offsets between resolved and original text.
+    pub substitutions: Vec<Substitution>,
     /// Whether the file contains a `PRAGMA WARN_ON_MISSING_VARIABLES;` directive.
     pub has_warn_pragma: bool,
+}
+
+/// Map a byte offset in resolved text back to the corresponding offset in original text.
+///
+/// Walks `substitutions` in order, tracking the cumulative delta between original
+/// and resolved positions. If `offset` falls before the next substitution in resolved
+/// space, applies the running delta. If inside a substitution's resolved span, clamps
+/// to that substitution's original start. Otherwise continues accumulating delta.
+#[allow(clippy::as_conversions)]
+pub fn resolved_to_original(offset: usize, substitutions: &[Substitution]) -> usize {
+    let mut delta: isize = 0; // original - resolved cumulative shift
+
+    for sub in substitutions {
+        // Where this substitution starts in resolved-text space.
+        let resolved_start = (sub.original_start as isize - delta) as usize;
+
+        if offset < resolved_start {
+            // Before this substitution — apply accumulated delta.
+            return (offset as isize + delta) as usize;
+        }
+
+        let resolved_end = resolved_start + sub.resolved_len;
+        if offset < resolved_end {
+            // Inside this substitution's resolved span — clamp to original start.
+            return sub.original_start;
+        }
+
+        // Past this substitution — accumulate delta.
+        delta += sub.original_len as isize - sub.resolved_len as isize;
+    }
+
+    // After all substitutions.
+    (offset as isize + delta) as usize
 }
 
 const PRAGMA: &str = "PRAGMA WARN_ON_MISSING_VARIABLES;";
@@ -265,6 +327,57 @@ fn consume_dollar_quoted(bytes: &[u8], mut i: usize, len: usize, tag: &[u8]) -> 
     i
 }
 
+/// Find the variable reference (if any) that contains the given byte offset.
+///
+/// Scans `sql` using the same context-awareness rules as [`resolve_variables`]
+/// (skipping strings, comments, dollar-quotes, type casts) and checks whether
+/// `offset` falls inside a variable reference.
+///
+/// # Returns
+/// `(name, byte_offset_of_colon, byte_len)` if the offset is inside a
+/// `:name`, `:'name'`, or `:"name"` reference outside of strings/comments.
+/// `None` otherwise.
+pub fn find_variable_at_position(sql: &str, offset: usize) -> Option<(String, usize, usize)> {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        if bytes[i] == b'\'' {
+            i = consume_single_quoted(bytes, i + 1, len);
+        } else if bytes[i] == b'"' {
+            i = consume_double_quoted(bytes, i + 1, len);
+        } else if starts_with(bytes, i, b"--") {
+            i = consume_line_comment(bytes, i + 2, len);
+        } else if starts_with(bytes, i, b"/*") {
+            i = consume_block_comment(bytes, i + 2, len);
+        } else if bytes[i] == b'$' {
+            if let Some((end, tag)) = try_dollar_tag(bytes, i, len) {
+                i = consume_dollar_quoted(bytes, end, len, tag);
+            } else {
+                i += 1;
+            }
+        } else if starts_with(bytes, i, b"::") {
+            i += 2;
+        } else if bytes[i] == b':' {
+            if let Some((name, _kind, end)) = try_read_variable(sql, bytes, i) {
+                let var_start = i;
+                let var_len = end - var_start;
+                if offset >= var_start && offset < end {
+                    return Some((name.to_string(), var_start, var_len));
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    None
+}
+
 /// Resolve psql-style variables (`:foo`, `:'foo'`, `:"foo"`) in SQL text.
 ///
 /// Always returns `ResolvedSql` with the SQL text (unresolved variables left as-is),
@@ -278,6 +391,7 @@ pub fn resolve_variables<'a>(sql: &'a str, vars: &BTreeMap<String, String>) -> R
         return ResolvedSql {
             sql: Cow::Borrowed(sql),
             unresolved: Vec::new(),
+            substitutions: Vec::new(),
             has_warn_pragma: false,
         };
     }
@@ -287,7 +401,8 @@ pub fn resolve_variables<'a>(sql: &'a str, vars: &BTreeMap<String, String>) -> R
     let mut i = 0;
     let mut output: Option<String> = None;
     let mut copy_from: usize = 0;
-    let mut unresolved: BTreeSet<&str> = BTreeSet::new();
+    let mut unresolved: Vec<UnresolvedVariable> = Vec::new();
+    let mut substitutions: Vec<Substitution> = Vec::new();
 
     while i < len {
         if bytes[i] == b'\'' {
@@ -325,6 +440,7 @@ pub fn resolve_variables<'a>(sql: &'a str, vars: &BTreeMap<String, String>) -> R
                 };
 
                 if let Some(value) = vars.get(name) {
+                    let before = buf.len();
                     match kind {
                         VarKind::Raw => buf.push_str(value),
                         VarKind::SqlLiteral => {
@@ -338,8 +454,18 @@ pub fn resolve_variables<'a>(sql: &'a str, vars: &BTreeMap<String, String>) -> R
                             buf.push('"');
                         }
                     }
+                    let after = buf.len();
+                    substitutions.push(Substitution {
+                        original_start: var_start,
+                        original_len: end - var_start,
+                        resolved_len: after - before,
+                    });
                 } else {
-                    unresolved.insert(name);
+                    unresolved.push(UnresolvedVariable {
+                        name: name.to_string(),
+                        byte_offset: var_start,
+                        byte_len: end - var_start,
+                    });
                     buf.push_str(&sql[var_start..end]);
                 }
 
@@ -363,7 +489,8 @@ pub fn resolve_variables<'a>(sql: &'a str, vars: &BTreeMap<String, String>) -> R
 
     ResolvedSql {
         sql,
-        unresolved: unresolved.into_iter().map(String::from).collect(),
+        unresolved,
+        substitutions,
         has_warn_pragma,
     }
 }
@@ -377,6 +504,11 @@ mod tests {
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
+    }
+
+    /// Extract just the names from unresolved variables for easy assertion.
+    fn unresolved_names<'a>(result: &'a ResolvedSql<'a>) -> Vec<&'a str> {
+        result.unresolved.iter().map(|v| v.name.as_str()).collect()
     }
 
     #[test]
@@ -472,14 +604,14 @@ mod tests {
     #[test]
     fn unresolved_variable_reported() {
         let result = resolve_variables("SELECT :missing", &BTreeMap::new());
-        assert_eq!(result.unresolved, vec!["missing"]);
+        assert_eq!(unresolved_names(&result), vec!["missing"]);
         assert_eq!(result.sql.as_ref(), "SELECT :missing");
     }
 
     #[test]
     fn multiple_unresolved_lists_all() {
         let result = resolve_variables("SELECT :a, :b, :a", &BTreeMap::new());
-        assert_eq!(result.unresolved, vec!["a", "b"]);
+        assert_eq!(unresolved_names(&result), vec!["a", "b", "a"]);
     }
 
     #[test]
@@ -562,7 +694,7 @@ mod tests {
             &BTreeMap::new(),
         );
         assert!(result.has_warn_pragma);
-        assert_eq!(result.unresolved, vec!["foo"]);
+        assert_eq!(unresolved_names(&result), vec!["foo"]);
     }
 
     #[test]
@@ -572,7 +704,7 @@ mod tests {
             &BTreeMap::new(),
         );
         assert!(result.has_warn_pragma);
-        assert_eq!(result.unresolved, vec!["foo"]);
+        assert_eq!(unresolved_names(&result), vec!["foo"]);
     }
 
     #[test]
@@ -603,5 +735,194 @@ mod tests {
     fn pragma_partial_match() {
         let result = resolve_variables("-- PRAGMA WARN_ON_MISSING\nSELECT :foo", &BTreeMap::new());
         assert!(!result.has_warn_pragma);
+    }
+
+    // --- Unresolved variable position tests ---
+
+    #[test]
+    fn unresolved_variable_has_correct_offset() {
+        // "SELECT :missing" — `:` is at byte 7
+        let result = resolve_variables("SELECT :missing", &BTreeMap::new());
+        assert_eq!(result.unresolved.len(), 1);
+        assert_eq!(result.unresolved[0].name, "missing");
+        assert_eq!(result.unresolved[0].byte_offset, 7);
+        assert_eq!(result.unresolved[0].byte_len, 8); // `:missing` = 8 bytes
+    }
+
+    #[test]
+    fn unresolved_quoted_variable_has_correct_len() {
+        // "SELECT :'missing'" — `:` at 7, len = 10 (:'missing')
+        let result = resolve_variables("SELECT :'missing'", &BTreeMap::new());
+        assert_eq!(result.unresolved.len(), 1);
+        assert_eq!(result.unresolved[0].byte_offset, 7);
+        assert_eq!(result.unresolved[0].byte_len, 10);
+    }
+
+    #[test]
+    fn multiple_unresolved_tracks_each_occurrence() {
+        let result = resolve_variables("SELECT :a, :b, :a", &BTreeMap::new());
+        assert_eq!(result.unresolved.len(), 3);
+        assert_eq!(result.unresolved[0].name, "a");
+        assert_eq!(result.unresolved[0].byte_offset, 7);
+        assert_eq!(result.unresolved[1].name, "b");
+        assert_eq!(result.unresolved[1].byte_offset, 11);
+        assert_eq!(result.unresolved[2].name, "a");
+        assert_eq!(result.unresolved[2].byte_offset, 15);
+    }
+
+    // --- find_variable_at_position tests ---
+
+    #[test]
+    fn find_var_bare_variable() {
+        // "SELECT :foo FROM t" — `:foo` at bytes 7..11
+        let sql = "SELECT :foo FROM t";
+        let result = find_variable_at_position(sql, 7);
+        assert_eq!(result, Some(("foo".to_string(), 7, 4)));
+        // Middle of variable
+        assert_eq!(
+            find_variable_at_position(sql, 9),
+            Some(("foo".to_string(), 7, 4))
+        );
+    }
+
+    #[test]
+    fn find_var_single_quoted() {
+        // "HOST :'host'" — `:'host'` at bytes 5..13
+        let sql = "HOST :'host'";
+        let result = find_variable_at_position(sql, 5);
+        assert_eq!(result, Some(("host".to_string(), 5, 7)));
+        assert_eq!(
+            find_variable_at_position(sql, 11),
+            Some(("host".to_string(), 5, 7))
+        );
+    }
+
+    #[test]
+    fn find_var_double_quoted() {
+        // "SELECT :\"col\"" — `:"col"` at bytes 7..13
+        let sql = "SELECT :\"col\"";
+        let result = find_variable_at_position(sql, 7);
+        assert_eq!(result, Some(("col".to_string(), 7, 6)));
+    }
+
+    #[test]
+    fn find_var_between_variables_returns_none() {
+        // "SELECT :a, :b" — space at byte 10 is between variables
+        let sql = "SELECT :a, :b";
+        assert_eq!(find_variable_at_position(sql, 10), None);
+    }
+
+    #[test]
+    fn find_var_in_string_literal_returns_none() {
+        let sql = "SELECT ':foo' FROM t";
+        // Byte 8 is inside the string literal
+        assert_eq!(find_variable_at_position(sql, 8), None);
+    }
+
+    #[test]
+    fn find_var_type_cast_returns_none() {
+        let sql = "SELECT x::int FROM t";
+        // Byte 9 is the second colon of ::
+        assert_eq!(find_variable_at_position(sql, 9), None);
+        assert_eq!(find_variable_at_position(sql, 8), None);
+    }
+
+    #[test]
+    fn find_var_in_comment_returns_none() {
+        let sql = "-- :foo\nSELECT 1";
+        assert_eq!(find_variable_at_position(sql, 3), None);
+    }
+
+    #[test]
+    fn find_var_offset_past_end_returns_none() {
+        let sql = "SELECT :foo";
+        assert_eq!(find_variable_at_position(sql, 11), None);
+    }
+
+    // --- Substitution tracking tests ---
+
+    #[test]
+    fn resolved_variable_records_substitution() {
+        let v = vars(&[("cluster", "analytics")]);
+        let result = resolve_variables("IN CLUSTER :cluster AS", &v);
+        assert_eq!(result.substitutions.len(), 1);
+        assert_eq!(result.substitutions[0].original_start, 11); // `:cluster` starts at 11
+        assert_eq!(result.substitutions[0].original_len, 8); // `:cluster` = 8 bytes
+        assert_eq!(result.substitutions[0].resolved_len, 9); // `analytics` = 9 bytes
+    }
+
+    // --- resolved_to_original tests ---
+
+    #[test]
+    fn resolved_to_original_no_substitutions() {
+        assert_eq!(resolved_to_original(5, &[]), 5);
+        assert_eq!(resolved_to_original(0, &[]), 0);
+    }
+
+    #[test]
+    fn resolved_to_original_shorter_replacement() {
+        // Original: "IN CLUSTER :cluster AS" (22 bytes)
+        //                        ^11     ^19
+        // Resolved: "IN CLUSTER ab AS" (16 bytes)  — `:cluster` (8) → `ab` (2)
+        //                        ^11 ^13
+        let subs = vec![Substitution {
+            original_start: 11,
+            original_len: 8,
+            resolved_len: 2,
+        }];
+        // Before substitution
+        assert_eq!(resolved_to_original(5, &subs), 5);
+        // Inside substitution (resolved offset 11 or 12) → clamp to original start
+        assert_eq!(resolved_to_original(11, &subs), 11);
+        assert_eq!(resolved_to_original(12, &subs), 11);
+        // After substitution: resolved 13 → original 19 (delta = 8 - 2 = 6)
+        assert_eq!(resolved_to_original(13, &subs), 19);
+    }
+
+    #[test]
+    fn resolved_to_original_longer_replacement() {
+        // Original: "X :a Y" — `:a` at 2, len 2
+        // Resolved: "X longvalue Y" — `longvalue` len 9
+        let subs = vec![Substitution {
+            original_start: 2,
+            original_len: 2,
+            resolved_len: 9,
+        }];
+        // Before
+        assert_eq!(resolved_to_original(0, &subs), 0);
+        // Inside (2..11) → clamp to 2
+        assert_eq!(resolved_to_original(5, &subs), 2);
+        // After: resolved 11 → original 4 (delta = 2 - 9 = -7)
+        assert_eq!(resolved_to_original(11, &subs), 4);
+    }
+
+    #[test]
+    fn resolved_to_original_multiple_substitutions() {
+        // Original: "A :x B :y C" — :x at 2 (len 2), :y at 7 (len 2)
+        // Resolved: "A val1 B val2 C" — val1 (len 4), val2 (len 4)
+        let subs = vec![
+            Substitution {
+                original_start: 2,
+                original_len: 2,
+                resolved_len: 4,
+            },
+            Substitution {
+                original_start: 7,
+                original_len: 2,
+                resolved_len: 4,
+            },
+        ];
+        // Before first sub
+        assert_eq!(resolved_to_original(0, &subs), 0);
+        // Inside first sub (resolved 2..6)
+        assert_eq!(resolved_to_original(3, &subs), 2);
+        // Between subs: resolved 6 → original 4, delta = 2 - 4 = -2
+        assert_eq!(resolved_to_original(6, &subs), 4);
+        // Inside second sub: resolved 9 (second sub starts at resolved 7 + delta(-2) → 9)
+        // Actually: second sub original_start=7, delta after first = 2-4 = -2
+        // resolved_start = 7 - (-2) = 9, resolved_end = 9 + 4 = 13
+        assert_eq!(resolved_to_original(10, &subs), 7);
+        // After both: resolved 13 → original 9, cumulative delta = (2-4) + (2-4) = -4
+        assert_eq!(resolved_to_original(13, &subs), 9);
     }
 }

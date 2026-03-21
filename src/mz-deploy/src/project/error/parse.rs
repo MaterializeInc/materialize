@@ -75,8 +75,11 @@ impl fmt::Display for ParseError {
                     "error".bright_red().bold(),
                     inner.path.display()
                 )?;
-                let formatted: Vec<String> =
-                    inner.unresolved.iter().map(|v| format!(":{}", v)).collect();
+                let formatted: Vec<String> = inner
+                    .unresolved
+                    .iter()
+                    .map(|v| format!(":{}", v.name))
+                    .collect();
                 writeln!(
                     f,
                     "  {}: {}",

@@ -20,7 +20,11 @@
 //!   then new diagnostics are published. On a successful build all tracked
 //!   URIs are cleared.
 //! - **`root`** — Set during `initialize` from `InitializeParams::root_uri`.
+//! - **`settings`** / **`variables`** — Cached from `project.toml` via
+//!   [`load_settings()`]. Reloaded at startup and on every save. Variables are
+//!   passed to per-keystroke diagnostics and the on-save project rebuild.
 
+use crate::config::ProjectSettings;
 use crate::lsp::{diagnostics, goto_definition, hover};
 use crate::project;
 use crate::project::error::{ProjectError, ValidationErrors};
@@ -49,6 +53,12 @@ pub struct Backend {
     project_diagnostic_uris: Mutex<Vec<Url>>,
     /// Project root directory.
     root: RwLock<PathBuf>,
+    /// Cached project settings loaded from `project.toml`.
+    settings: RwLock<Option<ProjectSettings>>,
+    /// Cached variables from the active profile config.
+    variables: RwLock<BTreeMap<String, String>>,
+    /// Name of the active profile (for hover display).
+    profile_name: RwLock<String>,
 }
 
 impl Backend {
@@ -61,13 +71,41 @@ impl Backend {
             types_cache: RwLock::new(None),
             project_diagnostic_uris: Mutex::new(Vec::new()),
             root: RwLock::new(root),
+            settings: RwLock::new(None),
+            variables: RwLock::new(BTreeMap::new()),
+            profile_name: RwLock::new("default".to_string()),
+        }
+    }
+
+    /// Load project settings and variables from `project.toml`.
+    ///
+    /// Silently defaults when `project.toml` is missing (no config is valid).
+    /// Called during `initialized` and at the start of each `rebuild_project`.
+    fn load_settings(&self) {
+        let root = self.root.read().unwrap().clone();
+        match ProjectSettings::load(&root) {
+            Ok(ps) => {
+                let name = ps.profile.clone();
+                let config = ps.config_for_profile(&name);
+                *self.variables.write().unwrap() = config.variables.clone();
+                *self.profile_name.write().unwrap() = name;
+                *self.settings.write().unwrap() = Some(ps);
+            }
+            Err(_) => {
+                // No project.toml or parse error — use defaults.
+                *self.settings.write().unwrap() = None;
+                *self.variables.write().unwrap() = BTreeMap::new();
+                *self.profile_name.write().unwrap() = "default".to_string();
+            }
         }
     }
 
     /// Publish parse diagnostics for a single document.
     async fn publish_diagnostics(&self, uri: Url, text: &str) {
         let rope = Rope::from_str(text);
-        let diags = diagnostics::diagnose(text, &rope);
+        let variables = self.variables.read().unwrap().clone();
+        let profile = self.profile_name.read().unwrap().clone();
+        let diags = diagnostics::diagnose(text, &rope, &variables, &profile);
 
         // Store the rope for later offset conversions (go-to-definition).
         if let Ok(mut docs) = self.documents.lock() {
@@ -112,8 +150,24 @@ impl Backend {
     /// clears diagnostics from files that no longer have errors. On success,
     /// clears all project diagnostics.
     async fn rebuild_project(&self) {
+        self.load_settings();
         let root = self.root.read().unwrap().clone();
-        match project::plan_sync(&root, "default", None, &Default::default()) {
+        let (profile, profile_suffix, variables) = {
+            let settings_guard = self.settings.read().unwrap();
+            match settings_guard.as_ref() {
+                Some(ps) => {
+                    let profile = ps.profile.clone();
+                    let config = ps.config_for_profile(&profile);
+                    (
+                        profile,
+                        config.profile_suffix.clone(),
+                        config.variables.clone(),
+                    )
+                }
+                None => ("default".to_string(), None, BTreeMap::new()),
+            }
+        };
+        match project::plan_sync(&root, &profile, profile_suffix.as_deref(), &variables) {
             Ok(p) => {
                 self.clear_project_diagnostics().await;
                 if let Ok(mut proj) = self.project.write() {
@@ -200,6 +254,7 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        self.load_settings();
         self.rebuild_project().await;
     }
 
@@ -249,6 +304,31 @@ impl LanguageServer for Backend {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
+
+        {
+            let (byte_offset, text) = {
+                let docs = self.documents.lock().unwrap();
+                match docs.get(&uri) {
+                    Some(rope) => {
+                        let line_start = rope
+                            .try_line_to_char(usize::try_from(position.line).unwrap_or(0))
+                            .ok();
+                        let offset = line_start
+                            .map(|ls| ls + usize::try_from(position.character).unwrap_or(0));
+                        (offset, Some(rope.to_string()))
+                    }
+                    None => (None, None),
+                }
+            };
+            if let (Some(offset), Some(text)) = (byte_offset, text) {
+                let variables = self.variables.read().unwrap();
+                let profile = self.profile_name.read().unwrap();
+                if let Some(h) = hover::resolve_variable_hover(&text, offset, &variables, &profile)
+                {
+                    return Ok(Some(h));
+                }
+            }
+        }
 
         let parts = match self.find_parts_at_position(&uri, position) {
             Some(p) => p,

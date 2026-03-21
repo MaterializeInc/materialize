@@ -1,11 +1,19 @@
-//! Hover information for SQL identifiers.
+//! Hover information for SQL identifiers and variable references.
+//!
+//! ## Variable Hover
+//!
+//! When the cursor is on a psql-style variable reference (`:foo`, `:'foo'`,
+//! `:"foo"`), [`resolve_variable_hover`] returns a tooltip showing the variable
+//! name, its resolved value (or "undefined"), and the active profile name.
+//!
+//! ## Object Hover
 //!
 //! When the cursor hovers over an identifier that references a database object,
-//! this module resolves the identifier to its output schema (column names and
-//! types) using the `types.cache` and `types.lock` data. The result is formatted
-//! as a Markdown table for display in the editor.
+//! [`resolve_hover`] resolves the identifier to its output schema (column names
+//! and types) using the `types.cache` and `types.lock` data. The result is
+//! formatted as a Markdown table for display in the editor.
 //!
-//! ## Resolution
+//! ### Resolution
 //!
 //! 1. Identifier parts are resolved to an [`ObjectId`] using the same
 //!    1/2/3-part convention as [`goto_definition::resolve_reference()`].
@@ -13,7 +21,7 @@
 //!    determine its kind (view, materialized view, table, etc.).
 //! 3. Column schemas are retrieved from the [`Types`] cache.
 //!
-//! ## Output
+//! ### Output
 //!
 //! - **Object with cached columns** — Shows the object kind, fully-qualified
 //!   name, and a column table (name, type, nullable). If the object has a
@@ -27,6 +35,7 @@
 
 use crate::project::constraint::default_constraint_name;
 use crate::project::planned;
+use crate::project::variables::find_variable_at_position;
 use crate::types::Types;
 use mz_sql_parser::ast::{CommentObjectType, CommentStatement, CreateConstraintStatement, Raw};
 use std::collections::BTreeMap;
@@ -34,6 +43,39 @@ use std::path::Path;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Url};
 
 use super::goto_definition;
+
+/// Resolve hover information for a variable reference at the given byte offset.
+///
+/// If `offset` falls inside a resolved variable reference (`:name`, `:'name'`,
+/// or `:"name"`), returns a [`Hover`] showing the variable name, its value,
+/// and the active profile. Undefined variables return `None` — their diagnostic
+/// already covers the error.
+///
+/// Returns `None` if the offset is not inside a variable reference, or if the
+/// variable is undefined.
+pub fn resolve_variable_hover(
+    text: &str,
+    offset: usize,
+    variables: &BTreeMap<String, String>,
+    profile_name: &str,
+) -> Option<Hover> {
+    let (name, _start, _len) = find_variable_at_position(text, offset)?;
+    let value = variables.get(&name)?;
+
+    let markdown = format!(
+        "**variable** `:{name}`\n\n\
+         **Value:** `{value}`\n\
+         **Profile:** `{profile_name}`"
+    );
+
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: markdown,
+        }),
+        range: None,
+    })
+}
 
 /// Resolve hover information for an identifier.
 ///
@@ -183,7 +225,39 @@ mod tests {
     use crate::types::ColumnType;
     use std::collections::BTreeMap;
 
-    // ── Tests ────────────────────────────────────────────────────────
+    // ── Variable hover tests ─────────────────────────────────────────
+
+    fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn variable_hover_resolved() {
+        let variables = vars(&[("cluster", "analytics")]);
+        let sql = "IN CLUSTER :cluster AS";
+        let hover = resolve_variable_hover(sql, 11, &variables, "staging").unwrap();
+        let text = extract_markdown(&hover);
+        assert!(text.contains("**variable** `:cluster`"));
+        assert!(text.contains("**Value:** `analytics`"));
+        assert!(text.contains("**Profile:** `staging`"));
+    }
+
+    #[test]
+    fn variable_hover_unresolved_returns_none() {
+        let sql = "IN CLUSTER :cluster AS";
+        assert!(resolve_variable_hover(sql, 11, &BTreeMap::new(), "staging").is_none());
+    }
+
+    #[test]
+    fn variable_hover_not_on_variable() {
+        let sql = "SELECT 1 FROM t";
+        assert!(resolve_variable_hover(sql, 5, &BTreeMap::new(), "default").is_none());
+    }
+
+    // ── Object hover tests ──────────────────────────────────────────
 
     #[test]
     fn hover_with_cached_columns() {

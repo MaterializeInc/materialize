@@ -2,11 +2,14 @@
 //!
 //! Provides two tiers of diagnostics:
 //!
-//! - **Per-keystroke parse errors** ([`diagnose()`]) — Parses SQL text with
-//!   [`mz_sql_parser::parser::parse_statements()`] and converts any
-//!   [`ParserStatementError`] into LSP [`Diagnostic`]s with correct
-//!   line/column positions. The byte offset from [`ParserError::pos`] is mapped
-//!   to an LSP [`Position`] using a ropey [`Rope`].
+//! - **Per-keystroke diagnostics** ([`diagnose()`]) — Resolves psql-style
+//!   variables before parsing. Unresolved variables produce positioned
+//!   diagnostics (ERROR or WARNING depending on the warn pragma). The resolved
+//!   SQL is then parsed with [`mz_sql_parser::parser::parse_statements()`] and
+//!   any parse error positions are mapped back to original-text offsets via
+//!   [`resolved_to_original`]. The [`Rope`] is always built from the original
+//!   text (what the editor shows), since all emitted byte offsets are in
+//!   original-text space.
 //!
 //! - **On-save validation errors** ([`validation_diagnostics()`]) — Converts
 //!   project-level [`ValidationError`]s into LSP diagnostics grouped by file.
@@ -15,40 +18,80 @@
 //!   (e.g., missing CREATE statement) fall back to `(0, 0)`.
 
 use crate::project::error::ValidationError;
+use crate::project::variables::{resolve_variables, resolved_to_original};
 use ropey::Rope;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
-/// Parse `text` as SQL and return diagnostics for any parse errors.
+/// Parse `text` as SQL and return diagnostics for any parse errors and variable issues.
+///
+/// Resolves psql-style variables before parsing. Unresolved variables produce
+/// diagnostics at their position in the original text. Parse errors from the
+/// resolved SQL are mapped back to original-text positions via the substitution log.
 ///
 /// # Arguments
-/// * `text` — The SQL source text to parse.
+/// * `text` — The original SQL source text (as the editor shows it).
 /// * `rope` — A [`Rope`] built from the same `text`, used for byte-offset to
 ///   line/column conversion.
+/// * `variables` — Variable definitions from the project config.
+/// * `profile_name` — Active profile name, shown in undefined-variable messages.
 ///
 /// # Returns
-/// A (possibly empty) vec of LSP diagnostics. At most one diagnostic is
-/// returned per parse invocation since the parser stops at the first error.
-pub fn diagnose(text: &str, rope: &Rope) -> Vec<Diagnostic> {
+/// A (possibly empty) vec of LSP diagnostics. Variable diagnostics are
+/// `WARNING` if the file has the warn pragma, `ERROR` otherwise. Parse errors
+/// are always `ERROR`.
+pub fn diagnose(
+    text: &str,
+    rope: &Rope,
+    variables: &BTreeMap<String, String>,
+    profile_name: &str,
+) -> Vec<Diagnostic> {
     if text.trim().is_empty() {
         return Vec::new();
     }
 
-    match mz_sql_parser::parser::parse_statements(text) {
-        Ok(_) => Vec::new(),
-        Err(e) => {
-            let position =
-                offset_to_position(e.error.pos, rope).unwrap_or_else(|| Position::new(0, 0));
-            vec![Diagnostic {
-                range: Range::new(position, position),
-                severity: Some(DiagnosticSeverity::ERROR),
-                source: Some("mz-deploy".to_string()),
-                message: e.error.message.clone(),
-                ..Default::default()
-            }]
-        }
+    let resolved = resolve_variables(text, variables);
+    let mut diags = Vec::new();
+
+    // Unresolved variable diagnostics — positioned in original text.
+    let var_severity = if resolved.has_warn_pragma {
+        DiagnosticSeverity::WARNING
+    } else {
+        DiagnosticSeverity::ERROR
+    };
+    for uv in &resolved.unresolved {
+        let position =
+            offset_to_position(uv.byte_offset, rope).unwrap_or_else(|| Position::new(0, 0));
+        let end_position = offset_to_position(uv.byte_offset + uv.byte_len, rope)
+            .unwrap_or_else(|| Position::new(0, 0));
+        diags.push(Diagnostic {
+            range: Range::new(position, end_position),
+            severity: Some(var_severity),
+            source: Some("mz-deploy".to_string()),
+            message: format!(
+                "undefined variable ':{}'  — define in [profiles.{}.variables] in project.toml",
+                uv.name, profile_name
+            ),
+            ..Default::default()
+        });
     }
+
+    // Parse the resolved SQL; map errors back to original-text positions.
+    if let Err(e) = mz_sql_parser::parser::parse_statements(&resolved.sql) {
+        let original_offset = resolved_to_original(e.error.pos, &resolved.substitutions);
+        let position =
+            offset_to_position(original_offset, rope).unwrap_or_else(|| Position::new(0, 0));
+        diags.push(Diagnostic {
+            range: Range::new(position, position),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("mz-deploy".to_string()),
+            message: e.error.message.clone(),
+            ..Default::default()
+        });
+    }
+
+    diags
 }
 
 /// Convert [`ValidationError`]s into LSP diagnostics grouped by file path.
@@ -115,14 +158,14 @@ mod tests {
     fn valid_sql_produces_no_diagnostics() {
         let text = "CREATE VIEW foo AS SELECT 1;";
         let rope = Rope::from_str(text);
-        assert!(diagnose(text, &rope).is_empty());
+        assert!(diagnose(text, &rope, &BTreeMap::new(), "default").is_empty());
     }
 
     #[test]
     fn syntax_error_produces_diagnostic_at_correct_position() {
         let text = "CREATE VIEW foo AS SELECTT 1;";
         let rope = Rope::from_str(text);
-        let diags = diagnose(text, &rope);
+        let diags = diagnose(text, &rope, &BTreeMap::new(), "default");
         assert_eq!(diags.len(), 1);
         assert_eq!(diags[0].severity, Some(DiagnosticSeverity::ERROR));
         // Error should be on line 0 (first line)
@@ -133,7 +176,7 @@ mod tests {
     fn multiline_error_position() {
         let text = "CREATE VIEW foo AS\nSELECT 1;\nCREATE VIEW bar AS SELECTT 2;";
         let rope = Rope::from_str(text);
-        let diags = diagnose(text, &rope);
+        let diags = diagnose(text, &rope, &BTreeMap::new(), "default");
         assert_eq!(diags.len(), 1);
         // Error should be on line 2 (third line, zero-indexed)
         assert_eq!(diags[0].range.start.line, 2);
@@ -143,14 +186,14 @@ mod tests {
     fn empty_file_produces_no_diagnostics() {
         let text = "";
         let rope = Rope::from_str(text);
-        assert!(diagnose(text, &rope).is_empty());
+        assert!(diagnose(text, &rope, &BTreeMap::new(), "default").is_empty());
     }
 
     #[test]
     fn whitespace_only_file_produces_no_diagnostics() {
         let text = "   \n  \n  ";
         let rope = Rope::from_str(text);
-        assert!(diagnose(text, &rope).is_empty());
+        assert!(diagnose(text, &rope, &BTreeMap::new(), "default").is_empty());
     }
 
     fn make_validation_error(file: &str, object_name: &str) -> ValidationError {
@@ -206,5 +249,86 @@ mod tests {
     fn empty_errors_returns_empty_map() {
         let result = validation_diagnostics(&[]);
         assert!(result.is_empty());
+    }
+
+    // --- Variable-aware diagnose tests ---
+
+    fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn resolved_variable_no_diagnostics() {
+        let text = "CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT 1";
+        let rope = Rope::from_str(text);
+        let diags = diagnose(text, &rope, &BTreeMap::new(), "default");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn resolved_variable_produces_clean_parse() {
+        let v = vars(&[("cluster", "quickstart")]);
+        let text = "CREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1";
+        let rope = Rope::from_str(text);
+        let diags = diagnose(text, &rope, &v, "default");
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn unresolved_variable_produces_error() {
+        let text = "CREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1";
+        let rope = Rope::from_str(text);
+        let diags = diagnose(text, &rope, &BTreeMap::new(), "default");
+        // Should have at least the variable error
+        let var_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.message.contains("undefined variable"))
+            .collect();
+        assert_eq!(var_diags.len(), 1);
+        assert_eq!(var_diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        // `:cluster` starts at byte 39
+        assert!(var_diags[0].message.contains(":cluster"));
+    }
+
+    #[test]
+    fn unresolved_variable_with_pragma_produces_warning() {
+        let text = "-- PRAGMA WARN_ON_MISSING_VARIABLES;\nCREATE MATERIALIZED VIEW mv IN CLUSTER :cluster AS SELECT 1";
+        let rope = Rope::from_str(text);
+        let diags = diagnose(text, &rope, &BTreeMap::new(), "default");
+        let var_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| d.message.contains("undefined variable"))
+            .collect();
+        assert_eq!(var_diags.len(), 1);
+        assert_eq!(var_diags[0].severity, Some(DiagnosticSeverity::WARNING));
+    }
+
+    #[test]
+    fn parse_error_maps_back_to_original_position() {
+        // After resolving :x → "ab", the parse error in resolved text
+        // should map back to the original text position.
+        let v = vars(&[("x", "ab")]);
+        // "CREATE VIEW :x AS SELECTT 1" → "CREATE VIEW ab AS SELECTT 1"
+        let text = "CREATE VIEW :x AS SELECTT 1";
+        let rope = Rope::from_str(text);
+        let diags = diagnose(text, &rope, &v, "default");
+        // Should have exactly one parse error diagnostic.
+        let parse_diags: Vec<_> = diags
+            .iter()
+            .filter(|d| !d.message.contains("undefined variable"))
+            .collect();
+        assert_eq!(parse_diags.len(), 1);
+        assert_eq!(parse_diags[0].severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(parse_diags[0].range.start.line, 0);
+    }
+
+    #[test]
+    fn no_variables_unchanged_behavior() {
+        let text = "CREATE VIEW foo AS SELECT 1;";
+        let rope = Rope::from_str(text);
+        assert!(diagnose(text, &rope, &BTreeMap::new(), "default").is_empty());
     }
 }
