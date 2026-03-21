@@ -2055,6 +2055,12 @@ class SqlServerInitialLoad(SqlServerCdc):
     when creating a materialized source"""
 
     FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
+    # clusterd memory keeps growing and is only lazily collected, so not useful
+    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
+        MeasurementType.WALLCLOCK: 0.10,
+        MeasurementType.MEMORY_MZ: 0.20,
+        MeasurementType.MEMORY_CLUSTERD: 100.0,
+    }
 
     def shared(self) -> Action:
         return TdAction(
