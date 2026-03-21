@@ -70,6 +70,8 @@ SERVICES = [
     Mz(app_password=""),
 ]
 
+KIND_CLUSTER_NAME = "kind"
+
 
 def run_mz_debug() -> None:
     # TODO: Hangs a lot in CI
@@ -187,6 +189,143 @@ def get_clusterd_data() -> dict[str, Any]:
     return get_pod_data(
         labels={"environmentd.materialize.cloud/namespace": "cluster"},
     )
+
+
+def ensure_kind_version() -> None:
+    kind_version = Version.parse(spawn.capture(["kind", "version"]).split(" ")[1][1:])
+    assert kind_version >= Version.parse(
+        "0.29.0"
+    ), f"kind >= v0.29.0 required, while you are on {kind_version}"
+
+
+def stop_and_remove_container(container_name: str) -> None:
+    try:
+        spawn.runv(["docker", "stop", container_name])
+    except:
+        pass
+    try:
+        spawn.runv(["docker", "rm", container_name])
+    except:
+        pass
+
+
+def start_registry_proxy(
+    *,
+    container_name: str,
+    cache_dir: str,
+    remote_url: str,
+    username: str | None = None,
+    password: str | None = None,
+) -> None:
+    env = ["-e", f"REGISTRY_PROXY_REMOTEURL={remote_url}"]
+    if username and password:
+        env.extend(
+            [
+                "-e",
+                f"REGISTRY_PROXY_USERNAME={username}",
+                "-e",
+                f"REGISTRY_PROXY_PASSWORD={password}",
+            ]
+        )
+
+    spawn.runv(
+        [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            container_name,
+            "--restart=always",
+            "--net=kind",
+            "-v",
+            cache_dir,
+            *env,
+            "registry:2",
+        ]
+    )
+
+
+def render_kind_cluster_config() -> None:
+    with (
+        open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml.tmpl") as in_file,
+        open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml", "w") as out_file,
+    ):
+        text = in_file.read()
+        out_file.write(
+            text.replace(
+                "$DOCKER_CONFIG",
+                os.getenv("DOCKER_CONFIG", f'{os.environ["HOME"]}/.docker'),
+            )
+        )
+
+
+def install_metrics_server() -> None:
+    spawn.runv(
+        [
+            "helm",
+            "repo",
+            "add",
+            "metrics-server",
+            "https://kubernetes-sigs.github.io/metrics-server/",
+        ]
+    )
+    spawn.runv(["helm", "repo", "update", "metrics-server"])
+    spawn.runv(
+        [
+            "helm",
+            "install",
+            "metrics-server",
+            "metrics-server/metrics-server",
+            "--namespace",
+            "kube-system",
+            "--set",
+            "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
+        ]
+    )
+
+
+def recreate_kind_cluster() -> None:
+    ensure_kind_version()
+
+    spawn.runv(["kind", "delete", "cluster", "--name", KIND_CLUSTER_NAME])
+
+    try:
+        spawn.runv(["docker", "network", "create", "kind"])
+    except:
+        pass
+
+    stop_and_remove_container("proxy-dockerhub")
+    stop_and_remove_container("proxy-ghcr")
+
+    start_registry_proxy(
+        container_name="proxy-dockerhub",
+        cache_dir=f"{MZ_ROOT}/misc/kind/cache/dockerhub:/var/lib/registry",
+        remote_url="https://registry-1.docker.io",
+        username=os.getenv("DOCKERHUB_USERNAME"),
+        password=os.getenv("DOCKERHUB_ACCESS_TOKEN"),
+    )
+    start_registry_proxy(
+        container_name="proxy-ghcr",
+        cache_dir=f"{MZ_ROOT}/misc/kind/cache/ghcr:/var/lib/registry",
+        remote_url="https://ghcr.io",
+        username="materialize-bot",
+        password=os.getenv("GITHUB_GHCR_TOKEN"),
+    )
+
+    render_kind_cluster_config()
+    spawn.runv(
+        [
+            "kind",
+            "create",
+            "cluster",
+            "--name",
+            KIND_CLUSTER_NAME,
+            "--config",
+            MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
+        ]
+    )
+
+    install_metrics_server()
 
 
 @contextmanager
@@ -1657,35 +1796,7 @@ def workflow_documentation_defaults(
         if os.path.exists(dir):
             shutil.rmtree(dir)
         os.mkdir(dir)
-        spawn.runv(["kind", "delete", "cluster"])
-        spawn.runv(["kind", "create", "cluster"])
-        spawn.runv(
-            [
-                "kubectl",
-                "label",
-                "node",
-                "kind-control-plane",
-                "materialize.cloud/disk=true",
-            ]
-        )
-        spawn.runv(
-            [
-                "kubectl",
-                "label",
-                "node",
-                "kind-control-plane",
-                "materialize.cloud/swap=true",
-            ]
-        )
-        spawn.runv(
-            [
-                "kubectl",
-                "label",
-                "node",
-                "kind-control-plane",
-                "workload=materialize-instance",
-            ]
-        )
+        recreate_kind_cluster()
 
         shutil.copyfile(
             "misc/helm-charts/operator/values.yaml",
@@ -1718,28 +1829,6 @@ def workflow_documentation_defaults(
         )
         spawn.runv(["kubectl", "apply", "-f", os.path.join(dir, "sample-minio.yaml")])
         spawn.runv(["kubectl", "get", "all", "-n", "materialize"])
-        spawn.runv(
-            [
-                "helm",
-                "repo",
-                "add",
-                "metrics-server",
-                "https://kubernetes-sigs.github.io/metrics-server/",
-            ]
-        )
-        spawn.runv(["helm", "repo", "update", "metrics-server"])
-        spawn.runv(
-            [
-                "helm",
-                "install",
-                "metrics-server",
-                "metrics-server/metrics-server",
-                "--namespace",
-                "kube-system",
-                "--set",
-                "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
-            ]
-        )
 
         wait_for_crd_established()
 
@@ -2386,142 +2475,10 @@ def setup(c: Composition, args) -> dict[str, Any]:
     c.up(Service("testdrive", idle=True), Service("mz-debug", idle=True))
     c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
 
-    cluster = "kind"
+    cluster = KIND_CLUSTER_NAME
     clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
     if cluster not in clusters or args.recreate_cluster:
-        kind_version = Version.parse(
-            spawn.capture(["kind", "version"]).split(" ")[1][1:]
-        )
-        assert kind_version >= Version.parse(
-            "0.29.0"
-        ), f"kind >= v0.29.0 required, while you are on {kind_version}"
-
-        spawn.runv(["kind", "delete", "cluster", "--name", cluster])
-
-        try:
-            spawn.runv(["docker", "network", "create", "kind"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "stop", "proxy-dockerhub"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "rm", "proxy-dockerhub"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "stop", "proxy-ghcr"])
-        except:
-            pass
-        try:
-            spawn.runv(["docker", "rm", "proxy-ghcr"])
-        except:
-            pass
-
-        dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
-        dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
-        spawn.runv(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                "proxy-dockerhub",
-                "--restart=always",
-                "--net=kind",
-                "-v",
-                f"{MZ_ROOT}/misc/kind/cache/dockerhub:/var/lib/registry",
-                "-e",
-                "REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io",
-                *(
-                    [
-                        "-e",
-                        f"REGISTRY_PROXY_USERNAME={dockerhub_username}",
-                        "-e",
-                        f"REGISTRY_PROXY_PASSWORD={dockerhub_token}",
-                    ]
-                    if dockerhub_username and dockerhub_token
-                    else []
-                ),
-                "registry:2",
-            ]
-        )
-
-        ghcr_username = "materialize-bot"
-        ghcr_token = os.getenv("GITHUB_GHCR_TOKEN")
-        spawn.runv(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                "proxy-ghcr",
-                "--restart=always",
-                "--net=kind",
-                "-v",
-                f"{MZ_ROOT}/misc/kind/cache/ghcr:/var/lib/registry",
-                "-e",
-                "REGISTRY_PROXY_REMOTEURL=https://ghcr.io",
-                *(
-                    [
-                        "-e",
-                        f"REGISTRY_PROXY_USERNAME={ghcr_username}",
-                        "-e",
-                        f"REGISTRY_PROXY_PASSWORD={ghcr_token}",
-                    ]
-                    if ghcr_username and ghcr_token
-                    else []
-                ),
-                "registry:2",
-            ]
-        )
-
-        with (
-            open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml.tmpl") as in_file,
-            open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml", "w") as out_file,
-        ):
-            text = in_file.read()
-            out_file.write(
-                text.replace(
-                    "$DOCKER_CONFIG",
-                    os.getenv("DOCKER_CONFIG", f'{os.environ["HOME"]}/.docker'),
-                )
-            )
-
-        spawn.runv(
-            [
-                "kind",
-                "create",
-                "cluster",
-                "--name",
-                cluster,
-                "--config",
-                MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
-            ]
-        )
-        spawn.runv(
-            [
-                "helm",
-                "repo",
-                "add",
-                "metrics-server",
-                "https://kubernetes-sigs.github.io/metrics-server/",
-            ]
-        )
-        spawn.runv(["helm", "repo", "update", "metrics-server"])
-        spawn.runv(
-            [
-                "helm",
-                "install",
-                "metrics-server",
-                "metrics-server/metrics-server",
-                "--namespace",
-                "kube-system",
-                "--set",
-                "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
-            ]
-        )
+        recreate_kind_cluster()
 
         spawn.runv(["kubectl", "create", "namespace", "materialize"])
 

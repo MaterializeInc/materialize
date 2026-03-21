@@ -15,7 +15,7 @@ apiVersion: kind.x-k8s.io/v1alpha4
 containerdConfigPatches:
   - |-
     [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
-      endpoint = ["http://proxy-docker-hub:5000"]
+      endpoint = ["http://proxy-dockerhub:5000"]
   - |-
     [plugins."io.containerd.grpc.v1.cri".registry.mirrors."ghcr.io"]
       endpoint = ["http://proxy-ghcr:5000"]
