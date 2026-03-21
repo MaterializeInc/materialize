@@ -378,16 +378,16 @@ where
     }
 
     /// Updates the workload class for a cluster.
-    pub fn update_cluster_workload_class(
-        &mut self,
-        id: ClusterId,
-        workload_class: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
         self.compute
-            .update_instance_workload_class(id, workload_class)?;
-        Ok(())
+            .update_instance_workload_class(id, workload_class)
+            .expect("instance exists");
     }
 
     /// Drops the specified cluster.

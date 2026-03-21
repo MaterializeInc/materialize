@@ -267,7 +267,6 @@ impl Coordinator {
             )));
         }
 
-        let new_workload_class = new_config.workload_class.clone();
         match (&config.variant, &new_config.variant) {
             (Managed(_), Managed(new_config_managed)) => {
                 let alter_followup = self
@@ -349,9 +348,6 @@ impl Coordinator {
                 .await?;
             }
         }
-
-        self.controller
-            .update_cluster_workload_class(cluster_id, new_workload_class)?;
 
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
@@ -478,9 +474,6 @@ impl Coordinator {
             .expect("There must be an active connection")
             .pending_cluster_alters
             .remove(&cluster_id);
-
-        self.controller
-            .update_cluster_workload_class(cluster_id, workload_class)?;
 
         Ok(StageResult::Response(ExecuteResponse::AlteredObject(
             ObjectType::Cluster,
