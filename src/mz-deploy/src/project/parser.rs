@@ -50,16 +50,55 @@ where
     Ok(statements)
 }
 
+/// Parses SQL and returns [`LocatedStatement`]s with zero byte offsets.
+///
+/// Test-only helper for constructing [`super::raw::ObjectVariant`] values.
+#[cfg(test)]
+pub fn parse_statements_located<I, S>(raw: I) -> Result<Vec<LocatedStatement>, ParseError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    parse_statements(raw).map(|stmts| {
+        stmts
+            .into_iter()
+            .map(|ast| LocatedStatement::at_zero(ast))
+            .collect()
+    })
+}
+
+/// A parsed SQL statement paired with its byte offset within the source file.
+#[derive(Debug, Clone)]
+pub struct LocatedStatement {
+    /// The parsed AST node.
+    pub ast: Statement<Raw>,
+    /// Byte offset of the statement's start within the (resolved) SQL text.
+    pub byte_offset: usize,
+}
+
+impl LocatedStatement {
+    /// Wrap a bare statement with a zero byte offset.
+    ///
+    /// Useful in tests where the exact source position is irrelevant.
+    #[cfg(test)]
+    pub fn at_zero(ast: Statement<Raw>) -> Self {
+        Self {
+            ast,
+            byte_offset: 0,
+        }
+    }
+}
+
 /// Parse SQL statements and add file context to any errors.
 ///
 /// Resolves psql-style variables (`:foo`, `:'foo'`, `:"foo"`) before parsing.
-/// This function directly parses SQL and creates SqlParseFailed errors with full context
-/// including file path and SQL content for better error reporting.
+/// Returns each statement together with its byte offset within the resolved SQL
+/// so that downstream validation errors can point to the exact location.
 pub fn parse_statements_with_context(
     sql: &str,
     path: PathBuf,
     variables: &BTreeMap<String, String>,
-) -> Result<Vec<Statement<Raw>>, ParseError> {
+) -> Result<Vec<LocatedStatement>, ParseError> {
     let resolved = super::variables::resolve_variables(sql, variables);
 
     if !resolved.unresolved.is_empty() {
@@ -96,9 +135,33 @@ pub fn parse_statements_with_context(
             source: e,
         })?;
 
-    let mut parsed: Vec<Statement<Raw>> = parsed_results
+    // Compute byte offsets via pointer arithmetic on `StatementParseResult.sql`.
+    //
+    // `result.sql` is a `&'a str` subslice of the input we passed to
+    // `parse_statements_with_limit` — the parser produces it by indexing
+    // `self.sql[before..after].trim()` inside `Parser::parse_statement`.
+    // Rust's lifetime parameter on `StatementParseResult<'a>` enforces this
+    // at the type level: the returned slice cannot outlive the input.
+    //
+    // Because both pointers reference the same allocation, subtracting the
+    // base pointer from the slice pointer yields a valid byte offset.
+    //
+    // Note: offsets are relative to the *variable-resolved* SQL text (the
+    // `sql` local above), not the raw file contents. When the LSP converts
+    // these to line/column positions it must build the Rope from the same
+    // resolved text, or re-resolve variables before lookup.
+    #[allow(clippy::as_conversions)]
+    let sql_base = sql.as_ptr() as usize;
+    let mut parsed: Vec<LocatedStatement> = parsed_results
         .into_iter()
-        .map(|result| result.ast)
+        .map(|result| {
+            #[allow(clippy::as_conversions)]
+            let byte_offset = result.sql.as_ptr() as usize - sql_base;
+            LocatedStatement {
+                ast: result.ast,
+                byte_offset,
+            }
+        })
         .collect();
 
     statements.append(&mut parsed);

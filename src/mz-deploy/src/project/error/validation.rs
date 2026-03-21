@@ -20,6 +20,12 @@ pub struct ErrorContext {
     pub file: PathBuf,
     /// The SQL statement that caused the error, if available
     pub sql_statement: Option<String>,
+    /// Byte offset of the offending statement within the file, if available.
+    ///
+    /// Used by the LSP to position diagnostics at the correct line/column
+    /// instead of defaulting to `(0, 0)`. `None` for file-level errors
+    /// (e.g., missing CREATE statement) where no single statement is at fault.
+    pub byte_offset: Option<usize>,
 }
 
 /// A validation error with contextual information.
@@ -104,6 +110,7 @@ impl ValidationError {
             context: ErrorContext {
                 file,
                 sql_statement: None,
+                byte_offset: None,
             },
         }
     }
@@ -115,6 +122,7 @@ impl ValidationError {
             context: ErrorContext {
                 file,
                 sql_statement: Some(sql),
+                byte_offset: None,
             },
         }
     }

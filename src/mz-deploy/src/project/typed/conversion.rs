@@ -55,7 +55,7 @@ use std::path::PathBuf;
 fn classify_variant_object_type(
     name: &str,
     path: &std::path::Path,
-    statements: &[mz_sql_parser::ast::Statement<Raw>],
+    statements: &[&mz_sql_parser::ast::Statement<Raw>],
 ) -> Result<ObjectType, Vec<ValidationError>> {
     let mut errors = Vec::new();
     let mut object_type: Option<ObjectType> = None;
@@ -399,7 +399,8 @@ impl DatabaseObject {
         // Step 1: Classify all variants to determine their object types
         let mut variant_types: Vec<(ObjectType, &super::super::raw::ObjectVariant)> = Vec::new();
         for variant in &value.variants {
-            match classify_variant_object_type(&value.name, &variant.path, &variant.statements) {
+            let stmts: Vec<_> = variant.statements.iter().map(|ls| &ls.ast).collect();
+            match classify_variant_object_type(&value.name, &variant.path, &stmts) {
                 Ok(obj_type) => variant_types.push((obj_type, variant)),
                 Err(errs) => errors.extend(errs),
             }
@@ -489,12 +490,17 @@ impl DatabaseObject {
         };
 
         // Step 5: Fully validate the active variant
+        let stmts: Vec<_> = active_variant
+            .statements
+            .iter()
+            .map(|ls| ls.ast.clone())
+            .collect();
         validate_single_variant(
             &value.name,
             &value.database,
             &value.schema,
             &active_variant.path,
-            active_variant.statements.clone(),
+            stmts,
         )
         .map(Some)
     }

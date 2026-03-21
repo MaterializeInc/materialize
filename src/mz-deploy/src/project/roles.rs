@@ -72,7 +72,11 @@ pub fn load_roles(
                 path: path.clone(),
                 source: e,
             })?;
-            let statements = parse_statements_with_context(&sql, path.clone(), variables)?;
+            let statements: Vec<Statement<Raw>> =
+                parse_statements_with_context(&sql, path.clone(), variables)?
+                    .into_iter()
+                    .map(|ls| ls.ast)
+                    .collect();
 
             if let Err(mut errs) = classify_role_statements(expected_name, path, statements) {
                 errors.append(&mut errs);
@@ -94,7 +98,11 @@ pub fn load_roles(
             path: active_path.clone(),
             source: e,
         })?;
-        let statements = parse_statements_with_context(&sql, active_path.clone(), variables)?;
+        let statements: Vec<Statement<Raw>> =
+            parse_statements_with_context(&sql, active_path.clone(), variables)?
+                .into_iter()
+                .map(|ls| ls.ast)
+                .collect();
 
         match classify_role_statements(expected_name, &active_path, statements) {
             Ok(def) => definitions.push(def),

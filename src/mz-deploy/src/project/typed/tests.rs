@@ -1,14 +1,19 @@
 //! Tests for the typed representation module.
 
-use super::super::parser::parse_statements;
+use super::super::parser::{LocatedStatement, parse_statements};
 use super::super::raw;
 use super::types::{Database, DatabaseObject, Schema};
 use mz_sql_parser::ast::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
+/// Wrap bare statements as [`LocatedStatement`]s with zero byte offsets.
+fn locate(stmts: Vec<Statement<Raw>>) -> Vec<LocatedStatement> {
+    stmts.into_iter().map(LocatedStatement::at_zero).collect()
+}
+
 fn create_raw_object(name: &str, path: PathBuf, sql: &str) -> raw::DatabaseObject {
-    let statements = parse_statements(vec![sql]).unwrap();
+    let statements = locate(parse_statements(vec![sql]).unwrap());
     let schema = path
         .parent()
         .and_then(|p| p.file_name())
@@ -1464,7 +1469,7 @@ fn test_schema_with_tables_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/users.sql"),
             profile: None,
-            statements: table_stmts,
+            statements: locate(table_stmts),
         }],
     };
 
@@ -1475,7 +1480,7 @@ fn test_schema_with_tables_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/active_users.sql"),
             profile: None,
-            statements: view_stmts,
+            statements: locate(view_stmts),
         }],
     };
 
@@ -1515,7 +1520,7 @@ fn test_schema_with_tables_and_materialized_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/orders.sql"),
             profile: None,
-            statements: table_stmts,
+            statements: locate(table_stmts),
         }],
     };
 
@@ -1526,7 +1531,7 @@ fn test_schema_with_tables_and_materialized_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/order_summary.sql"),
             profile: None,
-            statements: mv_stmts,
+            statements: locate(mv_stmts),
         }],
     };
 
@@ -1558,7 +1563,7 @@ fn test_schema_with_sinks_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/user_sink.sql"),
             profile: None,
-            statements: sink_stmts,
+            statements: locate(sink_stmts),
         }],
     };
 
@@ -1569,7 +1574,7 @@ fn test_schema_with_sinks_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/user_view.sql"),
             profile: None,
-            statements: view_stmts,
+            statements: locate(view_stmts),
         }],
     };
 
@@ -1602,7 +1607,7 @@ fn test_schema_with_sinks_and_materialized_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/order_sink.sql"),
             profile: None,
-            statements: sink_stmts,
+            statements: locate(sink_stmts),
         }],
     };
 
@@ -1613,7 +1618,7 @@ fn test_schema_with_sinks_and_materialized_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/order_mv.sql"),
             profile: None,
-            statements: mv_stmts,
+            statements: locate(mv_stmts),
         }],
     };
 
@@ -1647,7 +1652,7 @@ fn test_schema_with_tables_sinks_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/users.sql"),
             profile: None,
-            statements: table_stmts,
+            statements: locate(table_stmts),
         }],
     };
 
@@ -1658,7 +1663,7 @@ fn test_schema_with_tables_sinks_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/user_sink.sql"),
             profile: None,
-            statements: sink_stmts,
+            statements: locate(sink_stmts),
         }],
     };
 
@@ -1669,7 +1674,7 @@ fn test_schema_with_tables_sinks_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/user_view.sql"),
             profile: None,
-            statements: view_stmts,
+            statements: locate(view_stmts),
         }],
     };
 
@@ -1701,7 +1706,7 @@ fn test_schema_with_only_tables_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/tables/users.sql"),
             profile: None,
-            statements: table1_stmts,
+            statements: locate(table1_stmts),
         }],
     };
 
@@ -1712,7 +1717,7 @@ fn test_schema_with_only_tables_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/tables/orders.sql"),
             profile: None,
-            statements: table2_stmts,
+            statements: locate(table2_stmts),
         }],
     };
 
@@ -1744,7 +1749,7 @@ fn test_schema_with_tables_and_sinks_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/storage/users.sql"),
             profile: None,
-            statements: table_stmts,
+            statements: locate(table_stmts),
         }],
     };
 
@@ -1755,7 +1760,7 @@ fn test_schema_with_tables_and_sinks_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/storage/user_sink.sql"),
             profile: None,
-            statements: sink_stmts,
+            statements: locate(sink_stmts),
         }],
     };
 
@@ -1787,7 +1792,7 @@ fn test_schema_with_only_views_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/views/user_view.sql"),
             profile: None,
-            statements: view1_stmts,
+            statements: locate(view1_stmts),
         }],
     };
 
@@ -1798,7 +1803,7 @@ fn test_schema_with_only_views_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/views/order_view.sql"),
             profile: None,
-            statements: view2_stmts,
+            statements: locate(view2_stmts),
         }],
     };
 
@@ -1830,7 +1835,7 @@ fn test_schema_with_views_and_materialized_views_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/computation/user_view.sql"),
             profile: None,
-            statements: view_stmts,
+            statements: locate(view_stmts),
         }],
     };
 
@@ -1841,7 +1846,7 @@ fn test_schema_with_views_and_materialized_views_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/computation/user_summary.sql"),
             profile: None,
-            statements: mv_stmts,
+            statements: locate(mv_stmts),
         }],
     };
 
@@ -1873,7 +1878,7 @@ fn test_schema_with_table_from_source_and_view_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/users.sql"),
             profile: None,
-            statements: table_stmts,
+            statements: locate(table_stmts),
         }],
     };
 
@@ -1884,7 +1889,7 @@ fn test_schema_with_table_from_source_and_view_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/user_view.sql"),
             profile: None,
-            statements: view_stmts,
+            statements: locate(view_stmts),
         }],
     };
 
@@ -1914,7 +1919,7 @@ fn test_sink_missing_cluster_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/sinks/user_sink.sql"),
             profile: None,
-            statements: sink_stmts,
+            statements: locate(sink_stmts),
         }],
     };
 
@@ -1960,7 +1965,7 @@ fn test_sink_with_cluster_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/sinks/user_sink.sql"),
             profile: None,
-            statements: sink_stmts,
+            statements: locate(sink_stmts),
         }],
     };
 
@@ -1989,7 +1994,7 @@ fn test_materialized_view_missing_cluster_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/views/user_summary.sql"),
             profile: None,
-            statements: mv_stmts,
+            statements: locate(mv_stmts),
         }],
     };
 
@@ -2039,7 +2044,7 @@ fn test_index_missing_cluster_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/tables/users.sql"),
             profile: None,
-            statements: stmts,
+            statements: locate(stmts),
         }],
     };
 
@@ -2310,7 +2315,7 @@ fn test_source_missing_cluster_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
             profile: None,
-            statements: source_stmts,
+            statements: locate(source_stmts),
         }],
     };
 
@@ -2360,7 +2365,7 @@ fn test_source_with_cluster_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
             profile: None,
-            statements: source_stmts,
+            statements: locate(source_stmts),
         }],
     };
 
@@ -2397,7 +2402,7 @@ fn test_schema_with_source_and_view_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/kafka_source.sql"),
             profile: None,
-            statements: source_stmts,
+            statements: locate(source_stmts),
         }],
     };
 
@@ -2408,7 +2413,7 @@ fn test_schema_with_source_and_view_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/event_view.sql"),
             profile: None,
-            statements: view_stmts,
+            statements: locate(view_stmts),
         }],
     };
 
@@ -2445,7 +2450,7 @@ fn test_schema_with_source_and_table_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/ingestion/kafka_source.sql"),
             profile: None,
-            statements: source_stmts,
+            statements: locate(source_stmts),
         }],
     };
 
@@ -2456,7 +2461,7 @@ fn test_schema_with_source_and_table_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/ingestion/events.sql"),
             profile: None,
-            statements: table_stmts,
+            statements: locate(table_stmts),
         }],
     };
 
@@ -2596,7 +2601,7 @@ fn test_schema_with_secrets_and_tables_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/storage/my_secret.sql"),
             profile: None,
-            statements: secret_stmts,
+            statements: locate(secret_stmts),
         }],
     };
 
@@ -2607,7 +2612,7 @@ fn test_schema_with_secrets_and_tables_succeeds() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/storage/users.sql"),
             profile: None,
-            statements: table_stmts,
+            statements: locate(table_stmts),
         }],
     };
 
@@ -2639,7 +2644,7 @@ fn test_schema_with_secrets_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/my_secret.sql"),
             profile: None,
-            statements: secret_stmts,
+            statements: locate(secret_stmts),
         }],
     };
 
@@ -2650,7 +2655,7 @@ fn test_schema_with_secrets_and_views_fails() {
         variants: vec![raw::ObjectVariant {
             path: PathBuf::from("materialize/mixed/user_view.sql"),
             profile: None,
-            statements: view_stmts,
+            statements: locate(view_stmts),
         }],
     };
 
@@ -2682,12 +2687,12 @@ fn test_profile_type_mismatch_secret_vs_view() {
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret.sql"),
                 profile: None,
-                statements: secret_stmts,
+                statements: locate(secret_stmts),
             },
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret__staging.sql"),
                 profile: Some("staging".to_string()),
-                statements: view_stmts,
+                statements: locate(view_stmts),
             },
         ],
     };
@@ -2718,12 +2723,12 @@ fn test_profile_override_not_allowed_for_view() {
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_view.sql"),
                 profile: None,
-                statements: view_stmts,
+                statements: locate(view_stmts),
             },
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_view__staging.sql"),
                 profile: Some("staging".to_string()),
-                statements: view_stmts2,
+                statements: locate(view_stmts2),
             },
         ],
     };
@@ -2757,12 +2762,12 @@ fn test_profile_override_not_allowed_for_materialized_view() {
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_mv.sql"),
                 profile: None,
-                statements: mv_stmts,
+                statements: locate(mv_stmts),
             },
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_mv__staging.sql"),
                 profile: Some("staging".to_string()),
-                statements: mv_stmts2,
+                statements: locate(mv_stmts2),
             },
         ],
     };
@@ -2795,12 +2800,12 @@ fn test_valid_cross_profile_consistency_secret() {
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret.sql"),
                 profile: None,
-                statements: secret_stmts1,
+                statements: locate(secret_stmts1),
             },
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret__staging.sql"),
                 profile: Some("staging".to_string()),
-                statements: secret_stmts2,
+                statements: locate(secret_stmts2),
             },
         ],
     };
@@ -2828,12 +2833,12 @@ fn test_active_variant_resolution_picks_profile() {
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret.sql"),
                 profile: None,
-                statements: secret_stmts1,
+                statements: locate(secret_stmts1),
             },
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret__staging.sql"),
                 profile: Some("staging".to_string()),
-                statements: secret_stmts2,
+                statements: locate(secret_stmts2),
             },
         ],
     };
@@ -2870,12 +2875,12 @@ fn test_active_variant_resolution_falls_back_to_default() {
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret.sql"),
                 profile: None,
-                statements: secret_stmts1,
+                statements: locate(secret_stmts1),
             },
             raw::ObjectVariant {
                 path: PathBuf::from("materialize/public/my_secret__staging.sql"),
                 profile: Some("staging".to_string()),
-                statements: secret_stmts2,
+                statements: locate(secret_stmts2),
             },
         ],
     };

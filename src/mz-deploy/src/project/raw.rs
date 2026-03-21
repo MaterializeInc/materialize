@@ -53,7 +53,7 @@
 //! forward to the HIR, as validation focuses on individual object files.
 
 use super::error::{LoadError, ProjectError};
-use super::parser::parse_statements_with_context;
+use super::parser::{LocatedStatement, parse_statements_with_context};
 use super::profile_files::collect_all_sql_files;
 use mz_sql_parser::ast::{Raw, Statement};
 use rayon::prelude::*;
@@ -68,8 +68,8 @@ pub struct ObjectVariant {
     pub path: PathBuf,
     /// The profile name, or `None` for the default variant
     pub profile: Option<String>,
-    /// The parsed SQL statements from the file
-    pub statements: Vec<Statement<Raw>>,
+    /// The parsed SQL statements from the file, each with its byte offset.
+    pub statements: Vec<LocatedStatement>,
 }
 
 /// A database object that may have multiple profile variants.
@@ -337,11 +337,12 @@ pub fn load_project<P: AsRef<Path>>(
             if profile_suffix.is_some() {
                 sql_content = sql_content.replace(&original_db_name, &db_name);
             }
-            Some(parse_statements_with_context(
-                &sql_content,
-                db_mod_path.clone(),
-                variables,
-            )?)
+            Some(
+                parse_statements_with_context(&sql_content, db_mod_path.clone(), variables)?
+                    .into_iter()
+                    .map(|ls| ls.ast)
+                    .collect(),
+            )
         } else {
             None
         };
@@ -380,11 +381,16 @@ pub fn load_project<P: AsRef<Path>>(
                 if profile_suffix.is_some() {
                     sql_content = sql_content.replace(&original_db_name, &db_name);
                 }
-                Some(parse_statements_with_context(
-                    &sql_content,
-                    schema_mod_path.clone(),
-                    variables,
-                )?)
+                Some(
+                    parse_statements_with_context(
+                        &sql_content,
+                        schema_mod_path.clone(),
+                        variables,
+                    )?
+                    .into_iter()
+                    .map(|ls| ls.ast)
+                    .collect(),
+                )
             } else {
                 None
             };
@@ -453,12 +459,12 @@ pub fn load_project<P: AsRef<Path>>(
                         source,
                     }
                 })?;
-                let statements =
+                let located_statements =
                     parse_statements_with_context(&sql_content, vt.file_path.clone(), variables)?;
                 variants.push(ObjectVariant {
                     path: vt.file_path,
                     profile: vt.profile,
-                    statements,
+                    statements: located_statements,
                 });
             }
             Ok(ParsedObject {

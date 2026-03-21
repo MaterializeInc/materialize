@@ -143,6 +143,7 @@ mod tests {
             context: ErrorContext {
                 file: PathBuf::from(file),
                 sql_statement: None,
+                byte_offset: None,
             },
         }
     }
