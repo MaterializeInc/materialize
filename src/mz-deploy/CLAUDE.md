@@ -76,7 +76,7 @@ Manages `types.lock` (column schemas for external dependencies) and `types.cache
 
 ## Change Strategy
 
-When a change involves both restructuring code and adding new behavior (like parallelism), split into independent steps: first refactor the structure while keeping behavior identical, validate that step, then layer on the new behavior.
+When a change involves both restructuring code and adding new behavior (like parallelism), split into independent steps: first refactor the structure while keeping behavior identical, validate that step, then layer on the new behavior. After completing each step, pause and confirm with the user that the changes look correct before moving on to the next step.
 
 ## Key Conventions
 

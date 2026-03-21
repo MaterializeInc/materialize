@@ -13,7 +13,8 @@
 //!   On build failure the last good model is kept so go-to-definition degrades
 //!   gracefully rather than disappearing entirely.
 //! - **`types_cache`** — Rebuilt on every `didSave` from `types.cache.bin`
-//!   merged with `types.lock`. On load failure the last good cache is kept.
+//!   merged with `types.lock`. Used for hover column schemas and column
+//!   completions. On load failure the last good cache is kept.
 //! - **`project_diagnostic_uris`** — Tracks which file URIs currently have
 //!   project-level validation diagnostics. On each rebuild, old diagnostics
 //!   are cleared (empty `[]` published) for URIs no longer in the error set,
@@ -383,6 +384,13 @@ impl LanguageServer for Backend {
         if let Some(project) = self.project.read().unwrap().as_ref() {
             let cache_guard = self.types_cache.read().unwrap();
             items.extend(completion::object_completions(
+                project,
+                cache_guard.as_ref(),
+                &file_uri,
+                &root,
+                &prefix,
+            ));
+            items.extend(completion::column_completions(
                 project,
                 cache_guard.as_ref(),
                 &file_uri,

@@ -326,15 +326,14 @@ impl DockerRuntime {
 
     /// Create temporary tables from types.lock for type checking.
     ///
-    /// All CREATE TEMPORARY TABLE statements are batched into a single
-    /// `batch_execute` call to minimize round-trip overhead.
+    /// Each CREATE TEMPORARY TABLE statement is executed individually because
+    /// Materialize does not support CREATE TEMPORARY TABLE inside a transaction
+    /// block, and `batch_execute` wraps statements in an implicit transaction.
     async fn create_tables_from_types_lock(
         &self,
         client: &Client,
         types: &Types,
     ) -> Result<(), TypeCheckError> {
-        let mut statements = Vec::with_capacity(types.tables.len());
-
         for (fqn, columns) in &types.tables {
             let mut col_defs = Vec::new();
             for (col_name, col_type) in columns {
@@ -342,22 +341,21 @@ impl DockerRuntime {
                 col_defs.push(format!("{} {}{}", col_name, col_type.r#type, nullable));
             }
 
-            statements.push(format!(
+            let sql = format!(
                 "CREATE TEMPORARY TABLE \"{}\" ({})",
                 fqn,
                 col_defs.join(", ")
-            ));
+            );
 
             verbose!("Creating temporary table: {}", fqn);
-        }
 
-        let batch_sql = statements.join(";\n");
-        client.batch_execute(&batch_sql).await.map_err(|e| {
-            TypeCheckError::DatabaseSetupError(format!(
-                "failed to create temporary tables from types.lock: {}",
-                e
-            ))
-        })?;
+            client.execute(sql.as_str(), &[]).await.map_err(|e| {
+                TypeCheckError::DatabaseSetupError(format!(
+                    "failed to create temporary tables from types.lock: {}",
+                    e
+                ))
+            })?;
+        }
 
         Ok(())
     }
