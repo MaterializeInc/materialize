@@ -269,33 +269,21 @@ pub(crate) fn render<'scope>(
                 let id = config.id;
                 let worker_id = config.worker_id;
 
-                // Phase A: Nothing to snapshot?
-                if tables_to_snapshot.is_empty() {
-                    // A worker *must* emit a count even if not responsible for snapshotting a table
-                    // as statistic summarization will return null if any worker hasn't set a value.
-                    if !all_outputs.is_empty() {
-                        for statistics in config.statistics.values() {
-                            statistics.set_snapshot_records_known(0);
-                            statistics.set_snapshot_records_staged(0);
-                        }
-                    }
-                    trace!(%id, "timely-{worker_id} initializing table reader \
-                                 with no tables to snapshot, exiting");
-                    return Ok(());
-                }
-
+                // Initialize statistics for all exports (required even
+                // if this worker won't snapshot anything).
                 if !all_outputs.is_empty() {
-                    // A worker *must* emit a count even if not responsible for snapshotting a table
-                    // as statistic summarization will return null if any worker hasn't set a value.
-                    // This will also reset snapshot stats for any exports not snapshotting.
                     for statistics in config.statistics.values() {
                         statistics.set_snapshot_records_known(0);
                         statistics.set_snapshot_records_staged(0);
                     }
                 }
 
-                trace!(%id, "timely-{worker_id} initializing table reader \
-                             with {} tables to snapshot",
+                if tables_to_snapshot.is_empty() {
+                    trace!(%id, "timely-{worker_id} no tables to snapshot, exiting");
+                    return Ok(());
+                }
+
+                trace!(%id, "timely-{worker_id} snapshotting {} tables",
                        tables_to_snapshot.len());
 
                 let connection_config = connection
@@ -366,23 +354,6 @@ pub(crate) fn render<'scope>(
                     // start of the snapshot
                     let snapshot_gtid_set =
                         query_sys_var(&mut lock_conn, "global.gtid_executed").await?;
-
-                    // Validate GTID
-                    match gtid_set_frontier(&snapshot_gtid_set) {
-                        Ok(_) => {}
-                        Err(err) => {
-                            let err = DefiniteError::UnsupportedGtidState(err.to_string());
-                            return Ok(return_definite_error(
-                                err,
-                                &all_outputs,
-                                &raw_handle,
-                                data_cap_set,
-                                &definite_error_handle,
-                                definite_error_cap_set,
-                            )
-                            .await);
-                        }
-                    };
 
                     trace!(%id, "timely-{worker_id} acquired table locks");
 
@@ -471,24 +442,27 @@ pub(crate) fn render<'scope>(
                 trace!(%id, "timely-{worker_id} received snapshot info at: {}",
                        snapshot_gtid_frontier.pretty());
 
-                // Phase D: Determine if this worker has any data to read.
-                // Non-leader workers that have nothing to read skip
-                // connecting entirely — critical for the many-sources
-                // case (e.g. limits test with 300 sources) to avoid
-                // exhausting MySQL's connection pool.
-                let has_work = tables_to_snapshot.iter().any(|(table, _)| {
-                    match snapshot_info.pk_bounds.get(table) {
-                        Some(Some(bounds)) => {
-                            worker_pk_range(bounds, config.worker_id, config.worker_count).is_some()
-                        }
-                        _ => config.responsible_for(table),
-                    }
-                });
+                // Precompute each table's read plan for this worker.
+                // Tables with PK bounds get a range; others use
+                // single-worker fallback via responsible_for.
+                let table_ranges: BTreeMap<_, _> = tables_to_snapshot
+                    .keys()
+                    .filter_map(|table| {
+                        let range = match snapshot_info.pk_bounds.get(table) {
+                            Some(Some(bounds)) => {
+                                worker_pk_range(bounds, config.worker_id, config.worker_count)
+                            }
+                            _ => None,
+                        };
+                        let should_read = range.is_some() || config.responsible_for(table);
+                        should_read.then(|| (table.clone(), range))
+                    })
+                    .collect();
+                let has_work = !table_ranges.is_empty();
 
-                // Only connect if this worker has data to read.
-                // Skipping the connection is critical for the many-
-                // sources case (limits test) to avoid exhausting
-                // MySQL's connection pool.
+                // Non-leader workers that have nothing to read skip
+                // connecting — avoids exhausting MySQL's connection
+                // pool in many-sources scenarios (limits test).
                 let mut conn = if is_snapshot_leader || has_work {
                     let mut c = connection_config
                         .connect(
@@ -551,8 +525,7 @@ pub(crate) fn render<'scope>(
                 *snapshot_cap_set = CapabilitySet::new();
                 if is_snapshot_leader {
                     while snapshot_input.next().await.is_some() {}
-                    if let Some(lc) = lock_conn.take() {
-                        let mut lc = lc;
+                    if let Some(mut lc) = lock_conn.take() {
                         lc.query_drop("UNLOCK TABLES").await?;
                         lc.disconnect().await?;
                     }
@@ -629,30 +602,13 @@ pub(crate) fn render<'scope>(
 
                 let mut snapshot_staged_total = 0;
                 for (table, outputs) in &tables_to_snapshot {
-                    // Determine this worker's role for this table
-                    let pk_range = match snapshot_info.pk_bounds.get(table) {
-                        Some(Some(bounds)) => {
-                            // Table has integer PK bounds: compute this worker's range
-                            match worker_pk_range(bounds, config.worker_id, config.worker_count) {
-                                Some(range) => Some(range),
-                                None => {
-                                    // This worker has no range for this table, skip
-                                    continue;
-                                }
-                            }
-                        }
-                        _ => {
-                            // No PK: only the responsible worker reads the full table
-                            if config.responsible_for(table) {
-                                None
-                            } else {
-                                continue;
-                            }
-                        }
+                    let pk_range = match table_ranges.get(table) {
+                        Some(range) => range.as_ref(),
+                        None => continue, // This worker has no work for this table
                     };
 
                     let mut snapshot_staged = 0;
-                    let query = build_snapshot_query(outputs, pk_range.as_ref());
+                    let query = build_snapshot_query(outputs, pk_range);
                     trace!(%id, "timely-{worker_id} reading snapshot query='{}'", query);
                     let mut results = tx.exec_stream(query, ()).await?;
                     while let Some(row) = results.try_next().await? {
@@ -711,14 +667,14 @@ pub(crate) fn render<'scope>(
                 // important that this happens after the snapshot has finished because this is what
                 // unblocks the replication operator and we want this to happen serially.
                 //
-                // Since all workers now snapshot all tables (each with different PK ranges), we only
-                // emit rewind requests from the worker responsible for each output to avoid duplicates.
+                // Only the responsible worker emits rewind requests
+                // for each table. This worker is guaranteed to have
+                // a transaction (responsible_for → has_work = true).
                 for (table, outputs) in &tables_to_snapshot {
+                    if !config.responsible_for(table) {
+                        continue;
+                    }
                     for output in outputs {
-                        // Only emit rewind request from one worker per output
-                        if !config.responsible_for((&*table, output.output_index)) {
-                            continue;
-                        }
                         trace!(%id, "timely-{worker_id} producing rewind request for {table}\
                                      output {}", output.output_index);
                         let req = RewindRequest {
