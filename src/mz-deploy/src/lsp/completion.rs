@@ -62,6 +62,22 @@
 //! `ObjectId` must be in the current file's dependencies. Looks up columns and
 //! filters by `col_filter`. Label: bare column name.
 //!
+//! ### Alias Resolution (Mode B enhancement)
+//!
+//! When Mode B encounters a 1-part `object_text` (e.g., `o` from prefix
+//! `o.col`), it checks an **alias map** before falling back to the default
+//! ObjectId construction:
+//!
+//! 1. Check alias map for `object_text` (case-insensitive)
+//! 2. If found, use the mapped `ObjectId`
+//! 3. Otherwise, fall back to `ObjectId::new(default_db, default_schema, object_text)`
+//!
+//! The alias map is built per-request by walking the SQL AST of the current
+//! file's statement. Only `CreateView` and `CreateMaterializedView` produce
+//! aliases. Sources:
+//! - **Explicit alias:** `FROM orders o` → `"o" → ObjectId`
+//! - **Bare table name:** `FROM mydb.public.orders` → `"orders" → ObjectId`
+//!
 //! ### Examples
 //!
 //! | User types | File's object | Dependencies | Result |
@@ -71,12 +87,16 @@
 //! | `SELECT public.foo.` | `v` | `mydb.public.foo(id)` | column `id` offered |
 //! | `SELECT other.` | `v` | `foo(id)` | NO columns (`other` is not a dep) |
 //! | `SELECT baz.x` | `v` | `foo(id)` | NO columns (`baz` not a dep) |
+//! | `FROM orders o` then `o.` | `v` | `orders(id)` | column `id` offered |
+//! | `FROM t1 a JOIN t2 b` then `a.` | `v` | `t1(x), t2(y)` | column `x` offered |
 
+use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
 use crate::types::{ColumnType, ObjectKind, Types};
 use mz_sql_lexer::keywords::KEYWORDS;
-use std::collections::BTreeSet;
+use mz_sql_parser::ast::{Raw, Select, SetExpr, TableFactor, TableWithJoins};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, Position, Url};
 
@@ -299,18 +319,21 @@ pub fn column_completions(
 
     let file_object_id = ObjectId::new(default_db.clone(), default_schema.clone(), object_name);
 
-    // Find the object in the project to get its dependencies.
-    let dependencies = match project.find_object(&file_object_id) {
-        Some(obj) => &obj.dependencies,
+    // Find the object in the project to get its dependencies and alias map.
+    let obj = match project.find_object(&file_object_id) {
+        Some(obj) => obj,
         None => return Vec::new(),
     };
+
+    let alias_map = extract_alias_map(&obj.typed_object.stmt, &default_db, &default_schema);
 
     resolve_dependency_columns(
         prefix,
         &default_db,
         &default_schema,
-        dependencies,
+        &obj.dependencies,
         types_cache,
+        &alias_map,
     )
     .into_iter()
     .map(|(col_name, col_type)| CompletionItem {
@@ -323,18 +346,147 @@ pub fn column_completions(
     .collect()
 }
 
+/// Build a map from alias/bare-table-name to [`ObjectId`] by walking the SQL AST.
+///
+/// Only `CreateView` and `CreateMaterializedView` statements contain queries
+/// with FROM clauses that can introduce table aliases. All other statement
+/// types produce an empty map.
+///
+/// For each `TableFactor::Table { name, alias }`:
+/// - The bare table name (last identifier of `name`) always maps to the resolved `ObjectId`.
+/// - If an explicit alias is present, the alias also maps to the same `ObjectId`.
+///
+/// All keys are lowercased for case-insensitive lookup.
+fn extract_alias_map(
+    stmt: &Statement,
+    default_db: &str,
+    default_schema: &str,
+) -> BTreeMap<String, ObjectId> {
+    let mut map = BTreeMap::new();
+    match stmt {
+        Statement::CreateView(s) => {
+            extract_aliases_from_query(&s.definition.query, default_db, default_schema, &mut map);
+        }
+        Statement::CreateMaterializedView(s) => {
+            extract_aliases_from_query(&s.query, default_db, default_schema, &mut map);
+        }
+        _ => {}
+    }
+    map
+}
+
+/// Walk a query's body ([`SetExpr`]) to extract table aliases.
+fn extract_aliases_from_query(
+    query: &mz_sql_parser::ast::Query<Raw>,
+    default_db: &str,
+    default_schema: &str,
+    map: &mut BTreeMap<String, ObjectId>,
+) {
+    extract_aliases_from_set_expr(&query.body, default_db, default_schema, map);
+}
+
+/// Recurse through set expressions (SELECT, UNION, sub-queries).
+fn extract_aliases_from_set_expr(
+    set_expr: &SetExpr<Raw>,
+    default_db: &str,
+    default_schema: &str,
+    map: &mut BTreeMap<String, ObjectId>,
+) {
+    match set_expr {
+        SetExpr::Select(select) => {
+            extract_aliases_from_select(select, default_db, default_schema, map);
+        }
+        SetExpr::Query(query) => {
+            extract_aliases_from_query(query, default_db, default_schema, map);
+        }
+        SetExpr::SetOperation { left, right, .. } => {
+            extract_aliases_from_set_expr(left, default_db, default_schema, map);
+            extract_aliases_from_set_expr(right, default_db, default_schema, map);
+        }
+        SetExpr::Values(_) | SetExpr::Show(_) | SetExpr::Table(_) => {}
+    }
+}
+
+/// Extract aliases from a SELECT's FROM clause (relations and joins).
+fn extract_aliases_from_select(
+    select: &Select<Raw>,
+    default_db: &str,
+    default_schema: &str,
+    map: &mut BTreeMap<String, ObjectId>,
+) {
+    for table_with_joins in &select.from {
+        extract_aliases_from_table_with_joins(table_with_joins, default_db, default_schema, map);
+    }
+}
+
+/// Extract aliases from a [`TableWithJoins`] (the relation plus its joins).
+fn extract_aliases_from_table_with_joins(
+    twj: &TableWithJoins<Raw>,
+    default_db: &str,
+    default_schema: &str,
+    map: &mut BTreeMap<String, ObjectId>,
+) {
+    extract_aliases_from_table_factor(&twj.relation, default_db, default_schema, map);
+    for join in &twj.joins {
+        extract_aliases_from_table_factor(&join.relation, default_db, default_schema, map);
+    }
+}
+
+/// Extract aliases from a single [`TableFactor`].
+///
+/// For `Table { name, alias }`: inserts the bare table name (last ident) and,
+/// if present, the explicit alias. Skips subqueries (`Derived`). Recurses
+/// into `NestedJoin`.
+fn extract_aliases_from_table_factor(
+    tf: &TableFactor<Raw>,
+    default_db: &str,
+    default_schema: &str,
+    map: &mut BTreeMap<String, ObjectId>,
+) {
+    match tf {
+        TableFactor::Table { name, alias } => {
+            let obj_id = ObjectId::from_raw_item_name(name, default_db, default_schema);
+            // Bare table name: last identifier of the name.
+            let bare_name = name
+                .name()
+                .0
+                .last()
+                .map(|ident| ident.to_string().to_lowercase());
+            if let Some(bare) = bare_name {
+                map.insert(bare, obj_id.clone());
+            }
+            // Explicit alias.
+            if let Some(alias) = alias {
+                map.insert(alias.name.to_string().to_lowercase(), obj_id);
+            }
+        }
+        TableFactor::NestedJoin { join, .. } => {
+            extract_aliases_from_table_with_joins(join, default_db, default_schema, map);
+        }
+        TableFactor::Derived { .. }
+        | TableFactor::Function { .. }
+        | TableFactor::RowsFrom { .. } => {}
+    }
+}
+
 /// Resolve columns from dependency objects that match the current prefix.
 ///
 /// Returns `(column_name, column_type)` pairs. For `dots == 0`, collects
 /// columns from all dependencies filtered by prefix text. For `dots >= 1`
 /// (max 3), resolves the object from the prefix and returns its columns
 /// if it is a dependency.
+///
+/// In Mode B (qualified), when the object prefix is a single part (e.g., `o`
+/// from `o.col`), the `alias_map` is consulted first. If the part matches an
+/// alias or bare table name, the mapped [`ObjectId`] is used. Otherwise, the
+/// default database/schema construction is used as a fallback.
 fn resolve_dependency_columns<'a>(
     prefix: &PrefixContext<'_>,
     default_db: &str,
     default_schema: &str,
     dependencies: &BTreeSet<ObjectId>,
     types_cache: &'a Types,
+    alias_map: &BTreeMap<String, ObjectId>,
 ) -> Vec<(&'a str, &'a ColumnType)> {
     if prefix.dots == 0 {
         // Mode A: collect columns from all dependencies.
@@ -361,11 +513,16 @@ fn resolve_dependency_columns<'a>(
 
         let parts: Vec<&str> = object_text.split('.').collect();
         let object_id = match parts.len() {
-            1 => ObjectId::new(
-                default_db.to_string(),
-                default_schema.to_string(),
-                parts[0].to_string(),
-            ),
+            1 => alias_map
+                .get(&parts[0].to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| {
+                    ObjectId::new(
+                        default_db.to_string(),
+                        default_schema.to_string(),
+                        parts[0].to_string(),
+                    )
+                }),
             2 => ObjectId::new(
                 default_db.to_string(),
                 parts[0].to_string(),
@@ -1286,5 +1443,272 @@ mod tests {
                 sort
             );
         }
+    }
+
+    // ── alias column_completions tests ────────────────────────────────
+
+    #[test]
+    fn column_alias_explicit() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("models/mydb/storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        std::fs::write(storage.join("orders.sql"), "CREATE TABLE orders (id INT);").unwrap();
+
+        let compute = root.path().join("models/mydb/compute");
+        std::fs::create_dir_all(&compute).unwrap();
+        std::fs::write(
+            compute.join("v.sql"),
+            "CREATE VIEW v AS SELECT o.id FROM mydb.storage.orders o;",
+        )
+        .unwrap();
+        write_types_lock(
+            root.path(),
+            &[(
+                "mydb",
+                "storage",
+                "orders",
+                "table",
+                &[("id", "integer", false), ("name", "text", false)],
+            )],
+        );
+        let project = build_project(&root);
+        let types_cache = crate::types::load_types_lock(root.path()).unwrap();
+
+        // Typing "o." should resolve via alias to orders.
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "o.",
+        };
+        let uri = Url::from_file_path(root.path().join("models/mydb/compute/v.sql")).unwrap();
+        let items = column_completions(&project, Some(&types_cache), &uri, root.path(), &prefix);
+
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"id"), "expected 'id', got: {:?}", labels);
+        assert!(
+            labels.contains(&"name"),
+            "expected 'name', got: {:?}",
+            labels
+        );
+    }
+
+    #[test]
+    fn column_alias_bare_table_name() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("models/mydb/storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        std::fs::write(storage.join("orders.sql"), "CREATE TABLE orders (id INT);").unwrap();
+
+        let compute = root.path().join("models/mydb/compute");
+        std::fs::create_dir_all(&compute).unwrap();
+        std::fs::write(
+            compute.join("v.sql"),
+            "CREATE VIEW v AS SELECT * FROM mydb.storage.orders;",
+        )
+        .unwrap();
+        write_types_lock(
+            root.path(),
+            &[(
+                "mydb",
+                "storage",
+                "orders",
+                "table",
+                &[("id", "integer", false)],
+            )],
+        );
+        let project = build_project(&root);
+        let types_cache = crate::types::load_types_lock(root.path()).unwrap();
+
+        // Typing "orders." should resolve via bare table name.
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "orders.",
+        };
+        let uri = Url::from_file_path(root.path().join("models/mydb/compute/v.sql")).unwrap();
+        let items = column_completions(&project, Some(&types_cache), &uri, root.path(), &prefix);
+
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"id"), "expected 'id', got: {:?}", labels);
+    }
+
+    #[test]
+    fn column_alias_non_dependency_empty() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("models/mydb/storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        std::fs::write(storage.join("orders.sql"), "CREATE TABLE orders (id INT);").unwrap();
+        std::fs::write(storage.join("other.sql"), "CREATE TABLE other (x INT);").unwrap();
+
+        let compute = root.path().join("models/mydb/compute");
+        std::fs::create_dir_all(&compute).unwrap();
+        // v depends on orders but NOT other. The alias "o" maps to orders.
+        std::fs::write(
+            compute.join("v.sql"),
+            "CREATE VIEW v AS SELECT o.id FROM mydb.storage.orders o;",
+        )
+        .unwrap();
+        write_types_lock(
+            root.path(),
+            &[
+                (
+                    "mydb",
+                    "storage",
+                    "orders",
+                    "table",
+                    &[("id", "integer", false)],
+                ),
+                (
+                    "mydb",
+                    "storage",
+                    "other",
+                    "table",
+                    &[("x", "integer", false)],
+                ),
+            ],
+        );
+        let project = build_project(&root);
+        let types_cache = crate::types::load_types_lock(root.path()).unwrap();
+
+        // "other" is not a dependency — alias resolves to it but dep check fails.
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "other.",
+        };
+        let uri = Url::from_file_path(root.path().join("models/mydb/compute/v.sql")).unwrap();
+        let items = column_completions(&project, Some(&types_cache), &uri, root.path(), &prefix);
+
+        assert!(
+            items.is_empty(),
+            "expected empty for non-dependency alias, got: {:?}",
+            items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn column_alias_multiple_joins() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("models/mydb/storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        std::fs::write(storage.join("t1.sql"), "CREATE TABLE t1 (a INT);").unwrap();
+        std::fs::write(storage.join("t2.sql"), "CREATE TABLE t2 (b INT);").unwrap();
+
+        let compute = root.path().join("models/mydb/compute");
+        std::fs::create_dir_all(&compute).unwrap();
+        std::fs::write(
+            compute.join("v.sql"),
+            "CREATE VIEW v AS SELECT x.a, y.b FROM mydb.storage.t1 x JOIN mydb.storage.t2 y ON x.a = y.b;",
+        )
+        .unwrap();
+        write_types_lock(
+            root.path(),
+            &[
+                ("mydb", "storage", "t1", "table", &[("a", "integer", false)]),
+                ("mydb", "storage", "t2", "table", &[("b", "integer", false)]),
+            ],
+        );
+        let project = build_project(&root);
+        let types_cache = crate::types::load_types_lock(root.path()).unwrap();
+
+        let uri = Url::from_file_path(root.path().join("models/mydb/compute/v.sql")).unwrap();
+
+        // "x." should resolve to t1.
+        let prefix_x = PrefixContext {
+            dots: 1,
+            text: "x.",
+        };
+        let items_x =
+            column_completions(&project, Some(&types_cache), &uri, root.path(), &prefix_x);
+        let labels_x: Vec<&str> = items_x.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels_x.contains(&"a"),
+            "expected 'a' for x., got: {:?}",
+            labels_x
+        );
+
+        // "y." should resolve to t2.
+        let prefix_y = PrefixContext {
+            dots: 1,
+            text: "y.",
+        };
+        let items_y =
+            column_completions(&project, Some(&types_cache), &uri, root.path(), &prefix_y);
+        let labels_y: Vec<&str> = items_y.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels_y.contains(&"b"),
+            "expected 'b' for y., got: {:?}",
+            labels_y
+        );
+    }
+
+    #[test]
+    fn column_alias_case_insensitive() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("models/mydb/storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        std::fs::write(storage.join("orders.sql"), "CREATE TABLE orders (id INT);").unwrap();
+
+        let compute = root.path().join("models/mydb/compute");
+        std::fs::create_dir_all(&compute).unwrap();
+        std::fs::write(
+            compute.join("v.sql"),
+            "CREATE VIEW v AS SELECT O.id FROM mydb.storage.orders O;",
+        )
+        .unwrap();
+        write_types_lock(
+            root.path(),
+            &[(
+                "mydb",
+                "storage",
+                "orders",
+                "table",
+                &[("id", "integer", false)],
+            )],
+        );
+        let project = build_project(&root);
+        let types_cache = crate::types::load_types_lock(root.path()).unwrap();
+
+        // Lowercase "o." should match uppercase alias "O".
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "o.",
+        };
+        let uri = Url::from_file_path(root.path().join("models/mydb/compute/v.sql")).unwrap();
+        let items = column_completions(&project, Some(&types_cache), &uri, root.path(), &prefix);
+
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"id"),
+            "expected 'id' with case-insensitive alias, got: {:?}",
+            labels
+        );
+    }
+
+    #[test]
+    fn column_alias_non_query_stmt_empty_map() {
+        let root = tempfile::tempdir().unwrap();
+        let storage = root.path().join("models/mydb/storage");
+        std::fs::create_dir_all(&storage).unwrap();
+        std::fs::write(storage.join("t.sql"), "CREATE TABLE t (id INT);").unwrap();
+        write_types_lock(
+            root.path(),
+            &[("mydb", "storage", "t", "table", &[("id", "integer", false)])],
+        );
+        let project = build_project(&root);
+        let types_cache = crate::types::load_types_lock(root.path()).unwrap();
+
+        // CREATE TABLE has no query — alias map is empty, falls back to normal behavior.
+        // "t." with 1 dot resolves to ObjectId(mydb, storage, t) via fallback.
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "t.",
+        };
+        let uri = Url::from_file_path(root.path().join("models/mydb/storage/t.sql")).unwrap();
+        let items = column_completions(&project, Some(&types_cache), &uri, root.path(), &prefix);
+
+        // t is itself, not a dependency of itself, so empty.
+        assert!(
+            items.is_empty(),
+            "expected empty for non-query statement self-reference, got: {:?}",
+            items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
     }
 }
