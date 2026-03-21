@@ -389,6 +389,7 @@ mod tests {
             other => panic!("Unexpected statement type: {:?}", other),
         };
         typed::DatabaseObject {
+            path: std::path::PathBuf::from("test.sql"),
             stmt,
             indexes: vec![],
             constraints: vec![],

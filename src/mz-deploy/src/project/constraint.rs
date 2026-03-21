@@ -194,6 +194,8 @@ pub fn lower_to_materialized_view(
     };
 
     Some(typed::DatabaseObject {
+        // Constraint MVs are synthesized — use a path derived from the parent.
+        path: std::path::PathBuf::from(format!("{}/{}/{}.sql", database, schema, mv_name_str)),
         stmt: Statement::CreateMaterializedView(mv_stmt),
         indexes: vec![],
         constraints: vec![],

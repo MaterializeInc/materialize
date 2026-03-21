@@ -377,6 +377,7 @@ fn validate_single_variant(
     }
 
     Ok(DatabaseObject {
+        path: path.to_path_buf(),
         stmt,
         indexes,
         constraints,

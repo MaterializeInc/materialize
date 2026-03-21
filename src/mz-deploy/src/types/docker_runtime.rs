@@ -112,10 +112,7 @@ impl DockerRuntime {
                 verbose!("Connecting to Materialize...");
                 let client = Client::connect_with_profile(profile).await?;
                 timing!("  connect (slow-path)", connect_start.elapsed());
-                verbose!(
-                    "Connected ({}ms)",
-                    connect_start.elapsed().as_millis()
-                );
+                verbose!("Connected ({}ms)", connect_start.elapsed().as_millis());
                 client
             }
         };
@@ -135,10 +132,7 @@ impl DockerRuntime {
             );
         }
 
-        verbose!(
-            "get_client total ({}ms)",
-            start.elapsed().as_millis()
-        );
+        verbose!("get_client total ({}ms)", start.elapsed().as_millis());
         Ok(client)
     }
 

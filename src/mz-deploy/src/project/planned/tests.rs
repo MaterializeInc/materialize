@@ -7,6 +7,7 @@ use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::Ident;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 #[test]
 fn test_object_id_from_item_name() {
@@ -950,6 +951,7 @@ fn test_validate_cluster_isolation_separate_clusters() {
     let mv_obj = DatabaseObject {
         id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
         typed_object: typed::DatabaseObject {
+            path: PathBuf::from("test.sql"),
             stmt: mv_stmt,
             indexes: vec![],
             constraints: vec![],
@@ -964,6 +966,7 @@ fn test_validate_cluster_isolation_separate_clusters() {
     let sink_obj = DatabaseObject {
         id: ObjectId::new("db".to_string(), "schema".to_string(), "sink".to_string()),
         typed_object: typed::DatabaseObject {
+            path: PathBuf::from("test.sql"),
             stmt: sink_stmt,
             indexes: vec![],
             constraints: vec![],
@@ -1023,6 +1026,7 @@ fn test_validate_cluster_isolation_conflict_mv_and_source() {
     let mv_obj = DatabaseObject {
         id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
         typed_object: typed::DatabaseObject {
+            path: PathBuf::from("test.sql"),
             stmt: mv_stmt,
             indexes: vec![],
             constraints: vec![],
@@ -1090,6 +1094,7 @@ fn test_validate_cluster_isolation_only_compute_objects() {
     let mv_obj = DatabaseObject {
         id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
         typed_object: typed::DatabaseObject {
+            path: PathBuf::from("test.sql"),
             stmt: mv_stmt,
             indexes: vec![],
             constraints: vec![],
@@ -1144,6 +1149,7 @@ fn test_validate_cluster_isolation_only_storage_objects() {
     let sink_obj = DatabaseObject {
         id: ObjectId::new("db".to_string(), "schema".to_string(), "sink".to_string()),
         typed_object: typed::DatabaseObject {
+            path: PathBuf::from("test.sql"),
             stmt: sink_stmt,
             indexes: vec![],
             constraints: vec![],
@@ -2454,6 +2460,7 @@ fn test_lock_guard_no_tables_no_external_deps_skips() {
     let view_obj = DatabaseObject {
         id: ObjectId::new("db".to_string(), "public".to_string(), "v".to_string()),
         typed_object: typed::DatabaseObject {
+            path: PathBuf::from("test.sql"),
             stmt: view_stmt,
             indexes: vec![],
             constraints: vec![],
@@ -2554,6 +2561,7 @@ fn test_lock_guard_external_deps_but_no_tables_proceeds() {
     let view_obj = DatabaseObject {
         id: ObjectId::new("db".to_string(), "public".to_string(), "v".to_string()),
         typed_object: typed::DatabaseObject {
+            path: PathBuf::from("test.sql"),
             stmt: view_stmt,
             indexes: vec![],
             constraints: vec![],

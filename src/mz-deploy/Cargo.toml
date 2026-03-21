@@ -22,7 +22,10 @@ junit-report = "0.8.3"
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-aws-util = { path = "../aws-util", default-features = false }
+mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
+ropey = "1.6.1"
+tower-lsp = { version = "0.20.0", features = ["proposed"] }
 thiserror = "2.0"
 time = "0.3"
 clap = { version = "4.5.23", features = ["derive", "env"] }

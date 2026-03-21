@@ -6399,11 +6399,13 @@ dependencies = [
  "mz-aws-util",
  "mz-build-info",
  "mz-ore",
+ "mz-sql-lexer",
  "mz-sql-parser",
  "openssl",
  "owo-colors",
  "postgres-openssl",
  "rayon",
+ "ropey",
  "serde",
  "serde_json",
  "sha2",
@@ -6413,6 +6415,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "toml",
+ "tower-lsp",
  "workspace-hack",
 ]
 

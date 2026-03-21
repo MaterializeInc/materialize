@@ -590,13 +590,8 @@ async fn ensure_dep_exists(
             if let Some(statement) = create_temporary_view_sql(&typed_object.stmt, &fqn) {
                 let sql = statement.to_string();
                 client.execute(&sql, &[]).await.map_err(|e| {
-                    let error = build_typecheck_error(
-                        dep_id,
-                        &sql,
-                        &e,
-                        ctx.object_paths,
-                        ctx.project_root,
-                    );
+                    let error =
+                        build_typecheck_error(dep_id, &sql, &e, ctx.object_paths, ctx.project_root);
                     TypeCheckError::TypeCheckFailed(error)
                 })?;
                 verbose!("  ✓ Created temp table from AST (lazy): {}", dep_id);

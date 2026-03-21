@@ -11,6 +11,7 @@
 //! are the common vocabulary that all layers use without implying any
 //! validation status.
 
+use crate::types::ObjectKind;
 use mz_sql_parser::ast::*;
 
 /// A structured identifier for database objects supporting partial qualification.
@@ -149,6 +150,19 @@ pub enum Statement {
 }
 
 impl Statement {
+    /// Returns the [`ObjectKind`] corresponding to this statement variant.
+    pub fn kind(&self) -> ObjectKind {
+        match self {
+            Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => ObjectKind::Table,
+            Statement::CreateView(_) => ObjectKind::View,
+            Statement::CreateMaterializedView(_) => ObjectKind::MaterializedView,
+            Statement::CreateSource(_) => ObjectKind::Source,
+            Statement::CreateSink(_) => ObjectKind::Sink,
+            Statement::CreateSecret(_) => ObjectKind::Secret,
+            Statement::CreateConnection(_) => ObjectKind::Connection,
+        }
+    }
+
     /// Extracts the database identifier from the statement.
     ///
     /// Returns the object name (potentially qualified with schema/database)

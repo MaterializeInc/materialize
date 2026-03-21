@@ -1305,6 +1305,7 @@ mod tests {
         }
 
         typed::DatabaseObject {
+            path: std::path::PathBuf::from("test.sql"),
             stmt: stmt.expect("Expected at least one CREATE statement"),
             indexes,
             constraints: vec![],

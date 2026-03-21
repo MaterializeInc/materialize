@@ -5,7 +5,6 @@
 //! are valid.
 
 use super::super::types::FullyQualifiedName;
-use crate::project::ast::Statement;
 use crate::project::error::{ValidationError, ValidationErrorKind};
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -61,19 +60,6 @@ pub(in super::super) fn validate_constraint_enforcement(
     }
 }
 
-/// Determine the object kind from a project Statement.
-fn stmt_to_kind(stmt: &Statement) -> ObjectKind {
-    match stmt {
-        Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => ObjectKind::Table,
-        Statement::CreateView(_) => ObjectKind::View,
-        Statement::CreateMaterializedView(_) => ObjectKind::MaterializedView,
-        Statement::CreateSource(_) => ObjectKind::Source,
-        Statement::CreateSink(_) => ObjectKind::Sink,
-        Statement::CreateSecret(_) => ObjectKind::Secret,
-        Statement::CreateConnection(_) => ObjectKind::Connection,
-    }
-}
-
 /// Validates FK reference target types.
 ///
 /// Rules:
@@ -116,7 +102,7 @@ pub fn validate_constraint_fk_targets(
 
             // Determine the kind of the referenced object
             let ref_kind = if let Some(ref_obj) = project.find_object(&ref_id) {
-                stmt_to_kind(&ref_obj.typed_object.stmt)
+                ref_obj.typed_object.stmt.kind()
             } else {
                 // External object: look up in types.lock, default to Table
                 types.get_kind(&ref_id.to_string())

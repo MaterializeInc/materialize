@@ -496,10 +496,7 @@ pub fn load_typecheck_snapshot(
     match fs::read(&path) {
         Ok(bytes) => {
             let snapshot: TypecheckSnapshot = bincode::deserialize(&bytes)
-                .map_err(|source| TypesError::BincodeParseFailed {
-                    path,
-                    source,
-                })?;
+                .map_err(|source| TypesError::BincodeParseFailed { path, source })?;
             Ok(Some(snapshot.hashes))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -543,11 +540,8 @@ pub fn load_types_cache(directory: &Path) -> Result<Types, TypesError> {
         source,
     })?;
 
-    let bin: TypesCacheBin =
-        bincode::deserialize(&bytes).map_err(|source| TypesError::BincodeParseFailed {
-            path,
-            source,
-        })?;
+    let bin: TypesCacheBin = bincode::deserialize(&bytes)
+        .map_err(|source| TypesError::BincodeParseFailed { path, source })?;
     Ok(bin.into())
 }
 

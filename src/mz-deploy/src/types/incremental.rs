@@ -241,10 +241,7 @@ fn plan_without_snapshot(
 ///
 /// This avoids recomputing AST hashes — they were already computed during
 /// [`plan_typecheck`] and carried through the plan.
-pub fn write_snapshot_from_plan(
-    directory: &Path,
-    plan: &TypecheckPlan,
-) -> Result<(), TypesError> {
+pub fn write_snapshot_from_plan(directory: &Path, plan: &TypecheckPlan) -> Result<(), TypesError> {
     crate::types::write_typecheck_snapshot(directory, &plan.current_hashes)
 }
 

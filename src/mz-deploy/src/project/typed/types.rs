@@ -369,6 +369,12 @@ impl Statement {
 /// This would be validated and represented as a single `DatabaseObject`.
 #[derive(Debug)]
 pub struct DatabaseObject {
+    /// Path to the source `.sql` file that defined this object.
+    ///
+    /// Carried from [`raw::ObjectVariant::path`](super::super::raw::ObjectVariant)
+    /// through validation so downstream consumers (LSP, diagnostics) can cite
+    /// the source file without reconstructing it from the object's name.
+    pub path: PathBuf,
     /// The primary CREATE statement for this object
     pub stmt: Statement,
     /// Indexes defined on this object

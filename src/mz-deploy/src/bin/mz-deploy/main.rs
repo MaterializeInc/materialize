@@ -44,6 +44,7 @@ Develop:
   compile              Compile and validate SQL without connecting to database [aliases: build]
   test                 Run SQL unit tests defined in test files
   explore              Generate interactive project documentation
+  lsp                  Start Language Server Protocol server for editor integration
 
 Infrastructure:
   lock                 Generate types.lock file with external dependency schemas
@@ -570,6 +571,17 @@ enum Command {
         subcommand: DeleteCommand,
     },
 
+    /// Start Language Server Protocol server for editor integration
+    ///
+    /// Runs an LSP server over stdio that provides go-to-definition and
+    /// parse error diagnostics for .sql files in the project. Configure
+    /// your editor to run `mz-deploy lsp` as the language server for SQL files.
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help lsp' for a detailed usage guide."
+    )]
+    Lsp,
+
     /// Generate shell completions
     #[command(hide = true)]
     Completions {
@@ -803,6 +815,11 @@ async fn run(args: Args) -> Result<(), CliError> {
         );
     }
 
+    // Handle lsp before Settings::load — it doesn't need connection or project.toml
+    if let Some(Command::Lsp) = &args.command {
+        return mz_deploy::lsp::run(args.directory).await;
+    }
+
     let needs_connection = !matches!(
         &args.command,
         Some(Command::Compile { .. }) | Some(Command::Test { .. }) | Some(Command::Explore { .. })
@@ -940,6 +957,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             };
             delete::run(&settings, kind, &name, yes).await
         }
+        Some(Command::Lsp) => unreachable!("handled above"),
         Some(Command::Completions { .. }) => unreachable!("handled above"),
         Some(Command::Help { .. }) => unreachable!("handled above"),
         Some(Command::New { .. }) => unreachable!("handled above"),

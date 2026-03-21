@@ -32,6 +32,7 @@ pub mod cli;
 pub mod client;
 pub mod config;
 pub mod log;
+pub mod lsp;
 pub mod project;
 pub mod secret_resolver;
 pub mod types;

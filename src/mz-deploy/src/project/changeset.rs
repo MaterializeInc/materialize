@@ -1136,6 +1136,7 @@ mod tests {
             .map(|(id, stmt)| DatabaseObject {
                 id,
                 typed_object: typed::DatabaseObject {
+                    path: std::path::PathBuf::from("test.sql"),
                     stmt,
                     indexes: vec![],
                     constraints: vec![],
