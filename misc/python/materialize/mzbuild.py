@@ -18,6 +18,7 @@ documentation][user-docs].
 import argparse
 import base64
 import collections
+import fcntl
 import hashlib
 import io
 import json
@@ -912,6 +913,23 @@ class ResolvedImage:
         Requires that the caller has already acquired all dependencies and
         prepared all `PreImage` actions via `PreImage.prepare_batch`.
         """
+        # Use a file lock to prevent parallel mzcompose processes from
+        # racing on git clean / copy / strip for the same image directory.
+        lock_dir = self.image.rd.root / "target" / "mzbuild-locks"
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        profile = self.image.rd.profile.name.lower()
+        lock_path = lock_dir / f"{self.image.name}-{profile}.lock"
+        with open(lock_path, "w") as lock_file:
+            ui.say(f"Acquiring lock for {self.spec()}")
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            try:
+                self._build_locked(prep, push)
+            finally:
+                fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+    def _build_locked(
+        self, prep: dict[type[PreImage], Any], push: bool = False
+    ) -> None:
         ui.section(f"Building {self.spec()}")
         spawn.runv(["git", "clean", "-ffdX", self.image.path])
 
