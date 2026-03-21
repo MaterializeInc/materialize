@@ -25,7 +25,7 @@
 //!   passed to per-keystroke diagnostics and the on-save project rebuild.
 
 use crate::config::ProjectSettings;
-use crate::lsp::{diagnostics, goto_definition, hover};
+use crate::lsp::{completion, diagnostics, goto_definition, hover};
 use crate::project;
 use crate::project::error::{ProjectError, ValidationErrors};
 use crate::project::planned;
@@ -59,6 +59,9 @@ pub struct Backend {
     variables: RwLock<BTreeMap<String, String>>,
     /// Name of the active profile (for hover display).
     profile_name: RwLock<String>,
+    /// Pre-computed keyword completion items (static; object completions are
+    /// computed per-request since they depend on the file URI and project state).
+    completions: Vec<CompletionItem>,
 }
 
 impl Backend {
@@ -74,6 +77,7 @@ impl Backend {
             settings: RwLock::new(None),
             variables: RwLock::new(BTreeMap::new()),
             profile_name: RwLock::new("default".to_string()),
+            completions: completion::keyword_completions(),
         }
     }
 
@@ -245,6 +249,7 @@ impl LanguageServer for Backend {
                         ..Default::default()
                     },
                 )),
+                completion_provider: Some(CompletionOptions::default()),
                 definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 ..Default::default()
@@ -353,5 +358,39 @@ impl LanguageServer for Backend {
             project,
             types_cache,
         ))
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let file_uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let root = self.root.read().unwrap().clone();
+
+        let doc_text = {
+            let docs = self.documents.lock().unwrap();
+            docs.get(&file_uri).map(|rope| rope.to_string())
+        };
+        let text = doc_text.as_deref().unwrap_or("");
+        let prefix = completion::prefix_context(text, position);
+
+        // If the user is typing a qualified name (dots >= 1), keywords are
+        // not valid — only return object completions.
+        let mut items = if prefix.dots == 0 {
+            self.completions.clone()
+        } else {
+            Vec::new()
+        };
+
+        if let Some(project) = self.project.read().unwrap().as_ref() {
+            let cache_guard = self.types_cache.read().unwrap();
+            items.extend(completion::object_completions(
+                project,
+                cache_guard.as_ref(),
+                &file_uri,
+                &root,
+                &prefix,
+            ));
+        }
+
+        Ok(Some(CompletionResponse::Array(items)))
     }
 }

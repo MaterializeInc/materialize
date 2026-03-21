@@ -25,6 +25,9 @@
 //!   → ObjectId { database: "other_db", schema: "staging", object: "events" }
 //! ```
 
+use std::path::Path;
+use tower_lsp::lsp_types::Url;
+
 use mz_sql_parser::ast::{Ident, RawItemName, UnresolvedItemName};
 
 /// A fully qualified object identifier.
@@ -133,6 +136,28 @@ impl ObjectId {
     ///
     /// # Errors
     /// Returns error if the FQN format is invalid
+    /// Derive the default database and schema from a file's URI.
+    ///
+    /// Expects the file to be under `<root>/models/<database>/<schema>/`.
+    /// Returns `None` if the path doesn't match the expected layout.
+    pub fn default_db_schema_from_uri(file_uri: &Url, root: &Path) -> Option<(String, String)> {
+        let file_path = file_uri.to_file_path().ok()?;
+        let models_dir = root.join("models");
+        let relative = file_path.strip_prefix(&models_dir).ok()?;
+
+        let components: Vec<_> = relative
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_string())
+            .collect();
+
+        // Expected: [database, schema, file.sql] or deeper
+        if components.len() >= 3 {
+            Some((components[0].clone(), components[1].clone()))
+        } else {
+            None
+        }
+    }
+
     #[must_use = "this returns the parsed ObjectId, which should be used"]
     pub fn from_fqn(fqn: &str) -> Result<Self, String> {
         let parts: Vec<&str> = fqn.split('.').collect();

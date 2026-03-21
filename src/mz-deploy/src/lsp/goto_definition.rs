@@ -147,7 +147,7 @@ fn find_token_at_offset(
 /// project root (expects `models/<database>/<schema>/` structure), then
 /// constructs an [`ObjectId`] using 1/2/3-part name resolution.
 pub fn resolve_object_id(parts: &[String], file_uri: &Url, root: &Path) -> Option<ObjectId> {
-    let (default_db, default_schema) = extract_db_schema_from_uri(file_uri, root)?;
+    let (default_db, default_schema) = ObjectId::default_db_schema_from_uri(file_uri, root)?;
 
     match parts.len() {
         1 => Some(ObjectId::new(default_db, default_schema, parts[0].clone())),
@@ -189,27 +189,6 @@ pub fn resolve_reference(
         uri,
         range: Range::default(),
     })
-}
-
-/// Extract default database and schema from a file URI.
-///
-/// Expects the file to be under `<root>/models/<database>/<schema>/`.
-fn extract_db_schema_from_uri(file_uri: &Url, root: &Path) -> Option<(String, String)> {
-    let file_path = file_uri.to_file_path().ok()?;
-    let models_dir = root.join("models");
-    let relative = file_path.strip_prefix(&models_dir).ok()?;
-
-    let components: Vec<_> = relative
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_string())
-        .collect();
-
-    // Expected: [database, schema, file.sql] or deeper
-    if components.len() >= 3 {
-        Some((components[0].clone(), components[1].clone()))
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]

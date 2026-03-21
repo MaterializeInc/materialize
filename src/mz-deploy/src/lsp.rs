@@ -2,7 +2,7 @@
 //!
 //! Provides IDE integration for `.sql` files in mz-deploy projects via the
 //! Language Server Protocol (LSP). The server runs over stdio and supports
-//! three capabilities:
+//! four capabilities:
 //!
 //! ## Go-to-definition
 //!
@@ -24,6 +24,19 @@
 //! dependencies). If no column data is available, the hover shows the object
 //! kind and source file path.
 //!
+//! ## Completion
+//!
+//! Two kinds of completions are provided:
+//!
+//! - **Keywords** — Static list from the lexer's keyword map, computed once at
+//!   startup. Excluded when the typed prefix contains dots (qualified context).
+//! - **Object names** — Dynamic completions from the project model and external
+//!   dependencies, computed per-request. Qualification level adapts to the
+//!   dot-qualified prefix the user has already typed (0 dots = minimum, 1 dot =
+//!   schema.object, 2+ dots = db.schema.object). Each item carries a
+//!   `text_edit` that replaces the entire typed prefix, so the editor
+//!   substitutes rather than appends.
+//!
 //! ## Parse error diagnostics
 //!
 //! On every `didOpen` and `didChange`, the file is parsed with
@@ -37,6 +50,7 @@
 //!                                          ├─ documents: per-file Rope (updated on change)
 //!                                          ├─ project: planned::Project (rebuilt on save)
 //!                                          ├─ types_cache: Types (rebuilt on save)
+//!                                          ├─ completions: keyword CompletionItems (static)
 //!                                          └─ root: project root directory
 //! ```
 //!
@@ -44,6 +58,7 @@
 //! Parse diagnostics run per-file on every keystroke. Incremental updates may
 //! come later; the pipeline is fast enough for typical project sizes.
 
+mod completion;
 pub mod diagnostics;
 pub mod goto_definition;
 pub mod hover;
