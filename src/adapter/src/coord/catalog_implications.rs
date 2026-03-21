@@ -539,11 +539,17 @@ impl Coordinator {
                     prev: prev_cluster,
                     new: new_cluster,
                 }) => {
-                    tracing::debug!(
-                        ?prev_cluster,
-                        ?new_cluster,
-                        "not handling AlterCluster in here yet"
-                    );
+                    // Replica adds/drops/renames from config changes arrive as
+                    // separate AddClusterReplica/DroppedClusterReplica/
+                    // AlterClusterReplica events, so the only cluster-level
+                    // side effect here is updating the workload class on the
+                    // controller when it changes.
+                    if prev_cluster.config.workload_class != new_cluster.config.workload_class {
+                        self.controller.update_cluster_workload_class(
+                            cluster_id,
+                            new_cluster.config.workload_class.clone(),
+                        );
+                    }
                 }
                 CatalogImplication::Cluster(CatalogImplicationKind::Dropped(
                     cluster,
