@@ -126,17 +126,17 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~like `SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s rdf:type ?type }~~
 > ~~GROUP BY ?type ORDER BY DESC(?count) LIMIT 10`.~~
 
-### Prompt 11: Plan CONSTRUCT, ASK, DESCRIBE
+### ~~Prompt 11: Plan CONSTRUCT, ASK, DESCRIBE~~
 
-> Implement the three non-SELECT query forms:
-> - CONSTRUCT: plan WHERE clause, then Map to produce (subject, predicate,
->   object) columns per template triple pattern, then Union all template
->   triples, then Distinct (CONSTRUCT deduplicates).
-> - ASK: plan WHERE clause, wrap in Reduce(count) > 0 → single boolean.
-> - DESCRIBE: plan as SELECT over triples where resource appears as subject
->   or object. Use CBD (Concise Bounded Description) or a simpler strategy.
+> ~~Implement the three non-SELECT query forms:~~
+> ~~- CONSTRUCT: plan WHERE clause, then Map to produce (subject, predicate,~~
+>   ~~object) columns per template triple pattern, then Union all template~~
+>   ~~triples, then Distinct (CONSTRUCT deduplicates).~~
+> ~~- ASK: plan WHERE clause, wrap in Reduce(count) > 0 → single boolean.~~
+> ~~- DESCRIBE: plan as SELECT over triples where resource appears as subject~~
+>   ~~or object. Use CBD (Concise Bounded Description) or a simpler strategy.~~
 >
-> Define output `RelationDesc` for each form.
+> ~~Define output `RelationDesc` for each form.~~
 
 ### Prompt 12: Plan property paths with LetRec
 

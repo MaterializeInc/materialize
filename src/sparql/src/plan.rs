@@ -19,8 +19,9 @@ use mz_repr::{Datum, GlobalId, SqlColumnType, SqlRelationType, SqlScalarType};
 use mz_sql::plan::{AggregateExpr, AggregateFunc, HirRelationExpr, HirScalarExpr, JoinKind};
 
 use mz_sparql_parser::ast::{
-    Expression, GraphTerm, GroupGraphPattern, Iri, QueryForm, RdfLiteral, SelectClause,
-    SelectModifier, SelectVariable, SparqlQuery, TriplePattern, VarOrTerm, Variable, VerbPath,
+    Expression, GraphTerm, GroupGraphPattern, Iri, PropertyPath, QueryForm, RdfLiteral,
+    SelectClause, SelectModifier, SelectVariable, SparqlQuery, TriplePattern, VarOrIri, VarOrTerm,
+    Variable, VerbPath,
 };
 
 /// Column indices in the quad table `(subject, predicate, object, graph)`.
@@ -162,11 +163,16 @@ impl SparqlPlanner {
                 result =
                     self.plan_order_limit(result, &query.order_by, query.limit, query.offset)?;
             }
-            // Non-SELECT forms: just apply solution modifiers.
-            _ => {
-                if let Some(having) = &query.having {
-                    result = self.apply_filter(result, having)?;
-                }
+            QueryForm::Construct { template } => {
+                result = self.plan_construct(result, template)?;
+                result =
+                    self.plan_order_limit(result, &query.order_by, query.limit, query.offset)?;
+            }
+            QueryForm::Ask => {
+                result = self.plan_ask(result)?;
+            }
+            QueryForm::Describe { resources } => {
+                result = self.plan_describe(resources)?;
                 result =
                     self.plan_order_limit(result, &query.order_by, query.limit, query.offset)?;
             }
@@ -586,6 +592,294 @@ impl SparqlPlanner {
             },
             var_map: input.var_map,
         })
+    }
+
+    /// Plans a CONSTRUCT query.
+    ///
+    /// For each template triple pattern, produces a 3-column relation
+    /// (subject, predicate, object) by mapping variables from the WHERE clause
+    /// result to string columns, and concrete terms to string literals.
+    /// All template triples are unioned together, then deduplicated.
+    fn plan_construct(
+        &self,
+        input: PlannedRelation,
+        template: &[TriplePattern],
+    ) -> Result<PlannedRelation, PlanError> {
+        let output_var_map: BTreeMap<String, usize> = [
+            ("subject".to_string(), 0),
+            ("predicate".to_string(), 1),
+            ("object".to_string(), 2),
+        ]
+        .into_iter()
+        .collect();
+
+        if template.is_empty() {
+            // Empty template: return empty relation with the CONSTRUCT schema.
+            return Ok(PlannedRelation {
+                expr: HirRelationExpr::Constant {
+                    rows: vec![],
+                    typ: SqlRelationType::new(vec![
+                        SqlColumnType {
+                            scalar_type: SqlScalarType::String,
+                            nullable: true,
+                        };
+                        3
+                    ]),
+                },
+                var_map: output_var_map,
+            });
+        }
+
+        // For each template triple, create a Map that produces (subject, predicate, object).
+        let mut triple_relations = Vec::new();
+
+        for tp in template {
+            let scalars = vec![
+                self.var_or_term_to_scalar(&tp.subject, &input.var_map)?,
+                self.verb_path_to_scalar(&tp.predicate, &input.var_map)?,
+                self.var_or_term_to_scalar(&tp.object, &input.var_map)?,
+            ];
+
+            let input_arity = input.arity();
+            let mapped = HirRelationExpr::Map {
+                input: Box::new(input.expr.clone()),
+                scalars,
+            };
+
+            // Project to just the 3 new columns.
+            let projected = HirRelationExpr::Project {
+                input: Box::new(mapped),
+                outputs: vec![input_arity, input_arity + 1, input_arity + 2],
+            };
+
+            triple_relations.push(projected);
+        }
+
+        // Union all template triple relations together.
+        let mut unioned = triple_relations.remove(0);
+        for rel in triple_relations {
+            unioned = HirRelationExpr::Union {
+                base: Box::new(unioned),
+                inputs: vec![rel],
+            };
+        }
+
+        // CONSTRUCT deduplicates.
+        let distinct = HirRelationExpr::Distinct {
+            input: Box::new(unioned),
+        };
+
+        Ok(PlannedRelation {
+            expr: distinct,
+            var_map: output_var_map,
+        })
+    }
+
+    /// Plans an ASK query.
+    ///
+    /// ASK returns a single boolean: true if the WHERE clause matches at least
+    /// one solution, false otherwise. We plan this as:
+    /// `Map(Reduce(input, [], [count(true)]), count > 0)`
+    /// projecting to a single "result" column.
+    fn plan_ask(&self, input: PlannedRelation) -> Result<PlannedRelation, PlanError> {
+        // First, reduce to a single row with count(*).
+        let count_agg = AggregateExpr {
+            func: AggregateFunc::Count,
+            expr: Box::new(HirScalarExpr::literal(Datum::True, SqlScalarType::Bool)),
+            distinct: false,
+        };
+
+        let reduced = HirRelationExpr::Reduce {
+            input: Box::new(input.expr),
+            group_key: vec![],
+            aggregates: vec![count_agg],
+            expected_group_size: None,
+        };
+
+        // Column 0 is the count. Map count > 0 as the boolean result.
+        let gt_zero = HirScalarExpr::CallBinary {
+            func: mz_expr::BinaryFunc::Gt(mz_expr::func::Gt),
+            expr1: Box::new(HirScalarExpr::column(0)),
+            expr2: Box::new(HirScalarExpr::literal(
+                Datum::Int64(0),
+                SqlScalarType::Int64,
+            )),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        let mapped = HirRelationExpr::Map {
+            input: Box::new(reduced),
+            scalars: vec![gt_zero],
+        };
+
+        // Project to just the boolean column (column 1).
+        let projected = HirRelationExpr::Project {
+            input: Box::new(mapped),
+            outputs: vec![1],
+        };
+
+        let var_map: BTreeMap<String, usize> = [("result".to_string(), 0)].into_iter().collect();
+
+        Ok(PlannedRelation {
+            expr: projected,
+            var_map,
+        })
+    }
+
+    /// Plans a DESCRIBE query.
+    ///
+    /// DESCRIBE returns all triples where any of the described resources appear
+    /// as subject or object. This is a simplified Concise Bounded Description (CBD).
+    /// For each resource, we generate:
+    ///   (SELECT s, p, o WHERE { resource ?p ?o }) -- as subject
+    ///   UNION
+    ///   (SELECT s, p, o WHERE { ?s ?p resource }) -- as object
+    fn plan_describe(&self, resources: &[VarOrIri]) -> Result<PlannedRelation, PlanError> {
+        let output_var_map: BTreeMap<String, usize> = [
+            ("subject".to_string(), 0),
+            ("predicate".to_string(), 1),
+            ("object".to_string(), 2),
+        ]
+        .into_iter()
+        .collect();
+
+        if resources.is_empty() {
+            return Err(PlanError {
+                message: "DESCRIBE requires at least one resource or variable".to_string(),
+            });
+        }
+
+        let mut parts = Vec::new();
+
+        for resource in resources {
+            // Triples where resource is the subject: { resource ?p ?o }
+            let as_subject = self.plan_describe_direction(resource, true)?;
+            // Triples where resource is the object: { ?s ?p resource }
+            let as_object = self.plan_describe_direction(resource, false)?;
+
+            parts.push(as_subject);
+            parts.push(as_object);
+        }
+
+        // Union all parts together.
+        let mut unioned = parts.remove(0);
+        for part in parts {
+            unioned = HirRelationExpr::Union {
+                base: Box::new(unioned),
+                inputs: vec![part],
+            };
+        }
+
+        // Deduplicate.
+        let distinct = HirRelationExpr::Distinct {
+            input: Box::new(unioned),
+        };
+
+        Ok(PlannedRelation {
+            expr: distinct,
+            var_map: output_var_map,
+        })
+    }
+
+    /// Helper for DESCRIBE: generates a scan for triples where a resource
+    /// appears in a specific position (subject if `as_subject`, object otherwise).
+    ///
+    /// Returns a 3-column relation (subject, predicate, object).
+    fn plan_describe_direction(
+        &self,
+        resource: &VarOrIri,
+        as_subject: bool,
+    ) -> Result<HirRelationExpr, PlanError> {
+        let get = HirRelationExpr::Get {
+            id: Id::Global(self.quad_table_id),
+            typ: self.quad_table_type.clone(),
+        };
+
+        // Filter on the resource position.
+        let filter_col = if as_subject {
+            QUAD_SUBJECT
+        } else {
+            QUAD_OBJECT
+        };
+
+        let filter_expr = match resource {
+            VarOrIri::Iri(iri) => self.iri_filter(filter_col, iri),
+            VarOrIri::Variable(_) => {
+                // For DESCRIBE ?var, we can't filter statically — we'd need
+                // the WHERE clause result. For now, return an error for variable
+                // DESCRIBE without a WHERE clause providing bindings.
+                return Err(PlanError {
+                    message: "DESCRIBE with variables requires a WHERE clause \
+                              (not yet supported — use DESCRIBE <iri> instead)"
+                        .to_string(),
+                });
+            }
+        };
+
+        let filtered = HirRelationExpr::Filter {
+            input: Box::new(get),
+            predicates: vec![filter_expr],
+        };
+
+        // Project to (subject, predicate, object) — drop graph column.
+        let projected = HirRelationExpr::Project {
+            input: Box::new(filtered),
+            outputs: vec![QUAD_SUBJECT, QUAD_PREDICATE, QUAD_OBJECT],
+        };
+
+        Ok(projected)
+    }
+
+    /// Translates a `VarOrTerm` to a scalar expression (for CONSTRUCT templates).
+    fn var_or_term_to_scalar(
+        &self,
+        vot: &VarOrTerm,
+        var_map: &BTreeMap<String, usize>,
+    ) -> Result<HirScalarExpr, PlanError> {
+        match vot {
+            VarOrTerm::Variable(v) => {
+                let col = var_map.get(&v.name).ok_or_else(|| PlanError {
+                    message: format!(
+                        "CONSTRUCT template variable ?{} not bound in WHERE clause",
+                        v.name
+                    ),
+                })?;
+                Ok(HirScalarExpr::column(*col))
+            }
+            VarOrTerm::Term(term) => {
+                let s = self.term_to_string(term);
+                Ok(HirScalarExpr::literal(
+                    Datum::String(&s),
+                    SqlScalarType::String,
+                ))
+            }
+        }
+    }
+
+    /// Translates a `VerbPath` (predicate position) to a scalar expression (for CONSTRUCT templates).
+    fn verb_path_to_scalar(
+        &self,
+        verb: &VerbPath,
+        var_map: &BTreeMap<String, usize>,
+    ) -> Result<HirScalarExpr, PlanError> {
+        match verb {
+            VerbPath::Variable(v) => {
+                let col = var_map.get(&v.name).ok_or_else(|| PlanError {
+                    message: format!(
+                        "CONSTRUCT template variable ?{} not bound in WHERE clause",
+                        v.name
+                    ),
+                })?;
+                Ok(HirScalarExpr::column(*col))
+            }
+            VerbPath::Path(PropertyPath::Iri(iri)) => Ok(HirScalarExpr::literal(
+                Datum::String(&iri.value),
+                SqlScalarType::String,
+            )),
+            VerbPath::Path(_) => Err(PlanError {
+                message: "property paths in CONSTRUCT templates are not allowed".to_string(),
+            }),
+        }
     }
 
     /// Plans a graph pattern into a relational expression.
@@ -3677,5 +3971,186 @@ mod tests {
             },
             other => panic!("expected Project, got {:?}", other),
         }
+    }
+
+    // --- CONSTRUCT tests ---
+
+    #[mz_ore::test]
+    fn test_construct_basic() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> \
+             CONSTRUCT { ?s ex:knows ?o } \
+             WHERE { ?s ex:friend ?o }",
+        );
+        assert_eq!(var_names(&result), vec!["object", "predicate", "subject"]);
+        assert_eq!(result.arity(), 3);
+
+        // Should be: Distinct(Union or single Map+Project)
+        match &result.expr {
+            HirRelationExpr::Distinct { input } => match input.as_ref() {
+                HirRelationExpr::Project { .. } => {} // single template triple
+                other => panic!("expected Project inside Distinct, got {:?}", other),
+            },
+            other => panic!("expected Distinct, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_construct_multiple_templates() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> \
+             CONSTRUCT { ?s ex:knows ?o . ?o ex:knownBy ?s } \
+             WHERE { ?s ex:friend ?o }",
+        );
+        assert_eq!(var_names(&result), vec!["object", "predicate", "subject"]);
+
+        // Should be: Distinct(Union(Project(Map(...)), Project(Map(...))))
+        match &result.expr {
+            HirRelationExpr::Distinct { input } => match input.as_ref() {
+                HirRelationExpr::Union { base, inputs } => {
+                    assert_eq!(inputs.len(), 1);
+                    match (base.as_ref(), &inputs[0]) {
+                        (HirRelationExpr::Project { .. }, HirRelationExpr::Project { .. }) => {}
+                        other => panic!("expected Project on both sides of Union, got {:?}", other),
+                    }
+                }
+                other => panic!("expected Union inside Distinct, got {:?}", other),
+            },
+            other => panic!("expected Distinct, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_construct_concrete_terms() {
+        // CONSTRUCT with concrete subject and predicate, variable object.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> \
+             CONSTRUCT { ex:alice ex:likes ?thing } \
+             WHERE { ex:alice ex:likes ?thing }",
+        );
+        assert_eq!(result.arity(), 3);
+        assert_eq!(var_names(&result), vec!["object", "predicate", "subject"]);
+    }
+
+    #[mz_ore::test]
+    fn test_construct_empty_template() {
+        let result = plan_query("CONSTRUCT { } WHERE { ?s ?p ?o }");
+        assert_eq!(result.arity(), 3);
+        // Empty template produces empty constant.
+        match &result.expr {
+            HirRelationExpr::Constant { rows, .. } => {
+                assert!(rows.is_empty());
+            }
+            other => panic!("expected empty Constant, got {:?}", other),
+        }
+    }
+
+    // --- ASK tests ---
+
+    #[mz_ore::test]
+    fn test_ask_basic() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> \
+             ASK { ?s ex:name ?name }",
+        );
+        assert_eq!(var_names(&result), vec!["result"]);
+        assert_eq!(result.arity(), 1);
+
+        // Should be: Project(Map(Reduce(...)))
+        match &result.expr {
+            HirRelationExpr::Project { input, outputs } => {
+                assert_eq!(outputs, &[1]); // boolean column
+                match input.as_ref() {
+                    HirRelationExpr::Map { input, scalars } => {
+                        assert_eq!(scalars.len(), 1); // count > 0
+                        match input.as_ref() {
+                            HirRelationExpr::Reduce {
+                                group_key,
+                                aggregates,
+                                ..
+                            } => {
+                                assert!(group_key.is_empty());
+                                assert_eq!(aggregates.len(), 1);
+                            }
+                            other => panic!("expected Reduce, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected Map, got {:?}", other),
+                }
+            }
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_ask_with_filter() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> \
+             ASK { ?s ex:age ?age FILTER(?age > \"30\") }",
+        );
+        assert_eq!(var_names(&result), vec!["result"]);
+        assert_eq!(result.arity(), 1);
+    }
+
+    // --- DESCRIBE tests ---
+
+    #[mz_ore::test]
+    fn test_describe_single_iri() {
+        let result = plan_query("DESCRIBE <http://example.org/alice>");
+        assert_eq!(var_names(&result), vec!["object", "predicate", "subject"]);
+        assert_eq!(result.arity(), 3);
+
+        // Should be: Distinct(Union(as_subject, as_object))
+        match &result.expr {
+            HirRelationExpr::Distinct { input } => match input.as_ref() {
+                HirRelationExpr::Union { base, inputs } => {
+                    assert_eq!(inputs.len(), 1);
+                    // Both sides should be Project(Filter(Get))
+                    match (base.as_ref(), &inputs[0]) {
+                        (
+                            HirRelationExpr::Project { input: left, .. },
+                            HirRelationExpr::Project { input: right, .. },
+                        ) => match (left.as_ref(), right.as_ref()) {
+                            (
+                                HirRelationExpr::Filter { predicates: lp, .. },
+                                HirRelationExpr::Filter { predicates: rp, .. },
+                            ) => {
+                                assert_eq!(lp.len(), 1);
+                                assert_eq!(rp.len(), 1);
+                            }
+                            other => panic!("expected Filter on both sides, got {:?}", other),
+                        },
+                        other => panic!("expected Project on both sides, got {:?}", other),
+                    }
+                }
+                other => panic!("expected Union inside Distinct, got {:?}", other),
+            },
+            other => panic!("expected Distinct, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_describe_multiple_iris() {
+        let result = plan_query("DESCRIBE <http://example.org/alice> <http://example.org/bob>");
+        assert_eq!(var_names(&result), vec!["object", "predicate", "subject"]);
+
+        // Should be: Distinct(Union(alice_subj, alice_obj, bob_subj, bob_obj))
+        match &result.expr {
+            HirRelationExpr::Distinct { .. } => {} // structure is correct
+            other => panic!("expected Distinct, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_describe_variable_errors() {
+        // DESCRIBE ?x without WHERE clause should error (we can't resolve the variable).
+        let query = mz_sparql_parser::parser::parse("DESCRIBE ?x").expect("parse failed");
+        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let err = planner.plan(&query).unwrap_err();
+        assert!(
+            err.message.contains("variables requires a WHERE clause"),
+            "unexpected error: {}",
+            err.message
+        );
     }
 }

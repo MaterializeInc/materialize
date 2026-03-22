@@ -998,3 +998,83 @@ New tests (24):
 - Aggregates: COUNT(*), COUNT(DISTINCT), GROUP BY + COUNT, GROUP BY multiple keys,
   MIN/MAX, SUM, full aggregation query (GROUP BY + COUNT + ORDER BY DESC + LIMIT)
 - Edge cases: no modifiers → no TopK wrapper
+
+## 2026-03-22: Prompt 11 — Plan CONSTRUCT, ASK, DESCRIBE
+
+### What was done
+
+Extended the `plan()` method in `src/sparql/src/plan.rs` to handle the three
+non-SELECT query forms, replacing the catch-all `_ =>` branch with specific
+implementations.
+
+**CONSTRUCT** (`plan_construct`):
+- For each template triple pattern, creates a `Map` node that produces 3 columns
+  (subject, predicate, object) by translating variables to column references and
+  concrete terms (IRIs, literals, blank nodes) to string literals.
+- Projects to just the 3 new columns (dropping the WHERE clause columns).
+- Unions all template triple relations together.
+- Wraps in `Distinct` (CONSTRUCT deduplicates per the SPARQL spec).
+- Output var_map: `{subject: 0, predicate: 1, object: 2}`.
+- Empty template → empty constant with 3-column schema.
+
+**ASK** (`plan_ask`):
+- Wraps the WHERE clause result in `Reduce` with no group key and a single
+  `COUNT(true)` aggregate → produces a single row with the count.
+- Maps `count > 0` to a boolean.
+- Projects to just the boolean column.
+- Output var_map: `{result: 0}`.
+- Solution modifiers (ORDER BY, LIMIT, OFFSET) are not applied — ASK always
+  returns a single boolean.
+
+**DESCRIBE** (`plan_describe`):
+- For each described IRI resource, generates two scans of the quad table:
+  one filtered on `subject = iri` and one on `object = iri`, each projecting
+  to (subject, predicate, object).
+- Unions all parts and wraps in `Distinct`.
+- Output var_map: `{subject: 0, predicate: 1, object: 2}`.
+- Currently only supports concrete IRI resources. DESCRIBE with variables
+  (which would require correlating with the WHERE clause) returns a descriptive
+  error.
+
+**Helper methods added**:
+- `var_or_term_to_scalar`: translates `VarOrTerm` to `HirScalarExpr` (variable →
+  column ref, term → string literal) for CONSTRUCT template mapping.
+- `verb_path_to_scalar`: translates `VerbPath` to `HirScalarExpr` for predicate
+  position in templates. Only supports simple IRIs and variables (property paths
+  in CONSTRUCT templates are not allowed per the SPARQL spec).
+- `plan_describe_direction`: generates a scan for triples where a resource appears
+  in subject or object position.
+
+### Key decisions
+
+1. **CONSTRUCT output schema**: Fixed 3-column schema `(subject, predicate, object)`
+   rather than using variable names from the template. This matches the standard
+   SPARQL CONSTRUCT semantics where the output is a set of triples, not a solution
+   set.
+
+2. **ASK uses COUNT + GT**: Rather than using EXISTS/limit-1 pattern, we use
+   `Reduce(count) > 0` which is straightforward and correct. The optimizer can
+   potentially simplify this.
+
+3. **DESCRIBE is simplified CBD**: We use a basic "find all triples where resource
+   is subject or object" strategy rather than full Concise Bounded Description
+   (which would recursively follow blank nodes). This is sufficient for a first
+   implementation and matches what many SPARQL endpoints do.
+
+4. **DESCRIBE with variables deferred**: Supporting `DESCRIBE ?x WHERE { ... }`
+   requires correlating the variable bindings from the WHERE clause with the
+   describe scan — essentially a dependent join. This is deferred to a later
+   enhancement.
+
+5. **No solution modifiers on ASK**: ORDER BY/LIMIT/OFFSET are meaningless for
+   ASK (which always returns one row), so they are not applied.
+
+### Test results
+
+93 tests pass (84 old + 9 new), 0 failures, 1 warning (unused QUAD_ARITY constant).
+
+New tests (9):
+- CONSTRUCT: basic (single template), multiple templates (union structure),
+  concrete terms in template, empty template
+- ASK: basic (verify Reduce+Map+Project structure), with FILTER
+- DESCRIBE: single IRI (verify Union structure), multiple IRIs, variable (error)
