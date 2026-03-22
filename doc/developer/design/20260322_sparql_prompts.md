@@ -105,17 +105,17 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~Read first: Chebotko et al. (2009) "Semantics Preserving SPARQL-to-SQL~~
 > ~~Translation" for reference translations.~~
 
-### Prompt 9: Plan BIND, VALUES, expressions, and type coercions
+### ~~Prompt 9: Plan BIND, VALUES, expressions, and type coercions~~
 
-> Implement planning for BIND (→ Map), VALUES (→ Constant), and the full
-> SPARQL expression language. Map SPARQL functions to Materialize scalar
-> functions: string ops (STRLEN, SUBSTR, UCASE, LCASE, STRSTARTS, STRENDS,
-> CONTAINS, CONCAT, REPLACE, REGEX), numeric ops (+, -, *, /), comparison
-> (=, !=, <, >, <=, >=), logical (&&, ||, !), type tests (isIRI, isBlank,
-> isLiteral, isNumeric), accessors (STR, LANG, DATATYPE, IRI, BNODE),
-> COALESCE, IF, BOUND, EXISTS/NOT EXISTS. Handle RDF type coercions (extract
-> typed values from TEXT encoding, cast to appropriate Materialize types for
-> arithmetic/comparison).
+> ~~Implement planning for BIND (→ Map), VALUES (→ Constant), and the full~~
+> ~~SPARQL expression language. Map SPARQL functions to Materialize scalar~~
+> ~~functions: string ops (STRLEN, SUBSTR, UCASE, LCASE, STRSTARTS, STRENDS,~~
+> ~~CONTAINS, CONCAT, REPLACE, REGEX), numeric ops (+, -, *, /), comparison~~
+> ~~(=, !=, <, >, <=, >=), logical (&&, ||, !), type tests (isIRI, isBlank,~~
+> ~~isLiteral, isNumeric), accessors (STR, LANG, DATATYPE, IRI, BNODE),~~
+> ~~COALESCE, IF, BOUND, EXISTS/NOT EXISTS. Handle RDF type coercions (extract~~
+> ~~typed values from TEXT encoding, cast to appropriate Materialize types for~~
+> ~~arithmetic/comparison).~~
 
 ### Prompt 10: Plan SELECT projection, aggregates, solution modifiers
 

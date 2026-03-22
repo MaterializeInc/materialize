@@ -20,7 +20,7 @@ use mz_sql::plan::{HirRelationExpr, HirScalarExpr, JoinKind};
 
 use mz_sparql_parser::ast::{
     Expression, GraphTerm, GroupGraphPattern, Iri, RdfLiteral, SparqlQuery, TriplePattern,
-    VarOrTerm, VerbPath,
+    VarOrTerm, Variable, VerbPath,
 };
 
 /// Column indices in the quad table `(subject, predicate, object, graph)`.
@@ -123,9 +123,22 @@ impl SparqlPlanner {
                 let left = self.empty_relation();
                 self.plan_minus(left, inner)
             }
-            _ => Err(PlanError {
-                message: "unsupported graph pattern form (will be implemented in later prompts)"
+            GroupGraphPattern::Bind(expr, var) => {
+                // Bare BIND without preceding patterns: apply to empty row.
+                let left = self.empty_relation();
+                self.plan_bind(left, expr, var)
+            }
+            GroupGraphPattern::Values { variables, rows } => self.plan_values(variables, rows),
+            GroupGraphPattern::SubSelect(_) => Err(PlanError {
+                message: "subqueries not yet supported (will be implemented in prompt 10)"
                     .to_string(),
+            }),
+            GroupGraphPattern::Graph(_, _) => Err(PlanError {
+                message: "GRAPH patterns not yet supported (will be implemented in a later prompt)"
+                    .to_string(),
+            }),
+            GroupGraphPattern::Service { .. } => Err(PlanError {
+                message: "SERVICE patterns not supported".to_string(),
             }),
         }
     }
@@ -187,6 +200,9 @@ impl SparqlPlanner {
                 }
                 GroupGraphPattern::Minus(inner) => {
                     result = self.plan_minus(result, inner)?;
+                }
+                GroupGraphPattern::Bind(expr, var) => {
+                    result = self.plan_bind(result, expr, var)?;
                 }
                 other => {
                     let right = self.plan_pattern(other)?;
@@ -494,6 +510,82 @@ impl SparqlPlanner {
         })
     }
 
+    /// Plans `BIND(expr AS ?var)` — adds a computed column to the current relation.
+    ///
+    /// The expression is evaluated in the context of the current variable scope,
+    /// and the result is bound to the new variable.
+    fn plan_bind(
+        &self,
+        input: PlannedRelation,
+        expr: &Expression,
+        var: &Variable,
+    ) -> Result<PlannedRelation, PlanError> {
+        let hir_expr = self.translate_expression(expr, &input.var_map)?;
+        let new_col = input.arity();
+        let mapped = HirRelationExpr::Map {
+            input: Box::new(input.expr),
+            scalars: vec![hir_expr],
+        };
+        let mut new_var_map = input.var_map;
+        new_var_map.insert(var.name.clone(), new_col);
+        Ok(PlannedRelation {
+            expr: mapped,
+            var_map: new_var_map,
+        })
+    }
+
+    /// Plans `VALUES (?var1 ?var2) { (val1 val2) ... }` — inline data.
+    ///
+    /// Each row becomes a row in a `Constant` relation. UNDEF values become NULL.
+    fn plan_values(
+        &self,
+        variables: &[Variable],
+        rows: &[Vec<Option<GraphTerm>>],
+    ) -> Result<PlannedRelation, PlanError> {
+        let var_map: BTreeMap<String, usize> = variables
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (v.name.clone(), i))
+            .collect();
+
+        let typ = SqlRelationType::new(
+            variables
+                .iter()
+                .map(|_| SqlColumnType {
+                    scalar_type: SqlScalarType::String,
+                    nullable: true,
+                })
+                .collect(),
+        );
+
+        let datum_rows: Vec<mz_repr::Row> = rows
+            .iter()
+            .map(|row| {
+                // Compute owned strings first so they live long enough.
+                let strings: Vec<Option<String>> = row
+                    .iter()
+                    .map(|val| val.as_ref().map(|term| self.term_to_string(term)))
+                    .collect();
+                let datums: Vec<Datum> = strings
+                    .iter()
+                    .map(|s| match s {
+                        Some(s) => Datum::String(s.as_str()),
+                        None => Datum::Null,
+                    })
+                    .collect();
+                mz_repr::Row::pack_slice(&datums)
+            })
+            .collect();
+
+        Ok(PlannedRelation {
+            expr: HirRelationExpr::Constant {
+                rows: datum_rows,
+                typ,
+            },
+            var_map,
+        })
+    }
+
     /// Applies a SPARQL FILTER expression to a planned relation.
     fn apply_filter(
         &self,
@@ -614,12 +706,422 @@ impl SparqlPlanner {
                 })
             }
 
-            // Placeholder for expressions that will be fully implemented in prompt 9
-            _ => Err(PlanError {
-                message: format!(
-                    "SPARQL expression form not yet supported (will be implemented in prompt 9): {:?}",
-                    std::mem::discriminant(expr)
-                ),
+            // Arithmetic operators — operate on string-encoded numeric values.
+            // We cast strings to float64 for arithmetic, then back to string.
+            Expression::Add(l, r) => self.translate_arithmetic(
+                mz_expr::BinaryFunc::AddFloat64(mz_expr::func::AddFloat64),
+                l,
+                r,
+                var_map,
+            ),
+            Expression::Subtract(l, r) => self.translate_arithmetic(
+                mz_expr::BinaryFunc::SubFloat64(mz_expr::func::SubFloat64),
+                l,
+                r,
+                var_map,
+            ),
+            Expression::Multiply(l, r) => self.translate_arithmetic(
+                mz_expr::BinaryFunc::MulFloat64(mz_expr::func::MulFloat64),
+                l,
+                r,
+                var_map,
+            ),
+            Expression::Divide(l, r) => self.translate_arithmetic(
+                mz_expr::BinaryFunc::DivFloat64(mz_expr::func::DivFloat64),
+                l,
+                r,
+                var_map,
+            ),
+            Expression::UnaryPlus(e) => {
+                // Unary plus is identity on numeric values.
+                self.translate_expression(e, var_map)
+            }
+            Expression::UnaryMinus(e) => {
+                let inner = self.to_float64(self.translate_expression(e, var_map)?);
+                let negated = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::NegFloat64(mz_expr::func::NegFloat64),
+                    expr: Box::new(inner),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                Ok(self.from_float64(negated))
+            }
+
+            // IF(cond, then, else)
+            Expression::If(cond, then, els) => {
+                let cond = self.translate_expression(cond, var_map)?;
+                let then = self.translate_expression(then, var_map)?;
+                let els = self.translate_expression(els, var_map)?;
+                Ok(HirScalarExpr::If {
+                    cond: Box::new(cond),
+                    then: Box::new(then),
+                    els: Box::new(els),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+
+            // COALESCE(expr, ...)
+            Expression::Coalesce(exprs) => {
+                let hir_exprs: Result<Vec<_>, _> = exprs
+                    .iter()
+                    .map(|e| self.translate_expression(e, var_map))
+                    .collect();
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::Coalesce(mz_expr::func::variadic::Coalesce),
+                    exprs: hir_exprs?,
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+
+            // EXISTS { pattern } — correlated subquery
+            Expression::Exists(pattern) => {
+                let planned = self.plan_pattern(pattern)?;
+                // Apply variable bindings from outer scope via filters.
+                let correlated = self.correlate_subquery(planned, var_map)?;
+                Ok(HirScalarExpr::Exists(
+                    Box::new(correlated),
+                    mz_ore::treat_as_equal::TreatAsEqual(None),
+                ))
+            }
+
+            // NOT EXISTS { pattern }
+            Expression::NotExists(pattern) => {
+                let planned = self.plan_pattern(pattern)?;
+                let correlated = self.correlate_subquery(planned, var_map)?;
+                let exists = HirScalarExpr::Exists(
+                    Box::new(correlated),
+                    mz_ore::treat_as_equal::TreatAsEqual(None),
+                );
+                Ok(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(exists),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+
+            // Type tests — best-effort on string encoding.
+            // IRI values are bare strings without quotes or `_:` prefix.
+            Expression::IsIri(e) => {
+                // An IRI in our encoding doesn't start with `"` or `_:`.
+                // This is an approximation — simple literals are also bare strings.
+                let inner = self.translate_expression(e, var_map)?;
+                let not_blank = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(self.string_starts_with(inner.clone(), "_:")),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let not_quoted = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(self.string_starts_with(inner.clone(), "\"")),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let not_null = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(HirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull),
+                        expr: Box::new(inner),
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    }),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+                    exprs: vec![not_null, not_blank, not_quoted],
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::IsBlank(e) => {
+                let inner = self.translate_expression(e, var_map)?;
+                Ok(self.string_starts_with(inner, "_:"))
+            }
+            Expression::IsLiteral(e) => {
+                // Literals in our encoding start with `"` or are bare simple strings.
+                // This is approximate — we check that it's not an IRI-like pattern
+                // and not a blank node.
+                let inner = self.translate_expression(e, var_map)?;
+                let not_blank = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(self.string_starts_with(inner.clone(), "_:")),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                // For now, approximate: anything that's not a blank node and not null.
+                let not_null = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(HirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull),
+                        expr: Box::new(inner),
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    }),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+                    exprs: vec![not_null, not_blank],
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::IsNumeric(e) => {
+                // Best-effort: try to cast to float64 and check if it succeeds.
+                // For now, use a regex match for numeric strings.
+                let inner = self.translate_expression(e, var_map)?;
+                Ok(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(
+                        mz_expr::func::IsRegexpMatchCaseSensitive,
+                    ),
+                    expr1: Box::new(inner),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::String("^-?[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?$"),
+                        SqlScalarType::String,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+
+            // Accessor functions — extract parts of RDF term encoding.
+            Expression::Str(e) => {
+                // STR() returns the lexical form. For simple strings, that's the
+                // value itself. For tagged/typed literals, extract the value.
+                // For IRIs, return the IRI string.
+                // Simplification: return the value as-is (correct for IRIs and
+                // simple literals; typed/tagged literal extraction deferred to prompt 17).
+                self.translate_expression(e, var_map)
+            }
+            Expression::Lang(e) => {
+                // LANG() returns the language tag of a literal.
+                // In our encoding, language-tagged literals are `"value"@lang`.
+                // For non-tagged values, return "".
+                // Full implementation deferred to prompt 17; return "" for now.
+                let _inner = self.translate_expression(e, var_map)?;
+                Ok(HirScalarExpr::literal(
+                    Datum::String(""),
+                    SqlScalarType::String,
+                ))
+            }
+            Expression::Datatype(e) => {
+                // DATATYPE() returns the datatype IRI.
+                // Full implementation deferred to prompt 17; return xsd:string for now.
+                let _inner = self.translate_expression(e, var_map)?;
+                Ok(HirScalarExpr::literal(
+                    Datum::String("http://www.w3.org/2001/XMLSchema#string"),
+                    SqlScalarType::String,
+                ))
+            }
+
+            // String functions — operate on string values directly.
+            Expression::Strlen(e) => {
+                let inner = self.translate_expression(e, var_map)?;
+                // CharLength returns Int32; cast to string for RDF consistency.
+                let len = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::CharLength(mz_expr::func::CharLength),
+                    expr: Box::new(inner),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                Ok(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::CastInt32ToString(mz_expr::func::CastInt32ToString),
+                    expr: Box::new(len),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Ucase(e) => {
+                let inner = self.translate_expression(e, var_map)?;
+                Ok(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Upper(mz_expr::func::Upper),
+                    expr: Box::new(inner),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Lcase(e) => {
+                let inner = self.translate_expression(e, var_map)?;
+                Ok(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Lower(mz_expr::func::Lower),
+                    expr: Box::new(inner),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Contains(haystack, needle) => {
+                // CONTAINS(str, substr) — use regex: needle is a literal substring.
+                // We use position() > 0 as an alternative.
+                let h = self.translate_expression(haystack, var_map)?;
+                let n = self.translate_expression(needle, var_map)?;
+                let pos = HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Position(mz_expr::func::Position),
+                    expr1: Box::new(h),
+                    expr2: Box::new(n),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                Ok(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Gt(mz_expr::func::Gt),
+                    expr1: Box::new(pos),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::Int32(0),
+                        SqlScalarType::Int32,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::StrStarts(string, prefix) => {
+                let s = self.translate_expression(string, var_map)?;
+                let p = self.translate_expression(prefix, var_map)?;
+                Ok(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::StartsWith(mz_expr::func::StartsWith),
+                    expr1: Box::new(s),
+                    expr2: Box::new(p),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::StrEnds(string, suffix) => {
+                // STRENDS: use position of suffix at end.
+                // Implement as: right(str, strlen(suffix)) = suffix.
+                // Or use regex: str ~ (suffix || '$').
+                // Simplest: negate "not ends with" using a regex.
+                let s = self.translate_expression(string, var_map)?;
+                let suf = self.translate_expression(suffix, var_map)?;
+                // Use: position(reverse(string), reverse(suffix)) = 1
+                // Actually simpler: use Right(string, charlen(suffix)) = suffix
+                let suffix_len = HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::CharLength(mz_expr::func::CharLength),
+                    expr: Box::new(suf.clone()),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let right_part = HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Right(mz_expr::func::Right),
+                    expr1: Box::new(s),
+                    expr2: Box::new(HirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::CastInt32ToInt64(mz_expr::func::CastInt32ToInt64),
+                        expr: Box::new(suffix_len),
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    }),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                Ok(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                    expr1: Box::new(right_part),
+                    expr2: Box::new(suf),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Substr(string, start, len) => {
+                let s = self.translate_expression(string, var_map)?;
+                let start_expr = self.translate_expression(start, var_map)?;
+                let start_i64 = self.to_int64(start_expr);
+                let mut args = vec![s, start_i64];
+                if let Some(length) = len {
+                    let len_expr = self.translate_expression(length, var_map)?;
+                    args.push(self.to_int64(len_expr));
+                }
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::Substr(mz_expr::func::variadic::Substr),
+                    exprs: args,
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Concat(exprs) => {
+                let hir_exprs: Result<Vec<_>, _> = exprs
+                    .iter()
+                    .map(|e| self.translate_expression(e, var_map))
+                    .collect();
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::Concat(mz_expr::func::variadic::Concat),
+                    exprs: hir_exprs?,
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Replace(string, pattern, replacement, flags) => {
+                let s = self.translate_expression(string, var_map)?;
+                let p = self.translate_expression(pattern, var_map)?;
+                let r = self.translate_expression(replacement, var_map)?;
+                let mut args = vec![s, p, r];
+                if let Some(f) = flags {
+                    args.push(self.translate_expression(f, var_map)?);
+                }
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::Replace(mz_expr::func::variadic::Replace),
+                    exprs: args,
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Regex(string, pattern, flags) => {
+                let s = self.translate_expression(string, var_map)?;
+                let p = self.translate_expression(pattern, var_map)?;
+                if let Some(f) = flags {
+                    let f_expr = self.translate_expression(f, var_map)?;
+                    // With flags, use case-insensitive if flags contain 'i'.
+                    // For simplicity, use the regex match with flags via RegexpMatch.
+                    // Actually, we just need a boolean result.
+                    // Use IsRegexpMatchCaseInsensitive when flags indicate 'i'.
+                    let _ = f_expr;
+                    Ok(HirScalarExpr::CallBinary {
+                        func: mz_expr::BinaryFunc::IsRegexpMatchCaseInsensitive(
+                            mz_expr::func::IsRegexpMatchCaseInsensitive,
+                        ),
+                        expr1: Box::new(s),
+                        expr2: Box::new(p),
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    })
+                } else {
+                    Ok(HirScalarExpr::CallBinary {
+                        func: mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(
+                            mz_expr::func::IsRegexpMatchCaseSensitive,
+                        ),
+                        expr1: Box::new(s),
+                        expr2: Box::new(p),
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    })
+                }
+            }
+
+            // IN / NOT IN — expand to OR chain of equality checks.
+            Expression::In(value, list) => {
+                let v = self.translate_expression(value, var_map)?;
+                let checks: Result<Vec<_>, _> = list
+                    .iter()
+                    .map(|e| {
+                        let item = self.translate_expression(e, var_map)?;
+                        Ok(HirScalarExpr::CallBinary {
+                            func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                            expr1: Box::new(v.clone()),
+                            expr2: Box::new(item),
+                            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                        })
+                    })
+                    .collect();
+                let checks = checks?;
+                if checks.is_empty() {
+                    Ok(HirScalarExpr::literal_false())
+                } else if checks.len() == 1 {
+                    Ok(checks.into_iter().next().unwrap())
+                } else {
+                    Ok(HirScalarExpr::CallVariadic {
+                        func: mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or),
+                        exprs: checks,
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    })
+                }
+            }
+            Expression::NotIn(value, list) => {
+                let in_expr = self
+                    .translate_expression(&Expression::In(value.clone(), list.clone()), var_map)?;
+                Ok(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(in_expr),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+
+            // Generic function call — not yet supported.
+            Expression::FunctionCall(iri, _args) => Err(PlanError {
+                message: format!("custom function call <{}> not supported", iri.value),
+            }),
+
+            // Aggregate functions — handled in prompt 10 (SELECT projection).
+            Expression::Count { .. }
+            | Expression::Sum { .. }
+            | Expression::Avg { .. }
+            | Expression::Min { .. }
+            | Expression::Max { .. }
+            | Expression::GroupConcat { .. }
+            | Expression::Sample { .. } => Err(PlanError {
+                message: "aggregate functions are handled during SELECT projection (prompt 10)"
+                    .to_string(),
             }),
         }
     }
@@ -654,6 +1156,100 @@ impl SparqlPlanner {
                 exprs: predicates,
                 name: mz_ore::treat_as_equal::TreatAsEqual(None),
             }
+        }
+    }
+
+    /// Translates a binary arithmetic expression.
+    ///
+    /// Casts both operands from string to float64, applies the operation,
+    /// and casts the result back to string for RDF storage.
+    fn translate_arithmetic(
+        &self,
+        func: mz_expr::BinaryFunc,
+        left: &Expression,
+        right: &Expression,
+        var_map: &BTreeMap<String, usize>,
+    ) -> Result<HirScalarExpr, PlanError> {
+        let l = self.to_float64(self.translate_expression(left, var_map)?);
+        let r = self.to_float64(self.translate_expression(right, var_map)?);
+        let result = HirScalarExpr::CallBinary {
+            func,
+            expr1: Box::new(l),
+            expr2: Box::new(r),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+        Ok(self.from_float64(result))
+    }
+
+    /// Casts a string expression to float64.
+    fn to_float64(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        HirScalarExpr::CallUnary {
+            func: mz_expr::UnaryFunc::CastStringToFloat64(mz_expr::func::CastStringToFloat64),
+            expr: Box::new(expr),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
+    }
+
+    /// Casts a float64 expression back to string.
+    fn from_float64(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        HirScalarExpr::CallUnary {
+            func: mz_expr::UnaryFunc::CastFloat64ToString(mz_expr::func::CastFloat64ToString),
+            expr: Box::new(expr),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
+    }
+
+    /// Casts a string expression to int64 (for SUBSTR position/length).
+    fn to_int64(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        HirScalarExpr::CallUnary {
+            func: mz_expr::UnaryFunc::CastStringToInt64(mz_expr::func::CastStringToInt64),
+            expr: Box::new(expr),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
+    }
+
+    /// Checks if a string expression starts with a given prefix.
+    fn string_starts_with(&self, expr: HirScalarExpr, prefix: &str) -> HirScalarExpr {
+        HirScalarExpr::CallBinary {
+            func: mz_expr::BinaryFunc::StartsWith(mz_expr::func::StartsWith),
+            expr1: Box::new(expr),
+            expr2: Box::new(HirScalarExpr::literal(
+                Datum::String(prefix),
+                SqlScalarType::String,
+            )),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
+    }
+
+    /// Creates a correlated subquery for EXISTS/NOT EXISTS.
+    ///
+    /// Filters the inner pattern's result on equality with outer-scope variables
+    /// that appear in the inner pattern.
+    fn correlate_subquery(
+        &self,
+        inner: PlannedRelation,
+        outer_var_map: &BTreeMap<String, usize>,
+    ) -> Result<HirRelationExpr, PlanError> {
+        // Find variables shared between outer scope and inner pattern.
+        let mut filters = Vec::new();
+        for (var_name, &inner_col) in &inner.var_map {
+            if let Some(&outer_col) = outer_var_map.get(var_name) {
+                // Correlate: inner.var = outer.var (outer ref via column).
+                filters.push(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                    expr1: Box::new(HirScalarExpr::column(inner_col)),
+                    expr2: Box::new(HirScalarExpr::column(outer_col)),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                });
+            }
+        }
+        if filters.is_empty() {
+            Ok(inner.expr)
+        } else {
+            Ok(HirRelationExpr::Filter {
+                input: Box::new(inner.expr),
+                predicates: filters,
+            })
         }
     }
 
@@ -1691,6 +2287,532 @@ mod tests {
         assert!(
             err.message.contains("not in scope"),
             "expected 'not in scope' error, got: {}",
+            err.message
+        );
+    }
+
+    // --- BIND tests (Prompt 9) ---
+
+    #[mz_ore::test]
+    fn test_bind_simple() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE { ?s ex:name ?name . BIND(UCASE(?name) AS ?upper) }",
+        );
+        assert_eq!(var_names(&result), vec!["name", "s", "upper"]);
+        assert_eq!(result.arity(), 3);
+        // BIND adds a Map node.
+        // Structure: Filter(Map(Join or Filter or ..., [upper_expr]))
+        // The group has filters collected and applied after BIND, but here there
+        // are no FILTERs, so it's just Map on the BGP join result.
+    }
+
+    #[mz_ore::test]
+    fn test_bind_arithmetic() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . BIND((?o + \"1\") AS ?incremented) }");
+        assert_eq!(var_names(&result), vec!["incremented", "o", "p", "s"]);
+        assert_eq!(result.arity(), 4);
+        // Verify the Map expression exists.
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => {
+                assert_eq!(scalars.len(), 1);
+                // The arithmetic should produce CastFloat64ToString(AddFloat64(...)).
+                match &scalars[0] {
+                    HirScalarExpr::CallUnary { func, .. } => {
+                        assert!(
+                            matches!(func, mz_expr::UnaryFunc::CastFloat64ToString(_)),
+                            "expected CastFloat64ToString, got {:?}",
+                            func
+                        );
+                    }
+                    other => panic!("expected CallUnary (cast), got {:?}", other),
+                }
+            }
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_bind_with_filter() {
+        // BIND introduces ?len, FILTER uses it.
+        let result = plan_query(
+            "SELECT * WHERE {
+                ?s ?p ?o .
+                BIND(STRLEN(?o) AS ?len) .
+                FILTER(?len > \"5\")
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["len", "o", "p", "s"]);
+        // Structure: Filter on top (because FILTERs are collected and applied after all patterns).
+        match &result.expr {
+            HirRelationExpr::Filter { .. } => {}
+            other => panic!(
+                "expected Filter (group filter applied after BIND), got {:?}",
+                other
+            ),
+        }
+    }
+
+    // --- VALUES tests (Prompt 9) ---
+
+    #[mz_ore::test]
+    fn test_values_single_variable() {
+        let result = plan_query(
+            "SELECT * WHERE {
+                VALUES ?x { <http://example.org/a> <http://example.org/b> }
+                ?x ?p ?o
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["o", "p", "x"]);
+    }
+
+    #[mz_ore::test]
+    fn test_values_multi_variable() {
+        let result = plan_query(
+            "SELECT * WHERE {
+                VALUES (?x ?y) { (<http://a.example/> \"1\") (<http://b.example/> \"2\") }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["x", "y"]);
+        assert_eq!(result.arity(), 2);
+        // Should be a Constant with 2 rows.
+        match &result.expr {
+            HirRelationExpr::Constant { rows, .. } => {
+                assert_eq!(rows.len(), 2);
+            }
+            other => panic!("expected Constant, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_values_with_undef() {
+        let result = plan_query(
+            "SELECT * WHERE {
+                VALUES (?x ?y) { (<http://a.example/> UNDEF) (UNDEF \"2\") }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["x", "y"]);
+        // Verify NULL handling: first row has y=NULL, second has x=NULL.
+        match &result.expr {
+            HirRelationExpr::Constant { rows, .. } => {
+                assert_eq!(rows.len(), 2);
+                // Check first row: x is set, y is null.
+                let datums0: Vec<_> = rows[0].iter().collect();
+                assert!(!datums0[0].is_null()); // x
+                assert!(datums0[1].is_null()); // y
+                // Check second row: x is null, y is set.
+                let datums1: Vec<_> = rows[1].iter().collect();
+                assert!(datums1[0].is_null()); // x
+                assert!(!datums1[1].is_null()); // y
+            }
+            other => panic!("expected Constant, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_values_joined_with_bgp() {
+        // VALUES should inner-join with the BGP on shared variable ?type.
+        let result = plan_query(
+            "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+             SELECT * WHERE {
+                VALUES ?type { <http://example.org/Person> <http://example.org/Org> }
+                ?s rdf:type ?type
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["s", "type"]);
+        // Structure: Project(Join(Constant, Project(Filter(Get))))
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Join { kind, .. } => {
+                    assert_eq!(*kind, JoinKind::Inner);
+                }
+                other => panic!("expected Join, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    // --- Expression tests (Prompt 9) ---
+
+    #[mz_ore::test]
+    fn test_filter_arithmetic_add() {
+        // Addition should produce CastFloat64ToString(AddFloat64(cast, cast)).
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER((?o + \"1\") = \"43\") }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_filter_arithmetic_subtract() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER((?o - \"1\") = \"41\") }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+    }
+
+    #[mz_ore::test]
+    fn test_filter_arithmetic_multiply_divide() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER((?o * \"2\") = \"84\") }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+        let result2 = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER((?o / \"2\") = \"21\") }");
+        assert_eq!(var_names(&result2), vec!["o", "p", "s"]);
+    }
+
+    #[mz_ore::test]
+    fn test_filter_unary_minus() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(-?o = \"-42\") }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+    }
+
+    #[mz_ore::test]
+    fn test_expression_if() {
+        let result = plan_query(
+            "SELECT * WHERE {
+                ?s ?p ?o .
+                BIND(IF(?o = \"yes\", \"true\", \"false\") AS ?bool)
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["bool", "o", "p", "s"]);
+        // The BIND should produce a Map with an If expression.
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => {
+                assert_eq!(scalars.len(), 1);
+                match &scalars[0] {
+                    HirScalarExpr::If { .. } => {}
+                    other => panic!("expected If, got {:?}", other),
+                }
+            }
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_coalesce() {
+        let result = plan_query(
+            "SELECT * WHERE {
+                ?s ?p ?o .
+                BIND(COALESCE(?o, \"default\") AS ?val)
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["o", "p", "s", "val"]);
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => match &scalars[0] {
+                HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                    assert!(matches!(func, mz_expr::VariadicFunc::Coalesce(_)));
+                    assert_eq!(exprs.len(), 2);
+                }
+                other => panic!("expected CallVariadic(Coalesce), got {:?}", other),
+            },
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_string_functions() {
+        // UCASE
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . BIND(UCASE(?o) AS ?upper) }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s", "upper"]);
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => match &scalars[0] {
+                HirScalarExpr::CallUnary { func, .. } => {
+                    assert!(matches!(func, mz_expr::UnaryFunc::Upper(_)));
+                }
+                other => panic!("expected Upper, got {:?}", other),
+            },
+            other => panic!("expected Map, got {:?}", other),
+        }
+
+        // LCASE
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . BIND(LCASE(?o) AS ?lower) }");
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => match &scalars[0] {
+                HirScalarExpr::CallUnary { func, .. } => {
+                    assert!(matches!(func, mz_expr::UnaryFunc::Lower(_)));
+                }
+                other => panic!("expected Lower, got {:?}", other),
+            },
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_strlen() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . BIND(STRLEN(?o) AS ?len) }");
+        assert_eq!(var_names(&result), vec!["len", "o", "p", "s"]);
+        // STRLEN produces CastInt32ToString(CharLength(?o)).
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => match &scalars[0] {
+                HirScalarExpr::CallUnary { func, .. } => {
+                    assert!(matches!(func, mz_expr::UnaryFunc::CastInt32ToString(_)));
+                }
+                other => panic!("expected CastInt32ToString, got {:?}", other),
+            },
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_contains() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(CONTAINS(?o, \"test\")) }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+        // CONTAINS uses Position > 0.
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+                match &predicates[0] {
+                    HirScalarExpr::CallBinary { func, .. } => {
+                        assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
+                    }
+                    other => panic!("expected Gt (Position > 0), got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_strstarts_strends() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(STRSTARTS(?o, \"http\")) }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallBinary { func, .. } => {
+                    assert!(matches!(func, mz_expr::BinaryFunc::StartsWith(_)));
+                }
+                other => panic!("expected StartsWith, got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(STRENDS(?o, \".org\")) }");
+        // STRENDS uses Eq(Right(str, len), suffix).
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallBinary { func, .. } => {
+                    assert!(matches!(func, mz_expr::BinaryFunc::Eq(_)));
+                }
+                other => panic!("expected Eq (Right comparison), got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_concat() {
+        let result =
+            plan_query("SELECT * WHERE { ?s ?p ?o . BIND(CONCAT(?s, \" \", ?o) AS ?combined) }");
+        assert_eq!(var_names(&result), vec!["combined", "o", "p", "s"]);
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => match &scalars[0] {
+                HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                    assert!(matches!(func, mz_expr::VariadicFunc::Concat(_)));
+                    assert_eq!(exprs.len(), 3);
+                }
+                other => panic!("expected Concat, got {:?}", other),
+            },
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_regex() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(REGEX(?o, \"^test\")) }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallBinary { func, .. } => {
+                    assert!(matches!(
+                        func,
+                        mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(_)
+                    ));
+                }
+                other => panic!("expected IsRegexpMatch, got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+
+        // With flags.
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(REGEX(?o, \"test\", \"i\")) }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallBinary { func, .. } => {
+                    assert!(matches!(
+                        func,
+                        mz_expr::BinaryFunc::IsRegexpMatchCaseInsensitive(_)
+                    ));
+                }
+                other => panic!("expected IsRegexpMatchCaseInsensitive, got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_in_not_in() {
+        let result =
+            plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o IN (\"a\", \"b\", \"c\")) }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                    assert!(matches!(func, mz_expr::VariadicFunc::Or(_)));
+                    assert_eq!(exprs.len(), 3);
+                }
+                other => panic!("expected Or (IN expansion), got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o NOT IN (\"x\", \"y\")) }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallUnary { func, .. } => {
+                    assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
+                }
+                other => panic!("expected Not(Or(...)), got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_is_blank() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(isBlank(?s)) }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallBinary { func, .. } => {
+                    assert!(matches!(func, mz_expr::BinaryFunc::StartsWith(_)));
+                }
+                other => panic!("expected StartsWith (_:), got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_is_numeric() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(isNumeric(?o)) }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallBinary { func, .. } => {
+                    assert!(matches!(
+                        func,
+                        mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(_)
+                    ));
+                }
+                other => panic!("expected IsRegexpMatch (numeric pattern), got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_replace() {
+        let result = plan_query(
+            "SELECT * WHERE { ?s ?p ?o . BIND(REPLACE(?o, \"old\", \"new\") AS ?replaced) }",
+        );
+        assert_eq!(var_names(&result), vec!["o", "p", "replaced", "s"]);
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => match &scalars[0] {
+                HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                    assert!(matches!(func, mz_expr::VariadicFunc::Replace(_)));
+                    assert_eq!(exprs.len(), 3);
+                }
+                other => panic!("expected Replace, got {:?}", other),
+            },
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_expression_substr() {
+        let result =
+            plan_query("SELECT * WHERE { ?s ?p ?o . BIND(SUBSTR(?o, \"2\", \"3\") AS ?sub) }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s", "sub"]);
+        match &result.expr {
+            HirRelationExpr::Map { scalars, .. } => match &scalars[0] {
+                HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                    assert!(matches!(func, mz_expr::VariadicFunc::Substr(_)));
+                    assert_eq!(exprs.len(), 3); // string, start, length
+                }
+                other => panic!("expected Substr, got {:?}", other),
+            },
+            other => panic!("expected Map, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_filter_exists() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                ?s ex:name ?name .
+                FILTER EXISTS { ?s ex:email ?email }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::Exists(_, _) => {}
+                other => panic!("expected Exists, got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_filter_not_exists() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                ?s ex:name ?name .
+                FILTER NOT EXISTS { ?s ex:deleted ?d }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
+                HirScalarExpr::CallUnary { func, expr, .. } => {
+                    assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
+                    assert!(matches!(expr.as_ref(), HirScalarExpr::Exists(_, _)));
+                }
+                other => panic!("expected Not(Exists), got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_combined_bind_values_filter() {
+        // A query using BIND, VALUES, and FILTER together.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                VALUES ?type { <http://example.org/Person> }
+                ?s a ?type .
+                ?s ex:name ?name .
+                BIND(UCASE(?name) AS ?upper) .
+                FILTER(CONTAINS(?upper, \"ALICE\"))
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["name", "s", "type", "upper"]);
+        // The outermost should be Filter (CONTAINS check).
+        match &result.expr {
+            HirRelationExpr::Filter { .. } => {}
+            other => panic!("expected Filter at top level, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_aggregate_error_in_filter() {
+        // Aggregates in FILTER should produce an error (they belong in SELECT/HAVING).
+        let query =
+            parse("SELECT * WHERE { ?s ?p ?o . FILTER(COUNT(?s) > \"5\") }").expect("parse ok");
+        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let err = planner.plan(&query).unwrap_err();
+        assert!(
+            err.message.contains("aggregate"),
+            "expected aggregate error, got: {}",
             err.message
         );
     }

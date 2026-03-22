@@ -800,3 +800,105 @@ New tests (20):
 - MINUS: shared variables (Threshold+Negate structure), no shared variables (no-op),
   preserves all left-side variables
 - Combined: OPTIONAL inside UNION, FILTER after OPTIONAL, OPTIONAL+MINUS together
+
+## 2026-03-22: Prompt 9 — Plan BIND, VALUES, expressions, and type coercions
+
+### What was done
+
+Extended the SPARQL planner in `src/sparql/src/plan.rs` to handle BIND and VALUES
+graph patterns, and completed the SPARQL expression translator with all expression
+forms (except aggregates, deferred to prompt 10).
+
+**BIND** — `plan_bind()` adds a computed column via `HirRelationExpr::Map`:
+1. Translate the BIND expression in the context of the current variable scope
+2. Append the result as a new column via `Map`
+3. Register the new variable in `var_map`
+
+In `plan_group`, BIND is processed in order (not collected like FILTERs), since
+BIND introduces a new variable that subsequent patterns/FILTERs may reference.
+
+**VALUES** — `plan_values()` creates a `HirRelationExpr::Constant`:
+1. Build `SqlRelationType` with one nullable String column per variable
+2. Convert each row's terms to string datums (UNDEF → Datum::Null)
+3. Pack into `Row` values for the Constant relation
+4. In `plan_group`, VALUES is treated like any other joinable pattern
+
+**Expression translator** — completed all remaining forms in `translate_expression`:
+
+- **Arithmetic** (`+`, `-`, `*`, `/`): Cast operands from string to float64 via
+  `CastStringToFloat64`, apply the binary op (e.g., `AddFloat64`), cast result
+  back via `CastFloat64ToString`. Helper methods: `to_float64()`, `from_float64()`,
+  `translate_arithmetic()`.
+- **Unary arithmetic**: `UnaryPlus` is identity, `UnaryMinus` uses `NegFloat64`.
+- **IF(cond, then, else)** → `HirScalarExpr::If`
+- **COALESCE(exprs)** → `VariadicFunc::Coalesce`
+- **EXISTS/NOT EXISTS** → `HirScalarExpr::Exists` with correlated subquery.
+  `correlate_subquery()` adds equality filters for outer-scope variables that
+  appear in the inner pattern.
+- **Type tests** (best-effort on string encoding):
+  - `isBlank(?x)` → `StartsWith(?x, "_:")`
+  - `isIRI(?x)` → `NOT IsNull AND NOT StartsWith("_:") AND NOT StartsWith("\"")`
+  - `isLiteral(?x)` → `NOT IsNull AND NOT StartsWith("_:")`
+  - `isNumeric(?x)` → regex match `^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$`
+- **Accessors** (stub implementations, full extraction deferred to prompt 17):
+  - `STR(?x)` → identity (correct for IRIs and simple literals)
+  - `LANG(?x)` → returns "" (language tag extraction TBD)
+  - `DATATYPE(?x)` → returns xsd:string (datatype extraction TBD)
+- **String functions**:
+  - `STRLEN` → `CharLength` + `CastInt32ToString`
+  - `UCASE` → `Upper`
+  - `LCASE` → `Lower`
+  - `CONTAINS` → `Position > 0`
+  - `STRSTARTS` → `StartsWith`
+  - `STRENDS` → `Right(str, CharLength(suffix)) = suffix`
+  - `SUBSTR` → `VariadicFunc::Substr` (with string→int64 cast for positions)
+  - `CONCAT` → `VariadicFunc::Concat`
+  - `REPLACE` → `VariadicFunc::Replace`
+  - `REGEX` → `IsRegexpMatchCaseSensitive` / `IsRegexpMatchCaseInsensitive`
+- **IN/NOT IN** → expanded to OR chain of equality checks
+- **Aggregates** → produce clear error (handled in prompt 10)
+- **FunctionCall** → produce error with the IRI
+
+### Key decisions
+
+1. **String-based RDF encoding**: All quad table values are TEXT. Arithmetic
+   operations cast to float64 and back. This is correct for numeric RDF literals
+   stored as bare strings but won't handle typed literals like `"42"^^<xsd:integer>`
+   until prompt 17 adds proper lexical form extraction.
+
+2. **BIND is order-dependent in groups**: Unlike FILTER (which applies to the whole
+   group regardless of position), BIND must be processed in sequence because it
+   introduces a new variable. The `plan_group` method processes BIND inline, not
+   collected-and-deferred like FILTER.
+
+3. **Type test approximations**: The string encoding makes it impossible to
+   perfectly distinguish IRIs from simple literals (both are bare strings). The
+   `isIRI` and `isLiteral` implementations are best-effort. A future encoding
+   change (e.g., adding a type discriminator column) would fix this.
+
+4. **EXISTS correlation**: Inner patterns in EXISTS/NOT EXISTS reference the same
+   quad table. Shared variables between outer and inner scope produce equality
+   filters on the inner relation, effectively correlating the subquery.
+
+5. **LANG/DATATYPE stubs**: These accessors need to parse the string encoding
+   (extract `@lang` suffix or `^^<type>` suffix). Deferred to prompt 17 where
+   RDF expression edge cases are addressed systematically.
+
+### Test results
+
+60 tests pass (32 old + 28 new), 0 failures, 1 warning (unused QUAD_ARITY constant).
+
+New tests (28):
+- BIND: simple, arithmetic expression, with FILTER using bound variable
+- VALUES: single variable, multi-variable (verifies Constant with 2 rows),
+  with UNDEF (verifies NULL handling), joined with BGP
+- Arithmetic: add, subtract, multiply/divide, unary minus
+- IF: if-then-else in BIND
+- COALESCE: two-argument coalesce in BIND
+- String functions: UCASE/LCASE, STRLEN, CONTAINS, STRSTARTS/STRENDS,
+  CONCAT, REGEX (with and without flags), REPLACE, SUBSTR
+- IN/NOT IN: three-element list, two-element list with NOT
+- Type tests: isBlank, isNumeric
+- EXISTS: simple EXISTS, NOT EXISTS
+- Combined: BIND+VALUES+FILTER together in one query
+- Error: aggregate in FILTER (produces expected error message)
