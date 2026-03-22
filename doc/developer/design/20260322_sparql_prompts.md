@@ -138,21 +138,21 @@ includes the goal, key files to read, and acceptance criteria.
 >
 > ~~Define output `RelationDesc` for each form.~~
 
-### Prompt 12: Plan property paths with LetRec
+### ~~Prompt 12: Plan property paths with LetRec~~
 
-> Implement property path compilation:
-> - Simple paths (IRI, inverse, sequence, alternative) → joins/unions/reversal.
-> - `path+` → `LetRec` with recursive union (base case + extension step).
-> - `path*` → `LetRec` for `path+` unioned with identity.
-> - `path?` → union with identity (non-recursive).
-> - Negated property set → Filter on predicate NOT IN (...).
+> ~~Implement property path compilation:~~
+> ~~- Simple paths (IRI, inverse, sequence, alternative) → joins/unions/reversal.~~
+> ~~- `path+` → `LetRec` with recursive union (base case + extension step).~~
+> ~~- `path*` → `LetRec` for `path+` unioned with identity.~~
+> ~~- `path?` → union with identity (non-recursive).~~
+> ~~- Negated property set → Filter on predicate NOT IN (...).~~
 >
-> Test with transitive closure queries (e.g., `?x rdfs:subClassOf+ ?y`).
-> Verify that the generated LetRec matches `WITH MUTUALLY RECURSIVE`
-> semantics.
+> ~~Test with transitive closure queries (e.g., `?x rdfs:subClassOf+ ?y`).~~
+> ~~Verify that the generated LetRec matches `WITH MUTUALLY RECURSIVE`~~
+> ~~semantics.~~
 >
-> Read first: `src/sql/src/plan/hir.rs` (LetRec variant),
-> `src/sql/src/plan/query.rs` (how SQL WMR is planned).
+> ~~Read first: `src/sql/src/plan/hir.rs` (LetRec variant),~~
+> ~~`src/sql/src/plan/query.rs` (how SQL WMR is planned).~~
 
 ---
 

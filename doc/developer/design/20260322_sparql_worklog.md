@@ -1078,3 +1078,120 @@ New tests (9):
   concrete terms in template, empty template
 - ASK: basic (verify Reduce+Map+Project structure), with FILTER
 - DESCRIBE: single IRI (verify Union structure), multiple IRIs, variable (error)
+
+## 2026-03-22: Prompt 12 — Plan property paths with LetRec
+
+### What was done
+
+Extended the SPARQL planner in `src/sparql/src/plan.rs` to compile all property
+path forms into HIR. Added a `Cell<u64>` counter to `SparqlPlanner` for
+allocating unique `LocalId`s needed by `LetRec` bindings.
+
+**Infrastructure changes**:
+- Added `next_local_id: Cell<u64>` to `SparqlPlanner` for `LocalId` allocation.
+- Added `alloc_local_id()` helper and `pp_relation_type()` for the 2-column
+  `(start, end)` type shared by all property path results.
+- Modified `plan_triple()` to delegate non-simple property paths to a new
+  `plan_triple_with_property_path()` method instead of returning an error.
+
+**`plan_triple_with_property_path()`** — integrates a property path result with
+the triple pattern's subject and object:
+1. Plans the property path → 2-column `(start=0, end=1)` relation.
+2. Applies filters for concrete subject/object terms.
+3. Adds equality filters for repeated variables (e.g., `?x path ?x`).
+4. Projects to only the columns that have variable bindings.
+
+**`plan_property_path()`** — dispatches on `PropertyPath` variant:
+
+- **`Iri`** (`plan_pp_iri`): Scan quad table, filter `predicate = IRI`, project
+  to `(subject, object)`. Same as the existing simple-IRI case but returns a
+  standalone 2-column relation.
+
+- **`Inverse`** (`plan_pp_inverse`): Plan inner path, swap columns via
+  `Project [1, 0]`.
+
+- **`Sequence`** (`plan_pp_sequence`): Chain joins through intermediate nodes.
+  For `p1/p2`: join `p1(start, mid)` with `p2(mid, end)` on `p1.end = p2.start`,
+  project to `(p1.start, p2.end)`. Generalizes to N-step chains.
+
+- **`Alternative`** (`plan_pp_alternative`): Union of all alternatives.
+
+- **`OneOrMore`** (`plan_pp_one_or_more`): Transitive closure via `LetRec`.
+  ```
+  LetRec {
+      bindings: [("path_plus", id,
+          Distinct(
+              plan_path(inner)                    -- base: one step
+              UNION
+              Join(Get(id), plan_path(inner),     -- extend: one more step
+                   on: Get.end = step.start)
+              → Project(Get.start, step.end)
+          )
+      )],
+      body: Get(id)
+  }
+  ```
+  The `Distinct` inside the binding is critical to ensure convergence — without
+  it, the recursive union would grow without bound.
+
+- **`ZeroOrMore`** (`plan_pp_zero_or_more`): `path+ UNION identity`.
+
+- **`ZeroOrOne`** (`plan_pp_zero_or_one`): `path UNION identity`.
+
+- **`NegatedSet`** (`plan_pp_negated_set`): Handles both forward and inverse
+  exclusions. Forward IRIs: scan quads where predicate NOT IN forward set,
+  project `(subject, object)`. Inverse IRIs: scan quads where predicate NOT IN
+  inverse set, project `(object, subject)` [swapped]. Union both parts.
+
+**Identity relation** (`plan_pp_identity`): All distinct nodes in the graph
+paired with themselves. Computed as `Distinct(subjects UNION objects)` where
+each side projects the same quad column to both start and end.
+
+### Key decisions
+
+1. **2-column property path abstraction**: All property path forms produce a
+   uniform 2-column `(start, end)` relation. This clean abstraction makes
+   composition trivial (sequence = join on end/start, alternative = union,
+   inverse = swap) and integration with triple patterns straightforward.
+
+2. **LetRec for path+ (not path*)**: The recursive `LetRec` implements `path+`
+   (one-or-more). `path*` is then `path+ UNION identity`. This avoids having
+   the identity pairs pollute the recursive computation — they're added once
+   at the end.
+
+3. **Distinct inside LetRec binding**: The binding value includes `Distinct` to
+   ensure the recursive computation converges. Without deduplication, each
+   iteration would re-discover already-known paths, preventing fixpoint.
+
+4. **No iteration limit**: `LetRec { limit: None, ... }` allows the recursion
+   to run until fixpoint. This matches `WITH MUTUALLY RECURSIVE` semantics in
+   Materialize. Users can add a LIMIT on the outer query to bound results.
+
+5. **Negated set: separate forward/inverse handling**: Forward exclusions filter
+   on predicate and project `(subject, object)`. Inverse exclusions filter on
+   predicate and project `(object, subject)`. The union of both correctly
+   handles mixed negated sets like `!(ex:knows | ^ex:hates)`.
+
+6. **Identity via quad table scan**: The identity relation for `path*`/`path?`
+   extracts all distinct nodes from the quad table (subjects UNION objects, each
+   duplicated as both start and end). This ensures that `?x path* ?x` includes
+   all nodes even if the path never matches.
+
+### Test results
+
+107 tests pass (93 old + 14 new), 0 failures, 0 warnings.
+
+New tests (14):
+- Inverse path: `^ex:knows`
+- Sequence: two-step (`ex:knows/ex:name`), three-step (`ex:a/ex:b/ex:c`)
+- Alternative: `ex:knows | ex:friendOf`
+- OneOrMore: `ex:knows+` (verifies LetRec presence in HIR)
+- ZeroOrMore: `ex:knows*`
+- ZeroOrOne: `ex:knows?`
+- Negated set: forward only (`!(ex:knows|ex:hates)`), mixed forward+inverse
+  (`!(ex:knows|^ex:hates)`)
+- Concrete subject with path+: `<alice> ex:knows+ ?friend`
+- Same variable subject/object: `?x ex:knows+ ?x` (reflexive closure)
+- Inverse of sequence: `^(ex:a/ex:b)`
+- Property path joined with BGP: `?s ex:knows+ ?friend . ?friend ex:name ?name`
+- RDFS subClassOf+: `?x rdfs:subClassOf+ ?y`

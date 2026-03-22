@@ -12,16 +12,16 @@
 //! Translates a [`SparqlQuery`] AST into [`HirRelationExpr`] by compiling
 //! SPARQL graph patterns into relational algebra over a quad table.
 
-use std::collections::BTreeMap;
-
-use mz_expr::{ColumnOrder, Id};
+use mz_expr::{ColumnOrder, Id, LocalId};
 use mz_repr::{Datum, GlobalId, SqlColumnType, SqlRelationType, SqlScalarType};
 use mz_sql::plan::{AggregateExpr, AggregateFunc, HirRelationExpr, HirScalarExpr, JoinKind};
+use std::cell::Cell;
+use std::collections::BTreeMap;
 
 use mz_sparql_parser::ast::{
-    Expression, GraphTerm, GroupGraphPattern, Iri, PropertyPath, QueryForm, RdfLiteral,
-    SelectClause, SelectModifier, SelectVariable, SparqlQuery, TriplePattern, VarOrIri, VarOrTerm,
-    Variable, VerbPath,
+    Expression, GraphTerm, GroupGraphPattern, Iri, NegatedPathElement, PropertyPath, QueryForm,
+    RdfLiteral, SelectClause, SelectModifier, SelectVariable, SparqlQuery, TriplePattern, VarOrIri,
+    VarOrTerm, Variable, VerbPath,
 };
 
 /// Column indices in the quad table `(subject, predicate, object, graph)`.
@@ -69,11 +69,15 @@ impl PlannedRelation {
 ///
 /// Maintains the quad table identity and type information needed to compile
 /// SPARQL patterns into HIR.
+// TODO: Introduce a SparqlQueryContext (analogous to SQL's QueryContext) to hold
+// shared planning state: ID generation, catalog access, name resolution, etc.
 pub struct SparqlPlanner {
     /// The global ID of the quad table.
     quad_table_id: GlobalId,
     /// The relation type of the quad table.
     quad_table_type: SqlRelationType,
+    /// Counter for allocating unique `LocalId`s (used by LetRec for recursive paths).
+    next_local_id: Cell<u64>,
 }
 
 impl SparqlPlanner {
@@ -92,6 +96,7 @@ impl SparqlPlanner {
         SparqlPlanner {
             quad_table_id,
             quad_table_type,
+            next_local_id: Cell::new(1),
         }
     }
 
@@ -2105,18 +2110,14 @@ impl SparqlPlanner {
                     var_to_quad_col.insert(v.name.clone(), QUAD_PREDICATE);
                 }
             }
+            VerbPath::Path(PropertyPath::Iri(iri)) => {
+                filters.push(self.iri_filter(QUAD_PREDICATE, iri));
+            }
             VerbPath::Path(path) => {
-                use mz_sparql_parser::ast::PropertyPath;
-                match path {
-                    PropertyPath::Iri(iri) => {
-                        filters.push(self.iri_filter(QUAD_PREDICATE, iri));
-                    }
-                    _ => {
-                        return Err(PlanError {
-                            message: "property paths not yet supported (see prompt 12)".into(),
-                        });
-                    }
-                }
+                // Non-simple property path: delegate to the property path planner.
+                // This produces a 2-column (start, end) relation; we integrate it
+                // with the triple pattern's subject and object.
+                return self.plan_triple_with_property_path(triple, path);
             }
         }
 
@@ -2310,6 +2311,480 @@ impl SparqlPlanner {
             GraphTerm::BlankNode(label) => format!("_:{}", label),
             GraphTerm::NumericLiteral(s) => s.clone(),
             GraphTerm::BooleanLiteral(b) => b.to_string(),
+        }
+    }
+
+    // --- Property path planning ---
+
+    /// Allocates a fresh `LocalId` for use in `LetRec` bindings.
+    fn alloc_local_id(&self) -> LocalId {
+        let id = self.next_local_id.get();
+        self.next_local_id.set(id + 1);
+        LocalId::new(id)
+    }
+
+    /// The relation type for a 2-column property path result `(start, end)`.
+    fn pp_relation_type(&self) -> SqlRelationType {
+        let text_nullable = SqlColumnType {
+            scalar_type: SqlScalarType::String,
+            nullable: true,
+        };
+        SqlRelationType::new(vec![text_nullable.clone(), text_nullable])
+    }
+
+    /// Plans a triple pattern that uses a non-simple property path in the
+    /// predicate position.
+    ///
+    /// Compiles the property path into a 2-column `(start, end)` relation,
+    /// then integrates it with the subject and object of the triple pattern
+    /// by applying filters (for concrete terms) and creating variable bindings.
+    fn plan_triple_with_property_path(
+        &self,
+        triple: &TriplePattern,
+        path: &PropertyPath,
+    ) -> Result<PlannedRelation, PlanError> {
+        // Plan the property path → 2-column (start=0, end=1) relation.
+        let mut expr = self.plan_property_path(path)?;
+
+        let mut filters = Vec::new();
+        let mut var_map: BTreeMap<String, usize> = BTreeMap::new();
+        let mut extra_eq_filters: Vec<(usize, usize)> = Vec::new();
+
+        // Process subject → column 0 (start).
+        match &triple.subject {
+            VarOrTerm::Variable(v) => {
+                if let Some(&existing_col) = var_map.get(&v.name) {
+                    extra_eq_filters.push((existing_col, 0));
+                } else {
+                    var_map.insert(v.name.clone(), 0);
+                }
+            }
+            VarOrTerm::Term(term) => {
+                let value = self.term_to_string(term);
+                filters.push(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                    expr1: Box::new(HirScalarExpr::column(0)),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::String(&value),
+                        SqlScalarType::String,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                });
+            }
+        }
+
+        // Process object → column 1 (end).
+        match &triple.object {
+            VarOrTerm::Variable(v) => {
+                if let Some(&existing_col) = var_map.get(&v.name) {
+                    extra_eq_filters.push((existing_col, 1));
+                } else {
+                    var_map.insert(v.name.clone(), 1);
+                }
+            }
+            VarOrTerm::Term(term) => {
+                let value = self.term_to_string(term);
+                filters.push(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                    expr1: Box::new(HirScalarExpr::column(1)),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::String(&value),
+                        SqlScalarType::String,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                });
+            }
+        }
+
+        // Add equality filters for repeated variables (e.g., `?x path ?x`).
+        for (col_a, col_b) in &extra_eq_filters {
+            filters.push(HirScalarExpr::CallBinary {
+                func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                expr1: Box::new(HirScalarExpr::column(*col_a)),
+                expr2: Box::new(HirScalarExpr::column(*col_b)),
+                name: mz_ore::treat_as_equal::TreatAsEqual(None),
+            });
+        }
+
+        if !filters.is_empty() {
+            expr = HirRelationExpr::Filter {
+                input: Box::new(expr),
+                predicates: filters,
+            };
+        }
+
+        // Project to only the columns that have variable bindings.
+        let sorted_vars: Vec<(String, usize)> = var_map.into_iter().collect();
+        let project_cols: Vec<usize> = sorted_vars.iter().map(|(_, col)| *col).collect();
+        let new_var_map: BTreeMap<String, usize> = sorted_vars
+            .iter()
+            .enumerate()
+            .map(|(out_idx, (name, _))| (name.clone(), out_idx))
+            .collect();
+
+        expr = HirRelationExpr::Project {
+            input: Box::new(expr),
+            outputs: project_cols,
+        };
+
+        Ok(PlannedRelation {
+            expr,
+            var_map: new_var_map,
+        })
+    }
+
+    /// Plans a property path expression into a 2-column `(start, end)` relation.
+    ///
+    /// The output always has exactly 2 columns:
+    /// - Column 0: the start node (subject position)
+    /// - Column 1: the end node (object position)
+    fn plan_property_path(&self, path: &PropertyPath) -> Result<HirRelationExpr, PlanError> {
+        match path {
+            PropertyPath::Iri(iri) => self.plan_pp_iri(iri),
+            PropertyPath::Inverse(inner) => self.plan_pp_inverse(inner),
+            PropertyPath::Sequence(paths) => self.plan_pp_sequence(paths),
+            PropertyPath::Alternative(paths) => self.plan_pp_alternative(paths),
+            PropertyPath::ZeroOrMore(inner) => self.plan_pp_zero_or_more(inner),
+            PropertyPath::OneOrMore(inner) => self.plan_pp_one_or_more(inner),
+            PropertyPath::ZeroOrOne(inner) => self.plan_pp_zero_or_one(inner),
+            PropertyPath::NegatedSet(elements) => self.plan_pp_negated_set(elements),
+        }
+    }
+
+    /// Simple IRI path: scan quad table, filter predicate = IRI, project to (subject, object).
+    fn plan_pp_iri(&self, iri: &Iri) -> Result<HirRelationExpr, PlanError> {
+        let get = HirRelationExpr::Get {
+            id: Id::Global(self.quad_table_id),
+            typ: self.quad_table_type.clone(),
+        };
+        let filtered = HirRelationExpr::Filter {
+            input: Box::new(get),
+            predicates: vec![self.iri_filter(QUAD_PREDICATE, iri)],
+        };
+        Ok(HirRelationExpr::Project {
+            input: Box::new(filtered),
+            outputs: vec![QUAD_SUBJECT, QUAD_OBJECT],
+        })
+    }
+
+    /// Inverse path `^path`: plan inner path, then swap (start, end) columns.
+    fn plan_pp_inverse(&self, inner: &PropertyPath) -> Result<HirRelationExpr, PlanError> {
+        let base = self.plan_property_path(inner)?;
+        // Swap columns: project [1, 0] instead of [0, 1].
+        Ok(HirRelationExpr::Project {
+            input: Box::new(base),
+            outputs: vec![1, 0],
+        })
+    }
+
+    /// Sequence path `path1 / path2 / ...`: chain joins through intermediate nodes.
+    ///
+    /// For `p1/p2`: join p1(start, mid) with p2(mid, end) on p1.end = p2.start,
+    /// project to (p1.start, p2.end).
+    fn plan_pp_sequence(&self, paths: &[PropertyPath]) -> Result<HirRelationExpr, PlanError> {
+        if paths.is_empty() {
+            return Err(PlanError {
+                message: "empty property path sequence".to_string(),
+            });
+        }
+        if paths.len() == 1 {
+            return self.plan_property_path(&paths[0]);
+        }
+
+        let mut result = self.plan_property_path(&paths[0])?;
+
+        for path in &paths[1..] {
+            let right = self.plan_property_path(path)?;
+            // Join on result.end (col 1) = right.start (col 0, offset by 2).
+            let on = HirScalarExpr::CallBinary {
+                func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                expr1: Box::new(HirScalarExpr::column(1)), // left.end
+                expr2: Box::new(HirScalarExpr::column(2)), // right.start (offset by left arity=2)
+                name: mz_ore::treat_as_equal::TreatAsEqual(None),
+            };
+
+            let joined = HirRelationExpr::Join {
+                left: Box::new(result),
+                right: Box::new(right),
+                on,
+                kind: JoinKind::Inner,
+            };
+
+            // Project to (left.start=0, right.end=3).
+            result = HirRelationExpr::Project {
+                input: Box::new(joined),
+                outputs: vec![0, 3], // left.start, right.end
+            };
+        }
+
+        Ok(result)
+    }
+
+    /// Alternative path `path1 | path2 | ...`: union of all alternatives.
+    fn plan_pp_alternative(&self, paths: &[PropertyPath]) -> Result<HirRelationExpr, PlanError> {
+        if paths.is_empty() {
+            return Err(PlanError {
+                message: "empty property path alternative".to_string(),
+            });
+        }
+        if paths.len() == 1 {
+            return self.plan_property_path(&paths[0]);
+        }
+
+        let mut result = self.plan_property_path(&paths[0])?;
+        for path in &paths[1..] {
+            let right = self.plan_property_path(path)?;
+            result = HirRelationExpr::Union {
+                base: Box::new(result),
+                inputs: vec![right],
+            };
+        }
+        Ok(result)
+    }
+
+    /// One-or-more path `path+`: transitive closure via `LetRec`.
+    ///
+    /// Generates:
+    /// ```text
+    /// LetRec {
+    ///     bindings: [("path_plus", id, base UNION extend)],
+    ///     body: Get(id)
+    /// }
+    /// ```
+    /// where `base = plan_property_path(inner)` (one step)
+    /// and `extend = Join(Get(id), base, on: Get.end = base.start)
+    ///               → Project(Get.start, base.end)`
+    fn plan_pp_one_or_more(&self, inner: &PropertyPath) -> Result<HirRelationExpr, PlanError> {
+        let local_id = self.alloc_local_id();
+        let pp_type = self.pp_relation_type();
+
+        // Base case: one step of the path.
+        let base = self.plan_property_path(inner)?;
+
+        // Recursive reference: Get the accumulating result.
+        let recursive_get = HirRelationExpr::Get {
+            id: Id::Local(local_id),
+            typ: pp_type.clone(),
+        };
+
+        // One step for extension.
+        let step = self.plan_property_path(inner)?;
+
+        // Join recursive_get.end (col 1) with step.start (col 0, offset by 2).
+        let extend_on = HirScalarExpr::CallBinary {
+            func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+            expr1: Box::new(HirScalarExpr::column(1)), // recursive.end
+            expr2: Box::new(HirScalarExpr::column(2)), // step.start
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        let extend_join = HirRelationExpr::Join {
+            left: Box::new(recursive_get),
+            right: Box::new(step),
+            on: extend_on,
+            kind: JoinKind::Inner,
+        };
+
+        // Project to (recursive.start=0, step.end=3).
+        let extend = HirRelationExpr::Project {
+            input: Box::new(extend_join),
+            outputs: vec![0, 3],
+        };
+
+        // The binding value is: base UNION extend.
+        let binding_value = HirRelationExpr::Union {
+            base: Box::new(base),
+            inputs: vec![extend],
+        };
+
+        // Deduplicate to avoid infinite growth.
+        let binding_value = HirRelationExpr::Distinct {
+            input: Box::new(binding_value),
+        };
+
+        // The body is just Get(local_id).
+        let body = HirRelationExpr::Get {
+            id: Id::Local(local_id),
+            typ: pp_type.clone(),
+        };
+
+        Ok(HirRelationExpr::LetRec {
+            limit: None,
+            bindings: vec![("path_plus".to_string(), local_id, binding_value, pp_type)],
+            body: Box::new(body),
+        })
+    }
+
+    /// Zero-or-more path `path*`: transitive closure plus identity.
+    ///
+    /// `path* = path+ UNION identity`
+    /// where identity = all distinct nodes paired with themselves.
+    fn plan_pp_zero_or_more(&self, inner: &PropertyPath) -> Result<HirRelationExpr, PlanError> {
+        let plus = self.plan_pp_one_or_more(inner)?;
+        let identity = self.plan_pp_identity()?;
+        Ok(HirRelationExpr::Union {
+            base: Box::new(plus),
+            inputs: vec![identity],
+        })
+    }
+
+    /// Zero-or-one path `path?`: one step plus identity (non-recursive).
+    ///
+    /// `path? = path UNION identity`
+    fn plan_pp_zero_or_one(&self, inner: &PropertyPath) -> Result<HirRelationExpr, PlanError> {
+        let base = self.plan_property_path(inner)?;
+        let identity = self.plan_pp_identity()?;
+        Ok(HirRelationExpr::Union {
+            base: Box::new(base),
+            inputs: vec![identity],
+        })
+    }
+
+    /// Identity relation for `path*` and `path?`: all distinct nodes paired with themselves.
+    ///
+    /// `SELECT DISTINCT subject AS start, subject AS end FROM quad_table
+    ///  UNION
+    ///  SELECT DISTINCT object AS start, object AS end FROM quad_table`
+    fn plan_pp_identity(&self) -> Result<HirRelationExpr, PlanError> {
+        let get = HirRelationExpr::Get {
+            id: Id::Global(self.quad_table_id),
+            typ: self.quad_table_type.clone(),
+        };
+
+        // All subjects as (node, node).
+        let subjects = HirRelationExpr::Project {
+            input: Box::new(get.clone()),
+            outputs: vec![QUAD_SUBJECT, QUAD_SUBJECT],
+        };
+
+        // All objects as (node, node).
+        let objects = HirRelationExpr::Project {
+            input: Box::new(get),
+            outputs: vec![QUAD_OBJECT, QUAD_OBJECT],
+        };
+
+        let unioned = HirRelationExpr::Union {
+            base: Box::new(subjects),
+            inputs: vec![objects],
+        };
+
+        Ok(HirRelationExpr::Distinct {
+            input: Box::new(unioned),
+        })
+    }
+
+    /// Negated property set `!(iri1 | ^iri2 | iri3)`.
+    ///
+    /// Forward IRIs: scan quads where predicate NOT IN the forward set,
+    /// project to (subject, object).
+    /// Inverse IRIs: scan quads where predicate NOT IN the inverse set,
+    /// project to (object, subject) [swapped].
+    /// Union both results.
+    fn plan_pp_negated_set(
+        &self,
+        elements: &[NegatedPathElement],
+    ) -> Result<HirRelationExpr, PlanError> {
+        let forward_iris: Vec<&Iri> = elements
+            .iter()
+            .filter_map(|e| match e {
+                NegatedPathElement::Forward(iri) => Some(iri),
+                NegatedPathElement::Inverse(_) => None,
+            })
+            .collect();
+
+        let inverse_iris: Vec<&Iri> = elements
+            .iter()
+            .filter_map(|e| match e {
+                NegatedPathElement::Inverse(iri) => Some(iri),
+                NegatedPathElement::Forward(_) => None,
+            })
+            .collect();
+
+        let mut parts = Vec::new();
+
+        if !forward_iris.is_empty() || inverse_iris.is_empty() {
+            // Forward part: predicate NOT IN forward_iris → (subject, object).
+            // If there are no forward IRIs but also no inverse IRIs, this
+            // degenerates to scanning all triples (which is correct for `!()`).
+            let get = HirRelationExpr::Get {
+                id: Id::Global(self.quad_table_id),
+                typ: self.quad_table_type.clone(),
+            };
+
+            if forward_iris.is_empty() {
+                // No forward IRIs to exclude — include all triples.
+                parts.push(HirRelationExpr::Project {
+                    input: Box::new(get),
+                    outputs: vec![QUAD_SUBJECT, QUAD_OBJECT],
+                });
+            } else {
+                // Filter: predicate NOT IN (iri1, iri2, ...)
+                let not_in = self.predicate_not_in_filter(&forward_iris);
+                let filtered = HirRelationExpr::Filter {
+                    input: Box::new(get),
+                    predicates: vec![not_in],
+                };
+                parts.push(HirRelationExpr::Project {
+                    input: Box::new(filtered),
+                    outputs: vec![QUAD_SUBJECT, QUAD_OBJECT],
+                });
+            }
+        }
+
+        if !inverse_iris.is_empty() {
+            // Inverse part: predicate NOT IN inverse_iris → (object, subject) [swapped].
+            let get = HirRelationExpr::Get {
+                id: Id::Global(self.quad_table_id),
+                typ: self.quad_table_type.clone(),
+            };
+
+            let not_in = self.predicate_not_in_filter(&inverse_iris);
+            let filtered = HirRelationExpr::Filter {
+                input: Box::new(get),
+                predicates: vec![not_in],
+            };
+            // Swap: project (object, subject) for inverse direction.
+            parts.push(HirRelationExpr::Project {
+                input: Box::new(filtered),
+                outputs: vec![QUAD_OBJECT, QUAD_SUBJECT],
+            });
+        }
+
+        if parts.len() == 1 {
+            Ok(parts.pop().unwrap())
+        } else {
+            let mut result = parts.remove(0);
+            for part in parts {
+                result = HirRelationExpr::Union {
+                    base: Box::new(result),
+                    inputs: vec![part],
+                };
+            }
+            Ok(result)
+        }
+    }
+
+    /// Builds a `NOT (pred = iri1 OR pred = iri2 OR ...)` filter for the predicate column.
+    fn predicate_not_in_filter(&self, iris: &[&Iri]) -> HirScalarExpr {
+        let eq_checks: Vec<HirScalarExpr> = iris
+            .iter()
+            .map(|iri| self.iri_filter(QUAD_PREDICATE, iri))
+            .collect();
+
+        let any_match = if eq_checks.len() == 1 {
+            eq_checks.into_iter().next().unwrap()
+        } else {
+            HirScalarExpr::CallVariadic {
+                func: mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or),
+                exprs: eq_checks,
+                name: mz_ore::treat_as_equal::TreatAsEqual(None),
+            }
+        };
+
+        HirScalarExpr::CallUnary {
+            func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+            expr: Box::new(any_match),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
         }
     }
 }
@@ -4152,5 +4627,168 @@ mod tests {
             "unexpected error: {}",
             err.message
         );
+    }
+
+    // --- Property path tests ---
+
+    #[mz_ore::test]
+    fn test_pp_inverse() {
+        // ^ex:knows swaps subject/object direction.
+        let result =
+            plan_query("PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ^ex:knows ?o }");
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_sequence() {
+        // ex:knows / ex:name: chain two steps.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ex:knows/ex:name ?name }",
+        );
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_alternative() {
+        // ex:knows | ex:friendOf: union of two predicates.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> SELECT * WHERE { ?s (ex:knows|ex:friendOf) ?o }",
+        );
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+
+        // The property path result (before subject/object integration) should be
+        // a Union of two filtered scans.
+    }
+
+    #[mz_ore::test]
+    fn test_pp_one_or_more() {
+        // ex:knows+: transitive closure via LetRec.
+        let result =
+            plan_query("PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ex:knows+ ?o }");
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+
+        // The top-level expression should contain a LetRec somewhere.
+        fn has_letrec(expr: &HirRelationExpr) -> bool {
+            match expr {
+                HirRelationExpr::LetRec { .. } => true,
+                HirRelationExpr::Project { input, .. }
+                | HirRelationExpr::Filter { input, .. }
+                | HirRelationExpr::Distinct { input, .. }
+                | HirRelationExpr::Negate { input }
+                | HirRelationExpr::Threshold { input }
+                | HirRelationExpr::TopK { input, .. }
+                | HirRelationExpr::Reduce { input, .. }
+                | HirRelationExpr::Map { input, .. } => has_letrec(input),
+                HirRelationExpr::Join { left, right, .. } => has_letrec(left) || has_letrec(right),
+                HirRelationExpr::Union { base, inputs } => {
+                    has_letrec(base) || inputs.iter().any(has_letrec)
+                }
+                HirRelationExpr::Let { value, body, .. } => has_letrec(value) || has_letrec(body),
+                _ => false,
+            }
+        }
+        assert!(has_letrec(&result.expr), "expected LetRec for path+");
+    }
+
+    #[mz_ore::test]
+    fn test_pp_zero_or_more() {
+        // ex:knows*: transitive closure + identity.
+        let result =
+            plan_query("PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ex:knows* ?o }");
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_zero_or_one() {
+        // ex:knows?: one step or identity.
+        let result =
+            plan_query("PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ex:knows? ?o }");
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_negated_set() {
+        // !(ex:knows | ex:hates): all predicates except these two.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> SELECT * WHERE { ?s !(ex:knows|ex:hates) ?o }",
+        );
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_negated_set_with_inverse() {
+        // !(ex:knows | ^ex:hates): forward exclusion + inverse exclusion.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> SELECT * WHERE { ?s !(ex:knows|^ex:hates) ?o }",
+        );
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_transitive_with_concrete_subject() {
+        // Concrete subject with path+: filter on start node.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> \
+             SELECT * WHERE { <http://example.org/alice> ex:knows+ ?friend }",
+        );
+        assert_eq!(var_names(&result), vec!["friend"]);
+        assert_eq!(result.arity(), 1);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_sequence_three_steps() {
+        // Three-step sequence: ex:a / ex:b / ex:c.
+        let result =
+            plan_query("PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ex:a/ex:b/ex:c ?o }");
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_inverse_sequence() {
+        // ^(ex:a / ex:b): inverse of a sequence.
+        let result =
+            plan_query("PREFIX ex: <http://example.org/> SELECT * WHERE { ?s ^(ex:a/ex:b) ?o }");
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_same_variable_subject_object() {
+        // ?x ex:knows+ ?x: reflexive transitive closure.
+        let result =
+            plan_query("PREFIX ex: <http://example.org/> SELECT * WHERE { ?x ex:knows+ ?x }");
+        assert_eq!(var_names(&result), vec!["x"]);
+        assert_eq!(result.arity(), 1);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_with_bgp_join() {
+        // Property path combined with regular BGP triple — shared variable join.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/> \
+             SELECT * WHERE { ?s ex:knows+ ?friend . ?friend ex:name ?name }",
+        );
+        assert_eq!(var_names(&result), vec!["friend", "name", "s"]);
+        assert_eq!(result.arity(), 3);
+    }
+
+    #[mz_ore::test]
+    fn test_pp_rdfs_subclass_transitive() {
+        // Classic RDFS: ?x rdfs:subClassOf+ ?y (transitive subclass).
+        let result = plan_query(
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> \
+             SELECT * WHERE { ?x rdfs:subClassOf+ ?y }",
+        );
+        assert_eq!(var_names(&result), vec!["x", "y"]);
+        assert_eq!(result.arity(), 2);
     }
 }
