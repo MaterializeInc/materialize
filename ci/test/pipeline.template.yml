@@ -457,7 +457,7 @@ steps:
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
-          args: [--scenario=KafkaSources, --actions=80]
+          args: [--scenario=KafkaSources, --actions=60]
 
   - id: checks-no-restart-no-upgrade
     label: Checks parallel

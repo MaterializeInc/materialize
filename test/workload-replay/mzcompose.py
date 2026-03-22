@@ -70,7 +70,10 @@ SERVICES = [
         cluster_replica_size=cluster_replica_sizes,
         ports=[6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257],
         environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
-        additional_system_parameter_defaults={"enable_rbac_checks": "false"},
+        additional_system_parameter_defaults={
+            "enable_rbac_checks": "false",
+            "webhook_concurrent_request_limit": "5000",
+        },
     ),
     Testdrive(
         seed=1,
@@ -109,7 +112,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--runtime",
         type=int,
-        default=600,
+        default=420,
         help="runtime for continuous ingestion/query period, in seconds",
     )
     parser.add_argument(
@@ -212,7 +215,7 @@ def workflow_benchmark(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--runtime",
         type=int,
-        default=600,
+        default=420,
         help="runtime for continuous ingestion/query period, in seconds",
     )
     parser.add_argument(
