@@ -18,7 +18,7 @@ fn test_fqn() -> FullyQualifiedName {
 #[test]
 fn test_cte_references_not_qualified() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -61,7 +61,7 @@ fn test_cte_references_not_qualified() {
 #[test]
 fn test_multiple_ctes() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -115,7 +115,7 @@ fn test_multiple_ctes() {
 #[test]
 fn test_nested_cte_scope() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -160,7 +160,7 @@ fn test_nested_cte_scope() {
 #[test]
 fn test_cte_with_joins() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -209,7 +209,7 @@ fn test_cte_with_joins() {
 fn test_cte_shadowing_external_table() {
     // Test that a CTE with the same name as an external table shadows it
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -253,7 +253,7 @@ fn test_cte_shadowing_external_table() {
 fn test_complex_multi_cte_query() {
     // Test the exact query from the user that was failing
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW inventory_item AS
@@ -346,7 +346,7 @@ fn test_complex_multi_cte_query() {
 fn test_implicit_alias_unqualified_table() {
     // Test that unqualified table names get implicit aliases
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -378,7 +378,7 @@ fn test_implicit_alias_unqualified_table() {
 fn test_implicit_alias_schema_qualified_table() {
     // Test that schema-qualified table names get implicit aliases
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -410,7 +410,7 @@ fn test_implicit_alias_schema_qualified_table() {
 fn test_implicit_alias_fully_qualified_table() {
     // Test that fully qualified table names get implicit aliases
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -442,7 +442,7 @@ fn test_implicit_alias_fully_qualified_table() {
 fn test_no_implicit_alias_when_explicit_alias_exists() {
     // Test that explicit aliases are preserved and no implicit alias is added
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -479,7 +479,7 @@ fn test_no_implicit_alias_when_explicit_alias_exists() {
 fn test_no_implicit_alias_for_cte() {
     // Test that CTEs don't get implicit aliases
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -518,7 +518,7 @@ fn test_no_implicit_alias_for_cte() {
 fn test_implicit_alias_in_lateral_join() {
     // Test implicit aliases work correctly in LATERAL joins
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -559,7 +559,7 @@ fn test_implicit_alias_in_lateral_join() {
 fn test_having_clause_with_subquery() {
     // Test that subqueries in HAVING clauses are normalized
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -592,7 +592,7 @@ fn test_having_clause_with_subquery() {
 fn test_having_clause_with_nested_subquery() {
     // Test deeply nested subqueries in HAVING
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -635,7 +635,7 @@ fn test_having_clause_with_nested_subquery() {
 fn test_having_with_cte_reference() {
     // Test HAVING clause with CTE reference (should not be qualified)
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -681,7 +681,7 @@ fn test_and_operator_with_subqueries() {
     // Test AND operator with subqueries on both sides
     // This tests that Expr::Op is being recursively normalized
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -718,7 +718,7 @@ fn test_and_operator_with_subqueries() {
 fn test_or_operator_with_subqueries() {
     // Test OR operator with subqueries
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -752,7 +752,7 @@ fn test_or_operator_with_subqueries() {
 fn test_comparison_operator_with_subquery() {
     // Test comparison operators (>, <, =, etc.) with subqueries
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -786,7 +786,7 @@ fn test_comparison_operator_with_subquery() {
 fn test_nested_operators_with_subqueries() {
     // Test deeply nested operators with multiple subqueries
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -821,7 +821,7 @@ fn test_nested_operators_with_subqueries() {
 fn test_arithmetic_operators_with_subqueries() {
     // Test arithmetic operators containing subqueries
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -861,7 +861,7 @@ fn test_arithmetic_operators_with_subqueries() {
 fn test_schema_qualified_with_having_subquery() {
     // Integration test: schema-qualified tables with HAVING subquery
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -907,7 +907,7 @@ fn test_schema_qualified_with_having_subquery() {
 fn test_lateral_with_operators_and_implicit_alias() {
     // Integration test: LATERAL join with operators and implicit aliases
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -951,7 +951,7 @@ fn test_lateral_with_operators_and_implicit_alias() {
 fn test_wmr_with_operators_and_having() {
     // Integration test: WITH MUTUALLY RECURSIVE with operators and HAVING
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW v AS
@@ -1011,7 +1011,7 @@ fn test_wmr_with_operators_and_having() {
 fn test_flattening_unqualified_name() {
     // Test that unqualified names get flattened to "database.schema.object"
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::flattening(&fqn);
+    let mut visitor = NormalizingVisitor::flattening(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1041,7 +1041,7 @@ fn test_flattening_unqualified_name() {
 fn test_flattening_schema_qualified_name() {
     // Test that schema-qualified names get flattened
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::flattening(&fqn);
+    let mut visitor = NormalizingVisitor::flattening(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1071,7 +1071,7 @@ fn test_flattening_schema_qualified_name() {
 fn test_flattening_fully_qualified_name() {
     // Test that fully qualified names get flattened
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::flattening(&fqn);
+    let mut visitor = NormalizingVisitor::flattening(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1101,7 +1101,7 @@ fn test_flattening_fully_qualified_name() {
 fn test_flattening_with_join() {
     // Test flattening with multiple tables in a join
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::flattening(&fqn);
+    let mut visitor = NormalizingVisitor::flattening(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1136,7 +1136,7 @@ fn test_flattening_with_join() {
 fn test_flattening_cte_not_flattened() {
     // Test that CTEs are not flattened (they remain unqualified)
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::flattening(&fqn);
+    let mut visitor = NormalizingVisitor::flattening(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1192,7 +1192,7 @@ fn test_staging_unqualified_name() {
     let fqn = staging_test_fqn();
     let external_deps = BTreeSet::new();
     let replacement_objects = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_deploy123".to_string(),
         &external_deps,
@@ -1230,7 +1230,7 @@ fn test_staging_schema_qualified_name() {
     let fqn = staging_test_fqn();
     let external_deps = BTreeSet::new();
     let replacement_objects = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_deploy123".to_string(),
         &external_deps,
@@ -1274,7 +1274,7 @@ fn test_staging_external_dependency_not_transformed() {
     });
 
     let replacement_objects = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_deploy123".to_string(),
         &external_deps,
@@ -1324,7 +1324,7 @@ fn test_staging_mixed_internal_and_external() {
     });
 
     let replacement_objects = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_staging".to_string(),
         &external_deps,
@@ -1378,7 +1378,7 @@ fn test_staging_objects_to_deploy_filter() {
     // Note: "inventory" is NOT in objects_to_deploy
 
     let replacement_objects = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_staging".to_string(),
         &external_deps,
@@ -1455,7 +1455,7 @@ fn test_staging_cross_schema_objects_to_deploy_filter() {
         object: "order_summary".to_string(),
     });
 
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_v3".to_string(),
         &external_deps,
@@ -1522,7 +1522,7 @@ fn test_staging_replacement_schema_full_deploy() {
     // Empty replacement_objects — first deploy, no MVs exist in production yet
     let replacement_objects = BTreeSet::new();
 
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_v1".to_string(),
         &external_deps,
@@ -1593,7 +1593,7 @@ fn test_staging_replacement_schema_incremental_deploy() {
         object: "order_summary".to_string(),
     });
 
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_v3".to_string(),
         &external_deps,
@@ -1638,7 +1638,7 @@ fn test_staging_cte_not_transformed() {
     let fqn = staging_test_fqn();
     let external_deps = BTreeSet::new();
     let replacement_objects = BTreeSet::new();
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &fqn,
         "_staging".to_string(),
         &external_deps,
@@ -1687,7 +1687,7 @@ fn test_staging_cte_not_transformed() {
 fn test_nested_cte_in_derived_table() {
     // Test CTE defined inside a derived table (subquery in FROM)
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1738,7 +1738,7 @@ fn test_nested_cte_in_derived_table() {
 fn test_nested_cte_in_scalar_subquery() {
     // Test CTE defined inside a scalar subquery (in SELECT list)
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1788,7 +1788,7 @@ fn test_nested_cte_in_scalar_subquery() {
 fn test_nested_cte_in_where_subquery() {
     // Test CTE defined inside a subquery in WHERE clause
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1840,7 +1840,7 @@ fn test_nested_cte_in_where_subquery() {
 fn test_triple_nested_ctes() {
     // Test three levels of nested CTEs
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1899,7 +1899,7 @@ fn test_triple_nested_ctes() {
 fn test_cte_name_shadowing_in_nested_scope() {
     // Test that a CTE in inner scope shadows a CTE with same name in outer scope
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -1953,7 +1953,7 @@ fn test_cte_name_shadowing_in_nested_scope() {
 fn test_nested_cte_in_lateral_join() {
     // Test CTE defined inside a LATERAL join subquery
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2006,7 +2006,7 @@ fn test_nested_cte_in_lateral_join() {
 fn test_parallel_nested_ctes_in_union() {
     // Test multiple independent CTEs in different branches of a UNION
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2060,7 +2060,7 @@ fn test_parallel_nested_ctes_in_union() {
 fn test_outer_cte_visible_in_nested_subquery() {
     // Test that outer CTE is visible in nested subqueries (without redefining)
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2103,7 +2103,7 @@ fn test_outer_cte_visible_in_nested_subquery() {
 fn test_nested_cte_with_join_to_outer_cte() {
     // Test nested CTE that joins with outer CTE
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2159,7 +2159,7 @@ fn test_nested_cte_with_join_to_outer_cte() {
 fn test_nested_cte_in_exists_subquery() {
     // Test CTE defined inside an EXISTS subquery
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2219,7 +2219,7 @@ fn test_nested_cte_in_exists_subquery() {
 #[test]
 fn test_coalesce_with_subquery_normalized() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2249,7 +2249,7 @@ fn test_coalesce_with_subquery_normalized() {
 #[test]
 fn test_nested_expr_with_subquery_normalized() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2276,7 +2276,7 @@ fn test_nested_expr_with_subquery_normalized() {
 #[test]
 fn test_not_expr_with_subquery_normalized() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2303,7 +2303,7 @@ fn test_not_expr_with_subquery_normalized() {
 #[test]
 fn test_and_or_with_subquery_normalized() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2336,7 +2336,7 @@ fn test_and_or_with_subquery_normalized() {
 #[test]
 fn test_nullif_with_subquery_normalized() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2363,7 +2363,7 @@ fn test_nullif_with_subquery_normalized() {
 #[test]
 fn test_greatest_least_with_subquery_normalized() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS
@@ -2390,7 +2390,7 @@ fn test_greatest_least_with_subquery_normalized() {
 #[test]
 fn test_in_list_with_subquery_normalized() {
     let fqn = test_fqn();
-    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+    let mut visitor = NormalizingVisitor::fully_qualifying(&fqn);
 
     let sql = r#"
         CREATE VIEW test_view AS

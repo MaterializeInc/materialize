@@ -219,9 +219,9 @@ impl TryFrom<(&std::path::Path, &str)> for FullyQualifiedName {
 impl Statement {
     /// Normalizes the statement name to be fully qualified.
     pub fn normalize_stmt(self, fqn: &FullyQualifiedName) -> Self {
-        let visitor = NormalizingVisitor::fully_qualifying(fqn);
+        let mut visitor = NormalizingVisitor::fully_qualifying(fqn);
         self.normalize_name_with(&visitor, &fqn.to_item_name())
-            .normalize_dependencies_with(&visitor)
+            .normalize_dependencies_with(&mut visitor)
     }
 
     /// Normalizes the statement name using a custom transformer.
@@ -271,7 +271,7 @@ impl Statement {
     /// Normalizes all object references within the statement using a custom transformer.
     pub fn normalize_dependencies_with<T: NameTransformer>(
         self,
-        visitor: &NormalizingVisitor<T>,
+        visitor: &mut NormalizingVisitor<T>,
     ) -> Self {
         match self {
             Statement::CreateView(mut s) => {
@@ -493,8 +493,8 @@ impl DatabaseObject {
             Ident::new(schema).expect("valid ident"),
             Ident::new(&ident.object).expect("valid ident"),
         ]));
-        let visitor = NormalizingVisitor::fully_qualifying_with_db_map(&fqn, Some(db_map));
-        self.stmt = self.stmt.clone().normalize_dependencies_with(&visitor);
+        let mut visitor = NormalizingVisitor::fully_qualifying_with_db_map(&fqn, Some(db_map));
+        self.stmt = self.stmt.clone().normalize_dependencies_with(&mut visitor);
 
         visitor.normalize_index_references(&mut self.indexes);
         visitor.normalize_constraint_references(&mut self.constraints);

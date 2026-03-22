@@ -418,10 +418,11 @@ fn test_extract_dependencies_mutually_recursive_nested_cte_reference() {
 }
 
 #[test]
-fn test_extract_dependencies_simple_cte_cannot_forward_reference() {
-    // Test that Simple CTEs build scope incrementally
-    // In this case, cte1 tries to reference cte2 which comes later
-    // With our incremental scoping, cte2 will be treated as an external table
+fn test_extract_dependencies_simple_cte_forward_reference_treated_as_cte() {
+    // Simple CTEs push all names at once for scoping purposes.
+    // A forward reference like `SELECT * FROM cte2` inside `cte1` is a SQL
+    // error that Materialize rejects, so treating cte2 as a CTE (not an
+    // external dependency) is safe and correct.
     let sql = r#"
         CREATE VIEW v AS
         WITH
@@ -435,14 +436,8 @@ fn test_extract_dependencies_simple_cte_cannot_forward_reference() {
         let stmt = Statement::CreateView(view_stmt.clone());
         let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
 
-        // With incremental scoping, cte1 doesn't know about cte2 yet
-        // So cte2 is treated as an external dependency (along with base_table from cte2's definition)
-        assert_eq!(deps.len(), 2);
-        assert!(deps.contains(&ObjectId::new(
-            "db".to_string(),
-            "public".to_string(),
-            "cte2".to_string()
-        )));
+        // Both cte1 and cte2 are recognized as CTEs, only base_table is a dependency
+        assert_eq!(deps.len(), 1);
         assert!(deps.contains(&ObjectId::new(
             "db".to_string(),
             "public".to_string(),

@@ -1,36 +1,38 @@
 //! Dependency extraction and project conversion from typed representation.
 //!
 //! This module walks the SQL AST of every object to build a project-wide
-//! dependency graph and determine schema types. The core algorithm is a
-//! recursive descent through the AST, extracting table references and
-//! cluster usages.
+//! dependency graph and determine schema types. Query-level traversal is
+//! delegated to mz-sql-parser's auto-generated [`Visit`] trait — a
+//! [`DependencyVisitor`] overrides `visit_query` (for CTE scope management)
+//! and `visit_table_factor` (to collect table references as dependencies).
+//! All other AST nodes (expressions, set operations, etc.) are handled by
+//! the default traversal.
 //!
 //! # CTE Scoping
 //!
 //! CTE references must be excluded from the dependency set because they
-//! are query-local names, not database objects. Two scoping modes exist:
+//! are query-local names, not database objects. The visitor uses
+//! [`CteScope`](crate::project::cte_scope::CteScope) to track CTE names
+//! across nested queries. All CTE names in a `WITH` block are pushed at
+//! once — this is correct for both simple and mutually recursive CTEs
+//! because self-references in simple CTEs are SQL errors that Materialize
+//! rejects.
 //!
-//! - **Simple CTEs** (`WITH a AS (...), b AS (...)`) — each CTE can see
-//!   parent CTEs and earlier siblings, but not itself or later siblings.
-//!   Scope is built incrementally.
-//! - **Mutually recursive CTEs** (`WITH MUTUALLY RECURSIVE ...`) — all CTEs
-//!   in the block share a single scope and can reference each other freely.
+//! # Statement-Level Dispatch
 //!
-//! Functions with a `_with_ctes` suffix carry an explicit CTE name set
-//! so that unqualified single-identifier references can be checked against
-//! the current scope before being treated as external dependencies.
-//!
-//! # Limitations
-//!
-//! - `TableFactor::Function` (table functions) and `TableFactor::RowsFrom`
-//!   are not tracked — they may reference tables indirectly but extracting
-//!   those dependencies would require function-signature analysis.
+//! The top-level [`extract_dependencies`] function matches on statement type
+//! and calls `visitor.visit_query()` only on the relevant subtree (e.g., the
+//! query body of a CREATE VIEW, not the view name itself). Non-query
+//! dependencies (source connections, connection options) are extracted by
+//! dedicated helper functions.
 
 use super::super::ast::{Cluster, Statement};
 use super::super::constraint;
+use super::super::cte_scope::CteScope;
 use super::super::typed;
 use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use crate::project::object_id::ObjectId;
+use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::*;
 use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -373,6 +375,57 @@ pub fn extract_external_indexes(
     }
 }
 
+/// Visitor that collects table reference dependencies from query ASTs.
+///
+/// Overrides `visit_query` for CTE scope management and `visit_table_factor`
+/// to collect table references. All other traversal (expressions, set
+/// operations, subqueries) is handled by mz-sql-parser's auto-generated
+/// default implementations.
+struct DependencyVisitor<'a> {
+    default_database: &'a str,
+    default_schema: &'a str,
+    deps: BTreeSet<ObjectId>,
+    cte_scope: CteScope,
+}
+
+impl<'a> DependencyVisitor<'a> {
+    fn new(default_database: &'a str, default_schema: &'a str) -> Self {
+        Self {
+            default_database,
+            default_schema,
+            deps: BTreeSet::new(),
+            cte_scope: CteScope::new(),
+        }
+    }
+}
+
+impl<'ast> Visit<'ast, Raw> for DependencyVisitor<'_> {
+    fn visit_query(&mut self, node: &'ast Query<Raw>) {
+        let names = CteScope::collect_cte_names(&node.ctes);
+        self.cte_scope.push(names);
+        visit::visit_query(self, node);
+        self.cte_scope.pop();
+    }
+
+    fn visit_table_factor(&mut self, node: &'ast TableFactor<Raw>) {
+        match node {
+            TableFactor::Table { name, .. } => {
+                let unresolved = name.name();
+                if unresolved.0.len() == 1 && self.cte_scope.is_cte(&unresolved.0[0].to_string()) {
+                    return;
+                }
+                self.deps.insert(ObjectId::from_raw_item_name(
+                    name,
+                    self.default_database,
+                    self.default_schema,
+                ));
+                // Don't call default — it would visit_item_name which we don't need
+            }
+            _ => visit::visit_table_factor(self, node),
+        }
+    }
+}
+
 /// Extract all dependencies from a statement.
 ///
 /// Returns a tuple of (object_dependencies, cluster_dependencies).
@@ -384,20 +437,15 @@ pub fn extract_dependencies(
     default_database: &str,
     default_schema: &str,
 ) -> (BTreeSet<ObjectId>, BTreeSet<Cluster>) {
-    let mut deps = BTreeSet::new();
+    let mut visitor = DependencyVisitor::new(default_database, default_schema);
     let mut clusters = BTreeSet::new();
 
     match stmt {
         Statement::CreateView(s) => {
-            extract_query_dependencies(
-                &s.definition.query,
-                default_database,
-                default_schema,
-                &mut deps,
-            );
+            visitor.visit_query(&s.definition.query);
         }
         Statement::CreateMaterializedView(s) => {
-            extract_query_dependencies(&s.query, default_database, default_schema, &mut deps);
+            visitor.visit_query(&s.query);
 
             // Extract cluster dependency from IN CLUSTER clause
             if let Some(ref cluster_name) = s.in_cluster {
@@ -408,12 +456,12 @@ pub fn extract_dependencies(
             // Table depends on the source it's created from
             let source_id =
                 ObjectId::from_raw_item_name(&s.source, default_database, default_schema);
-            deps.insert(source_id);
+            visitor.deps.insert(source_id);
         }
         Statement::CreateSink(s) => {
             // Sink depends on the shard it reads from
             let from_id = ObjectId::from_raw_item_name(&s.from, default_database, default_schema);
-            deps.insert(from_id);
+            visitor.deps.insert(from_id);
 
             if let Some(ref cluster_name) = s.in_cluster {
                 clusters.insert(Cluster::new(cluster_name.to_string()));
@@ -425,7 +473,7 @@ pub fn extract_dependencies(
                 &s.connection,
                 default_database,
                 default_schema,
-                &mut deps,
+                &mut visitor.deps,
             );
 
             if let Some(ref cluster_name) = s.in_cluster {
@@ -433,601 +481,18 @@ pub fn extract_dependencies(
             }
         }
         Statement::CreateConnection(s) => {
-            extract_connection_option_deps(&s.values, default_database, default_schema, &mut deps);
+            extract_connection_option_deps(
+                &s.values,
+                default_database,
+                default_schema,
+                &mut visitor.deps,
+            );
         }
         // These don't have dependencies on other database objects
         Statement::CreateTable(_) | Statement::CreateSecret(_) => {}
     }
 
-    (deps, clusters)
-}
-
-/// Entry point for query dependency extraction (views and materialized views).
-///
-/// Starts with an empty CTE scope — the `_with_ctes` variant handles
-/// nested scoping as it recurses.
-fn extract_query_dependencies(
-    query: &Query<Raw>,
-    default_database: &str,
-    default_schema: &str,
-    deps: &mut BTreeSet<ObjectId>,
-) {
-    extract_query_dependencies_with_ctes(
-        query,
-        default_database,
-        default_schema,
-        deps,
-        &BTreeSet::new(),
-    );
-}
-
-/// Extract dependencies from a query, carrying the accumulated CTE scope.
-///
-/// Handles both simple and mutually recursive CTE blocks, merging parent
-/// scope with locally defined CTEs before recursing into the query body.
-fn extract_query_dependencies_with_ctes(
-    query: &Query<Raw>,
-    default_database: &str,
-    default_schema: &str,
-    deps: &mut BTreeSet<ObjectId>,
-    parent_cte_names: &BTreeSet<String>,
-) {
-    // Collect CTE names from this query level
-    let local_cte_names = match &query.ctes {
-        CteBlock::Simple(ctes) => ctes
-            .iter()
-            .map(|cte| cte.alias.name.to_string())
-            .collect::<BTreeSet<String>>(),
-        CteBlock::MutuallyRecursive(mut_rec_block) => mut_rec_block
-            .ctes
-            .iter()
-            .map(|cte| cte.name.to_string())
-            .collect::<BTreeSet<String>>(),
-    };
-
-    // Merge parent and local CTE names for the combined scope
-    let mut combined_cte_names = parent_cte_names.clone();
-    combined_cte_names.extend(local_cte_names.iter().cloned());
-
-    // Extract from CTEs (WITH clause)
-    match &query.ctes {
-        CteBlock::Simple(ctes) => {
-            // For Simple CTEs, build scope incrementally: each CTE can only see
-            // parent CTEs and earlier CTEs at this level (not itself or later CTEs)
-            let mut incremental_cte_names = parent_cte_names.clone();
-            for cte in ctes {
-                extract_query_dependencies_with_ctes(
-                    &cte.query,
-                    default_database,
-                    default_schema,
-                    deps,
-                    &incremental_cte_names,
-                );
-                // Add this CTE to the scope for the next CTE
-                incremental_cte_names.insert(cte.alias.name.to_string());
-            }
-        }
-        CteBlock::MutuallyRecursive(mut_rec_block) => {
-            // For MutuallyRecursive CTEs, all CTEs can reference each other in any order
-            // Pass the combined scope (parent + all CTEs at this level) to each CTE
-            for cte in &mut_rec_block.ctes {
-                extract_query_dependencies_with_ctes(
-                    &cte.query,
-                    default_database,
-                    default_schema,
-                    deps,
-                    &combined_cte_names,
-                );
-            }
-        }
-    }
-
-    // Extract from the main query body, passing combined CTE names to exclude
-    extract_set_expr_dependencies_with_ctes(
-        &query.body,
-        default_database,
-        default_schema,
-        deps,
-        &combined_cte_names,
-    );
-}
-
-/// Extract dependencies from a set expression, excluding CTE names.
-fn extract_set_expr_dependencies_with_ctes(
-    set_expr: &SetExpr<Raw>,
-    default_database: &str,
-    default_schema: &str,
-    deps: &mut BTreeSet<ObjectId>,
-    cte_names: &BTreeSet<String>,
-) {
-    match set_expr {
-        SetExpr::Select(select) => {
-            extract_select_dependencies_with_ctes(
-                select,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        SetExpr::Query(query) => {
-            extract_query_dependencies_with_ctes(
-                query,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        SetExpr::SetOperation { left, right, .. } => {
-            extract_set_expr_dependencies_with_ctes(
-                left,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_set_expr_dependencies_with_ctes(
-                right,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        SetExpr::Values(_) | SetExpr::Show(_) | SetExpr::Table(_) => {
-            // These don't reference other tables
-        }
-    }
-}
-
-/// Extract dependencies from a SELECT statement, excluding CTE names.
-fn extract_select_dependencies_with_ctes(
-    select: &Select<Raw>,
-    default_database: &str,
-    default_schema: &str,
-    deps: &mut BTreeSet<ObjectId>,
-    cte_names: &BTreeSet<String>,
-) {
-    // Extract from FROM clause
-    for table_with_joins in &select.from {
-        extract_table_factor_dependencies_with_ctes(
-            &table_with_joins.relation,
-            default_database,
-            default_schema,
-            deps,
-            cte_names,
-        );
-
-        // Extract from JOINs
-        for join in &table_with_joins.joins {
-            extract_table_factor_dependencies_with_ctes(
-                &join.relation,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-    }
-
-    // Extract from WHERE clause (subqueries)
-    if let Some(ref selection) = select.selection {
-        extract_expr_dependencies_with_ctes(
-            selection,
-            default_database,
-            default_schema,
-            deps,
-            cte_names,
-        );
-    }
-
-    // Extract from SELECT items (subqueries, function calls)
-    for item in &select.projection {
-        if let SelectItem::Expr { expr, .. } = item {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-    }
-}
-
-/// Extract dependencies from a table factor (FROM clause item), excluding CTE names.
-///
-/// For `TableFactor::Table`, checks whether the reference is a CTE by looking
-/// for unqualified single-identifier names in the current CTE scope.
-fn extract_table_factor_dependencies_with_ctes(
-    table_factor: &TableFactor<Raw>,
-    default_database: &str,
-    default_schema: &str,
-    deps: &mut BTreeSet<ObjectId>,
-    cte_names: &BTreeSet<String>,
-) {
-    match table_factor {
-        TableFactor::Table { name, .. } => {
-            // name is &RawItemName
-            // Check if this is a CTE reference (unqualified single identifier)
-            let unresolved_name = name.name();
-            if unresolved_name.0.len() == 1 {
-                let table_name = unresolved_name.0[0].to_string();
-                if cte_names.contains(&table_name) {
-                    // This is a CTE reference - don't add it as a dependency
-                    return;
-                }
-            }
-
-            let obj_id = ObjectId::from_raw_item_name(name, default_database, default_schema);
-            deps.insert(obj_id);
-        }
-        TableFactor::Derived { subquery, .. } => {
-            extract_query_dependencies_with_ctes(
-                subquery,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        TableFactor::Function { .. } => {
-            // Table functions might reference tables, but this is complex to extract
-            // For now, we don't track these dependencies
-        }
-        TableFactor::RowsFrom { .. } => {
-            // ROWS FROM might reference tables, but this is complex to extract
-            // For now, we don't track these dependencies
-        }
-        TableFactor::NestedJoin { join, .. } => {
-            extract_table_factor_dependencies_with_ctes(
-                &join.relation,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            for nested_join in &join.joins {
-                extract_table_factor_dependencies_with_ctes(
-                    &nested_join.relation,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-        }
-    }
-}
-
-/// Extract dependencies from an expression tree, excluding CTE names.
-///
-/// Recurses into subqueries (`EXISTS`, `IN (SELECT ...)`), binary operations,
-/// CASE expressions, function calls, and array/list constructors to find
-/// any nested table references.
-fn extract_expr_dependencies_with_ctes(
-    expr: &Expr<Raw>,
-    default_database: &str,
-    default_schema: &str,
-    deps: &mut BTreeSet<ObjectId>,
-    cte_names: &BTreeSet<String>,
-) {
-    match expr {
-        Expr::Subquery(query) | Expr::Exists(query) => {
-            extract_query_dependencies_with_ctes(
-                query,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::InSubquery { expr, subquery, .. } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_query_dependencies_with_ctes(
-                subquery,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::Between {
-            expr, low, high, ..
-        } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_expr_dependencies_with_ctes(
-                low,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_expr_dependencies_with_ctes(
-                high,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::Op { expr1, expr2, .. } => {
-            // Extract from operands of binary/unary operations (e.g., AND, OR, =, +, etc.)
-            extract_expr_dependencies_with_ctes(
-                expr1,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            if let Some(expr2) = expr2 {
-                extract_expr_dependencies_with_ctes(
-                    expr2,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-        }
-        Expr::Cast { expr, .. } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::Case {
-            operand,
-            conditions,
-            results,
-            else_result,
-        } => {
-            if let Some(operand) = operand {
-                extract_expr_dependencies_with_ctes(
-                    operand,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-            for cond in conditions {
-                extract_expr_dependencies_with_ctes(
-                    cond,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-            for result in results {
-                extract_expr_dependencies_with_ctes(
-                    result,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-            if let Some(else_result) = else_result {
-                extract_expr_dependencies_with_ctes(
-                    else_result,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-        }
-        Expr::Function(func) => {
-            // Extract from function arguments
-            match &func.args {
-                FunctionArgs::Star => {}
-                FunctionArgs::Args { args, order_by } => {
-                    for arg in args {
-                        extract_expr_dependencies_with_ctes(
-                            arg,
-                            default_database,
-                            default_schema,
-                            deps,
-                            cte_names,
-                        );
-                    }
-                    for order in order_by {
-                        extract_expr_dependencies_with_ctes(
-                            &order.expr,
-                            default_database,
-                            default_schema,
-                            deps,
-                            cte_names,
-                        );
-                    }
-                }
-            }
-        }
-        Expr::HomogenizingFunction { exprs, .. }
-        | Expr::Array(exprs)
-        | Expr::List(exprs)
-        | Expr::Row { exprs } => {
-            for expr in exprs {
-                extract_expr_dependencies_with_ctes(
-                    expr,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-        }
-        Expr::NullIf { l_expr, r_expr }
-        | Expr::And {
-            left: l_expr,
-            right: r_expr,
-        }
-        | Expr::Or {
-            left: l_expr,
-            right: r_expr,
-        } => {
-            extract_expr_dependencies_with_ctes(
-                l_expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_expr_dependencies_with_ctes(
-                r_expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::Nested(expr) | Expr::Not { expr } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::InList { expr, list, .. } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            for item in list {
-                extract_expr_dependencies_with_ctes(
-                    item,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-        }
-        Expr::Like {
-            expr,
-            pattern,
-            escape,
-            ..
-        } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_expr_dependencies_with_ctes(
-                pattern,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            if let Some(escape) = escape {
-                extract_expr_dependencies_with_ctes(
-                    escape,
-                    default_database,
-                    default_schema,
-                    deps,
-                    cte_names,
-                );
-            }
-        }
-        Expr::Collate { expr, .. } | Expr::IsExpr { expr, .. } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::AnySubquery {
-            left, right: query, ..
-        }
-        | Expr::AllSubquery {
-            left, right: query, ..
-        } => {
-            extract_expr_dependencies_with_ctes(
-                left,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_query_dependencies_with_ctes(
-                query,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::AnyExpr {
-            left, right: expr, ..
-        }
-        | Expr::AllExpr {
-            left, right: expr, ..
-        } => {
-            extract_expr_dependencies_with_ctes(
-                left,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::ArraySubquery(query) | Expr::ListSubquery(query) | Expr::MapSubquery(query) => {
-            extract_query_dependencies_with_ctes(
-                query,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        Expr::Subscript { expr, .. } => {
-            extract_expr_dependencies_with_ctes(
-                expr,
-                default_database,
-                default_schema,
-                deps,
-                cte_names,
-            );
-        }
-        // Leaf nodes: identifiers, literals, parameters, wildcards, field access
-        _ => {}
-    }
+    (visitor.deps, clusters)
 }
 
 /// Extract the connection dependency from a source's connection clause.

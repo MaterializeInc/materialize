@@ -1,13 +1,18 @@
 //! The NormalizingVisitor for traversing SQL AST and applying name transformations.
 //!
-//! This module contains the `NormalizingVisitor` struct which traverses SQL statements
-//! and applies name transformations using a configurable strategy (via the `NameTransformer` trait).
+//! This module contains the `NormalizingVisitor` struct which transforms object
+//! names in SQL statements using a configurable strategy (via the `NameTransformer`
+//! trait). Query-level traversal is delegated to mz-sql-parser's auto-generated
+//! [`VisitMut`] trait — the visitor overrides `visit_query_mut` (for CTE scope
+//! management) and `visit_table_factor_mut` (for name transformation and implicit
+//! aliasing). All other AST nodes (expressions, set operations, etc.) are handled
+//! by the default traversal.
 //!
 //! ## CTE Scoping
 //!
 //! Common Table Expressions (CTEs) introduce names that shadow real database
-//! objects. The visitor maintains a **stack of CTE scopes** (`cte_scope`) to
-//! track which names are currently in scope:
+//! objects. The visitor uses [`CteScope`](crate::project::cte_scope::CteScope)
+//! to track which names are currently in scope:
 //!
 //! - When entering a `WITH` clause, all CTE names from that clause are pushed
 //!   as a new scope level.
@@ -20,12 +25,6 @@
 //! name. Any multi-part reference (e.g., `schema.name`) is always a database
 //! object reference and is always transformed.
 //!
-//! ## Traversal Order
-//!
-//! The visitor performs a recursive depth-first traversal of the SQL AST:
-//! `Query` → `CteBlock` → `SetExpr` → `Select` → `TableFactor` / `Expr`.
-//! Subqueries in WHERE, HAVING, and SELECT items are recursively normalized.
-//!
 //! ## Implicit Aliasing
 //!
 //! When a table reference in a FROM clause is transformed (e.g., `sales` →
@@ -33,21 +32,27 @@
 //! table name is attached. This ensures that column references like
 //! `sales.column` continue to resolve correctly after transformation.
 
+use super::super::cte_scope::CteScope;
 use super::super::typed::FullyQualifiedName;
 use super::transformers::{
     ClusterTransformer, FlatteningTransformer, FullyQualifyingTransformer, NameTransformer,
     StagingTransformer,
 };
 use crate::project::object_id::ObjectId;
+use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::*;
 
 /// Visitor that traverses SQL AST and transforms names using a given strategy.
 ///
 /// This struct is generic over the `NameTransformer` trait, allowing different
 /// transformation strategies to reuse the same traversal logic.
+///
+/// Implements [`VisitMut`] to delegate query-level traversal to mz-sql-parser's
+/// auto-generated visitor, overriding only `visit_query_mut` (CTE scope) and
+/// `visit_table_factor_mut` (name transformation + implicit aliasing).
 pub struct NormalizingVisitor<T: NameTransformer> {
     transformer: T,
-    cte_scope: std::cell::RefCell<Vec<std::collections::BTreeSet<String>>>,
+    cte_scope: CteScope,
 }
 
 impl<T: NameTransformer> NormalizingVisitor<T> {
@@ -55,26 +60,8 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
     pub fn new(transformer: T) -> Self {
         Self {
             transformer,
-            cte_scope: std::cell::RefCell::new(Vec::new()),
+            cte_scope: CteScope::new(),
         }
-    }
-
-    /// Check if a name is a CTE currently in scope.
-    fn is_cte_in_scope(&self, name: &str) -> bool {
-        self.cte_scope
-            .borrow()
-            .iter()
-            .any(|scope| scope.contains(name))
-    }
-
-    /// Push a new CTE scope onto the stack.
-    fn push_cte_scope(&self, cte_names: std::collections::BTreeSet<String>) {
-        self.cte_scope.borrow_mut().push(cte_names);
-    }
-
-    /// Pop the current CTE scope from the stack.
-    fn pop_cte_scope(&self) {
-        self.cte_scope.borrow_mut().pop();
     }
 
     /// Get a reference to the transformer.
@@ -95,7 +82,7 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
         // CTEs can only be referenced by their unqualified name
         if unresolved.0.len() == 1 {
             let name_str = unresolved.0[0].to_string();
-            if self.is_cte_in_scope(&name_str) {
+            if self.cte_scope.is_cte(&name_str) {
                 // This is a CTE reference - don't transform it
                 crate::verbose!("Skipping transform of CTE reference: {}", name_str);
                 return;
@@ -203,310 +190,10 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
 
     /// Normalize all table references in a query (used for views and materialized views).
     ///
-    /// Recursively traverses the query AST to find and normalize all object references
-    /// in FROM clauses, JOINs, subqueries, and CTEs.
-    pub fn normalize_query(&self, query: &mut Query<Raw>) {
-        // Collect CTE names from this query to track them in scope
-        let cte_names = match &query.ctes {
-            CteBlock::Simple(ctes) => ctes
-                .iter()
-                .map(|cte| cte.alias.name.to_string())
-                .collect::<std::collections::BTreeSet<String>>(),
-            CteBlock::MutuallyRecursive(mut_rec_block) => mut_rec_block
-                .ctes
-                .iter()
-                .map(|cte| cte.name.to_string())
-                .collect::<std::collections::BTreeSet<String>>(),
-        };
-
-        // Push CTE names onto scope stack
-        self.push_cte_scope(cte_names);
-
-        // Normalize CTEs (WITH clause)
-        // Note: CTE definitions themselves can reference earlier CTEs in the same WITH clause
-        match &mut query.ctes {
-            CteBlock::Simple(ctes) => {
-                for cte in ctes {
-                    self.normalize_query(&mut cte.query);
-                }
-            }
-            CteBlock::MutuallyRecursive(mut_rec_block) => {
-                for cte in &mut mut_rec_block.ctes {
-                    self.normalize_query(&mut cte.query);
-                }
-            }
-        }
-
-        // Normalize main query body (can reference all CTEs from this query)
-        self.normalize_set_expr(&mut query.body);
-
-        // Pop CTE scope after processing this query
-        self.pop_cte_scope();
-    }
-
-    /// Normalize a set expression (SELECT, UNION, INTERSECT, EXCEPT, etc.).
-    pub fn normalize_set_expr(&self, set_expr: &mut SetExpr<Raw>) {
-        match set_expr {
-            SetExpr::Select(select) => {
-                self.normalize_select(select);
-            }
-            SetExpr::Query(query) => {
-                self.normalize_query(query);
-            }
-            SetExpr::SetOperation { left, right, .. } => {
-                self.normalize_set_expr(left);
-                self.normalize_set_expr(right);
-            }
-            SetExpr::Values(_) | SetExpr::Show(_) | SetExpr::Table(_) => {
-                // These don't contain table references
-            }
-        }
-    }
-
-    /// Normalize a SELECT statement.
-    ///
-    /// Handles table references in FROM, JOIN, WHERE (subqueries), and SELECT items (subqueries).
-    pub fn normalize_select(&self, select: &mut Select<Raw>) {
-        // Normalize FROM clause
-        for table_with_joins in &mut select.from {
-            self.normalize_table_factor(&mut table_with_joins.relation);
-
-            // Normalize JOINs
-            for join in &mut table_with_joins.joins {
-                self.normalize_table_factor(&mut join.relation);
-            }
-        }
-
-        // Normalize WHERE clause (may contain subqueries)
-        if let Some(ref mut selection) = select.selection {
-            self.normalize_expr(selection);
-        }
-
-        // Normalize HAVING clause (may contain subqueries)
-        if let Some(ref mut having) = select.having {
-            self.normalize_expr(having);
-        }
-
-        // Normalize SELECT items (may contain subqueries in expressions)
-        for item in &mut select.projection {
-            if let SelectItem::Expr { expr, .. } = item {
-                self.normalize_expr(expr);
-            }
-        }
-    }
-
-    /// Normalize a table factor (table reference, subquery, or nested join).
-    ///
-    /// This is the key function where actual table names are normalized.
-    pub fn normalize_table_factor(&self, table_factor: &mut TableFactor<Raw>) {
-        match table_factor {
-            TableFactor::Table { name, alias } => {
-                // Save the original table name (the last part) before transformation
-                // This will be used as an implicit alias if one doesn't exist
-                let original_table_name = match name.name().0.len() {
-                    1 => {
-                        // Unqualified: "sales"
-                        let name_str = name.name().0[0].to_string();
-                        // Don't create an alias if this is a CTE reference (it won't be transformed)
-                        if !self.is_cte_in_scope(&name_str) {
-                            Some(name.name().0[0].clone())
-                        } else {
-                            None
-                        }
-                    }
-                    2 | 3 => {
-                        // Schema-qualified: "schema.sales" or fully qualified: "db.schema.sales"
-                        // Extract the table name (last part) to use as implicit alias
-                        Some(name.name().0.last().unwrap().clone())
-                    }
-                    _ => None,
-                };
-
-                // Normalize the table name (e.g., "sales" -> "materialize.public.sales")
-                self.normalize_raw_item_name(name);
-
-                // If there's no explicit alias and we have an original table name, create an implicit alias
-                // This ensures qualified column references like "sales.column" continue to work
-                // after the table name is transformed to "materialize.public.sales" or "materialize_public_sales"
-                if alias.is_none() {
-                    if let Some(original) = original_table_name {
-                        *alias = Some(TableAlias {
-                            name: original,
-                            columns: vec![],
-                            strict: false,
-                        });
-                    }
-                }
-            }
-            TableFactor::Derived { subquery, .. } => {
-                self.normalize_query(subquery);
-            }
-            TableFactor::NestedJoin { join, .. } => {
-                self.normalize_table_factor(&mut join.relation);
-                for nested_join in &mut join.joins {
-                    self.normalize_table_factor(&mut nested_join.relation);
-                }
-            }
-            TableFactor::Function { .. } | TableFactor::RowsFrom { .. } => {
-                // Table functions might reference tables, but the structure is complex
-                // For now, we don't normalize these
-            }
-        }
-    }
-
-    /// Normalize expressions (handles subqueries in WHERE, CASE, etc.).
-    pub fn normalize_expr(&self, expr: &mut Expr<Raw>) {
-        match expr {
-            Expr::Subquery(query)
-            | Expr::Exists(query)
-            | Expr::ArraySubquery(query)
-            | Expr::ListSubquery(query)
-            | Expr::MapSubquery(query) => {
-                self.normalize_query(query);
-            }
-            Expr::InSubquery { expr, subquery, .. } => {
-                self.normalize_expr(expr);
-                self.normalize_query(subquery);
-            }
-            Expr::AnySubquery {
-                left, right: query, ..
-            }
-            | Expr::AllSubquery {
-                left, right: query, ..
-            } => {
-                self.normalize_expr(left);
-                self.normalize_query(query);
-            }
-            Expr::Between {
-                expr, low, high, ..
-            } => {
-                self.normalize_expr(expr);
-                self.normalize_expr(low);
-                self.normalize_expr(high);
-            }
-            Expr::Cast { expr, .. } => {
-                self.normalize_expr(expr);
-            }
-            Expr::Case {
-                operand,
-                conditions,
-                results,
-                else_result,
-            } => {
-                if let Some(operand) = operand {
-                    self.normalize_expr(operand);
-                }
-                for cond in conditions {
-                    self.normalize_expr(cond);
-                }
-                for result in results {
-                    self.normalize_expr(result);
-                }
-                if let Some(else_result) = else_result {
-                    self.normalize_expr(else_result);
-                }
-            }
-            Expr::Function(func) => {
-                if let FunctionArgs::Args { args, order_by, .. } = &mut func.args {
-                    for arg in args {
-                        self.normalize_expr(arg);
-                    }
-                    for order in order_by {
-                        self.normalize_expr(&mut order.expr);
-                    }
-                }
-            }
-            Expr::HomogenizingFunction { exprs, .. } => {
-                for expr in exprs {
-                    self.normalize_expr(expr);
-                }
-            }
-            Expr::NullIf { l_expr, r_expr } => {
-                self.normalize_expr(l_expr);
-                self.normalize_expr(r_expr);
-            }
-            Expr::Nested(expr) => {
-                self.normalize_expr(expr);
-            }
-            Expr::Not { expr } => {
-                self.normalize_expr(expr);
-            }
-            Expr::And { left, right } | Expr::Or { left, right } => {
-                self.normalize_expr(left);
-                self.normalize_expr(right);
-            }
-            Expr::InList { expr, list, .. } => {
-                self.normalize_expr(expr);
-                for item in list {
-                    self.normalize_expr(item);
-                }
-            }
-            Expr::Like {
-                expr,
-                pattern,
-                escape,
-                ..
-            } => {
-                self.normalize_expr(expr);
-                self.normalize_expr(pattern);
-                if let Some(escape) = escape {
-                    self.normalize_expr(escape);
-                }
-            }
-            Expr::AnyExpr {
-                left, right: expr, ..
-            }
-            | Expr::AllExpr {
-                left, right: expr, ..
-            } => {
-                self.normalize_expr(left);
-                self.normalize_expr(expr);
-            }
-            Expr::Array(exprs) | Expr::List(exprs) => {
-                for expr in exprs {
-                    self.normalize_expr(expr);
-                }
-            }
-            Expr::Row { exprs } => {
-                for expr in exprs {
-                    self.normalize_expr(expr);
-                }
-            }
-            Expr::Collate { expr, .. } => {
-                self.normalize_expr(expr);
-            }
-            Expr::IsExpr {
-                expr, construct, ..
-            } => {
-                self.normalize_expr(expr);
-                if let IsExprConstruct::DistinctFrom(other_expr) = construct {
-                    self.normalize_expr(other_expr);
-                }
-            }
-            Expr::Op { expr1, expr2, .. } => {
-                self.normalize_expr(expr1);
-                if let Some(expr2) = expr2 {
-                    self.normalize_expr(expr2);
-                }
-            }
-            Expr::Subscript { expr, positions } => {
-                self.normalize_expr(expr);
-                for pos in positions {
-                    match pos {
-                        SubscriptPosition { start: Some(e), .. } => self.normalize_expr(e),
-                        _ => {}
-                    }
-                    match pos {
-                        SubscriptPosition { end: Some(e), .. } => self.normalize_expr(e),
-                        _ => {}
-                    }
-                }
-            }
-            // Leaf nodes: identifiers, literals, parameters, wildcards, field access.
-            // Identifier and QualifiedWildcard are intentionally NOT transformed —
-            // they reference column aliases from the FROM clause, not table names.
-            _ => {}
-        }
+    /// Delegates to the [`VisitMut`] implementation which handles CTE scoping
+    /// and recursive traversal automatically.
+    pub fn normalize_query(&mut self, query: &mut Query<Raw>) {
+        self.visit_query_mut(query);
     }
 
     /// Normalize index references.
@@ -631,6 +318,54 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
                     // Already resolved, leave as-is
                 }
             }
+        }
+    }
+}
+
+impl<T: NameTransformer> VisitMut<'_, Raw> for NormalizingVisitor<T> {
+    fn visit_query_mut(&mut self, node: &mut Query<Raw>) {
+        let names = CteScope::collect_cte_names(&node.ctes);
+        self.cte_scope.push(names);
+        visit_mut::visit_query_mut(self, node);
+        self.cte_scope.pop();
+    }
+
+    fn visit_table_factor_mut(&mut self, node: &mut TableFactor<Raw>) {
+        match node {
+            TableFactor::Table { name, alias } => {
+                // Save the original table name (the last part) before transformation.
+                // This will be used as an implicit alias if one doesn't exist.
+                let original_table_name = match name.name().0.len() {
+                    1 => {
+                        let name_str = name.name().0[0].to_string();
+                        // Don't create an alias if this is a CTE reference (it won't be transformed)
+                        if !self.cte_scope.is_cte(&name_str) {
+                            Some(name.name().0[0].clone())
+                        } else {
+                            None
+                        }
+                    }
+                    2 | 3 => Some(name.name().0.last().unwrap().clone()),
+                    _ => None,
+                };
+
+                // Normalize the table name (e.g., "sales" -> "materialize.public.sales")
+                self.normalize_raw_item_name(name);
+
+                // If there's no explicit alias and we have an original table name, create
+                // an implicit alias so that qualified column references like "sales.column"
+                // continue to work after transformation.
+                if alias.is_none() {
+                    if let Some(original) = original_table_name {
+                        *alias = Some(TableAlias {
+                            name: original,
+                            columns: vec![],
+                            strict: false,
+                        });
+                    }
+                }
+            }
+            _ => visit_mut::visit_table_factor_mut(self, node),
         }
     }
 }
