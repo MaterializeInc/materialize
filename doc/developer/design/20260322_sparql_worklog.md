@@ -462,3 +462,76 @@ New parser tests (22):
 - ASK: basic, with prefix, with WHERE keyword, with FILTER, with OPTIONAL
 - DESCRIBE: single IRI, variable, multiple resources, star, with WHERE, no WHERE
 - Errors: unknown query form, empty DESCRIBE, CONSTRUCT missing brace
+
+## 2026-03-22: Prompt 5 — Parse property paths
+
+### What was done
+
+Implemented full property path parsing in `src/sparql-parser/src/parser.rs`,
+following the W3C SPARQL 1.1 grammar (Section 9). Property paths can now appear
+wherever a predicate is expected in triple patterns.
+
+**Replaced `parse_verb()`**: The former stub that only accepted simple IRIs,
+variables, and `a` now delegates to the property path parser for non-variable
+predicates. Variables are still handled directly (they cannot be part of property
+path expressions in SPARQL 1.1).
+
+**Updated `can_start_verb()`**: Now also recognizes `^` (inverse), `!` (negated),
+and `(` (grouped) as valid predicate starters.
+
+**Property path parser** — 8 new methods implementing a recursive-descent parser
+with correct operator precedence:
+
+1. `parse_path()` → entry point, delegates to `parse_path_alternative()`
+2. `parse_path_alternative()` → `PathSequence ( '|' PathSequence )*` (lowest precedence)
+3. `parse_path_sequence()` → `PathEltOrInverse ( '/' PathEltOrInverse )*`
+4. `parse_path_elt_or_inverse()` → `PathElt | '^' PathElt`
+5. `parse_path_elt()` → `PathPrimary PathMod?`
+6. `parse_path_mod()` → optional `*`, `+`, `?` postfix modifiers (highest precedence)
+7. `parse_path_primary()` → `iri | 'a' | '!' NegatedSet | '(' Path ')'`
+8. `parse_path_negated_property_set()` → `element | '(' element ('|' element)* ')'`
+9. `parse_negated_path_element()` → `iri | 'a' | '^' iri | '^' 'a'`
+10. `parse_path_iri_or_a()` → IRI or `a` keyword in path context
+
+**Operator precedence** (lowest to highest):
+- `|` (alternative) — `ex:a | ex:b`
+- `/` (sequence) — `ex:a / ex:b`
+- `^` (inverse) — `^ex:a`
+- `*`, `+`, `?` (modifiers) — `ex:a+`
+- Parentheses override precedence — `(ex:a | ex:b) / ex:c`
+
+So `ex:a/ex:b|ex:c` parses as `(ex:a/ex:b) | ex:c`, and `^ex:p+` parses as
+`^(ex:p+)` (modifier binds to primary, then inverse wraps).
+
+### Key decisions
+
+1. **`Token::Question` for `?` modifier**: The lexer already distinguishes
+   standalone `?` (when not followed by a name character) from variable tokens.
+   The property path modifier parser consumes `Token::Question` after a path
+   element.
+
+2. **Negated property sets use `NegatedPathElement`**: The AST already had
+   `NegatedPathElement::Forward(Iri)` and `NegatedPathElement::Inverse(Iri)`.
+   The parser produces these directly, keeping the AST clean for the planner.
+
+3. **Empty negated set `!()` allowed**: The grammar permits an empty parenthesized
+   negated set. It's semantically vacuous (matches all predicates) but harmless
+   to parse.
+
+4. **No changes to AST**: All property path AST types were already defined in
+   prompt 1. The parser now populates them.
+
+### Test results
+
+120 tests pass (18 lexer + 102 parser), 0 failures, 0 warnings.
+
+New parser tests (25):
+- Simple: IRI path, `a` keyword, variable predicate still works
+- Unary: inverse (`^`), zero-or-more (`*`), one-or-more (`+`), zero-or-one (`?`)
+- Binary: sequence (`/`), alternative (`|`), three-way alternative
+- Negated: single IRI, multi-element set, `a` keyword, empty parens
+- Parenthesized: grouped path, with modifier (`(ex:a/ex:b)+`)
+- Precedence: sequence over alternative, parens overriding precedence
+- Combined: inverse with modifier, sequence+inverse+modifier, complex transitive closure
+- Integration: paths in CONSTRUCT, paths with FILTER, multiple triples with paths,
+  semicolon shorthand with paths

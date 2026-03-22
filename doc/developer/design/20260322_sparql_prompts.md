@@ -53,16 +53,16 @@ includes the goal, key files to read, and acceptance criteria.
 >
 > ~~Read first: W3C SPARQL 1.1 Sections 16.2-16.4.~~
 
-### Prompt 5: Parse property paths
+### ~~Prompt 5: Parse property paths~~
 
-> Add parsing of property path expressions in the predicate position:
-> `iri`, `^path` (inverse), `path1/path2` (sequence), `path1|path2`
-> (alternative), `path*`, `path+`, `path?`, `!(iri1|iri2)` (negated
-> property set). Property paths can appear wherever a predicate is expected.
-> Pay attention to operator precedence: `/` binds tighter than `|`,
-> unary operators (`^`, `*`, `+`, `?`) bind tightest.
+> ~~Add parsing of property path expressions in the predicate position:~~
+> ~~`iri`, `^path` (inverse), `path1/path2` (sequence), `path1|path2`~~
+> ~~(alternative), `path*`, `path+`, `path?`, `!(iri1|iri2)` (negated~~
+> ~~property set). Property paths can appear wherever a predicate is expected.~~
+> ~~Pay attention to operator precedence: `/` binds tighter than `|`,~~
+> ~~unary operators (`^`, `*`, `+`, `?`) bind tightest.~~
 >
-> Read first: W3C SPARQL 1.1 Section 9.
+> ~~Read first: W3C SPARQL 1.1 Section 9.~~
 
 ### Prompt 6: Parse aggregates, subqueries, GRAPH, solution modifiers
 

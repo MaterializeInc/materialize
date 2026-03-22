@@ -529,10 +529,10 @@ fn lex_token(input: &str, pos: &mut usize) -> Result<Token, LexerError> {
                 *pos = start + 1;
                 Ok(Token::Question)
             } else {
-                return Err(LexerError {
-                    message: format!("unexpected character '{}'", ch as char),
+                Err(LexerError {
+                    message: format!("unexpected character '{}'", char::from(ch)),
                     pos: start,
-                });
+                })
             }
         }
 
@@ -700,7 +700,7 @@ fn lex_token(input: &str, pos: &mut usize) -> Result<Token, LexerError> {
         _ if is_pn_chars_base(ch) => lex_identifier_or_prefixed(input, pos),
 
         _ => Err(LexerError {
-            message: format!("unexpected character '{}'", ch as char),
+            message: format!("unexpected character '{}'", char::from(ch)),
             pos: start,
         }),
     }
@@ -768,7 +768,7 @@ fn lex_string_literal(input: &str, pos: &mut usize) -> Result<Token, LexerError>
                 _ => {
                     // For unrecognized escapes, include both characters.
                     content.push('\\');
-                    content.push(bytes[*pos] as char);
+                    content.push(char::from(bytes[*pos]));
                 }
             }
             *pos += 1;

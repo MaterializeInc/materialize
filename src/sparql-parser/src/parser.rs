@@ -21,7 +21,7 @@
 //! - Prompt 5: property paths
 //! - Prompt 6: aggregates, subqueries, GRAPH, solution modifiers
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::ast::*;
@@ -69,7 +69,7 @@ pub(crate) struct Parser<'a> {
     tokens: Vec<PosToken>,
     pos: usize,
     /// Prefix map built from PREFIX declarations, used to resolve prefixed names.
-    prefixes: HashMap<String, String>,
+    prefixes: BTreeMap<String, String>,
     /// Base IRI from BASE declaration, used to resolve relative IRIs.
     #[allow(dead_code)]
     base: Option<String>,
@@ -81,7 +81,7 @@ impl<'a> Parser<'a> {
             input,
             tokens,
             pos: 0,
-            prefixes: HashMap::new(),
+            prefixes: BTreeMap::new(),
             base: None,
         }
     }
@@ -723,29 +723,182 @@ impl<'a> Parser<'a> {
                 | Some(Token::Iri(_))
                 | Some(Token::PrefixedName { .. })
                 | Some(Token::Keyword(Keyword::A))
+                | Some(Token::Caret)
+                | Some(Token::Bang)
+                | Some(Token::LParen)
         )
     }
 
-    /// Parse a verb (predicate): variable, IRI, or `a` (rdf:type).
+    /// Parse a verb (predicate): a variable or a property path expression.
     ///
-    /// Property paths are not yet supported (see prompt 5).
+    /// SPARQL grammar:
+    /// ```text
+    /// Verb ::= VarOrIri | 'a'
+    /// VerbPath ::= Path
+    /// ```
+    ///
+    /// We try to parse a property path. If the path position starts with a
+    /// variable token, we return `VerbPath::Variable` — variables cannot be
+    /// part of property path expressions in SPARQL 1.1.
     fn parse_verb(&mut self) -> Result<VerbPath, ParseError> {
+        if matches!(self.peek(), Some(Token::Variable(_))) {
+            let var = self.parse_variable()?;
+            Ok(VerbPath::Variable(var))
+        } else {
+            let path = self.parse_path()?;
+            Ok(VerbPath::Path(path))
+        }
+    }
+
+    // ----- Property path parsing (SPARQL 1.1 Section 9) -----
+    //
+    // Precedence (lowest to highest):
+    //   PathAlternative  ::= PathSequence ( '|' PathSequence )*
+    //   PathSequence     ::= PathEltOrInverse ( '/' PathEltOrInverse )*
+    //   PathEltOrInverse ::= PathElt | '^' PathElt
+    //   PathElt          ::= PathPrimary PathMod?
+    //   PathPrimary      ::= iri | 'a' | '!' PathNegatedPropertySet | '(' Path ')'
+    //   PathMod          ::= '*' | '+' | '?'
+
+    /// Parse a property path (top-level): `PathAlternative`.
+    fn parse_path(&mut self) -> Result<PropertyPath, ParseError> {
+        self.parse_path_alternative()
+    }
+
+    /// `PathAlternative ::= PathSequence ( '|' PathSequence )*`
+    fn parse_path_alternative(&mut self) -> Result<PropertyPath, ParseError> {
+        let first = self.parse_path_sequence()?;
+        if !matches!(self.peek(), Some(Token::Pipe)) {
+            return Ok(first);
+        }
+        let mut alternatives = vec![first];
+        while self.eat(&Token::Pipe) {
+            alternatives.push(self.parse_path_sequence()?);
+        }
+        Ok(PropertyPath::Alternative(alternatives))
+    }
+
+    /// `PathSequence ::= PathEltOrInverse ( '/' PathEltOrInverse )*`
+    fn parse_path_sequence(&mut self) -> Result<PropertyPath, ParseError> {
+        let first = self.parse_path_elt_or_inverse()?;
+        if !matches!(self.peek(), Some(Token::Slash)) {
+            return Ok(first);
+        }
+        let mut steps = vec![first];
+        while self.eat(&Token::Slash) {
+            steps.push(self.parse_path_elt_or_inverse()?);
+        }
+        Ok(PropertyPath::Sequence(steps))
+    }
+
+    /// `PathEltOrInverse ::= PathElt | '^' PathElt`
+    fn parse_path_elt_or_inverse(&mut self) -> Result<PropertyPath, ParseError> {
+        if self.eat(&Token::Caret) {
+            let elt = self.parse_path_elt()?;
+            Ok(PropertyPath::Inverse(Box::new(elt)))
+        } else {
+            self.parse_path_elt()
+        }
+    }
+
+    /// `PathElt ::= PathPrimary PathMod?`
+    fn parse_path_elt(&mut self) -> Result<PropertyPath, ParseError> {
+        let primary = self.parse_path_primary()?;
+        self.parse_path_mod(primary)
+    }
+
+    /// Apply optional postfix modifier: `*`, `+`, `?`.
+    fn parse_path_mod(&mut self, base: PropertyPath) -> Result<PropertyPath, ParseError> {
         match self.peek() {
-            Some(Token::Variable(_)) => {
-                let var = self.parse_variable()?;
-                Ok(VerbPath::Variable(var))
+            Some(Token::Star) => {
+                self.bump();
+                Ok(PropertyPath::ZeroOrMore(Box::new(base)))
             }
+            Some(Token::Plus) => {
+                self.bump();
+                Ok(PropertyPath::OneOrMore(Box::new(base)))
+            }
+            Some(Token::Question) => {
+                self.bump();
+                Ok(PropertyPath::ZeroOrOne(Box::new(base)))
+            }
+            _ => Ok(base),
+        }
+    }
+
+    /// `PathPrimary ::= iri | 'a' | '!' PathNegatedPropertySet | '(' Path ')'`
+    fn parse_path_primary(&mut self) -> Result<PropertyPath, ParseError> {
+        match self.peek() {
             Some(Token::Keyword(Keyword::A)) => {
                 self.bump();
-                Ok(VerbPath::Path(PropertyPath::Iri(Iri {
+                Ok(PropertyPath::Iri(Iri {
                     value: "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
-                })))
+                }))
             }
             Some(Token::Iri(_)) | Some(Token::PrefixedName { .. }) => {
                 let iri = self.parse_iri()?;
-                Ok(VerbPath::Path(PropertyPath::Iri(iri)))
+                Ok(PropertyPath::Iri(iri))
             }
-            _ => Err(self.expected("predicate (variable, IRI, or 'a')")),
+            Some(Token::Bang) => {
+                self.bump();
+                self.parse_path_negated_property_set()
+            }
+            Some(Token::LParen) => {
+                self.bump();
+                let path = self.parse_path()?;
+                self.expect(&Token::RParen, "')' to close path group")?;
+                Ok(path)
+            }
+            _ => Err(self.expected("property path (IRI, 'a', '!', or '(')")),
+        }
+    }
+
+    /// Parse a negated property set: `PathOneInPropertySet`
+    /// or `'(' ( PathOneInPropertySet ( '|' PathOneInPropertySet )* )? ')'`.
+    ///
+    /// `PathOneInPropertySet ::= iri | 'a' | '^' ( iri | 'a' )`
+    fn parse_path_negated_property_set(&mut self) -> Result<PropertyPath, ParseError> {
+        if self.eat(&Token::LParen) {
+            // Parenthesized negated set: !(iri1 | ^iri2 | iri3)
+            let mut elements = Vec::new();
+            if !matches!(self.peek(), Some(Token::RParen)) {
+                elements.push(self.parse_negated_path_element()?);
+                while self.eat(&Token::Pipe) {
+                    elements.push(self.parse_negated_path_element()?);
+                }
+            }
+            self.expect(&Token::RParen, "')' to close negated property set")?;
+            Ok(PropertyPath::NegatedSet(elements))
+        } else {
+            // Single element: !iri or !^iri
+            let element = self.parse_negated_path_element()?;
+            Ok(PropertyPath::NegatedSet(vec![element]))
+        }
+    }
+
+    /// Parse a single element of a negated property set:
+    /// `iri | 'a' | '^' iri | '^' 'a'`
+    fn parse_negated_path_element(&mut self) -> Result<NegatedPathElement, ParseError> {
+        if self.eat(&Token::Caret) {
+            let iri = self.parse_path_iri_or_a()?;
+            Ok(NegatedPathElement::Inverse(iri))
+        } else {
+            let iri = self.parse_path_iri_or_a()?;
+            Ok(NegatedPathElement::Forward(iri))
+        }
+    }
+
+    /// Parse an IRI or the `a` keyword (which expands to rdf:type) in path context.
+    fn parse_path_iri_or_a(&mut self) -> Result<Iri, ParseError> {
+        match self.peek() {
+            Some(Token::Keyword(Keyword::A)) => {
+                self.bump();
+                Ok(Iri {
+                    value: "http://www.w3.org/1999/02/22-rdf-syntax-ns#type".to_string(),
+                })
+            }
+            Some(Token::Iri(_)) | Some(Token::PrefixedName { .. }) => self.parse_iri(),
+            _ => Err(self.expected("IRI or 'a' in negated property set")),
         }
     }
 
@@ -2597,5 +2750,467 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
     fn test_error_construct_missing_brace() {
         let err = parse("CONSTRUCT ?s ?p ?o WHERE { ?s ?p ?o }").unwrap_err();
         assert!(err.message.contains("'{'"), "got: {}", err.message);
+    }
+
+    // ---- Property path tests (prompt 5) ----
+
+    /// Helper: extract the predicate from the first triple in a simple BGP query.
+    fn parse_first_predicate(sparql: &str) -> VerbPath {
+        let q = parse(sparql).unwrap();
+        match q.where_clause {
+            GroupGraphPattern::Basic(triples) => triples[0].predicate.clone(),
+            GroupGraphPattern::Group(pats) => match &pats[0] {
+                GroupGraphPattern::Basic(triples) => triples[0].predicate.clone(),
+                _ => panic!("expected Basic, got {:?}", pats[0]),
+            },
+            _ => panic!("expected Basic or Group, got {:?}", q.where_clause),
+        }
+    }
+
+    /// Helper: extract the PropertyPath from a VerbPath.
+    fn unwrap_path(vp: VerbPath) -> PropertyPath {
+        match vp {
+            VerbPath::Path(p) => p,
+            VerbPath::Variable(v) => panic!("expected Path, got Variable({v})"),
+        }
+    }
+
+    #[test]
+    fn test_path_simple_iri() {
+        // A simple IRI in predicate position is parsed as a property path.
+        let pred = parse_first_predicate("SELECT * WHERE { ?s <http://ex.org/p> ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/p"),
+            other => panic!("expected Iri, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_a_keyword() {
+        let pred = parse_first_predicate("SELECT * WHERE { ?s a ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::Iri(iri) => {
+                assert_eq!(iri.value, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+            }
+            other => panic!("expected Iri(rdf:type), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_inverse() {
+        let pred = parse_first_predicate("SELECT * WHERE { ?s ^<http://ex.org/p> ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::Inverse(inner) => match *inner {
+                PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/p"),
+                other => panic!("expected Iri inside Inverse, got {:?}", other),
+            },
+            other => panic!("expected Inverse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_sequence() {
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:a/ex:b/ex:c ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::Sequence(steps) => {
+                assert_eq!(steps.len(), 3);
+                for (i, name) in ["a", "b", "c"].iter().enumerate() {
+                    match &steps[i] {
+                        PropertyPath::Iri(iri) => {
+                            assert_eq!(iri.value, format!("http://ex.org/{name}"))
+                        }
+                        other => panic!("expected Iri, got {:?}", other),
+                    }
+                }
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_alternative() {
+        let pred =
+            parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:a|ex:b ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::Alternative(alts) => {
+                assert_eq!(alts.len(), 2);
+                match &alts[0] {
+                    PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/a"),
+                    other => panic!("expected Iri, got {:?}", other),
+                }
+                match &alts[1] {
+                    PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/b"),
+                    other => panic!("expected Iri, got {:?}", other),
+                }
+            }
+            other => panic!("expected Alternative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_zero_or_more() {
+        let pred =
+            parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:p* ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::ZeroOrMore(inner) => match *inner {
+                PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/p"),
+                other => panic!("expected Iri, got {:?}", other),
+            },
+            other => panic!("expected ZeroOrMore, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_one_or_more() {
+        let pred =
+            parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:p+ ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::OneOrMore(inner) => match *inner {
+                PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/p"),
+                other => panic!("expected Iri, got {:?}", other),
+            },
+            other => panic!("expected OneOrMore, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_zero_or_one() {
+        let pred =
+            parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:p? ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::ZeroOrOne(inner) => match *inner {
+                PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/p"),
+                other => panic!("expected Iri, got {:?}", other),
+            },
+            other => panic!("expected ZeroOrOne, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_negated_single() {
+        // !ex:p — negated single IRI
+        let pred =
+            parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s !ex:p ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::NegatedSet(elems) => {
+                assert_eq!(elems.len(), 1);
+                match &elems[0] {
+                    NegatedPathElement::Forward(iri) => {
+                        assert_eq!(iri.value, "http://ex.org/p")
+                    }
+                    other => panic!("expected Forward, got {:?}", other),
+                }
+            }
+            other => panic!("expected NegatedSet, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_negated_set_multi() {
+        // !(ex:a | ^ex:b | ex:c)
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s !(ex:a | ^ex:b | ex:c) ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::NegatedSet(elems) => {
+                assert_eq!(elems.len(), 3);
+                assert!(
+                    matches!(&elems[0], NegatedPathElement::Forward(iri) if iri.value == "http://ex.org/a")
+                );
+                assert!(
+                    matches!(&elems[1], NegatedPathElement::Inverse(iri) if iri.value == "http://ex.org/b")
+                );
+                assert!(
+                    matches!(&elems[2], NegatedPathElement::Forward(iri) if iri.value == "http://ex.org/c")
+                );
+            }
+            other => panic!("expected NegatedSet, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_negated_a() {
+        // !a — negated rdf:type
+        let pred = parse_first_predicate("SELECT * WHERE { ?s !a ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::NegatedSet(elems) => {
+                assert_eq!(elems.len(), 1);
+                match &elems[0] {
+                    NegatedPathElement::Forward(iri) => {
+                        assert_eq!(iri.value, "http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+                    }
+                    other => panic!("expected Forward(rdf:type), got {:?}", other),
+                }
+            }
+            other => panic!("expected NegatedSet, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_parenthesized() {
+        // (ex:a / ex:b) — grouped path
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s (ex:a / ex:b) ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::Sequence(steps) => {
+                assert_eq!(steps.len(), 2);
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_precedence_seq_over_alt() {
+        // ex:a / ex:b | ex:c  should parse as (ex:a / ex:b) | ex:c
+        // because `/` binds tighter than `|`
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:a/ex:b|ex:c ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::Alternative(alts) => {
+                assert_eq!(alts.len(), 2);
+                assert!(
+                    matches!(&alts[0], PropertyPath::Sequence(s) if s.len() == 2),
+                    "left alt should be Sequence, got {:?}",
+                    alts[0]
+                );
+                assert!(
+                    matches!(&alts[1], PropertyPath::Iri(_)),
+                    "right alt should be Iri, got {:?}",
+                    alts[1]
+                );
+            }
+            other => panic!("expected Alternative, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_precedence_alt_over_seq_with_parens() {
+        // (ex:a | ex:b) / ex:c  — parens override precedence
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s (ex:a|ex:b)/ex:c ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::Sequence(steps) => {
+                assert_eq!(steps.len(), 2);
+                assert!(
+                    matches!(&steps[0], PropertyPath::Alternative(a) if a.len() == 2),
+                    "first step should be Alternative, got {:?}",
+                    steps[0]
+                );
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_inverse_with_modifier() {
+        // ^ex:p+ — inverse of (ex:p+) or (^ex:p)+ ?
+        // Per SPARQL grammar: PathEltOrInverse ::= PathElt | '^' PathElt
+        // PathElt ::= PathPrimary PathMod?
+        // So ^ex:p+ means ^(ex:p+) — the modifier binds to the primary, then inverse wraps it.
+        let pred =
+            parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ^ex:p+ ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::Inverse(inner) => match *inner {
+                PropertyPath::OneOrMore(inner2) => match *inner2 {
+                    PropertyPath::Iri(iri) => assert_eq!(iri.value, "http://ex.org/p"),
+                    other => panic!("expected Iri, got {:?}", other),
+                },
+                other => panic!("expected OneOrMore, got {:?}", other),
+            },
+            other => panic!("expected Inverse, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_complex_transitive_closure() {
+        // rdfs:subClassOf+ — typical transitive closure query
+        let q = parse(
+            "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> \
+             SELECT ?x ?y WHERE { ?x rdfs:subClassOf+ ?y }",
+        )
+        .unwrap();
+        match q.where_clause {
+            GroupGraphPattern::Basic(triples) => {
+                assert_eq!(triples.len(), 1);
+                match &triples[0].predicate {
+                    VerbPath::Path(PropertyPath::OneOrMore(inner)) => match inner.as_ref() {
+                        PropertyPath::Iri(iri) => {
+                            assert_eq!(iri.value, "http://www.w3.org/2000/01/rdf-schema#subClassOf")
+                        }
+                        other => panic!("expected Iri, got {:?}", other),
+                    },
+                    other => panic!("expected OneOrMore path, got {:?}", other),
+                }
+            }
+            other => panic!("expected Basic, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_combined_sequence_inverse_modifier() {
+        // ex:knows / ^ex:likes* — sequence of ex:knows then inverse of ex:likes*
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:knows/^ex:likes* ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::Sequence(steps) => {
+                assert_eq!(steps.len(), 2);
+                assert!(
+                    matches!(&steps[0], PropertyPath::Iri(iri) if iri.value == "http://ex.org/knows")
+                );
+                match &steps[1] {
+                    PropertyPath::Inverse(inner) => {
+                        assert!(matches!(
+                            inner.as_ref(),
+                            PropertyPath::ZeroOrMore(i) if matches!(i.as_ref(), PropertyPath::Iri(iri) if iri.value == "http://ex.org/likes")
+                        ));
+                    }
+                    other => panic!("expected Inverse, got {:?}", other),
+                }
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_three_way_alternative() {
+        // ex:a | ex:b | ex:c
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:a|ex:b|ex:c ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::Alternative(alts) => assert_eq!(alts.len(), 3),
+            other => panic!("expected Alternative with 3 elements, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_in_construct() {
+        // Property paths in CONSTRUCT WHERE clause
+        let q = parse(
+            "PREFIX ex: <http://ex.org/> \
+             CONSTRUCT { ?x ex:related ?y } WHERE { ?x ex:knows+ ?y }",
+        )
+        .unwrap();
+        match &q.where_clause {
+            GroupGraphPattern::Basic(triples) => {
+                assert!(matches!(
+                    &triples[0].predicate,
+                    VerbPath::Path(PropertyPath::OneOrMore(_))
+                ));
+            }
+            other => panic!("expected Basic, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_with_filter() {
+        // Property paths combined with FILTER
+        let q = parse(
+            "PREFIX ex: <http://ex.org/> \
+             SELECT * WHERE { ?s ex:p/ex:q ?o . FILTER(?o > 10) }",
+        )
+        .unwrap();
+        match &q.where_clause {
+            GroupGraphPattern::Group(pats) => {
+                assert_eq!(pats.len(), 2);
+                match &pats[0] {
+                    GroupGraphPattern::Basic(triples) => {
+                        assert!(matches!(
+                            &triples[0].predicate,
+                            VerbPath::Path(PropertyPath::Sequence(s)) if s.len() == 2
+                        ));
+                    }
+                    other => panic!("expected Basic, got {:?}", other),
+                }
+                assert!(matches!(&pats[1], GroupGraphPattern::Filter(_)));
+            }
+            other => panic!("expected Group, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_variable_predicate_still_works() {
+        // Variable predicates should still work alongside path support
+        let pred = parse_first_predicate("SELECT * WHERE { ?s ?p ?o }");
+        assert!(matches!(pred, VerbPath::Variable(v) if v.name == "p"));
+    }
+
+    #[test]
+    fn test_path_negated_empty_parens() {
+        // !() — empty negated set (matches all predicates — vacuously true negation)
+        let pred = parse_first_predicate("SELECT * WHERE { ?s !() ?o }");
+        match unwrap_path(pred) {
+            PropertyPath::NegatedSet(elems) => assert_eq!(elems.len(), 0),
+            other => panic!("expected NegatedSet, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_nested_parens_with_modifiers() {
+        // (ex:a / ex:b)+ — parenthesized sequence with modifier
+        let pred = parse_first_predicate(
+            "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s (ex:a/ex:b)+ ?o }",
+        );
+        match unwrap_path(pred) {
+            PropertyPath::OneOrMore(inner) => match *inner {
+                PropertyPath::Sequence(steps) => assert_eq!(steps.len(), 2),
+                other => panic!("expected Sequence, got {:?}", other),
+            },
+            other => panic!("expected OneOrMore, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_multiple_triples_with_paths() {
+        // Multiple triple patterns, some with paths
+        let q = parse(
+            "PREFIX ex: <http://ex.org/> \
+             SELECT * WHERE { ?s ex:a/ex:b ?mid . ?mid ex:c+ ?o }",
+        )
+        .unwrap();
+        match &q.where_clause {
+            GroupGraphPattern::Basic(triples) => {
+                assert_eq!(triples.len(), 2);
+                assert!(matches!(
+                    &triples[0].predicate,
+                    VerbPath::Path(PropertyPath::Sequence(_))
+                ));
+                assert!(matches!(
+                    &triples[1].predicate,
+                    VerbPath::Path(PropertyPath::OneOrMore(_))
+                ));
+            }
+            other => panic!("expected Basic, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_path_semicolon_shorthand() {
+        // Property paths with semicolon shorthand
+        let q = parse(
+            "PREFIX ex: <http://ex.org/> \
+             SELECT * WHERE { ?s ex:a/ex:b ?o1 ; ex:c* ?o2 }",
+        )
+        .unwrap();
+        match &q.where_clause {
+            GroupGraphPattern::Basic(triples) => {
+                assert_eq!(triples.len(), 2);
+                assert!(matches!(
+                    &triples[0].predicate,
+                    VerbPath::Path(PropertyPath::Sequence(_))
+                ));
+                assert!(matches!(
+                    &triples[1].predicate,
+                    VerbPath::Path(PropertyPath::ZeroOrMore(_))
+                ));
+            }
+            other => panic!("expected Basic, got {:?}", other),
+        }
     }
 }
