@@ -173,6 +173,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consume a bare word (non-keyword identifier) — used for "BY" in GROUP BY / ORDER BY.
+    fn expect_bare_word(&mut self, word: &str) -> Result<(), ParseError> {
+        match self.peek() {
+            Some(Token::PrefixedName { prefix, local })
+                if prefix.is_empty() && local.eq_ignore_ascii_case(word) =>
+            {
+                self.bump();
+                Ok(())
+            }
+            _ => Err(self.expected(word)),
+        }
+    }
+
     // === Query parsing ===
 
     /// Parse a complete SPARQL query.
@@ -186,17 +199,18 @@ impl<'a> Parser<'a> {
             Some(Token::Keyword(Keyword::Select)) => {
                 let form = self.parse_select_clause()?;
                 let where_clause = self.parse_where_clause()?;
-                // Solution modifiers — not yet supported, will be added in prompt 6
+                let (group_by, having, order_by, limit, offset) =
+                    self.parse_solution_modifiers()?;
                 Ok(SparqlQuery {
                     base,
                     prefixes,
                     form,
                     where_clause,
-                    group_by: vec![],
-                    having: None,
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
+                    group_by,
+                    having,
+                    order_by,
+                    limit,
+                    offset,
                 })
             }
             Some(Token::Keyword(Keyword::Construct)) => {
@@ -207,48 +221,55 @@ impl<'a> Parser<'a> {
                     // Short form: CONSTRUCT WHERE { pattern }
                     let where_clause = self.parse_where_clause()?;
                     let template = self.extract_triples_from_pattern(&where_clause);
+                    let (group_by, having, order_by, limit, offset) =
+                        self.parse_solution_modifiers()?;
                     Ok(SparqlQuery {
                         base,
                         prefixes,
                         form: QueryForm::Construct { template },
                         where_clause,
-                        group_by: vec![],
-                        having: None,
-                        order_by: vec![],
-                        limit: None,
-                        offset: None,
+                        group_by,
+                        having,
+                        order_by,
+                        limit,
+                        offset,
                     })
                 } else {
                     // Full form: CONSTRUCT { template } WHERE { pattern }
                     let template = self.parse_construct_template()?;
                     let where_clause = self.parse_where_clause()?;
-                    // Solution modifiers — not yet supported, will be added in prompt 6
+                    let (group_by, having, order_by, limit, offset) =
+                        self.parse_solution_modifiers()?;
                     Ok(SparqlQuery {
                         base,
                         prefixes,
                         form: QueryForm::Construct { template },
                         where_clause,
-                        group_by: vec![],
-                        having: None,
-                        order_by: vec![],
-                        limit: None,
-                        offset: None,
+                        group_by,
+                        having,
+                        order_by,
+                        limit,
+                        offset,
                     })
                 }
             }
             Some(Token::Keyword(Keyword::Ask)) => {
                 self.bump();
                 let where_clause = self.parse_where_clause()?;
+                // ASK doesn't typically use solution modifiers, but parse them
+                // for spec compliance (they're valid in the grammar).
+                let (group_by, having, order_by, limit, offset) =
+                    self.parse_solution_modifiers()?;
                 Ok(SparqlQuery {
                     base,
                     prefixes,
                     form: QueryForm::Ask,
                     where_clause,
-                    group_by: vec![],
-                    having: None,
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
+                    group_by,
+                    having,
+                    order_by,
+                    limit,
+                    offset,
                 })
             }
             Some(Token::Keyword(Keyword::Describe)) => {
@@ -263,16 +284,18 @@ impl<'a> Parser<'a> {
                 } else {
                     GroupGraphPattern::Basic(vec![])
                 };
+                let (group_by, having, order_by, limit, offset) =
+                    self.parse_solution_modifiers()?;
                 Ok(SparqlQuery {
                     base,
                     prefixes,
                     form: QueryForm::Describe { resources },
                     where_clause,
-                    group_by: vec![],
-                    having: None,
-                    order_by: vec![],
-                    limit: None,
-                    offset: None,
+                    group_by,
+                    having,
+                    order_by,
+                    limit,
+                    offset,
                 })
             }
             _ => Err(self.expected("SELECT, CONSTRUCT, ASK, or DESCRIBE")),
@@ -496,23 +519,43 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::Dot);
                 }
                 Some(Token::Keyword(Keyword::Graph)) => {
-                    return Err(self.error("GRAPH patterns not yet supported (see prompt 6)"));
+                    flush_triples(&mut triples, &mut patterns);
+                    self.bump(); // consume GRAPH
+                    let name = self.parse_var_or_iri()?;
+                    let inner = self.parse_group_graph_pattern()?;
+                    patterns.push(GroupGraphPattern::Graph(name, Box::new(inner)));
+                    self.eat(&Token::Dot);
                 }
                 Some(Token::Keyword(Keyword::Service)) => {
                     return Err(self.error("SERVICE patterns not yet supported"));
                 }
                 Some(Token::LBrace) => {
-                    // Nested group — could be followed by UNION
                     flush_triples(&mut triples, &mut patterns);
-                    let mut group = self.parse_group_graph_pattern()?;
 
-                    // Check for UNION chains: { P1 } UNION { P2 } UNION { P3 }
-                    while self.eat_keyword(Keyword::Union) {
-                        let right = self.parse_group_graph_pattern()?;
-                        group = GroupGraphPattern::Union(Box::new(group), Box::new(right));
+                    // Check for subquery: { SELECT ... }
+                    // We need to peek past the '{' to see if SELECT follows
+                    if self.pos + 1 < self.tokens.len()
+                        && matches!(
+                            self.tokens[self.pos + 1].kind,
+                            Token::Keyword(Keyword::Select)
+                        )
+                    {
+                        self.bump(); // consume '{'
+                        let subquery = self.parse_subselect()?;
+                        self.expect(&Token::RBrace, "'}'")?;
+                        patterns.push(GroupGraphPattern::SubSelect(Box::new(subquery)));
+                    } else {
+                        // Nested group — could be followed by UNION
+                        let mut group = self.parse_group_graph_pattern()?;
+
+                        // Check for UNION chains: { P1 } UNION { P2 } UNION { P3 }
+                        while self.eat_keyword(Keyword::Union) {
+                            let right = self.parse_group_graph_pattern()?;
+                            group = GroupGraphPattern::Union(Box::new(group), Box::new(right));
+                        }
+
+                        patterns.push(group);
                     }
-
-                    patterns.push(group);
                     self.eat(&Token::Dot);
                 }
                 _ => break,
@@ -625,6 +668,211 @@ impl<'a> Parser<'a> {
                 Ok(GraphTerm::BooleanLiteral(false))
             }
             _ => Err(self.expected("data block value (IRI, literal, or UNDEF)")),
+        }
+    }
+
+    // === Solution modifiers ===
+
+    /// Parse solution modifiers: GROUP BY, HAVING, ORDER BY, LIMIT, OFFSET.
+    ///
+    /// These appear after the WHERE clause in all query forms.
+    /// Returns (group_by, having, order_by, limit, offset).
+    fn parse_solution_modifiers(
+        &mut self,
+    ) -> Result<
+        (
+            Vec<Expression>,
+            Option<Expression>,
+            Vec<OrderCondition>,
+            Option<u64>,
+            Option<u64>,
+        ),
+        ParseError,
+    > {
+        // GROUP BY — the lexer maps "GROUP" to Keyword::GroupBy; we must also
+        // consume the following "BY" token (lexed as PrefixedName { prefix: "", local: "BY" }).
+        let group_by = if self.eat_keyword(Keyword::GroupBy) {
+            self.expect_bare_word("BY")?;
+            let mut exprs = Vec::new();
+            loop {
+                match self.peek() {
+                    Some(Token::Variable(_)) => {
+                        let var = self.parse_variable()?;
+                        exprs.push(Expression::Variable(var));
+                    }
+                    Some(Token::LParen) => {
+                        // ( expression AS ?var ) — grouping with alias
+                        self.bump();
+                        let expr = self.parse_expression()?;
+                        if self.eat_keyword(Keyword::As) {
+                            let _var = self.parse_variable()?;
+                            // The AS alias in GROUP BY is for naming; we store the expression
+                            self.expect(&Token::RParen, "')'")?;
+                            exprs.push(expr);
+                        } else {
+                            self.expect(&Token::RParen, "')'")?;
+                            exprs.push(expr);
+                        }
+                    }
+                    Some(Token::Keyword(kw)) if is_builtin_call_keyword(*kw) => {
+                        let expr = self.parse_builtin_call()?;
+                        exprs.push(expr);
+                    }
+                    _ => break,
+                }
+            }
+            if exprs.is_empty() {
+                return Err(self.expected("expression in GROUP BY"));
+            }
+            exprs
+        } else {
+            vec![]
+        };
+
+        // HAVING
+        let having = if self.eat_keyword(Keyword::Having) {
+            let expr = self.parse_constraint()?;
+            Some(expr)
+        } else {
+            None
+        };
+
+        // ORDER BY — same as GROUP BY, the lexer maps "ORDER" to Keyword::OrderBy;
+        // we must consume the following "BY" token.
+        let order_by = if self.eat_keyword(Keyword::OrderBy) {
+            self.expect_bare_word("BY")?;
+            let mut conditions = Vec::new();
+            loop {
+                if self.eat_keyword(Keyword::Asc) {
+                    let expr = self.parse_bracketed_expression()?;
+                    conditions.push(OrderCondition {
+                        expr,
+                        ascending: true,
+                    });
+                } else if self.eat_keyword(Keyword::Desc) {
+                    let expr = self.parse_bracketed_expression()?;
+                    conditions.push(OrderCondition {
+                        expr,
+                        ascending: false,
+                    });
+                } else if matches!(
+                    self.peek(),
+                    Some(Token::Variable(_)) | Some(Token::LParen) | Some(Token::Keyword(_))
+                ) {
+                    // Bare expression — default ascending
+                    // But exclude keywords that start a new clause
+                    if matches!(
+                        self.peek(),
+                        Some(Token::Keyword(Keyword::Limit))
+                            | Some(Token::Keyword(Keyword::Offset))
+                            | Some(Token::Keyword(Keyword::Values))
+                    ) {
+                        break;
+                    }
+                    let expr = self.parse_expression()?;
+                    conditions.push(OrderCondition {
+                        expr,
+                        ascending: true,
+                    });
+                } else {
+                    break;
+                }
+            }
+            if conditions.is_empty() {
+                return Err(self.expected("expression in ORDER BY"));
+            }
+            conditions
+        } else {
+            vec![]
+        };
+
+        // LIMIT
+        let limit = if self.eat_keyword(Keyword::Limit) {
+            match self.next_token() {
+                Some(Token::Integer(s)) => {
+                    let n: u64 = s
+                        .parse()
+                        .map_err(|_| self.error(format!("invalid LIMIT value: {}", s)))?;
+                    Some(n)
+                }
+                _ => return Err(self.expected("integer after LIMIT")),
+            }
+        } else {
+            None
+        };
+
+        // OFFSET
+        let offset = if self.eat_keyword(Keyword::Offset) {
+            match self.next_token() {
+                Some(Token::Integer(s)) => {
+                    let n: u64 = s
+                        .parse()
+                        .map_err(|_| self.error(format!("invalid OFFSET value: {}", s)))?;
+                    Some(n)
+                }
+                _ => return Err(self.expected("integer after OFFSET")),
+            }
+        } else {
+            None
+        };
+
+        Ok((group_by, having, order_by, limit, offset))
+    }
+
+    /// Parse a parenthesized expression: `( expr )`.
+    fn parse_bracketed_expression(&mut self) -> Result<Expression, ParseError> {
+        self.expect(&Token::LParen, "'('")?;
+        let expr = self.parse_expression()?;
+        self.expect(&Token::RParen, "')'")?;
+        Ok(expr)
+    }
+
+    /// Parse a subquery (SELECT inside WHERE braces).
+    ///
+    /// Grammar: `SelectClause WhereClause SolutionModifier ValuesClause`
+    fn parse_subselect(&mut self) -> Result<SparqlQuery, ParseError> {
+        let form = self.parse_select_clause()?;
+        let where_clause = self.parse_where_clause()?;
+        let (group_by, having, order_by, limit, offset) = self.parse_solution_modifiers()?;
+        // Optional trailing VALUES clause in subquery
+        let where_clause = if matches!(self.peek(), Some(Token::Keyword(Keyword::Values))) {
+            // Inline VALUES after solution modifiers — wrap into the WHERE pattern
+            let values = self.parse_inline_data()?;
+            match where_clause {
+                GroupGraphPattern::Group(mut pats) => {
+                    pats.push(values);
+                    GroupGraphPattern::Group(pats)
+                }
+                other => GroupGraphPattern::Group(vec![other, values]),
+            }
+        } else {
+            where_clause
+        };
+        Ok(SparqlQuery {
+            base: None,
+            prefixes: vec![],
+            form,
+            where_clause,
+            group_by,
+            having,
+            order_by,
+            limit,
+            offset,
+        })
+    }
+
+    /// Parse a variable or IRI (for GRAPH name, DESCRIBE resources, etc.).
+    fn parse_var_or_iri(&mut self) -> Result<VarOrIri, ParseError> {
+        match self.peek() {
+            Some(Token::Variable(_)) => {
+                let var = self.parse_variable()?;
+                Ok(VarOrIri::Variable(var))
+            }
+            Some(Token::Iri(_)) | Some(Token::PrefixedName { .. }) => {
+                let iri = self.parse_iri()?;
+                Ok(VarOrIri::Iri(iri))
+            }
+            _ => Err(self.expected("variable or IRI")),
         }
     }
 
@@ -1230,6 +1478,7 @@ impl<'a> Parser<'a> {
                 self.bump();
                 Ok(Expression::BooleanLiteral(false))
             }
+            Some(Token::Keyword(kw)) if is_aggregate_keyword(*kw) => self.parse_aggregate(),
             Some(Token::Keyword(kw)) if is_builtin_call_keyword(*kw) => self.parse_builtin_call(),
             Some(Token::Keyword(Keyword::Not)) => {
                 // NOT EXISTS { pattern }
@@ -1239,6 +1488,76 @@ impl<'a> Parser<'a> {
                 Ok(Expression::NotExists(Box::new(pattern)))
             }
             _ => Err(self.expected("expression")),
+        }
+    }
+
+    /// Parse an aggregate function call: COUNT, SUM, AVG, MIN, MAX, GROUP_CONCAT, SAMPLE.
+    fn parse_aggregate(&mut self) -> Result<Expression, ParseError> {
+        let kw = match self.next_token() {
+            Some(Token::Keyword(kw)) => kw,
+            _ => return Err(self.expected("aggregate function")),
+        };
+
+        self.expect(&Token::LParen, "'('")?;
+        let distinct = self.eat_keyword(Keyword::Distinct);
+
+        match kw {
+            Keyword::Count => {
+                // COUNT(*) or COUNT(expr) or COUNT(DISTINCT expr)
+                let expr = if self.eat(&Token::Star) {
+                    None
+                } else {
+                    Some(Box::new(self.parse_expression()?))
+                };
+                self.expect(&Token::RParen, "')'")?;
+                Ok(Expression::Count { expr, distinct })
+            }
+            Keyword::Sum => {
+                let expr = Box::new(self.parse_expression()?);
+                self.expect(&Token::RParen, "')'")?;
+                Ok(Expression::Sum { expr, distinct })
+            }
+            Keyword::Avg => {
+                let expr = Box::new(self.parse_expression()?);
+                self.expect(&Token::RParen, "')'")?;
+                Ok(Expression::Avg { expr, distinct })
+            }
+            Keyword::Min => {
+                let expr = Box::new(self.parse_expression()?);
+                self.expect(&Token::RParen, "')'")?;
+                Ok(Expression::Min { expr, distinct })
+            }
+            Keyword::Max => {
+                let expr = Box::new(self.parse_expression()?);
+                self.expect(&Token::RParen, "')'")?;
+                Ok(Expression::Max { expr, distinct })
+            }
+            Keyword::GroupConcat => {
+                let expr = Box::new(self.parse_expression()?);
+                // Optional SEPARATOR
+                let separator = if self.eat(&Token::Semicolon) {
+                    self.expect_keyword(Keyword::Separator)?;
+                    self.expect(&Token::Eq, "'='")?;
+                    match self.next_token() {
+                        Some(Token::StringLiteral(s)) => Some(s),
+                        _ => return Err(self.expected("string literal for SEPARATOR")),
+                    }
+                } else {
+                    None
+                };
+                self.expect(&Token::RParen, "')'")?;
+                Ok(Expression::GroupConcat {
+                    expr,
+                    distinct,
+                    separator,
+                })
+            }
+            Keyword::Sample => {
+                let expr = Box::new(self.parse_expression()?);
+                self.expect(&Token::RParen, "')'")?;
+                Ok(Expression::Sample { expr, distinct })
+            }
+            _ => Err(self.error(format!("unexpected aggregate keyword {:?}", kw))),
         }
     }
 
@@ -1548,6 +1867,20 @@ fn is_builtin_call_keyword(kw: Keyword) -> bool {
             | Keyword::Iri
             | Keyword::Uri
             | Keyword::Exists
+    )
+}
+
+/// Check whether a keyword is an aggregate function.
+fn is_aggregate_keyword(kw: Keyword) -> bool {
+    matches!(
+        kw,
+        Keyword::Count
+            | Keyword::Sum
+            | Keyword::Avg
+            | Keyword::Min
+            | Keyword::Max
+            | Keyword::GroupConcat
+            | Keyword::Sample
     )
 }
 
@@ -3212,5 +3545,497 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
             }
             other => panic!("expected Basic, got {:?}", other),
         }
+    }
+
+    // === Prompt 6: Aggregates, subqueries, GRAPH, solution modifiers ===
+
+    #[test]
+    fn test_group_by_simple() {
+        let q = p("SELECT ?type WHERE { ?s <http://type> ?type } GROUP BY ?type");
+        assert_eq!(q.group_by.len(), 1);
+        assert!(matches!(&q.group_by[0], Expression::Variable(v) if v.name == "type"));
+    }
+
+    #[test]
+    fn test_group_by_multiple() {
+        let q = p("SELECT ?a ?b WHERE { ?s ?p ?o } GROUP BY ?a ?b");
+        assert_eq!(q.group_by.len(), 2);
+        assert!(matches!(&q.group_by[0], Expression::Variable(v) if v.name == "a"));
+        assert!(matches!(&q.group_by[1], Expression::Variable(v) if v.name == "b"));
+    }
+
+    #[test]
+    fn test_having() {
+        let q = p(
+            "SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s <http://type> ?type } GROUP BY ?type HAVING (COUNT(?s) > 5)",
+        );
+        assert!(q.having.is_some());
+        assert!(matches!(
+            q.having.as_ref().unwrap(),
+            Expression::GreaterThan(_, _)
+        ));
+    }
+
+    #[test]
+    fn test_order_by_simple() {
+        let q = p("SELECT ?s ?p WHERE { ?s ?p ?o } ORDER BY ?s");
+        assert_eq!(q.order_by.len(), 1);
+        assert!(q.order_by[0].ascending);
+        assert!(matches!(&q.order_by[0].expr, Expression::Variable(v) if v.name == "s"));
+    }
+
+    #[test]
+    fn test_order_by_desc() {
+        let q = p("SELECT ?s WHERE { ?s ?p ?o } ORDER BY DESC(?s)");
+        assert_eq!(q.order_by.len(), 1);
+        assert!(!q.order_by[0].ascending);
+    }
+
+    #[test]
+    fn test_order_by_asc() {
+        let q = p("SELECT ?s WHERE { ?s ?p ?o } ORDER BY ASC(?s)");
+        assert_eq!(q.order_by.len(), 1);
+        assert!(q.order_by[0].ascending);
+    }
+
+    #[test]
+    fn test_order_by_multiple() {
+        let q = p("SELECT ?s ?p WHERE { ?s ?p ?o } ORDER BY ?s DESC(?p)");
+        assert_eq!(q.order_by.len(), 2);
+        assert!(q.order_by[0].ascending);
+        assert!(!q.order_by[1].ascending);
+    }
+
+    #[test]
+    fn test_limit() {
+        let q = p("SELECT ?s WHERE { ?s ?p ?o } LIMIT 10");
+        assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, None);
+    }
+
+    #[test]
+    fn test_offset() {
+        let q = p("SELECT ?s WHERE { ?s ?p ?o } OFFSET 5");
+        assert_eq!(q.limit, None);
+        assert_eq!(q.offset, Some(5));
+    }
+
+    #[test]
+    fn test_limit_offset() {
+        let q = p("SELECT ?s WHERE { ?s ?p ?o } LIMIT 10 OFFSET 20");
+        assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, Some(20));
+    }
+
+    #[test]
+    fn test_all_solution_modifiers() {
+        let q = p("SELECT ?type (COUNT(?s) AS ?count) \
+             WHERE { ?s <http://type> ?type } \
+             GROUP BY ?type \
+             HAVING (COUNT(?s) > 1) \
+             ORDER BY DESC(?count) \
+             LIMIT 10 \
+             OFFSET 5");
+        assert_eq!(q.group_by.len(), 1);
+        assert!(q.having.is_some());
+        assert_eq!(q.order_by.len(), 1);
+        assert!(!q.order_by[0].ascending);
+        assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, Some(5));
+    }
+
+    // --- Aggregates ---
+
+    #[test]
+    fn test_count_star() {
+        let q = p("SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            assert_eq!(vars.len(), 1);
+            if let SelectVariable::Expression(Expression::Count { expr, distinct }, _) = &vars[0] {
+                assert!(expr.is_none());
+                assert!(!distinct);
+            } else {
+                panic!("expected COUNT(*), got {:?}", vars[0]);
+            }
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_count_expr() {
+        let q = p("SELECT (COUNT(?s) AS ?n) WHERE { ?s ?p ?o }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            if let SelectVariable::Expression(Expression::Count { expr, distinct }, _) = &vars[0] {
+                assert!(expr.is_some());
+                assert!(!distinct);
+            } else {
+                panic!("expected COUNT(?s)");
+            }
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_count_distinct() {
+        let q = p("SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { ?s ?p ?o }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            if let SelectVariable::Expression(Expression::Count { expr, distinct }, _) = &vars[0] {
+                assert!(expr.is_some());
+                assert!(*distinct);
+            } else {
+                panic!("expected COUNT(DISTINCT ?s)");
+            }
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_sum() {
+        let q = p("SELECT (SUM(?val) AS ?total) WHERE { ?s <http://val> ?val }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            assert!(matches!(
+                &vars[0],
+                SelectVariable::Expression(
+                    Expression::Sum {
+                        distinct: false,
+                        ..
+                    },
+                    _
+                )
+            ));
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_avg() {
+        let q = p("SELECT (AVG(?val) AS ?mean) WHERE { ?s <http://val> ?val }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            assert!(matches!(
+                &vars[0],
+                SelectVariable::Expression(
+                    Expression::Avg {
+                        distinct: false,
+                        ..
+                    },
+                    _
+                )
+            ));
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_min_max() {
+        let q = p("SELECT (MIN(?v) AS ?lo) (MAX(?v) AS ?hi) WHERE { ?s <http://v> ?v }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            assert_eq!(vars.len(), 2);
+            assert!(matches!(
+                &vars[0],
+                SelectVariable::Expression(Expression::Min { .. }, _)
+            ));
+            assert!(matches!(
+                &vars[1],
+                SelectVariable::Expression(Expression::Max { .. }, _)
+            ));
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_group_concat() {
+        let q = p(
+            "SELECT (GROUP_CONCAT(?name ; SEPARATOR = \", \") AS ?names) \
+             WHERE { ?s <http://name> ?name }",
+        );
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            if let SelectVariable::Expression(
+                Expression::GroupConcat {
+                    distinct,
+                    separator,
+                    ..
+                },
+                _,
+            ) = &vars[0]
+            {
+                assert!(!distinct);
+                assert_eq!(separator.as_deref(), Some(", "));
+            } else {
+                panic!("expected GROUP_CONCAT, got {:?}", vars[0]);
+            }
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_group_concat_no_separator() {
+        let q = p("SELECT (GROUP_CONCAT(?name) AS ?names) WHERE { ?s <http://name> ?name }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            if let SelectVariable::Expression(Expression::GroupConcat { separator, .. }, _) =
+                &vars[0]
+            {
+                assert_eq!(*separator, None);
+            } else {
+                panic!("expected GROUP_CONCAT");
+            }
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_sample() {
+        let q = p("SELECT (SAMPLE(?v) AS ?s) WHERE { ?x <http://v> ?v }");
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            assert!(matches!(
+                &vars[0],
+                SelectVariable::Expression(Expression::Sample { .. }, _)
+            ));
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    // --- GRAPH ---
+
+    #[test]
+    fn test_graph_iri() {
+        let q = p("SELECT * WHERE { GRAPH <http://g1> { ?s ?p ?o } }");
+        match &q.where_clause {
+            GroupGraphPattern::Graph(name, inner) => {
+                assert!(matches!(name, VarOrIri::Iri(i) if i.value == "http://g1"));
+                assert!(matches!(inner.as_ref(), GroupGraphPattern::Basic(_)));
+            }
+            other => panic!("expected Graph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_graph_variable() {
+        let q = p("SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }");
+        match &q.where_clause {
+            GroupGraphPattern::Graph(name, _) => {
+                assert!(matches!(name, VarOrIri::Variable(v) if v.name == "g"));
+            }
+            other => panic!("expected Graph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_graph_with_triples() {
+        // Triples before GRAPH
+        let q = p("SELECT * WHERE { ?a ?b ?c . GRAPH <http://g> { ?s ?p ?o } }");
+        match &q.where_clause {
+            GroupGraphPattern::Group(pats) => {
+                assert_eq!(pats.len(), 2);
+                assert!(matches!(&pats[0], GroupGraphPattern::Basic(_)));
+                assert!(matches!(&pats[1], GroupGraphPattern::Graph(_, _)));
+            }
+            other => panic!("expected Group, got {:?}", other),
+        }
+    }
+
+    // --- Subqueries ---
+
+    #[test]
+    fn test_subquery_simple() {
+        let q = p("SELECT ?s ?name WHERE { \
+               ?s <http://name> ?name . \
+               { SELECT ?s WHERE { ?s <http://type> <http://Person> } } \
+             }");
+        match &q.where_clause {
+            GroupGraphPattern::Group(pats) => {
+                assert_eq!(pats.len(), 2);
+                assert!(matches!(&pats[0], GroupGraphPattern::Basic(_)));
+                assert!(matches!(&pats[1], GroupGraphPattern::SubSelect(_)));
+            }
+            other => panic!("expected Group, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_subquery_with_limit() {
+        let q = p("SELECT * WHERE { \
+               { SELECT ?s WHERE { ?s ?p ?o } LIMIT 5 } \
+             }");
+        match &q.where_clause {
+            GroupGraphPattern::SubSelect(sub) => {
+                assert_eq!(sub.limit, Some(5));
+            }
+            other => panic!("expected SubSelect, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_subquery_with_aggregates() {
+        let q = p("SELECT ?type ?count WHERE { \
+               { SELECT ?type (COUNT(?s) AS ?count) \
+                 WHERE { ?s <http://type> ?type } \
+                 GROUP BY ?type } \
+             }");
+        match &q.where_clause {
+            GroupGraphPattern::SubSelect(sub) => {
+                assert_eq!(sub.group_by.len(), 1);
+                if let QueryForm::Select {
+                    projection: SelectClause::Variables(vars),
+                    ..
+                } = &sub.form
+                {
+                    assert_eq!(vars.len(), 2);
+                } else {
+                    panic!("expected SELECT in subquery");
+                }
+            }
+            other => panic!("expected SubSelect, got {:?}", other),
+        }
+    }
+
+    // --- Combined tests ---
+
+    #[test]
+    fn test_full_aggregation_query() {
+        // The example from the prompt: find types with counts, ordered, limited
+        let q = p("PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
+             SELECT ?type (COUNT(?s) AS ?count) \
+             WHERE { ?s rdf:type ?type } \
+             GROUP BY ?type \
+             ORDER BY DESC(?count) \
+             LIMIT 10");
+        assert_eq!(q.group_by.len(), 1);
+        assert_eq!(q.order_by.len(), 1);
+        assert!(!q.order_by[0].ascending);
+        assert_eq!(q.limit, Some(10));
+        assert_eq!(q.offset, None);
+    }
+
+    #[test]
+    fn test_construct_with_limit() {
+        let q = p("CONSTRUCT { ?s <http://p> ?o } WHERE { ?s <http://q> ?o } LIMIT 100");
+        assert!(matches!(q.form, QueryForm::Construct { .. }));
+        assert_eq!(q.limit, Some(100));
+    }
+
+    #[test]
+    fn test_describe_with_limit() {
+        let q = p("DESCRIBE ?s WHERE { ?s ?p ?o } LIMIT 5");
+        assert!(matches!(q.form, QueryForm::Describe { .. }));
+        assert_eq!(q.limit, Some(5));
+    }
+
+    #[test]
+    fn test_aggregate_in_having() {
+        // HAVING can reference aggregates
+        let q = p("SELECT ?type WHERE { ?s <http://type> ?type } \
+             GROUP BY ?type \
+             HAVING (COUNT(?s) > 10)");
+        if let Some(Expression::GreaterThan(left, _)) = &q.having {
+            assert!(matches!(left.as_ref(), Expression::Count { .. }));
+        } else {
+            panic!("expected HAVING with COUNT > 10");
+        }
+    }
+
+    #[test]
+    fn test_graph_in_subquery() {
+        let q = p("SELECT * WHERE { \
+               GRAPH <http://g1> { \
+                 { SELECT ?s WHERE { ?s ?p ?o } LIMIT 10 } \
+               } \
+             }");
+        match &q.where_clause {
+            GroupGraphPattern::Graph(_, inner) => {
+                assert!(matches!(inner.as_ref(), GroupGraphPattern::SubSelect(_)));
+            }
+            other => panic!("expected Graph, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_multiple_aggregates() {
+        let q = p(
+            "SELECT (COUNT(*) AS ?total) (AVG(?age) AS ?avg_age) (MAX(?age) AS ?max_age) \
+             WHERE { ?s <http://age> ?age }",
+        );
+        if let QueryForm::Select {
+            projection: SelectClause::Variables(vars),
+            ..
+        } = &q.form
+        {
+            assert_eq!(vars.len(), 3);
+            assert!(matches!(
+                &vars[0],
+                SelectVariable::Expression(Expression::Count { .. }, _)
+            ));
+            assert!(matches!(
+                &vars[1],
+                SelectVariable::Expression(Expression::Avg { .. }, _)
+            ));
+            assert!(matches!(
+                &vars[2],
+                SelectVariable::Expression(Expression::Max { .. }, _)
+            ));
+        } else {
+            panic!("expected SELECT");
+        }
+    }
+
+    #[test]
+    fn test_order_by_expression() {
+        // ORDER BY with a function call expression
+        let q = p("SELECT ?s WHERE { ?s <http://name> ?name } ORDER BY LCASE(?name)");
+        assert_eq!(q.order_by.len(), 1);
+        assert!(q.order_by[0].ascending);
+        assert!(matches!(&q.order_by[0].expr, Expression::Lcase(_)));
+    }
+
+    #[test]
+    fn test_group_by_expression() {
+        // GROUP BY with a built-in function call
+        let q = p("SELECT (COUNT(*) AS ?n) WHERE { ?s <http://name> ?name } GROUP BY LCASE(?name)");
+        assert_eq!(q.group_by.len(), 1);
+        assert!(matches!(&q.group_by[0], Expression::Lcase(_)));
     }
 }

@@ -535,3 +535,78 @@ New parser tests (25):
 - Combined: inverse with modifier, sequence+inverse+modifier, complex transitive closure
 - Integration: paths in CONSTRUCT, paths with FILTER, multiple triples with paths,
   semicolon shorthand with paths
+
+## 2026-03-22: Prompt 6 — Parse aggregates, subqueries, GRAPH, solution modifiers
+
+### What was done
+
+Completed the SPARQL 1.1 parser by implementing all remaining features: solution
+modifiers, aggregate functions, subqueries, and GRAPH patterns.
+
+**Solution modifiers** — added `parse_solution_modifiers()` method returning
+`(group_by, having, order_by, limit, offset)`. Called after every query form's
+WHERE clause (SELECT, CONSTRUCT, ASK, DESCRIBE). Parsing details:
+
+- **GROUP BY**: Supports bare variables (`GROUP BY ?x`), built-in function calls
+  (`GROUP BY LCASE(?name)`), and parenthesized expressions with optional AS alias
+  (`GROUP BY (YEAR(?date) AS ?yr)`).
+- **HAVING**: Parses a single constraint expression (parenthesized or built-in call).
+  Aggregates inside HAVING are supported (e.g., `HAVING (COUNT(?s) > 5)`).
+- **ORDER BY**: Supports `ASC(expr)`, `DESC(expr)`, and bare expressions (default
+  ascending). Multiple conditions are comma-free (space-separated), matching the
+  SPARQL grammar. Correctly stops at LIMIT/OFFSET/VALUES keywords.
+- **LIMIT / OFFSET**: Parse integer values after the keyword.
+
+**Aggregate functions** — added `parse_aggregate()` method and `is_aggregate_keyword()`
+helper. Aggregates are recognized in `parse_primary_expression()` before built-in
+functions (since aggregate keywords like MIN/MAX must not fall through to other
+handling). Supported aggregates:
+
+- `COUNT(*)`, `COUNT(expr)`, `COUNT(DISTINCT expr)`
+- `SUM`, `AVG`, `MIN`, `MAX` — all with optional DISTINCT
+- `GROUP_CONCAT(expr)` and `GROUP_CONCAT(expr ; SEPARATOR = "str")`
+- `SAMPLE(expr)` with optional DISTINCT
+
+**Subqueries** — `{ SELECT ... }` inside a WHERE clause is now recognized by
+peeking past the `{` for a `SELECT` keyword. The subquery is parsed via
+`parse_subselect()` which handles SELECT clause, WHERE clause, solution modifiers,
+and an optional trailing VALUES clause. Produces `GroupGraphPattern::SubSelect`.
+
+**GRAPH patterns** — `GRAPH <iri> { ... }` and `GRAPH ?var { ... }` are parsed
+via a new `parse_var_or_iri()` helper. The inner pattern is a full group graph
+pattern, supporting nested subqueries and other pattern forms inside GRAPH blocks.
+
+### Key decisions
+
+1. **GROUP BY / ORDER BY two-word keywords**: The lexer maps "GROUP" to
+   `Keyword::GroupBy` and "ORDER" to `Keyword::OrderBy`, but "BY" is lexed as a
+   separate `PrefixedName { prefix: "", local: "BY" }` token. Added
+   `expect_bare_word()` helper to consume the "BY" token after the keyword.
+
+2. **ORDER BY bare expressions**: Used `parse_expression()` (not `parse_constraint()`)
+   for bare ORDER BY items since `parse_constraint` only handles parenthesized
+   expressions and built-in calls, while ORDER BY commonly uses bare variables.
+
+3. **Subquery detection**: Peek two tokens ahead (`{` then `SELECT`) to distinguish
+   subqueries from nested groups. This avoids backtracking and is unambiguous since
+   SELECT cannot start a triple pattern.
+
+4. **Solution modifiers on all query forms**: Per the SPARQL grammar, solution
+   modifiers are valid after any query form's WHERE clause. Even ASK gets them
+   parsed (for spec compliance), though they're semantically questionable.
+
+### Test results
+
+154 tests pass (18 lexer + 136 parser), 0 failures, 0 warnings, 0 clippy warnings.
+
+New parser tests (34):
+- Solution modifiers: GROUP BY simple, GROUP BY multiple, HAVING, ORDER BY simple,
+  ORDER BY DESC, ORDER BY ASC, ORDER BY multiple, LIMIT, OFFSET, LIMIT+OFFSET,
+  all modifiers combined
+- Aggregates: COUNT(*), COUNT(expr), COUNT(DISTINCT), SUM, AVG, MIN/MAX,
+  GROUP_CONCAT with separator, GROUP_CONCAT without separator, SAMPLE,
+  multiple aggregates in one query
+- GRAPH: IRI name, variable name, with preceding triples
+- Subqueries: simple, with LIMIT, with aggregates
+- Combined: full aggregation query, CONSTRUCT with LIMIT, DESCRIBE with LIMIT,
+  aggregate in HAVING, GRAPH with subquery, ORDER BY expression, GROUP BY expression

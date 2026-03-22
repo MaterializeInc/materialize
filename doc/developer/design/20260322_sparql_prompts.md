@@ -64,13 +64,13 @@ includes the goal, key files to read, and acceptance criteria.
 >
 > ~~Read first: W3C SPARQL 1.1 Section 9.~~
 
-### Prompt 6: Parse aggregates, subqueries, GRAPH, solution modifiers
+### ~~Prompt 6: Parse aggregates, subqueries, GRAPH, solution modifiers~~
 
-> Complete the parser with: GROUP BY, HAVING, aggregate functions (COUNT,
-> SUM, AVG, MIN, MAX, GROUP_CONCAT, SAMPLE), subqueries (SELECT nested in
-> WHERE), GRAPH ?g { ... } / GRAPH <iri> { ... }, ORDER BY, LIMIT, OFFSET,
-> DISTINCT, REDUCED. This should cover the full SPARQL 1.1 query grammar.
-> Add a comprehensive test suite.
+> ~~Complete the parser with: GROUP BY, HAVING, aggregate functions (COUNT,~~
+> ~~SUM, AVG, MIN, MAX, GROUP_CONCAT, SAMPLE), subqueries (SELECT nested in~~
+> ~~WHERE), GRAPH ?g { ... } / GRAPH <iri> { ... }, ORDER BY, LIMIT, OFFSET,~~
+> ~~DISTINCT, REDUCED. This should cover the full SPARQL 1.1 query grammar.~~
+> ~~Add a comprehensive test suite.~~
 
 ---
 
