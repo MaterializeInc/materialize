@@ -2737,7 +2737,7 @@ def wait_for_crd_established():
                     stderr=subprocess.DEVNULL,
                 )
             )
-            conditions = crd.get("status", {}).get("conditions", [])
+            conditions = crd.get("status", {}).get("conditions") or []
             established_condition = next(
                 (
                     condition
