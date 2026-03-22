@@ -7893,6 +7893,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-sparql"
+version = "0.0.0"
+dependencies = [
+ "mz-expr",
+ "mz-ore",
+ "mz-repr",
+ "mz-sparql-parser",
+ "mz-sql",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-sparql-parser"
+version = "0.0.0"
+dependencies = [
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-sql"
 version = "0.0.0"
 dependencies = [

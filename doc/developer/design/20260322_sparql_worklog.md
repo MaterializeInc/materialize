@@ -610,3 +610,100 @@ New parser tests (34):
 - Subqueries: simple, with LIMIT, with aggregates
 - Combined: full aggregation query, CONSTRUCT with LIMIT, DESCRIBE with LIMIT,
   aggregate in HAVING, GRAPH with subquery, ORDER BY expression, GROUP BY expression
+
+## 2026-03-22: Prompt 7 — Bootstrap `mz-sparql` planner crate and plan BGPs
+
+### What was done
+
+Created `src/sparql/` crate with the SPARQL-to-HIR query planner. The planner
+takes a parsed `SparqlQuery` and produces `HirRelationExpr` (the same HIR used
+by the SQL planner), enabling reuse of the entire lowering/optimization/execution
+pipeline.
+
+**Crate structure**:
+- **`Cargo.toml`**: Dependencies on `mz-sparql-parser` (AST), `mz-repr` (Datum,
+  Row, ScalarType), `mz-expr` (BinaryFunc, Id), `mz-sql` (HirRelationExpr,
+  HirScalarExpr, JoinKind), `mz-ore`.
+- **`src/lib.rs`**: Module declaration for `plan`.
+- **`src/plan.rs`**: The planner implementation.
+
+**Core types**:
+- `SparqlPlanner` — holds the quad table ID and type. Constructed with
+  `SparqlPlanner::new(quad_table_id: GlobalId)`.
+- `PlannedRelation` — bundles a `HirRelationExpr` with a `var_map: BTreeMap<String, usize>`
+  that tracks which SPARQL variable maps to which column index.
+- `PlanError` — error type for planning failures.
+
+**Quad table model**: The planner assumes a single table `(subject TEXT, predicate TEXT,
+object TEXT, graph TEXT)` identified by `GlobalId`. Constants: `QUAD_SUBJECT=0`,
+`QUAD_PREDICATE=1`, `QUAD_OBJECT=2`, `QUAD_GRAPH=3`.
+
+**Single triple pattern planning** (`plan_triple`):
+1. `Get(quad_table)` — scan the quad table (4 columns)
+2. For each position (subject, predicate, object):
+   - Variable → record in `var_to_quad_col` mapping
+   - Concrete term (IRI, literal) → add equality `Filter` predicate
+   - Repeated variable (same var in multiple positions) → equality filter between columns
+3. `Project` to keep only columns with variables, sorted alphabetically by variable name
+4. Output: `PlannedRelation` with the projected relation and variable→column mapping
+
+**Multi-pattern BGP planning** (`plan_bgp`):
+1. Plan first triple pattern
+2. For each subsequent pattern, join with the accumulated result via `join_on_shared_vars`
+3. Empty BGP → `Constant` with one empty row (join identity)
+
+**Join on shared variables** (`join_on_shared_vars`):
+1. Find variables present in both left and right relations
+2. Build equality predicates: `left.col = right.(col + left_arity)`
+3. Multiple shared vars → conjunction via `VariadicFunc::And`
+4. No shared vars → cross join (ON = `true`)
+5. `Project` to eliminate duplicate columns for shared variables
+6. Update var_map: left vars keep their indices, new right vars get appended
+
+**RDF term encoding** (`term_to_string`):
+- IRIs: bare IRI string (no angle brackets)
+- Simple literals: string value
+- Language-tagged: `"value"@lang`
+- Typed: `"value"^^<datatype>`
+- Blank nodes: `_:label`
+- Numeric/boolean: string representation
+
+**mz-sql change**: Added `ColumnRef` to the public re-exports in
+`src/sql/src/plan.rs` (needed for downstream crates to construct
+`HirScalarExpr::Column` values, though not used in this prompt).
+
+### Key decisions
+
+1. **Separate crate**: `mz-sparql` depends on `mz-sql` (for HIR types) but not
+   vice versa. The integration (prompt 13) will happen at the adapter level,
+   which already depends on both. No circular dependency.
+
+2. **PlannedRelation abstraction**: Rather than returning bare `HirRelationExpr`,
+   we bundle it with the variable→column mapping. This is essential because
+   SPARQL variables are named (not positional), and downstream planning steps
+   (FILTER, OPTIONAL, projection) need to resolve variable references to column
+   indices.
+
+3. **Alphabetical variable ordering**: Variables are sorted by name in the
+   output projection. This ensures deterministic column ordering regardless of
+   the order variables appear in the query. Makes testing reliable and JOIN
+   column alignment predictable.
+
+4. **BinaryFunc::Eq(Eq) pattern**: Materialize's `BinaryFunc` enum uses the
+   `#[sqlfunc]` proc macro pattern where each variant wraps a unit struct
+   (e.g., `BinaryFunc::Eq(Eq)`). Same for `VariadicFunc::And(And)`.
+
+5. **No catalog dependency yet**: The planner takes a `GlobalId` for the quad
+   table rather than resolving it from the catalog. This keeps the initial
+   implementation simple and testable. Catalog integration comes in prompt 13.
+
+### Test results
+
+12 tests pass, 0 failures, 1 warning (unused QUAD_ARITY constant).
+
+Tests cover:
+- Single triple: all variables, concrete predicate, concrete subject+predicate,
+  `a` (rdf:type) shorthand, repeated variable, literal object
+- Multi-triple BGP: shared variable join, no shared variables (cross join),
+  three-way join, multiple shared variables
+- Edge cases: empty BGP, deterministic column ordering

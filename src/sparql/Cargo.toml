@@ -1,0 +1,26 @@
+[package]
+name = "mz-sparql"
+description = "SPARQL 1.1 query planner for Materialize."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore" }
+mz-repr = { path = "../repr", features = ["tracing"] }
+mz-sparql-parser = { path = "../sparql-parser" }
+mz-sql = { path = "../sql" }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

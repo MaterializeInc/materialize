@@ -107,7 +107,7 @@ use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 pub use hir::{
-    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
+    AggregateExpr, CoercibleScalarExpr, ColumnRef, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
     WindowExprType,
 };
 pub use lowering::Config as HirToMirConfig;

@@ -76,19 +76,19 @@ includes the goal, key files to read, and acceptance criteria.
 
 ## Phase 2: Planner Core
 
-### Prompt 7: Bootstrap `mz-sparql` planner crate and plan BGPs
+### ~~Prompt 7: Bootstrap `mz-sparql` planner crate and plan BGPs~~
 
-> Create `src/sparql/` with `Cargo.toml`, `src/lib.rs`, `src/plan.rs`.
-> Implement the core planner function: `plan_sparql(query: SparqlQuery,
-> catalog: &dyn SessionCatalog) -> Result<HirRelationExpr, PlanError>`.
-> Start with BGP planning: given a triple table `rdf_quads(subject, predicate,
-> object, graph)`, compile each triple pattern to a `Get` + `Filter` (for
-> concrete terms) or `Get` + `Project` (for variables). Compile multi-pattern
-> BGPs as `Join` with equality on shared variables. Maintain a variable→column
-> mapping. Write tests that verify the generated HIR against expected plans.
+> ~~Create `src/sparql/` with `Cargo.toml`, `src/lib.rs`, `src/plan.rs`.~~
+> ~~Implement the core planner function: `plan_sparql(query: SparqlQuery,~~
+> ~~catalog: &dyn SessionCatalog) -> Result<HirRelationExpr, PlanError>`.~~
+> ~~Start with BGP planning: given a triple table `rdf_quads(subject, predicate,~~
+> ~~object, graph)`, compile each triple pattern to a `Get` + `Filter` (for~~
+> ~~concrete terms) or `Get` + `Project` (for variables). Compile multi-pattern~~
+> ~~BGPs as `Join` with equality on shared variables. Maintain a variable→column~~
+> ~~mapping. Write tests that verify the generated HIR against expected plans.~~
 >
-> Read first: `src/sql/src/plan/statement.rs`, `src/sql/src/plan/query.rs`,
-> `src/sql/src/plan/hir.rs`, `src/expr/src/relation.rs`.
+> ~~Read first: `src/sql/src/plan/statement.rs`, `src/sql/src/plan/query.rs`,~~
+> ~~`src/sql/src/plan/hir.rs`, `src/expr/src/relation.rs`.~~
 
 ### Prompt 8: Plan FILTER, OPTIONAL, UNION, MINUS
 
