@@ -223,6 +223,8 @@ impl DockerRuntime {
                 "-d",
                 "--name",
                 CONTAINER_NAME,
+                "-e",
+                "MZ_EAT_MY_DATA=1",
                 "-p",
                 &format!("{}:6875", CONTAINER_PORT),
                 &self.image,
