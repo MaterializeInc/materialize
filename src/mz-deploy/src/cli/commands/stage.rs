@@ -636,12 +636,12 @@ async fn record_stage_metadata(
             .enumerate()
             .map(|(idx, (object_id, typed_obj))| {
                 let original_fqn = FullyQualifiedName::from(object_id.to_unresolved_item_name());
-                let visitor = NormalizingVisitor::fully_qualifying(&original_fqn);
+                let mut visitor = NormalizingVisitor::fully_qualifying(&original_fqn);
                 let stmt = typed_obj
                     .stmt
                     .clone()
                     .normalize_name_with(&visitor, &original_fqn.to_item_name())
-                    .normalize_dependencies_with(&visitor);
+                    .normalize_dependencies_with(&mut visitor);
                 let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
                 #[allow(clippy::as_conversions)]
                 PendingStatement {
@@ -1185,7 +1185,7 @@ async fn deploy_single_object(
 ) -> Result<(), CliError> {
     let original_fqn = FullyQualifiedName::from(object_id.to_unresolved_item_name());
 
-    let visitor = NormalizingVisitor::staging(
+    let mut visitor = NormalizingVisitor::staging(
         &original_fqn,
         staging_suffix.to_string(),
         &planned_project.external_dependencies,
@@ -1197,7 +1197,7 @@ async fn deploy_single_object(
         .stmt
         .clone()
         .normalize_name_with(&visitor, &original_fqn.to_item_name())
-        .normalize_dependencies_with(&visitor)
+        .normalize_dependencies_with(&mut visitor)
         .normalize_cluster_with(&visitor);
 
     let stmt = transform(stmt);

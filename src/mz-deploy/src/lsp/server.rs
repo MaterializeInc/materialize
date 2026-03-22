@@ -2,8 +2,8 @@
 //!
 //! [`Backend`] holds per-session state: the document ropes (for offset
 //! conversion), the latest successfully built project model (for
-//! go-to-definition and hover), the types cache (for hover column schemas),
-//! and the project root path.
+//! go-to-definition, hover, completion, and code lens), the types cache (for
+//! hover column schemas and column completions), and the project root path.
 //!
 //! ## State Management
 //!
@@ -13,32 +13,95 @@
 //!   On build failure the last good model is kept so go-to-definition degrades
 //!   gracefully rather than disappearing entirely.
 //! - **`types_cache`** — Rebuilt on every `didSave` from `types.cache.bin`
-//!   merged with `types.lock`. Used for hover column schemas and column
-//!   completions. On load failure the last good cache is kept.
+//!   merged with `types.lock`. On load failure the last good cache is kept.
 //! - **`project_diagnostic_uris`** — Tracks which file URIs currently have
-//!   project-level validation diagnostics. On each rebuild, old diagnostics
-//!   are cleared (empty `[]` published) for URIs no longer in the error set,
-//!   then new diagnostics are published. On a successful build all tracked
-//!   URIs are cleared.
+//!   project-level validation diagnostics. On each rebuild, diagnostics are
+//!   diffed via [`compute_diagnostic_actions`]: old URIs not in the new set
+//!   are cleared, new diagnostics are published.
 //! - **`root`** — Set during `initialize` from `InitializeParams::root_uri`.
 //! - **`settings`** / **`variables`** — Cached from `project.toml` via
-//!   [`load_settings()`]. Reloaded at startup and on every save. Variables are
-//!   passed to per-keystroke diagnostics and the on-save project rebuild.
+//!   [`load_settings()`]. Reloaded at startup and on every save.
 
 use crate::config::ProjectSettings;
-use crate::lsp::{completion, diagnostics, goto_definition, hover};
+use crate::lsp::{catalog, code_lens, completion, dag, diagnostics, goto_definition, hover};
 use crate::project;
 use crate::project::error::{ProjectError, ValidationErrors};
 use crate::project::planned;
 use crate::types::{self, Types};
 use ropey::Rope;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
+
+/// Actions to take after a project rebuild, expressed as pure data.
+///
+/// Separates the *decision* of which diagnostics to publish/clear from the
+/// *execution* of those actions (which requires async I/O via the LSP client).
+/// The [`compute_diagnostic_actions`] function produces this from validation
+/// diagnostics and the set of previously tracked diagnostic URIs.
+struct DiagnosticActions {
+    /// New diagnostics to publish, keyed by file URI.
+    diagnostics_to_publish: Vec<(Url, Vec<Diagnostic>)>,
+    /// URIs that had diagnostics before but should now be cleared.
+    uris_to_clear: Vec<Url>,
+    /// The new set of URIs that have diagnostics (replaces `project_diagnostic_uris`).
+    new_tracked_uris: Vec<Url>,
+}
+
+/// Compute which diagnostics to publish and which URIs to clear.
+///
+/// `new_diagnostics` is the set of validation diagnostics from the current
+/// build (empty on success or non-validation errors). `old_diagnostic_uris`
+/// is the set of URIs that had diagnostics before this build.
+///
+/// URIs in the old set that are not in the new set are scheduled for clearing.
+fn compute_diagnostic_actions(
+    new_diagnostics: BTreeMap<PathBuf, Vec<Diagnostic>>,
+    old_diagnostic_uris: &[Url],
+) -> DiagnosticActions {
+    let new_uris: Vec<Url> = new_diagnostics
+        .keys()
+        .filter_map(|path| Url::from_file_path(path).ok())
+        .collect();
+
+    let uris_to_clear: Vec<Url> = old_diagnostic_uris
+        .iter()
+        .filter(|uri| !new_uris.contains(uri))
+        .cloned()
+        .collect();
+
+    let diagnostics_to_publish: Vec<(Url, Vec<Diagnostic>)> = new_diagnostics
+        .into_iter()
+        .filter_map(|(path, diags)| Url::from_file_path(path).ok().map(|uri| (uri, diags)))
+        .collect();
+
+    DiagnosticActions {
+        diagnostics_to_publish,
+        uris_to_clear,
+        new_tracked_uris: new_uris,
+    }
+}
+
+/// Load and merge types from `types.lock` and `types.cache.bin`.
+///
+/// Returns `Some` if any types were found, `None` otherwise. The two sources
+/// are merged so hover covers both external dependencies (from the lock file)
+/// and internal views (from the cache).
+fn load_merged_types(root: &Path) -> Option<Types> {
+    let mut merged = types::load_types_lock(root).unwrap_or_default();
+    if let Ok(cache) = types::load_types_cache(root) {
+        merged.merge(&cache);
+    }
+    if merged.tables.is_empty() {
+        None
+    } else {
+        Some(merged)
+    }
+}
 
 /// LSP backend holding session state.
 pub struct Backend {
@@ -60,9 +123,6 @@ pub struct Backend {
     variables: RwLock<BTreeMap<String, String>>,
     /// Name of the active profile (for hover display).
     profile_name: RwLock<String>,
-    /// Pre-computed keyword completion items (static; object completions are
-    /// computed per-request since they depend on the file URI and project state).
-    completions: Vec<CompletionItem>,
 }
 
 impl Backend {
@@ -78,7 +138,6 @@ impl Backend {
             settings: RwLock::new(None),
             variables: RwLock::new(BTreeMap::new()),
             profile_name: RwLock::new("default".to_string()),
-            completions: completion::keyword_completions(),
         }
     }
 
@@ -120,11 +179,16 @@ impl Backend {
         self.client.publish_diagnostics(uri, diags, None).await;
     }
 
-    /// Find the dot-qualified identifier parts at the given cursor position.
+    /// Snapshot document text and cursor context for a given position.
     ///
-    /// Converts the LSP line/character position to a byte offset using the
-    /// stored rope, reads the document text, and extracts the identifier chain.
-    fn find_parts_at_position(&self, uri: &Url, position: Position) -> Option<Vec<String>> {
+    /// Acquires the documents lock once and returns the full document text,
+    /// byte offset, and optional dot-qualified identifier parts at the cursor.
+    /// Returns `None` if the document is not open.
+    fn snapshot_at_position(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<(String, usize, Option<Vec<String>>)> {
         let (byte_offset, text) = {
             let docs = self.documents.lock().unwrap();
             let rope = docs.get(uri)?;
@@ -135,25 +199,68 @@ impl Backend {
             (offset, rope.to_string())
         };
 
-        goto_definition::find_reference_at_position(&text, byte_offset)
+        let parts = goto_definition::find_reference_at_position(&text, byte_offset);
+        Some((text, byte_offset, parts))
     }
 
-    /// Clear project diagnostics for all previously tracked URIs.
-    async fn clear_project_diagnostics(&self) {
-        let old_uris = {
-            let mut uris = self.project_diagnostic_uris.lock().unwrap();
-            std::mem::take(&mut *uris)
-        };
-        for uri in old_uris {
-            self.client.publish_diagnostics(uri, Vec::new(), None).await;
+    /// Handle the `mz-deploy/dag` custom request.
+    ///
+    /// Returns the project's dependency graph as JSON, or `null` if no project
+    /// has been successfully built yet.
+    #[allow(clippy::unused_async)] // async required by tower-lsp custom_method
+    pub async fn dag(&self) -> tower_lsp::jsonrpc::Result<serde_json::Value> {
+        let root = self.root.read().unwrap().clone();
+        let project_guard = self.project.read().unwrap();
+        match project_guard.as_ref() {
+            Some(project) => Ok(
+                serde_json::to_value(dag::build_dag_response(project, &root))
+                    .unwrap_or(serde_json::Value::Null),
+            ),
+            None => Ok(serde_json::Value::Null),
+        }
+    }
+
+    /// Handle the `mz-deploy/keywords` custom request.
+    ///
+    /// Returns the full list of Materialize SQL keywords as a JSON array of
+    /// uppercase strings (e.g., `["ABORT", "ACCESS", ...]`). The keyword list
+    /// is static and derived from [`mz_sql_lexer::keywords::KEYWORDS`].
+    #[allow(clippy::unused_async)] // async required by tower-lsp custom_method
+    pub async fn keywords(&self) -> tower_lsp::jsonrpc::Result<serde_json::Value> {
+        let kws: Vec<&str> = mz_sql_lexer::keywords::KEYWORDS
+            .entries()
+            .map(|(_, kw)| kw.as_str())
+            .collect();
+        Ok(serde_json::to_value(kws).unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Handle the `mz-deploy/catalog` custom request.
+    ///
+    /// Returns the project's data catalog as JSON, or `null` if no project
+    /// has been successfully built yet.
+    #[allow(clippy::unused_async)] // async required by tower-lsp custom_method
+    pub async fn catalog(&self) -> tower_lsp::jsonrpc::Result<serde_json::Value> {
+        let root = self.root.read().unwrap().clone();
+        let project_guard = self.project.read().unwrap();
+        match project_guard.as_ref() {
+            Some(project) => {
+                let types_guard = self.types_cache.read().unwrap();
+                Ok(serde_json::to_value(catalog::build_catalog_response(
+                    project,
+                    types_guard.as_ref(),
+                    &root,
+                ))
+                .unwrap_or(serde_json::Value::Null))
+            }
+            None => Ok(serde_json::Value::Null),
         }
     }
 
     /// Rebuild the project model and types cache from disk.
     ///
-    /// On validation errors, publishes diagnostics to the affected files and
-    /// clears diagnostics from files that no longer have errors. On success,
-    /// clears all project diagnostics.
+    /// Delegates to [`compute_diagnostic_actions`] for the pure diagnostic
+    /// diffing logic, then applies the resulting actions via the LSP client.
+    /// Types are loaded via [`load_merged_types`].
     async fn rebuild_project(&self) {
         self.load_settings();
         let root = self.root.read().unwrap().clone();
@@ -172,56 +279,40 @@ impl Backend {
                 None => ("default".to_string(), None, BTreeMap::new()),
             }
         };
-        match project::plan_sync(&root, &profile, profile_suffix.as_deref(), &variables) {
-            Ok(p) => {
-                self.clear_project_diagnostics().await;
-                if let Ok(mut proj) = self.project.write() {
-                    *proj = Some(p);
-                }
-            }
+
+        let build_result =
+            project::plan_sync(&root, &profile, profile_suffix.as_deref(), &variables);
+
+        // Extract validation diagnostics from the build result (pure).
+        let new_diagnostics = match &build_result {
             Err(ProjectError::Validation(ValidationErrors { errors })) => {
-                let new_diags = diagnostics::validation_diagnostics(&errors);
-
-                // Collect new URIs and publish diagnostics.
-                let new_uris: Vec<Url> = new_diags
-                    .iter()
-                    .filter_map(|(path, _)| Url::from_file_path(path).ok())
-                    .collect();
-
-                // Clear old URIs that aren't in the new set.
-                {
-                    let old_uris = self.project_diagnostic_uris.lock().unwrap().clone();
-                    for uri in &old_uris {
-                        if !new_uris.contains(uri) {
-                            self.client
-                                .publish_diagnostics(uri.clone(), Vec::new(), None)
-                                .await;
-                        }
-                    }
-                }
-
-                // Publish new diagnostics.
-                for (path, diags) in &new_diags {
-                    if let Ok(uri) = Url::from_file_path(path) {
-                        self.client
-                            .publish_diagnostics(uri, diags.clone(), None)
-                            .await;
-                    }
-                }
-
-                // Store the new set of URIs.
-                *self.project_diagnostic_uris.lock().unwrap() = new_uris;
+                diagnostics::validation_diagnostics(errors)
             }
-            Err(_) => {}
+            _ => BTreeMap::new(),
+        };
+
+        // Compute diagnostic actions (pure).
+        let old_uris = self.project_diagnostic_uris.lock().unwrap().clone();
+        let actions = compute_diagnostic_actions(new_diagnostics, &old_uris);
+
+        // Store the new project on success.
+        if let Ok(p) = build_result {
+            *self.project.write().unwrap() = Some(p);
         }
 
-        // Load types.lock (external deps) and types.cache.bin (internal views),
-        // merging them so hover covers all objects.
-        let mut merged = types::load_types_lock(&root).unwrap_or_default();
-        if let Ok(cache) = types::load_types_cache(&root) {
-            merged.merge(&cache);
+        // Apply diagnostic actions (I/O).
+        for uri in &actions.uris_to_clear {
+            self.client
+                .publish_diagnostics(uri.clone(), Vec::new(), None)
+                .await;
         }
-        if !merged.tables.is_empty() {
+        for (uri, diags) in actions.diagnostics_to_publish {
+            self.client.publish_diagnostics(uri, diags, None).await;
+        }
+        *self.project_diagnostic_uris.lock().unwrap() = actions.new_tracked_uris;
+
+        // Load types.lock + types.cache.bin so hover covers all objects.
+        if let Some(merged) = load_merged_types(&root) {
             *self.types_cache.write().unwrap() = Some(merged);
         }
     }
@@ -253,6 +344,9 @@ impl LanguageServer for Backend {
                 completion_provider: Some(CompletionOptions::default()),
                 definition_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
+                code_lens_provider: Some(CodeLensOptions {
+                    resolve_provider: Some(false),
+                }),
                 ..Default::default()
             },
             ..Default::default()
@@ -291,7 +385,11 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        let parts = match self.find_parts_at_position(&uri, position) {
+        let (_, _, parts) = match self.snapshot_at_position(&uri, position) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        let parts = match parts {
             Some(p) => p,
             None => return Ok(None),
         };
@@ -311,32 +409,22 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
 
-        {
-            let (byte_offset, text) = {
-                let docs = self.documents.lock().unwrap();
-                match docs.get(&uri) {
-                    Some(rope) => {
-                        let line_start = rope
-                            .try_line_to_char(usize::try_from(position.line).unwrap_or(0))
-                            .ok();
-                        let offset = line_start
-                            .map(|ls| ls + usize::try_from(position.character).unwrap_or(0));
-                        (offset, Some(rope.to_string()))
-                    }
-                    None => (None, None),
-                }
-            };
-            if let (Some(offset), Some(text)) = (byte_offset, text) {
-                let variables = self.variables.read().unwrap();
-                let profile = self.profile_name.read().unwrap();
-                if let Some(h) = hover::resolve_variable_hover(&text, offset, &variables, &profile)
-                {
-                    return Ok(Some(h));
-                }
-            }
-        }
+        let (text, byte_offset, parts) = match self.snapshot_at_position(&uri, position) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
 
-        let parts = match self.find_parts_at_position(&uri, position) {
+        // Try variable hover first (pure).
+        let variables = self.variables.read().unwrap();
+        let profile = self.profile_name.read().unwrap();
+        if let Some(h) = hover::resolve_variable_hover(&text, byte_offset, &variables, &profile) {
+            return Ok(Some(h));
+        }
+        drop(variables);
+        drop(profile);
+
+        // Then object hover (pure).
+        let parts = match parts {
             Some(p) => p,
             None => return Ok(None),
         };
@@ -373,32 +461,102 @@ impl LanguageServer for Backend {
         let text = doc_text.as_deref().unwrap_or("");
         let prefix = completion::prefix_context(text, position);
 
-        // If the user is typing a qualified name (dots >= 1), keywords are
-        // not valid — only return object completions.
-        let mut items = if prefix.dots == 0 {
-            self.completions.clone()
-        } else {
-            Vec::new()
-        };
-
-        if let Some(project) = self.project.read().unwrap().as_ref() {
-            let cache_guard = self.types_cache.read().unwrap();
-            items.extend(completion::object_completions(
-                project,
-                cache_guard.as_ref(),
-                &file_uri,
-                &root,
-                &prefix,
-            ));
-            items.extend(completion::column_completions(
-                project,
-                cache_guard.as_ref(),
-                &file_uri,
-                &root,
-                &prefix,
-            ));
-        }
+        let project_guard = self.project.read().unwrap();
+        let cache_guard = self.types_cache.read().unwrap();
+        let items = completion::complete(
+            project_guard.as_ref(),
+            cache_guard.as_ref(),
+            &file_uri,
+            &root,
+            &prefix,
+        );
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn code_lens(&self, params: CodeLensParams) -> Result<Option<Vec<CodeLens>>> {
+        let file_uri = params.text_document.uri;
+        let root = self.root.read().unwrap().clone();
+
+        let doc_text = {
+            let docs = self.documents.lock().unwrap();
+            docs.get(&file_uri).map(|rope| rope.to_string())
+        };
+        let text = match doc_text.as_deref() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        let project_guard = self.project.read().unwrap();
+        let project = match project_guard.as_ref() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let lenses = code_lens::code_lenses(&file_uri, text, &root, project);
+        Ok(Some(lenses))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file_url(path: &str) -> Url {
+        Url::from_file_path(path).unwrap()
+    }
+
+    fn make_diagnostic(msg: &str) -> Diagnostic {
+        Diagnostic {
+            message: msg.to_string(),
+            severity: Some(DiagnosticSeverity::ERROR),
+            source: Some("mz-deploy".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn diagnostic_actions_success_clears_all() {
+        let old = vec![file_url("/a.sql"), file_url("/b.sql")];
+        let actions = compute_diagnostic_actions(BTreeMap::new(), &old);
+
+        assert!(actions.diagnostics_to_publish.is_empty());
+        assert_eq!(actions.uris_to_clear.len(), 2);
+        assert!(actions.new_tracked_uris.is_empty());
+    }
+
+    #[test]
+    fn diagnostic_actions_validation_errors() {
+        let old = vec![file_url("/a.sql"), file_url("/b.sql")];
+        let mut new_diags = BTreeMap::new();
+        new_diags.insert(PathBuf::from("/b.sql"), vec![make_diagnostic("error in b")]);
+        new_diags.insert(PathBuf::from("/c.sql"), vec![make_diagnostic("error in c")]);
+
+        let actions = compute_diagnostic_actions(new_diags, &old);
+
+        // /a.sql should be cleared (was in old, not in new).
+        assert_eq!(actions.uris_to_clear, vec![file_url("/a.sql")]);
+        // /b.sql and /c.sql should be published.
+        assert_eq!(actions.diagnostics_to_publish.len(), 2);
+        // Tracked URIs should be the new set.
+        assert_eq!(actions.new_tracked_uris.len(), 2);
+    }
+
+    #[test]
+    fn diagnostic_actions_no_previous() {
+        let mut new_diags = BTreeMap::new();
+        new_diags.insert(PathBuf::from("/a.sql"), vec![make_diagnostic("error")]);
+
+        let actions = compute_diagnostic_actions(new_diags, &[]);
+
+        assert!(actions.uris_to_clear.is_empty());
+        assert_eq!(actions.diagnostics_to_publish.len(), 1);
+        assert_eq!(actions.new_tracked_uris.len(), 1);
+    }
+
+    #[test]
+    fn load_merged_types_returns_none_for_missing_files() {
+        let result = load_merged_types(Path::new("/nonexistent/path"));
+        assert!(result.is_none());
     }
 }

@@ -840,7 +840,7 @@ fn build_object_paths(project: &Project, project_root: &Path) -> BTreeMap<Object
 
 /// Create temporary view for a project object
 fn create_temporary_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Option<Statement> {
-    let visitor = NormalizingVisitor::flattening(fqn);
+    let mut visitor = NormalizingVisitor::flattening(fqn);
 
     match stmt {
         Statement::CreateView(view) => {
@@ -849,7 +849,7 @@ fn create_temporary_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Opti
 
             let normalized = Statement::CreateView(view)
                 .normalize_name_with(&visitor, &fqn.to_item_name())
-                .normalize_dependencies_with(&visitor);
+                .normalize_dependencies_with(&mut visitor);
 
             Some(normalized)
         }
@@ -865,7 +865,7 @@ fn create_temporary_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Opti
             };
             let normalized = Statement::CreateView(view_stmt)
                 .normalize_name_with(&visitor, &fqn.to_item_name())
-                .normalize_dependencies_with(&visitor);
+                .normalize_dependencies_with(&mut visitor);
 
             Some(normalized)
         }

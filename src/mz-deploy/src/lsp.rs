@@ -2,7 +2,7 @@
 //!
 //! Provides IDE integration for `.sql` files in mz-deploy projects via the
 //! Language Server Protocol (LSP). The server runs over stdio and supports
-//! four capabilities:
+//! five capabilities:
 //!
 //! ## Go-to-definition
 //!
@@ -43,6 +43,29 @@
 //! [`mz_sql_parser::parser::parse_statements()`]. Parse errors are converted to
 //! LSP diagnostics with correct line/column positions via a ropey `Rope`.
 //!
+//! ## Code Lens
+//!
+//! Adds a clickable "Run Test" link above each `EXECUTE UNIT TEST` statement.
+//! When clicked, the editor dispatches a `mz-deploy.runTest` command with the
+//! test filter string (e.g., `database.schema.object#test_name`) as argument.
+//!
+//! ## Custom Endpoints
+//!
+//! - **`mz-deploy/dag`** — Returns the project's dependency graph as JSON
+//!   ([`dag::DagResponse`]) for rendering in the VS Code workspace webview.
+//!   The response contains lightweight node metadata and edges; see the
+//!   [`dag`] module for the data model.
+//!
+//! - **`mz-deploy/catalog`** — Returns the project's data catalog as JSON
+//!   ([`catalog::CatalogResponse`]) for the VS Code workspace catalog view.
+//!   The response contains a database/schema tree for sidebar navigation and
+//!   full object metadata (columns, constraints, grants, indexes) for the
+//!   detail panel. See the [`catalog`] module for the data model.
+//!
+//! - **`mz-deploy/keywords`** — Returns the full list of Materialize SQL
+//!   keywords as a JSON array of uppercase strings. Used by the VS Code
+//!   extension to apply keyword syntax highlighting via editor decorations.
+//!
 //! ## Architecture
 //!
 //! ```text
@@ -58,7 +81,10 @@
 //! Parse diagnostics run per-file on every keystroke. Incremental updates may
 //! come later; the pipeline is fast enough for typical project sizes.
 
+mod catalog;
+mod code_lens;
 mod completion;
+mod dag;
 pub mod diagnostics;
 pub mod goto_definition;
 pub mod hover;

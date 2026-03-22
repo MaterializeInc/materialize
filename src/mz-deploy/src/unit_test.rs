@@ -884,11 +884,11 @@ fn create_expected_view_sql(expected: &ExpectedResult) -> String {
 
 /// Create SQL for the target view as a temporary view with flattened naming.
 fn create_target_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> String {
-    let visitor = NormalizingVisitor::flattening(fqn);
+    let mut visitor = NormalizingVisitor::flattening(fqn);
     let transformed_stmt = stmt
         .clone()
         .normalize_name_with(&visitor, &fqn.to_item_name())
-        .normalize_dependencies_with(&visitor);
+        .normalize_dependencies_with(&mut visitor);
 
     match transformed_stmt {
         Statement::CreateView(view) => {

@@ -1,15 +1,31 @@
 //! Context-aware completion for the LSP server.
 //!
-//! Three kinds of completion items are produced by independent functions:
+//! Completions are produced by a 3-phase pipeline:
 //!
-//! ## 1. Keywords ([`keyword_completions`])
+//! ```text
+//! Phase 1: RESOLVE CONTEXT    → CompletionContext
+//! Phase 2: GATHER CANDIDATES  → Vec<CompletionCandidate>
+//! Phase 3: FORMAT ITEMS       → Vec<CompletionItem>
+//! ```
 //!
-//! Static list from [`mz_sql_lexer::keywords::KEYWORDS`], built once at
-//! startup. Offered only when `dots == 0`. Excluded when the prefix contains
-//! dots. Label is the uppercase keyword (e.g., `SELECT`). Kind: `KEYWORD`.
-//! No sort prefix (sorts after objects and columns).
+//! ## Phase 1: Resolve Context ([`resolve_context`])
 //!
-//! ## 2. Object names ([`object_completions`])
+//! Builds a [`CompletionContext`] from the file URI, project, and prefix.
+//! Determines the default database/schema from the file path, and resolves
+//! the current file's dependencies and alias map (for column completions).
+//! All downstream logic operates on this resolved context — no further URI
+//! parsing or project lookups needed.
+//!
+//! ## Phase 2: Gather Candidates
+//!
+//! Three independent gatherers produce [`CompletionCandidate`]s:
+//!
+//! ### Keywords ([`gather_keywords`])
+//!
+//! Static list from [`mz_sql_lexer::keywords::KEYWORDS`]. Only offered when
+//! `dots == 0`. Label is the uppercase keyword. Kind: `KEYWORD`.
+//!
+//! ### Object names ([`gather_objects`])
 //!
 //! Dynamic per-request from project objects and external dependencies.
 //!
@@ -21,81 +37,40 @@
 //!   `db.schema.object`. First case-insensitive prefix match wins. Label is
 //!   the remainder after the last dot in the prefix.
 //!
-//! Kind: mapped from `ObjectKind` (`STRUCT` for table/view/MV, `EVENT` for
-//! source/sink, etc.). Sort: `1_` same-schema, `2_` cross-schema, `3_`
-//! cross-database.
+//! Sort: `1_` same-schema, `2_` cross-schema, `3_` cross-database.
 //!
-//! ### Disambiguation
+//! ### Column names ([`gather_columns`])
 //!
-//! A single-dot prefix like `mydb.` is ambiguous — it could be a database or
-//! schema prefix. Each object is matched against candidates at increasing
-//! qualification levels. The first candidate whose lowercase form starts with
-//! the prefix text wins.
+//! Dynamic per-request from the types cache. **Only offered for objects that
+//! are dependencies of the current file's object.**
 //!
-//! Examples:
-//! - Prefix `public.f` → matches `public.foo` → label `foo`
-//! - Prefix `mydb.p` → matches `mydb.public.foo` → label `public.foo`
-//! - Prefix `mydb.public.f` → matches `mydb.public.foo` → label `foo`
+//! - **Unqualified** (`dots == 0`, [`gather_unqualified_columns`]): columns
+//!   from all dependencies, filtered by prefix.
+//! - **Qualified** (`dots >= 1`, [`gather_qualified_columns`]): resolves the
+//!   object prefix to an [`ObjectId`] (with alias map support), checks it is
+//!   a dependency, and returns that object's columns.
 //!
-//! ## 3. Column names ([`column_completions`])
+//! Sort: `0_` (before object names).
 //!
-//! Dynamic per-request from the types cache (`types.lock` + `types.cache.bin`).
+//! #### Alias Resolution
 //!
-//! **Constraint:** only offered for objects that are dependencies of the
-//! current file's object. Never for non-dependencies.
+//! When a qualified column prefix has a 1-part object (e.g., `o.col`), the
+//! alias map is checked before falling back to default db/schema resolution.
+//! Aliases are extracted from `FROM` clauses in views/materialized views.
 //!
-//! Kind: `FIELD`. Detail: column type, e.g., `"integer"` or
-//! `"text (nullable)"`. Sort: `0_` (sorts before object names).
+//! ## Phase 3: Format Items ([`format_candidate`])
 //!
-//! ### Mode A: Unqualified (`dots == 0`)
-//!
-//! Derives the current file's `ObjectId` from the file URI. Finds the object
-//! in the project, gets its `dependencies` set. For each dependency, looks up
-//! columns via the types cache. Collects all columns across all dependencies,
-//! filtered by `prefix.text` (case-insensitive). Label: bare column name.
-//!
-//! ### Mode B: Qualified (`dots >= 1`, `dots <= 3`)
-//!
-//! Splits `prefix.text` at the last `.` into `(object_text, col_filter)`.
-//! Splits `object_text` on `.` to resolve an `ObjectId` (1-part uses defaults,
-//! 2-part uses default database, 3-part is fully qualified). The resolved
-//! `ObjectId` must be in the current file's dependencies. Looks up columns and
-//! filters by `col_filter`. Label: bare column name.
-//!
-//! ### Alias Resolution (Mode B enhancement)
-//!
-//! When Mode B encounters a 1-part `object_text` (e.g., `o` from prefix
-//! `o.col`), it checks an **alias map** before falling back to the default
-//! ObjectId construction:
-//!
-//! 1. Check alias map for `object_text` (case-insensitive)
-//! 2. If found, use the mapped `ObjectId`
-//! 3. Otherwise, fall back to `ObjectId::new(default_db, default_schema, object_text)`
-//!
-//! The alias map is built per-request by walking the SQL AST of the current
-//! file's statement. Only `CreateView` and `CreateMaterializedView` produce
-//! aliases. Sources:
-//! - **Explicit alias:** `FROM orders o` → `"o" → ObjectId`
-//! - **Bare table name:** `FROM mydb.public.orders` → `"orders" → ObjectId`
-//!
-//! ### Examples
-//!
-//! | User types | File's object | Dependencies | Result |
-//! |---|---|---|---|
-//! | `SELECT b` | `v` | `foo(id, bar)` | column `bar` offered (matches `b`) |
-//! | `SELECT foo.i` | `v` | `foo(id, name)` | column `id` offered |
-//! | `SELECT public.foo.` | `v` | `mydb.public.foo(id)` | column `id` offered |
-//! | `SELECT other.` | `v` | `foo(id)` | NO columns (`other` is not a dep) |
-//! | `SELECT baz.x` | `v` | `foo(id)` | NO columns (`baz` not a dep) |
-//! | `FROM orders o` then `o.` | `v` | `orders(id)` | column `id` offered |
-//! | `FROM t1 a JOIN t2 b` then `a.` | `v` | `t1(x), t2(y)` | column `x` offered |
+//! Converts each [`CompletionCandidate`] into an LSP [`CompletionItem`] with
+//! appropriate kind, detail, and sort text.
 
 use crate::project::ast::Statement;
+use crate::project::cte_scope::CteScope;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
 use crate::types::{ColumnType, ObjectKind, Types};
 use mz_sql_lexer::keywords::KEYWORDS;
-use mz_sql_parser::ast::{Raw, Select, SetExpr, TableFactor, TableWithJoins};
+use mz_sql_parser::ast::visit::{self, Visit};
+use mz_sql_parser::ast::{Raw, TableFactor};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind, Position, Url};
@@ -108,13 +83,68 @@ pub struct PrefixContext<'a> {
     pub text: &'a str,
 }
 
+/// Everything the completion engine needs about the cursor position and file.
+///
+/// Built once by [`resolve_context`] and consumed by all candidate-gathering
+/// functions. No further URI parsing or project lookups are needed downstream.
+struct CompletionContext<'a> {
+    /// The default database derived from the file path.
+    default_db: String,
+    /// The default schema derived from the file path.
+    default_schema: String,
+    /// The parsed prefix at the cursor.
+    prefix: &'a PrefixContext<'a>,
+    /// The current file's dependencies and alias map (None if file not in project).
+    file_object: Option<FileObject<'a>>,
+}
+
+/// The current file's resolved context for column completions.
+struct FileObject<'a> {
+    /// Objects this file depends on.
+    dependencies: &'a BTreeSet<ObjectId>,
+    /// Alias/bare-table-name → ObjectId map from the SQL AST.
+    alias_map: BTreeMap<String, ObjectId>,
+}
+
+/// Build a [`CompletionContext`] from the file URI, project, and prefix.
+///
+/// Returns `None` if the file is not under `models/<database>/<schema>/`
+/// (i.e., the default database/schema cannot be determined from the path).
+fn resolve_context<'a>(
+    file_uri: &Url,
+    root: &Path,
+    project: &'a planned::Project,
+    prefix: &'a PrefixContext<'a>,
+) -> Option<CompletionContext<'a>> {
+    let (default_db, default_schema) = ObjectId::default_db_schema_from_uri(file_uri, root)?;
+
+    // Try to resolve the current file's object for column completions.
+    let file_object = file_uri
+        .to_file_path()
+        .ok()
+        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .and_then(|object_name| {
+            let file_object_id =
+                ObjectId::new(default_db.clone(), default_schema.clone(), object_name);
+            project.find_object(&file_object_id).map(|obj| FileObject {
+                dependencies: &obj.dependencies,
+                alias_map: extract_alias_map(&obj.typed_object.stmt, &default_db, &default_schema),
+            })
+        });
+
+    Some(CompletionContext {
+        default_db,
+        default_schema,
+        prefix,
+        file_object,
+    })
+}
+
 /// Find the dot-qualified identifier prefix at the cursor position.
 ///
 /// Scans backward from `position` through identifier characters (alphanumeric,
-/// underscore) and dots to determine what the user has typed so far. Returns
-/// a [`PrefixContext`] with the dot count and a borrowed slice of the prefix.
+/// underscore) and dots to determine what the user has typed so far.
 pub fn prefix_context(text: &str, position: Position) -> PrefixContext<'_> {
-    // Convert Position (line/character) to byte offset.
     let pos_line = usize::try_from(position.line).unwrap_or(0);
     let pos_char = usize::try_from(position.character).unwrap_or(0);
     let mut byte_offset = 0;
@@ -123,11 +153,9 @@ pub fn prefix_context(text: &str, position: Position) -> PrefixContext<'_> {
             byte_offset += pos_char;
             break;
         }
-        // +1 for the newline character.
         byte_offset += line.len() + 1;
     }
 
-    // Scan backward through identifier chars and dots.
     let prefix_bytes = &text.as_bytes()[..byte_offset.min(text.len())];
     let mut start = prefix_bytes.len();
     while start > 0 {
@@ -145,87 +173,298 @@ pub fn prefix_context(text: &str, position: Position) -> PrefixContext<'_> {
     PrefixContext { dots, text: prefix }
 }
 
-/// Build completion items for all SQL keywords known to the lexer.
-pub fn keyword_completions() -> Vec<CompletionItem> {
+/// A completion candidate before final formatting.
+///
+/// Intermediate representation produced by the gather phase. Captures what to
+/// complete and how to sort it, without LSP-specific formatting concerns.
+enum CompletionCandidate<'a> {
+    Keyword {
+        label: String,
+    },
+    Object {
+        label: String,
+        sort_key: String,
+        kind: ObjectKind,
+        is_external: bool,
+    },
+    Column {
+        name: &'a str,
+        col_type: &'a ColumnType,
+    },
+}
+
+/// Gather keyword candidates. Only offered when `dots == 0`.
+fn gather_keywords(ctx: &CompletionContext<'_>) -> Vec<CompletionCandidate<'static>> {
+    if ctx.prefix.dots > 0 {
+        return Vec::new();
+    }
     KEYWORDS
         .entries()
-        .map(|(_, kw)| CompletionItem {
+        .map(|(_, kw)| CompletionCandidate::Keyword {
             label: kw.as_str().to_string(),
-            kind: Some(CompletionItemKind::KEYWORD),
-            ..Default::default()
         })
         .collect()
 }
 
-/// Build completion items for project objects and external dependencies.
+/// Gather object candidates from project objects and external dependencies.
+fn gather_objects<'a>(
+    ctx: &CompletionContext<'a>,
+    project: &'a planned::Project,
+    types_cache: Option<&'a Types>,
+) -> Vec<CompletionCandidate<'a>> {
+    let mut candidates = Vec::new();
+
+    for obj in project.iter_objects() {
+        let id = &obj.id;
+        let kind = obj.typed_object.stmt.kind();
+        if let Some((label, sort_key)) =
+            qualify_and_filter(id, &ctx.default_db, &ctx.default_schema, ctx.prefix)
+        {
+            candidates.push(CompletionCandidate::Object {
+                label,
+                sort_key,
+                kind,
+                is_external: false,
+            });
+        }
+    }
+
+    for id in &project.external_dependencies {
+        let kind = types_cache
+            .map(|tc| tc.get_kind(&id.to_string()))
+            .unwrap_or_default();
+        if let Some((label, sort_key)) =
+            qualify_and_filter(id, &ctx.default_db, &ctx.default_schema, ctx.prefix)
+        {
+            candidates.push(CompletionCandidate::Object {
+                label,
+                sort_key,
+                kind,
+                is_external: true,
+            });
+        }
+    }
+
+    candidates
+}
+
+/// Gather column candidates from dependency objects via the types cache.
+fn gather_columns<'a>(
+    ctx: &CompletionContext<'a>,
+    types_cache: &'a Types,
+) -> Vec<CompletionCandidate<'a>> {
+    let file_obj = match &ctx.file_object {
+        Some(fo) => fo,
+        None => return Vec::new(),
+    };
+
+    if ctx.prefix.dots == 0 {
+        gather_unqualified_columns(file_obj.dependencies, types_cache, ctx.prefix.text)
+    } else {
+        gather_qualified_columns(
+            ctx.prefix.text,
+            file_obj,
+            types_cache,
+            &ctx.default_db,
+            &ctx.default_schema,
+        )
+    }
+}
+
+/// Gather columns from all dependencies, filtered by prefix (case-insensitive).
+fn gather_unqualified_columns<'a>(
+    dependencies: &BTreeSet<ObjectId>,
+    types_cache: &'a Types,
+    filter_text: &str,
+) -> Vec<CompletionCandidate<'a>> {
+    let filter = filter_text.to_lowercase();
+    let mut candidates = Vec::new();
+    for dep in dependencies {
+        if let Some(columns) = types_cache.get_table(&dep.to_string()) {
+            for (col_name, col_type) in columns {
+                if filter.is_empty() || col_name.to_lowercase().starts_with(&filter) {
+                    candidates.push(CompletionCandidate::Column {
+                        name: col_name.as_str(),
+                        col_type,
+                    });
+                }
+            }
+        }
+    }
+    candidates
+}
+
+/// Gather columns from a specific qualified object reference.
 ///
-/// Returns an empty vec if the file is not under `models/<database>/<schema>/`
-/// (i.e., the default database/schema cannot be determined). The `prefix`
-/// controls qualification level and filtering — see module docs.
-pub fn object_completions(
-    project: &planned::Project,
+/// Splits the prefix at the last `.` into `(object_text, col_filter)`,
+/// resolves `object_text` to an [`ObjectId`] via [`resolve_qualified_object`],
+/// checks it is a dependency, and returns its columns filtered by `col_filter`.
+fn gather_qualified_columns<'a>(
+    prefix_text: &str,
+    file_object: &FileObject<'_>,
+    types_cache: &'a Types,
+    default_db: &str,
+    default_schema: &str,
+) -> Vec<CompletionCandidate<'a>> {
+    let last_dot = match prefix_text.rfind('.') {
+        Some(pos) => pos,
+        None => return Vec::new(),
+    };
+    let object_text = &prefix_text[..last_dot];
+    let col_filter = prefix_text[last_dot + 1..].to_lowercase();
+
+    let object_id = match resolve_qualified_object(
+        object_text,
+        &file_object.alias_map,
+        default_db,
+        default_schema,
+    ) {
+        Some(id) => id,
+        None => return Vec::new(),
+    };
+
+    if !file_object.dependencies.contains(&object_id) {
+        return Vec::new();
+    }
+
+    match types_cache.get_table(&object_id.to_string()) {
+        Some(columns) => columns
+            .iter()
+            .filter(|(name, _)| {
+                col_filter.is_empty() || name.to_lowercase().starts_with(&col_filter)
+            })
+            .map(|(name, col_type)| CompletionCandidate::Column {
+                name: name.as_str(),
+                col_type,
+            })
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Resolve a dot-qualified object prefix to an [`ObjectId`].
+///
+/// - 1 part: alias map lookup (case-insensitive), then fallback to
+///   `default_db.default_schema.name`
+/// - 2 parts: `default_db.part0.part1`
+/// - 3 parts: `part0.part1.part2`
+/// - 4+ parts: `None`
+fn resolve_qualified_object(
+    object_text: &str,
+    alias_map: &BTreeMap<String, ObjectId>,
+    default_db: &str,
+    default_schema: &str,
+) -> Option<ObjectId> {
+    let parts: Vec<&str> = object_text.split('.').collect();
+    match parts.len() {
+        1 => Some(
+            alias_map
+                .get(&parts[0].to_lowercase())
+                .cloned()
+                .unwrap_or_else(|| {
+                    ObjectId::new(
+                        default_db.to_string(),
+                        default_schema.to_string(),
+                        parts[0].to_string(),
+                    )
+                }),
+        ),
+        2 => Some(ObjectId::new(
+            default_db.to_string(),
+            parts[0].to_string(),
+            parts[1].to_string(),
+        )),
+        3 => Some(ObjectId::new(
+            parts[0].to_string(),
+            parts[1].to_string(),
+            parts[2].to_string(),
+        )),
+        _ => None,
+    }
+}
+
+/// Convert a [`CompletionCandidate`] into an LSP [`CompletionItem`].
+fn format_candidate(candidate: &CompletionCandidate<'_>) -> CompletionItem {
+    match candidate {
+        CompletionCandidate::Keyword { label } => CompletionItem {
+            label: label.clone(),
+            kind: Some(CompletionItemKind::KEYWORD),
+            ..Default::default()
+        },
+        CompletionCandidate::Object {
+            label,
+            sort_key,
+            kind,
+            is_external,
+        } => CompletionItem {
+            label: label.clone(),
+            kind: Some(object_kind_to_completion_kind(*kind)),
+            detail: Some(if *is_external {
+                format!("{} (external)", kind)
+            } else {
+                kind.to_string()
+            }),
+            sort_text: Some(sort_key.clone()),
+            ..Default::default()
+        },
+        CompletionCandidate::Column { name, col_type } => CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::FIELD),
+            detail: Some(format_column_detail(col_type)),
+            sort_text: Some(format!("0_{}", name)),
+            ..Default::default()
+        },
+    }
+}
+
+/// Run the 3-phase completion pipeline.
+///
+/// 1. **Resolve context** — determine default db/schema, file dependencies,
+///    and alias map from the file URI and project.
+/// 2. **Gather candidates** — collect keywords, objects, and columns that
+///    match the prefix.
+/// 3. **Format items** — convert candidates to LSP completion items.
+///
+/// When `project` is `None` (no successful build yet), only keyword
+/// completions are returned. Keywords are included only when `dots == 0`
+/// (the module decides this, not the caller).
+pub fn complete(
+    project: Option<&planned::Project>,
     types_cache: Option<&Types>,
     file_uri: &Url,
     root: &Path,
     prefix: &PrefixContext<'_>,
 ) -> Vec<CompletionItem> {
-    let (default_db, default_schema) = match ObjectId::default_db_schema_from_uri(file_uri, root) {
-        Some(pair) => pair,
-        None => return Vec::new(),
-    };
+    let ctx = project.and_then(|p| resolve_context(file_uri, root, p, prefix));
 
-    let mut items = Vec::new();
-
-    // Project objects.
-    for obj in project.iter_objects() {
-        let id = &obj.id;
-        let kind = obj.typed_object.stmt.kind();
-        if let Some((label, sort_prefix)) =
-            qualify_and_filter(id, &default_db, &default_schema, prefix)
-        {
-            items.push(CompletionItem {
-                label,
-                kind: Some(object_kind_to_completion_kind(kind)),
-                detail: Some(kind.to_string()),
-                sort_text: Some(sort_prefix),
-                ..Default::default()
-            });
+    let mut candidates: Vec<CompletionCandidate<'_>> = Vec::new();
+    if let Some(ctx) = &ctx {
+        candidates.extend(gather_keywords(ctx));
+        candidates.extend(gather_objects(ctx, project.unwrap(), types_cache));
+        if let Some(tc) = types_cache {
+            candidates.extend(gather_columns(ctx, tc));
         }
+    } else if prefix.dots == 0 {
+        candidates.extend(
+            KEYWORDS
+                .entries()
+                .map(|(_, kw)| CompletionCandidate::Keyword {
+                    label: kw.as_str().to_string(),
+                }),
+        );
     }
 
-    // External dependencies.
-    for id in &project.external_dependencies {
-        let kind = types_cache
-            .map(|tc| tc.get_kind(&id.to_string()))
-            .unwrap_or_default();
-        if let Some((label, sort_prefix)) =
-            qualify_and_filter(id, &default_db, &default_schema, prefix)
-        {
-            items.push(CompletionItem {
-                label,
-                kind: Some(object_kind_to_completion_kind(kind)),
-                detail: Some(format!("{} (external)", kind)),
-                sort_text: Some(sort_prefix),
-                ..Default::default()
-            });
-        }
-    }
-
-    items
+    candidates.iter().map(format_candidate).collect()
 }
 
 /// Compute the label and sort prefix for an object, filtered by the typed prefix.
 ///
 /// For `dots == 0`, returns minimum qualification (bare name if same-schema,
 /// `schema.object` if cross-schema, `db.schema.object` if cross-database).
-/// No filtering is applied; the editor handles fuzzy matching.
 ///
-/// For `dots >= 1`, tries matching the object against `schema.object` and
-/// `db.schema.object` candidates (in order). Returns `None` if neither
-/// candidate starts with the prefix text (case-insensitive). On match, the
-/// label is the portion of the candidate after the last dot in the prefix —
-/// this is what the editor inserts when replacing the word at cursor.
-fn qualify_and_filter(
+/// For `dots >= 1`, tries matching against `schema.object` and
+/// `db.schema.object` candidates. Returns `None` if neither matches.
+pub(crate) fn qualify_and_filter(
     id: &ObjectId,
     default_db: &str,
     default_schema: &str,
@@ -240,7 +479,6 @@ fn qualify_and_filter(
     };
 
     if prefix.dots == 0 {
-        // Minimum qualification, no filtering.
         let label = if id.database() == default_db && id.schema() == default_schema {
             id.object().to_string()
         } else if id.database() == default_db {
@@ -251,7 +489,6 @@ fn qualify_and_filter(
         return Some((label.clone(), format!("{}_{}", sort_key, label)));
     }
 
-    // dots >= 1: try candidates from least to most qualified.
     let candidates = [
         format!("{}.{}", id.schema(), id.object()),
         format!("{}.{}.{}", id.database(), id.schema(), id.object()),
@@ -260,9 +497,6 @@ fn qualify_and_filter(
     let prefix_lower = prefix.text.to_lowercase();
     for candidate in &candidates {
         if candidate.to_lowercase().starts_with(&prefix_lower) {
-            // The label is everything after the last dot in the prefix.
-            // Since the candidate starts with the prefix (case-insensitive)
-            // and identifiers are ASCII, byte positions correspond directly.
             let last_dot = prefix.text.rfind('.').expect("dots >= 1 guarantees a dot");
             let label = candidate[last_dot + 1..].to_string();
             return Some((label, format!("{}_{}", sort_key, candidate)));
@@ -284,285 +518,98 @@ fn object_kind_to_completion_kind(kind: ObjectKind) -> CompletionItemKind {
     }
 }
 
-/// Build completion items for columns of dependency objects.
-///
-/// Only returns columns for objects that are dependencies of the current
-/// file's object. Returns an empty vec if the file is not under
-/// `models/<database>/<schema>/`, the object is not found in the project,
-/// or no types cache is available.
-pub fn column_completions(
-    project: &planned::Project,
-    types_cache: Option<&Types>,
-    file_uri: &Url,
-    root: &Path,
-    prefix: &PrefixContext<'_>,
-) -> Vec<CompletionItem> {
-    let types_cache = match types_cache {
-        Some(tc) => tc,
-        None => return Vec::new(),
-    };
-
-    let (default_db, default_schema) = match ObjectId::default_db_schema_from_uri(file_uri, root) {
-        Some(pair) => pair,
-        None => return Vec::new(),
-    };
-
-    // Derive the current file's ObjectId from the URI filename stem.
-    let object_name = file_uri
-        .to_file_path()
-        .ok()
-        .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned()));
-    let object_name = match object_name {
-        Some(name) => name,
-        None => return Vec::new(),
-    };
-
-    let file_object_id = ObjectId::new(default_db.clone(), default_schema.clone(), object_name);
-
-    // Find the object in the project to get its dependencies and alias map.
-    let obj = match project.find_object(&file_object_id) {
-        Some(obj) => obj,
-        None => return Vec::new(),
-    };
-
-    let alias_map = extract_alias_map(&obj.typed_object.stmt, &default_db, &default_schema);
-
-    resolve_dependency_columns(
-        prefix,
-        &default_db,
-        &default_schema,
-        &obj.dependencies,
-        types_cache,
-        &alias_map,
-    )
-    .into_iter()
-    .map(|(col_name, col_type)| CompletionItem {
-        label: col_name.to_string(),
-        kind: Some(CompletionItemKind::FIELD),
-        detail: Some(format_column_detail(col_type)),
-        sort_text: Some(format!("0_{}", col_name)),
-        ..Default::default()
-    })
-    .collect()
-}
-
-/// Build a map from alias/bare-table-name to [`ObjectId`] by walking the SQL AST.
-///
-/// Only `CreateView` and `CreateMaterializedView` statements contain queries
-/// with FROM clauses that can introduce table aliases. All other statement
-/// types produce an empty map.
-///
-/// For each `TableFactor::Table { name, alias }`:
-/// - The bare table name (last identifier of `name`) always maps to the resolved `ObjectId`.
-/// - If an explicit alias is present, the alias also maps to the same `ObjectId`.
-///
-/// All keys are lowercased for case-insensitive lookup.
-fn extract_alias_map(
-    stmt: &Statement,
-    default_db: &str,
-    default_schema: &str,
-) -> BTreeMap<String, ObjectId> {
-    let mut map = BTreeMap::new();
-    match stmt {
-        Statement::CreateView(s) => {
-            extract_aliases_from_query(&s.definition.query, default_db, default_schema, &mut map);
-        }
-        Statement::CreateMaterializedView(s) => {
-            extract_aliases_from_query(&s.query, default_db, default_schema, &mut map);
-        }
-        _ => {}
-    }
-    map
-}
-
-/// Walk a query's body ([`SetExpr`]) to extract table aliases.
-fn extract_aliases_from_query(
-    query: &mz_sql_parser::ast::Query<Raw>,
-    default_db: &str,
-    default_schema: &str,
-    map: &mut BTreeMap<String, ObjectId>,
-) {
-    extract_aliases_from_set_expr(&query.body, default_db, default_schema, map);
-}
-
-/// Recurse through set expressions (SELECT, UNION, sub-queries).
-fn extract_aliases_from_set_expr(
-    set_expr: &SetExpr<Raw>,
-    default_db: &str,
-    default_schema: &str,
-    map: &mut BTreeMap<String, ObjectId>,
-) {
-    match set_expr {
-        SetExpr::Select(select) => {
-            extract_aliases_from_select(select, default_db, default_schema, map);
-        }
-        SetExpr::Query(query) => {
-            extract_aliases_from_query(query, default_db, default_schema, map);
-        }
-        SetExpr::SetOperation { left, right, .. } => {
-            extract_aliases_from_set_expr(left, default_db, default_schema, map);
-            extract_aliases_from_set_expr(right, default_db, default_schema, map);
-        }
-        SetExpr::Values(_) | SetExpr::Show(_) | SetExpr::Table(_) => {}
-    }
-}
-
-/// Extract aliases from a SELECT's FROM clause (relations and joins).
-fn extract_aliases_from_select(
-    select: &Select<Raw>,
-    default_db: &str,
-    default_schema: &str,
-    map: &mut BTreeMap<String, ObjectId>,
-) {
-    for table_with_joins in &select.from {
-        extract_aliases_from_table_with_joins(table_with_joins, default_db, default_schema, map);
-    }
-}
-
-/// Extract aliases from a [`TableWithJoins`] (the relation plus its joins).
-fn extract_aliases_from_table_with_joins(
-    twj: &TableWithJoins<Raw>,
-    default_db: &str,
-    default_schema: &str,
-    map: &mut BTreeMap<String, ObjectId>,
-) {
-    extract_aliases_from_table_factor(&twj.relation, default_db, default_schema, map);
-    for join in &twj.joins {
-        extract_aliases_from_table_factor(&join.relation, default_db, default_schema, map);
-    }
-}
-
-/// Extract aliases from a single [`TableFactor`].
-///
-/// For `Table { name, alias }`: inserts the bare table name (last ident) and,
-/// if present, the explicit alias. Skips subqueries (`Derived`). Recurses
-/// into `NestedJoin`.
-fn extract_aliases_from_table_factor(
-    tf: &TableFactor<Raw>,
-    default_db: &str,
-    default_schema: &str,
-    map: &mut BTreeMap<String, ObjectId>,
-) {
-    match tf {
-        TableFactor::Table { name, alias } => {
-            let obj_id = ObjectId::from_raw_item_name(name, default_db, default_schema);
-            // Bare table name: last identifier of the name.
-            let bare_name = name
-                .name()
-                .0
-                .last()
-                .map(|ident| ident.to_string().to_lowercase());
-            if let Some(bare) = bare_name {
-                map.insert(bare, obj_id.clone());
-            }
-            // Explicit alias.
-            if let Some(alias) = alias {
-                map.insert(alias.name.to_string().to_lowercase(), obj_id);
-            }
-        }
-        TableFactor::NestedJoin { join, .. } => {
-            extract_aliases_from_table_with_joins(join, default_db, default_schema, map);
-        }
-        TableFactor::Derived { .. }
-        | TableFactor::Function { .. }
-        | TableFactor::RowsFrom { .. } => {}
-    }
-}
-
-/// Resolve columns from dependency objects that match the current prefix.
-///
-/// Returns `(column_name, column_type)` pairs. For `dots == 0`, collects
-/// columns from all dependencies filtered by prefix text. For `dots >= 1`
-/// (max 3), resolves the object from the prefix and returns its columns
-/// if it is a dependency.
-///
-/// In Mode B (qualified), when the object prefix is a single part (e.g., `o`
-/// from `o.col`), the `alias_map` is consulted first. If the part matches an
-/// alias or bare table name, the mapped [`ObjectId`] is used. Otherwise, the
-/// default database/schema construction is used as a fallback.
-fn resolve_dependency_columns<'a>(
-    prefix: &PrefixContext<'_>,
-    default_db: &str,
-    default_schema: &str,
-    dependencies: &BTreeSet<ObjectId>,
-    types_cache: &'a Types,
-    alias_map: &BTreeMap<String, ObjectId>,
-) -> Vec<(&'a str, &'a ColumnType)> {
-    if prefix.dots == 0 {
-        // Mode A: collect columns from all dependencies.
-        let filter = prefix.text.to_lowercase();
-        let mut results = Vec::new();
-        for dep in dependencies {
-            if let Some(columns) = types_cache.get_table(&dep.to_string()) {
-                for (col_name, col_type) in columns {
-                    if filter.is_empty() || col_name.to_lowercase().starts_with(&filter) {
-                        results.push((col_name.as_str(), col_type));
-                    }
-                }
-            }
-        }
-        results
-    } else {
-        // Mode B: resolve object from prefix, check it's a dependency.
-        let last_dot = match prefix.text.rfind('.') {
-            Some(pos) => pos,
-            None => return Vec::new(),
-        };
-        let object_text = &prefix.text[..last_dot];
-        let col_filter = prefix.text[last_dot + 1..].to_lowercase();
-
-        let parts: Vec<&str> = object_text.split('.').collect();
-        let object_id = match parts.len() {
-            1 => alias_map
-                .get(&parts[0].to_lowercase())
-                .cloned()
-                .unwrap_or_else(|| {
-                    ObjectId::new(
-                        default_db.to_string(),
-                        default_schema.to_string(),
-                        parts[0].to_string(),
-                    )
-                }),
-            2 => ObjectId::new(
-                default_db.to_string(),
-                parts[0].to_string(),
-                parts[1].to_string(),
-            ),
-            3 => ObjectId::new(
-                parts[0].to_string(),
-                parts[1].to_string(),
-                parts[2].to_string(),
-            ),
-            _ => return Vec::new(),
-        };
-
-        // Dependency check.
-        if !dependencies.contains(&object_id) {
-            return Vec::new();
-        }
-
-        match types_cache.get_table(&object_id.to_string()) {
-            Some(columns) => columns
-                .iter()
-                .filter(|(name, _)| {
-                    col_filter.is_empty() || name.to_lowercase().starts_with(&col_filter)
-                })
-                .map(|(name, col_type)| (name.as_str(), col_type))
-                .collect(),
-            None => Vec::new(),
-        }
-    }
-}
-
 /// Format a column type for the completion item detail field.
-///
-/// Returns the type name, appending `" (nullable)"` when the column is nullable.
 fn format_column_detail(col_type: &ColumnType) -> String {
     if col_type.nullable {
         format!("{} (nullable)", col_type.r#type)
     } else {
         col_type.r#type.clone()
     }
+}
+
+/// Build a map from alias/bare-table-name to [`ObjectId`] by walking the SQL AST.
+///
+/// Visitor that collects table alias → ObjectId mappings from query ASTs.
+///
+/// Overrides `visit_query` for CTE scope management and `visit_table_factor`
+/// to collect both explicit aliases (`FROM t AS alias`) and implicit bare
+/// names (`FROM t` → `t`). Does not recurse into derived subqueries or
+/// table functions — only direct table references produce aliases.
+struct AliasVisitor<'a> {
+    default_db: &'a str,
+    default_schema: &'a str,
+    aliases: BTreeMap<String, ObjectId>,
+    cte_scope: CteScope,
+}
+
+impl<'a> AliasVisitor<'a> {
+    fn new(default_db: &'a str, default_schema: &'a str) -> Self {
+        Self {
+            default_db,
+            default_schema,
+            aliases: BTreeMap::new(),
+            cte_scope: CteScope::new(),
+        }
+    }
+}
+
+impl<'ast> Visit<'ast, Raw> for AliasVisitor<'_> {
+    fn visit_query(&mut self, node: &'ast mz_sql_parser::ast::Query<Raw>) {
+        let names = CteScope::collect_cte_names(&node.ctes);
+        self.cte_scope.push(names);
+        visit::visit_query(self, node);
+        self.cte_scope.pop();
+    }
+
+    fn visit_table_factor(&mut self, node: &'ast TableFactor<Raw>) {
+        match node {
+            TableFactor::Table { name, alias } => {
+                let unresolved = name.name();
+                if unresolved.0.len() == 1 && self.cte_scope.is_cte(&unresolved.0[0].to_string()) {
+                    return;
+                }
+                let obj_id =
+                    ObjectId::from_raw_item_name(name, self.default_db, self.default_schema);
+                if let Some(bare) = unresolved.0.last().map(|i| i.to_string().to_lowercase()) {
+                    self.aliases.insert(bare, obj_id.clone());
+                }
+                if let Some(alias) = alias {
+                    self.aliases
+                        .insert(alias.name.to_string().to_lowercase(), obj_id);
+                }
+            }
+            TableFactor::NestedJoin { .. } => {
+                visit::visit_table_factor(self, node);
+            }
+            // Don't recurse into subqueries or table functions for alias collection
+            TableFactor::Derived { .. }
+            | TableFactor::Function { .. }
+            | TableFactor::RowsFrom { .. } => {}
+        }
+    }
+}
+
+/// Extract alias → ObjectId map from a statement's query body.
+///
+/// Only `CreateView` and `CreateMaterializedView` produce aliases.
+/// All keys are lowercased for case-insensitive lookup. CTE references
+/// are excluded from the alias map.
+fn extract_alias_map(
+    stmt: &Statement,
+    default_db: &str,
+    default_schema: &str,
+) -> BTreeMap<String, ObjectId> {
+    let mut visitor = AliasVisitor::new(default_db, default_schema);
+    match stmt {
+        Statement::CreateView(s) => {
+            visitor.visit_query(&s.definition.query);
+        }
+        Statement::CreateMaterializedView(s) => {
+            visitor.visit_query(&s.query);
+        }
+        _ => {}
+    }
+    visitor.aliases
 }
 
 #[cfg(test)]
@@ -586,7 +633,45 @@ mod tests {
             .expect("project should compile")
     }
 
-    // ── prefix_context tests ──────────────────────────────────────────
+    /// Test helper: run only the object-gathering phase and format results.
+    fn object_completions(
+        project: &planned::Project,
+        types_cache: Option<&Types>,
+        file_uri: &Url,
+        root: &Path,
+        prefix: &PrefixContext<'_>,
+    ) -> Vec<CompletionItem> {
+        let ctx = match resolve_context(file_uri, root, project, prefix) {
+            Some(ctx) => ctx,
+            None => return Vec::new(),
+        };
+        gather_objects(&ctx, project, types_cache)
+            .iter()
+            .map(format_candidate)
+            .collect()
+    }
+
+    /// Test helper: run only the column-gathering phase and format results.
+    fn column_completions(
+        project: &planned::Project,
+        types_cache: Option<&Types>,
+        file_uri: &Url,
+        root: &Path,
+        prefix: &PrefixContext<'_>,
+    ) -> Vec<CompletionItem> {
+        let types_cache = match types_cache {
+            Some(tc) => tc,
+            None => return Vec::new(),
+        };
+        let ctx = match resolve_context(file_uri, root, project, prefix) {
+            Some(ctx) => ctx,
+            None => return Vec::new(),
+        };
+        gather_columns(&ctx, types_cache)
+            .iter()
+            .map(format_candidate)
+            .collect()
+    }
 
     #[test]
     fn prefix_no_prefix() {
@@ -635,8 +720,6 @@ mod tests {
         assert_eq!(ctx.dots, 1);
         assert_eq!(ctx.text, "public.f");
     }
-
-    // ── object_completions tests ──────────────────────────────────────
 
     #[test]
     fn same_schema_bare_name() {
@@ -922,8 +1005,6 @@ mod tests {
             labels
         );
     }
-
-    // ── column_completions tests ─────────────────────────────────────
 
     /// Helper: write a types.lock with the given tables and columns.
     fn write_types_lock(root: &Path, tables: &[(&str, &str, &str, &str, &[(&str, &str, bool)])]) {
@@ -1445,8 +1526,6 @@ mod tests {
         }
     }
 
-    // ── alias column_completions tests ────────────────────────────────
-
     #[test]
     fn column_alias_explicit() {
         let root = tempfile::tempdir().unwrap();
@@ -1710,5 +1789,145 @@ mod tests {
             "expected empty for non-query statement self-reference, got: {:?}",
             items.iter().map(|i| &i.label).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn qualify_same_schema_bare_label() {
+        let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
+        let prefix = no_prefix();
+        let result = qualify_and_filter(&id, "mydb", "public", &prefix);
+        assert_eq!(result, Some(("foo".to_string(), "1_foo".to_string())));
+    }
+
+    #[test]
+    fn qualify_cross_schema_qualified() {
+        let id = ObjectId::new("mydb".to_string(), "other".to_string(), "bar".to_string());
+        let prefix = no_prefix();
+        let result = qualify_and_filter(&id, "mydb", "public", &prefix);
+        assert_eq!(
+            result,
+            Some(("other.bar".to_string(), "2_other.bar".to_string()))
+        );
+    }
+
+    #[test]
+    fn qualify_cross_database_fully_qualified() {
+        let id = ObjectId::new("otherdb".to_string(), "s".to_string(), "x".to_string());
+        let prefix = no_prefix();
+        let result = qualify_and_filter(&id, "mydb", "public", &prefix);
+        assert_eq!(
+            result,
+            Some(("otherdb.s.x".to_string(), "3_otherdb.s.x".to_string()))
+        );
+    }
+
+    #[test]
+    fn qualify_dotted_prefix_matches_schema_qualified() {
+        let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "public.",
+        };
+        let result = qualify_and_filter(&id, "mydb", "public", &prefix);
+        assert_eq!(
+            result,
+            Some(("foo".to_string(), "1_public.foo".to_string()))
+        );
+    }
+
+    #[test]
+    fn qualify_dotted_prefix_no_match() {
+        let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "other.",
+        };
+        let result = qualify_and_filter(&id, "mydb", "public", &prefix);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn qualify_case_insensitive() {
+        let id = ObjectId::new("mydb".to_string(), "public".to_string(), "foo".to_string());
+        let prefix = PrefixContext {
+            dots: 1,
+            text: "PUBLIC.F",
+        };
+        let result = qualify_and_filter(&id, "mydb", "public", &prefix);
+        assert_eq!(
+            result,
+            Some(("foo".to_string(), "1_public.foo".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_qualified_object_alias_hit() {
+        let mut aliases = BTreeMap::new();
+        aliases.insert(
+            "o".to_string(),
+            ObjectId::new(
+                "mydb".to_string(),
+                "storage".to_string(),
+                "orders".to_string(),
+            ),
+        );
+        let result = resolve_qualified_object("o", &aliases, "mydb", "public");
+        assert_eq!(
+            result,
+            Some(ObjectId::new(
+                "mydb".to_string(),
+                "storage".to_string(),
+                "orders".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn resolve_qualified_object_bare_fallback() {
+        let aliases = BTreeMap::new();
+        let result = resolve_qualified_object("foo", &aliases, "mydb", "public");
+        assert_eq!(
+            result,
+            Some(ObjectId::new(
+                "mydb".to_string(),
+                "public".to_string(),
+                "foo".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn resolve_qualified_object_two_parts() {
+        let aliases = BTreeMap::new();
+        let result = resolve_qualified_object("storage.orders", &aliases, "mydb", "public");
+        assert_eq!(
+            result,
+            Some(ObjectId::new(
+                "mydb".to_string(),
+                "storage".to_string(),
+                "orders".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn resolve_qualified_object_three_parts() {
+        let aliases = BTreeMap::new();
+        let result = resolve_qualified_object("otherdb.s.x", &aliases, "mydb", "public");
+        assert_eq!(
+            result,
+            Some(ObjectId::new(
+                "otherdb".to_string(),
+                "s".to_string(),
+                "x".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn resolve_qualified_object_four_parts_none() {
+        let aliases = BTreeMap::new();
+        let result = resolve_qualified_object("a.b.c.d", &aliases, "mydb", "public");
+        assert_eq!(result, None);
     }
 }
