@@ -90,20 +90,20 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~Read first: `src/sql/src/plan/statement.rs`, `src/sql/src/plan/query.rs`,~~
 > ~~`src/sql/src/plan/hir.rs`, `src/expr/src/relation.rs`.~~
 
-### Prompt 8: Plan FILTER, OPTIONAL, UNION, MINUS
+### ~~Prompt 8: Plan FILTER, OPTIONAL, UNION, MINUS~~
 
-> Extend the planner for the remaining graph pattern forms:
-> - FILTER → `HirRelationExpr::Filter` with translated expressions
-> - OPTIONAL → `Join { kind: LeftOuter, on: filter_expr }`
->   (critical: filter goes in ON, not post-join)
-> - UNION → outer union with NULL-padding for asymmetric variables
-> - MINUS → anti-join pattern using NOT EXISTS on shared variables
+> ~~Extend the planner for the remaining graph pattern forms:~~
+> ~~- FILTER → `HirRelationExpr::Filter` with translated expressions~~
+> ~~- OPTIONAL → `Join { kind: LeftOuter, on: filter_expr }`~~
+>   ~~(critical: filter goes in ON, not post-join)~~
+> ~~- UNION → outer union with NULL-padding for asymmetric variables~~
+> ~~- MINUS → anti-join pattern using NOT EXISTS on shared variables~~
 >
-> Pay special attention to OPTIONAL semantics with tests that verify
-> filter placement. Test MINUS with both shared and disjoint variables.
+> ~~Pay special attention to OPTIONAL semantics with tests that verify~~
+> ~~filter placement. Test MINUS with both shared and disjoint variables.~~
 >
-> Read first: Chebotko et al. (2009) "Semantics Preserving SPARQL-to-SQL
-> Translation" for reference translations.
+> ~~Read first: Chebotko et al. (2009) "Semantics Preserving SPARQL-to-SQL~~
+> ~~Translation" for reference translations.~~
 
 ### Prompt 9: Plan BIND, VALUES, expressions, and type coercions
 

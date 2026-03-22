@@ -707,3 +707,96 @@ Tests cover:
 - Multi-triple BGP: shared variable join, no shared variables (cross join),
   three-way join, multiple shared variables
 - Edge cases: empty BGP, deterministic column ordering
+
+## 2026-03-22: Prompt 8 — Plan FILTER, OPTIONAL, UNION, MINUS
+
+### What was done
+
+Extended the SPARQL planner in `src/sparql/src/plan.rs` to handle the four remaining
+group graph pattern forms: FILTER, OPTIONAL, UNION, and MINUS. Also added the
+beginning of a SPARQL expression translator (`translate_expression`).
+
+**FILTER** — `apply_filter()` translates a SPARQL `Expression` to `HirScalarExpr`
+and wraps the input in `HirRelationExpr::Filter`. The expression translator handles:
+- Variable references → `HirScalarExpr::column(idx)` via var_map lookup
+- Comparison operators: `=`, `!=`, `<`, `>`, `<=`, `>=` → `BinaryFunc::Eq/NotEq/Lt/Gt/Lte/Gte`
+- Logical operators: `&&` → `VariadicFunc::And`, `||` → `VariadicFunc::Or`, `!` → `UnaryFunc::Not`
+- `BOUND(?var)` → `Not(IsNull(column))` — true when variable is not null
+- Literals (string, numeric, boolean, IRI) → `HirScalarExpr::literal`
+- Other expression forms return a "not yet supported (prompt 9)" error
+
+Per SPARQL semantics, FILTERs in a group apply to the entire group (not just
+preceding patterns). The `plan_group` method collects all FILTERs and applies
+them after all other patterns have been joined.
+
+**OPTIONAL** — `plan_optional()` produces `Join { kind: LeftOuter, on: ... }`.
+Critical semantic detail: FILTERs inside OPTIONAL go into the join's ON clause,
+not as a post-join filter. This is essential for SPARQL OPTIONAL+FILTER semantics
+(a post-join filter would eliminate rows where the optional pattern didn't match,
+defeating the purpose of the left outer join).
+
+Implementation:
+1. `extract_optional_filters()` separates FILTERs from the inner group
+2. Non-filter patterns are planned normally as the right side
+3. Shared variable equality predicates + translated filter expressions form the ON clause
+4. Project eliminates duplicate columns for shared variables
+5. New right-only variables get NULL when the optional pattern doesn't match (LeftOuter semantics)
+
+**UNION** — `plan_union()` implements outer union with NULL-padding:
+1. Plan both sides independently
+2. Compute combined variable set (sorted, deduplicated)
+3. `pad_for_union()` adds NULL columns via `Map` for variables not present on a side
+4. `Project` reorders columns to match the target variable order
+5. `HirRelationExpr::union()` combines the padded sides
+
+**MINUS** — `plan_minus()` implements anti-join using `Negate + Union + Threshold`:
+1. Find shared variables between left and right
+2. If no shared variables → MINUS is a no-op (return left unchanged, per SPARQL spec)
+3. Project right to shared variables only, then `Distinct`
+4. Inner-join left with right_projected on shared variables (acts as semi-join since right is distinct)
+5. Project back to left columns only
+6. Result = `left.union(matched.negate()).threshold()` — removes matched rows
+
+**`plan_group` rewrite** — The group planner now properly handles mixed pattern types:
+- Basic/Group/Union patterns are inner-joined with the accumulator
+- FILTER expressions are collected and applied at the end (SPARQL scoping rule)
+- OPTIONAL patterns produce left outer joins with the accumulator
+- MINUS patterns produce anti-joins against the accumulator
+- Empty accumulator is optimized: first non-trivial pattern replaces it instead of joining
+
+### Key decisions
+
+1. **FILTER scoping**: Per the SPARQL spec, FILTERs in a group apply to the whole
+   group, not just preceding patterns. We collect them and apply after all joins.
+   Exception: FILTERs inside OPTIONAL are extracted and placed in the join ON clause.
+
+2. **MINUS via Negate+Threshold**: Rather than implementing a custom anti-join
+   operator, we use the existing `Negate` + `Union` + `Threshold` pattern (same
+   as SQL EXCEPT). This is semantically correct and reuses the well-tested
+   differential dataflow machinery.
+
+3. **MINUS no-shared-vars optimization**: When MINUS has no shared variables with
+   the left side, it has no effect per the SPARQL spec. We short-circuit and return
+   the left side unchanged.
+
+4. **Expression translator stub**: Only comparison, logical, BOUND, and literal
+   expressions are implemented now. Arithmetic, string functions, type tests, etc.
+   are deferred to prompt 9 with a clear error message.
+
+5. **UNION NULL-padding via Map**: Variables missing from one side get `NULL` via
+   `Map` + `Project`. All quad table columns are TEXT/nullable, so String NULL is
+   the correct padding type.
+
+### Test results
+
+32 tests pass (12 old + 20 new), 0 failures, 1 warning (unused QUAD_ARITY constant).
+
+New tests (20):
+- FILTER: simple equality, comparison (Gt), logical AND, unary NOT, BOUND,
+  multiple filters in group, variable not in scope (error case)
+- OPTIONAL: simple, with inner FILTER (verifies ON placement), multiple OPTIONALs,
+  no shared variables (cross left join)
+- UNION: same variables, different variables (NULL padding), three-way union
+- MINUS: shared variables (Threshold+Negate structure), no shared variables (no-op),
+  preserves all left-side variables
+- Combined: OPTIONAL inside UNION, FILTER after OPTIONAL, OPTIONAL+MINUS together

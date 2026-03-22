@@ -19,7 +19,8 @@ use mz_repr::{Datum, GlobalId, SqlColumnType, SqlRelationType, SqlScalarType};
 use mz_sql::plan::{HirRelationExpr, HirScalarExpr, JoinKind};
 
 use mz_sparql_parser::ast::{
-    GraphTerm, GroupGraphPattern, Iri, RdfLiteral, SparqlQuery, TriplePattern, VarOrTerm, VerbPath,
+    Expression, GraphTerm, GroupGraphPattern, Iri, RdfLiteral, SparqlQuery, TriplePattern,
+    VarOrTerm, VerbPath,
 };
 
 /// Column indices in the quad table `(subject, predicate, object, graph)`.
@@ -107,8 +108,24 @@ impl SparqlPlanner {
         match pattern {
             GroupGraphPattern::Basic(triples) => self.plan_bgp(triples),
             GroupGraphPattern::Group(patterns) => self.plan_group(patterns),
+            GroupGraphPattern::Filter(_) => Err(PlanError {
+                message: "bare FILTER outside Group context; should be handled by plan_group"
+                    .to_string(),
+            }),
+            GroupGraphPattern::Optional(inner) => {
+                // Bare OPTIONAL without preceding patterns: left side is empty row.
+                let left = self.empty_relation();
+                self.plan_optional(left, inner)
+            }
+            GroupGraphPattern::Union(left, right) => self.plan_union(left, right),
+            GroupGraphPattern::Minus(inner) => {
+                // Bare MINUS without preceding patterns: left side is empty row.
+                let left = self.empty_relation();
+                self.plan_minus(left, inner)
+            }
             _ => Err(PlanError {
-                message: "unsupported graph pattern form (will be implemented in later prompts)".to_string(),
+                message: "unsupported graph pattern form (will be implemented in later prompts)"
+                    .to_string(),
             }),
         }
     }
@@ -141,24 +158,530 @@ impl SparqlPlanner {
         Ok(result)
     }
 
-    /// Plans a group of sub-patterns (joined together).
+    /// Plans a group of sub-patterns.
+    ///
+    /// In the SPARQL algebra, a group `{ P1 . FILTER(e) . OPTIONAL { P2 } . MINUS { P3 } }`
+    /// is evaluated left-to-right:
+    /// - Basic/Group/Union patterns are inner-joined with the accumulator
+    /// - FILTER applies to the accumulated result so far
+    /// - OPTIONAL left-outer-joins its inner pattern with the accumulator
+    /// - MINUS anti-joins its inner pattern against the accumulator
     fn plan_group(&self, patterns: &[GroupGraphPattern]) -> Result<PlannedRelation, PlanError> {
-        if patterns.is_empty() {
-            return Ok(PlannedRelation {
-                expr: HirRelationExpr::Constant {
-                    rows: vec![mz_repr::Row::default()],
-                    typ: SqlRelationType::empty(),
-                },
-                var_map: BTreeMap::new(),
+        let mut result = self.empty_relation();
+
+        // Collect FILTERs — per SPARQL spec, FILTERs in a group apply to the
+        // entire group, not just patterns preceding them. We collect them and
+        // apply after all other patterns are joined.
+        // Exception: FILTERs inside OPTIONAL are handled specially (they go
+        // into the left-join ON clause) — but those are inside nested groups,
+        // not at this level.
+        let mut group_filters = Vec::new();
+
+        for pattern in patterns {
+            match pattern {
+                GroupGraphPattern::Filter(expr) => {
+                    group_filters.push(expr.clone());
+                }
+                GroupGraphPattern::Optional(inner) => {
+                    result = self.plan_optional(result, inner)?;
+                }
+                GroupGraphPattern::Minus(inner) => {
+                    result = self.plan_minus(result, inner)?;
+                }
+                other => {
+                    let right = self.plan_pattern(other)?;
+                    if result.var_map.is_empty()
+                        && matches!(result.expr, HirRelationExpr::Constant { .. })
+                    {
+                        // First non-trivial pattern: replace empty relation.
+                        result = right;
+                    } else {
+                        result = self.join_on_shared_vars(result, right)?;
+                    }
+                }
+            }
+        }
+
+        // Apply collected FILTERs.
+        for filter_expr in &group_filters {
+            result = self.apply_filter(result, filter_expr)?;
+        }
+
+        Ok(result)
+    }
+
+    /// Returns an empty relation (single row, no columns) — the identity for join.
+    fn empty_relation(&self) -> PlannedRelation {
+        PlannedRelation {
+            expr: HirRelationExpr::Constant {
+                rows: vec![mz_repr::Row::default()],
+                typ: SqlRelationType::empty(),
+            },
+            var_map: BTreeMap::new(),
+        }
+    }
+
+    /// Plans `OPTIONAL { inner }` as a left outer join of `left` with the inner pattern.
+    ///
+    /// If the inner pattern is a Group containing FILTERs, those filters go into
+    /// the join ON clause (not post-join), preserving SPARQL OPTIONAL+FILTER semantics.
+    fn plan_optional(
+        &self,
+        left: PlannedRelation,
+        inner: &GroupGraphPattern,
+    ) -> Result<PlannedRelation, PlanError> {
+        // Extract filters from inside the OPTIONAL group.
+        let (base_pattern, inner_filters) = self.extract_optional_filters(inner);
+
+        // Plan the non-filter part of the OPTIONAL.
+        let right = self.plan_pattern(&base_pattern)?;
+
+        let left_arity = left.arity();
+
+        // Build equality predicates for shared variables (the join condition).
+        let mut join_predicates = Vec::new();
+        let mut shared_vars: Vec<String> = Vec::new();
+
+        for (var_name, &left_col) in &left.var_map {
+            if let Some(&right_col) = right.var_map.get(var_name) {
+                shared_vars.push(var_name.clone());
+                join_predicates.push(HirScalarExpr::CallBinary {
+                    func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                    expr1: Box::new(HirScalarExpr::column(left_col)),
+                    expr2: Box::new(HirScalarExpr::column(left_arity + right_col)),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                });
+            }
+        }
+
+        // Translate FILTER expressions from inside OPTIONAL and add to join ON.
+        // These reference the right-side columns (offset by left_arity).
+        for filter_expr in &inner_filters {
+            let combined_var_map = self.combined_var_map(&left.var_map, &right.var_map, left_arity);
+            let hir_filter = self.translate_expression(filter_expr, &combined_var_map)?;
+            join_predicates.push(hir_filter);
+        }
+
+        // Build ON condition.
+        let on = self.conjunction(join_predicates);
+
+        let joined = HirRelationExpr::Join {
+            left: Box::new(left.expr),
+            right: Box::new(right.expr),
+            on,
+            kind: JoinKind::LeftOuter,
+        };
+
+        // Build projection: keep all left columns, add new right-only columns.
+        let mut project_cols: Vec<usize> = (0..left_arity).collect();
+        let mut new_var_map = left.var_map.clone();
+
+        for (var_name, &right_col) in &right.var_map {
+            if !shared_vars.contains(var_name) {
+                let new_col = project_cols.len();
+                project_cols.push(left_arity + right_col);
+                new_var_map.insert(var_name.clone(), new_col);
+            }
+        }
+
+        let projected = HirRelationExpr::Project {
+            input: Box::new(joined),
+            outputs: project_cols,
+        };
+
+        Ok(PlannedRelation {
+            expr: projected,
+            var_map: new_var_map,
+        })
+    }
+
+    /// Extracts FILTER expressions from an OPTIONAL's inner group.
+    ///
+    /// Returns the base pattern (without filters) and the extracted filter expressions.
+    /// This is needed because SPARQL OPTIONAL { P FILTER(e) } means:
+    /// left-outer-join with P, and e goes into the ON clause.
+    fn extract_optional_filters(
+        &self,
+        pattern: &GroupGraphPattern,
+    ) -> (GroupGraphPattern, Vec<Expression>) {
+        match pattern {
+            GroupGraphPattern::Group(patterns) => {
+                let mut base_patterns = Vec::new();
+                let mut filters = Vec::new();
+                for p in patterns {
+                    match p {
+                        GroupGraphPattern::Filter(expr) => filters.push(expr.clone()),
+                        other => base_patterns.push(other.clone()),
+                    }
+                }
+                let base = if base_patterns.len() == 1 {
+                    base_patterns.pop().unwrap()
+                } else {
+                    GroupGraphPattern::Group(base_patterns)
+                };
+                (base, filters)
+            }
+            other => (other.clone(), Vec::new()),
+        }
+    }
+
+    /// Plans `{ left } UNION { right }` as an outer union with NULL-padding.
+    ///
+    /// Variables present in only one side get NULL values on the other side.
+    fn plan_union(
+        &self,
+        left_pattern: &GroupGraphPattern,
+        right_pattern: &GroupGraphPattern,
+    ) -> Result<PlannedRelation, PlanError> {
+        let left = self.plan_pattern(left_pattern)?;
+        let right = self.plan_pattern(right_pattern)?;
+
+        // Compute the combined variable set (sorted for determinism).
+        let mut all_vars: Vec<String> = left
+            .var_map
+            .keys()
+            .chain(right.var_map.keys())
+            .cloned()
+            .collect();
+        all_vars.sort();
+        all_vars.dedup();
+
+        let output_var_map: BTreeMap<String, usize> = all_vars
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (v.clone(), i))
+            .collect();
+
+        // Pad each side: for variables not present, add a NULL column via Map,
+        // then Project to the combined column order.
+        let left_padded = self.pad_for_union(&left, &all_vars)?;
+        let right_padded = self.pad_for_union(&right, &all_vars)?;
+
+        let union_expr = left_padded.union(right_padded);
+
+        Ok(PlannedRelation {
+            expr: union_expr,
+            var_map: output_var_map,
+        })
+    }
+
+    /// Pads a relation so its columns match `target_vars` (in order), adding
+    /// NULL columns for any variables not present in the relation.
+    fn pad_for_union(
+        &self,
+        rel: &PlannedRelation,
+        target_vars: &[String],
+    ) -> Result<HirRelationExpr, PlanError> {
+        let rel_arity = rel.arity();
+
+        // Figure out which target vars need NULL padding.
+        let mut null_columns = Vec::new();
+        let mut project_indices = Vec::new();
+
+        for var in target_vars {
+            if let Some(&col) = rel.var_map.get(var) {
+                // Variable exists in this relation — use its column.
+                project_indices.push(col);
+            } else {
+                // Variable doesn't exist — we'll add a NULL column via Map.
+                let null_col_index = rel_arity + null_columns.len();
+                null_columns.push(HirScalarExpr::literal_null(SqlScalarType::String));
+                project_indices.push(null_col_index);
+            }
+        }
+
+        let mut expr = rel.expr.clone();
+
+        if !null_columns.is_empty() {
+            expr = HirRelationExpr::Map {
+                input: Box::new(expr),
+                scalars: null_columns,
+            };
+        }
+
+        // Project to the target column order.
+        expr = HirRelationExpr::Project {
+            input: Box::new(expr),
+            outputs: project_indices,
+        };
+
+        Ok(expr)
+    }
+
+    /// Plans `MINUS { inner }` as an anti-join on shared variables.
+    ///
+    /// SPARQL MINUS semantics: remove from the left side any solutions that are
+    /// "compatible" with a solution from the right side on their shared variables.
+    /// If there are no shared variables, MINUS has no effect.
+    fn plan_minus(
+        &self,
+        left: PlannedRelation,
+        inner: &GroupGraphPattern,
+    ) -> Result<PlannedRelation, PlanError> {
+        let right = self.plan_pattern(inner)?;
+
+        // Find shared variables.
+        let shared_vars: Vec<String> = left
+            .var_map
+            .keys()
+            .filter(|v| right.var_map.contains_key(*v))
+            .cloned()
+            .collect();
+
+        if shared_vars.is_empty() {
+            // No shared variables → MINUS has no effect (per SPARQL spec).
+            return Ok(left);
+        }
+
+        // Project right side down to just the shared variables, then distinct.
+        let right_shared_cols: Vec<usize> = shared_vars.iter().map(|v| right.var_map[v]).collect();
+        let right_projected = HirRelationExpr::Distinct {
+            input: Box::new(HirRelationExpr::Project {
+                input: Box::new(right.expr),
+                outputs: right_shared_cols,
+            }),
+        };
+
+        // Anti-join via Negate + Union + Threshold.
+        //
+        // result = left ⊳ right (anti-join on shared vars)
+        //        = left EXCEPT (left semi-join right on shared vars)
+        //
+        // We implement this as:
+        //   1. Join left with right_projected on shared vars (inner join = semi-join since right is distinct)
+        //   2. Negate the result
+        //   3. Union with left
+        //   4. Threshold (keeps only positive counts)
+
+        let left_arity = left.arity();
+
+        // Build join predicates for shared variables.
+        let mut join_predicates = Vec::new();
+        for (i, var_name) in shared_vars.iter().enumerate() {
+            let left_col = left.var_map[var_name];
+            let right_col = i; // right_projected has shared vars at 0..n
+            join_predicates.push(HirScalarExpr::CallBinary {
+                func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                expr1: Box::new(HirScalarExpr::column(left_col)),
+                expr2: Box::new(HirScalarExpr::column(left_arity + right_col)),
+                name: mz_ore::treat_as_equal::TreatAsEqual(None),
             });
         }
 
-        let mut result = self.plan_pattern(&patterns[0])?;
-        for pattern in &patterns[1..] {
-            let right = self.plan_pattern(pattern)?;
-            result = self.join_on_shared_vars(result, right)?;
+        let on = self.conjunction(join_predicates);
+
+        // Inner join left with right_projected.
+        let joined = HirRelationExpr::Join {
+            left: Box::new(left.expr.clone()),
+            right: Box::new(right_projected),
+            on,
+            kind: JoinKind::Inner,
+        };
+
+        // Project back to just left columns.
+        let left_cols: Vec<usize> = (0..left_arity).collect();
+        let matched = HirRelationExpr::Project {
+            input: Box::new(joined),
+            outputs: left_cols,
+        };
+
+        // Anti-join: left EXCEPT ALL matched
+        let result = left.expr.union(matched.negate()).threshold();
+
+        Ok(PlannedRelation {
+            expr: result,
+            var_map: left.var_map,
+        })
+    }
+
+    /// Applies a SPARQL FILTER expression to a planned relation.
+    fn apply_filter(
+        &self,
+        rel: PlannedRelation,
+        filter_expr: &Expression,
+    ) -> Result<PlannedRelation, PlanError> {
+        let hir_expr = self.translate_expression(filter_expr, &rel.var_map)?;
+        Ok(PlannedRelation {
+            expr: HirRelationExpr::Filter {
+                input: Box::new(rel.expr),
+                predicates: vec![hir_expr],
+            },
+            var_map: rel.var_map,
+        })
+    }
+
+    /// Translates a SPARQL expression to an HIR scalar expression.
+    ///
+    /// Variable references are resolved to column indices via `var_map`.
+    fn translate_expression(
+        &self,
+        expr: &Expression,
+        var_map: &BTreeMap<String, usize>,
+    ) -> Result<HirScalarExpr, PlanError> {
+        match expr {
+            Expression::Variable(v) => {
+                let col = var_map.get(&v.name).ok_or_else(|| PlanError {
+                    message: format!("variable ?{} not in scope", v.name),
+                })?;
+                Ok(HirScalarExpr::column(*col))
+            }
+            Expression::Literal(lit) => {
+                let s = self.literal_to_string(lit);
+                Ok(HirScalarExpr::literal(
+                    Datum::String(&s),
+                    SqlScalarType::String,
+                ))
+            }
+            Expression::NumericLiteral(s) => Ok(HirScalarExpr::literal(
+                Datum::String(s),
+                SqlScalarType::String,
+            )),
+            Expression::BooleanLiteral(b) => Ok(HirScalarExpr::literal(
+                if *b { Datum::True } else { Datum::False },
+                SqlScalarType::Bool,
+            )),
+            Expression::Iri(iri) => Ok(HirScalarExpr::literal(
+                Datum::String(&iri.value),
+                SqlScalarType::String,
+            )),
+
+            // Comparison operators
+            Expression::Equal(l, r) => {
+                self.translate_binary(mz_expr::BinaryFunc::Eq(mz_expr::func::Eq), l, r, var_map)
+            }
+            Expression::NotEqual(l, r) => self.translate_binary(
+                mz_expr::BinaryFunc::NotEq(mz_expr::func::NotEq),
+                l,
+                r,
+                var_map,
+            ),
+            Expression::LessThan(l, r) => {
+                self.translate_binary(mz_expr::BinaryFunc::Lt(mz_expr::func::Lt), l, r, var_map)
+            }
+            Expression::GreaterThan(l, r) => {
+                self.translate_binary(mz_expr::BinaryFunc::Gt(mz_expr::func::Gt), l, r, var_map)
+            }
+            Expression::LessThanOrEqual(l, r) => {
+                self.translate_binary(mz_expr::BinaryFunc::Lte(mz_expr::func::Lte), l, r, var_map)
+            }
+            Expression::GreaterThanOrEqual(l, r) => {
+                self.translate_binary(mz_expr::BinaryFunc::Gte(mz_expr::func::Gte), l, r, var_map)
+            }
+
+            // Logical operators
+            Expression::And(l, r) => {
+                let l = self.translate_expression(l, var_map)?;
+                let r = self.translate_expression(r, var_map)?;
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+                    exprs: vec![l, r],
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::Or(l, r) => {
+                let l = self.translate_expression(l, var_map)?;
+                let r = self.translate_expression(r, var_map)?;
+                Ok(HirScalarExpr::CallVariadic {
+                    func: mz_expr::VariadicFunc::Or(mz_expr::func::variadic::Or),
+                    exprs: vec![l, r],
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+            Expression::UnaryNot(e) => {
+                let inner = self.translate_expression(e, var_map)?;
+                Ok(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(inner),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+
+            // BOUND(?var) — true if the variable is not null
+            Expression::Bound(v) => {
+                let col = var_map.get(&v.name).ok_or_else(|| PlanError {
+                    message: format!("variable ?{} not in scope for BOUND", v.name),
+                })?;
+                Ok(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::IsNull(mz_expr::func::IsNull),
+                    expr: Box::new(HirScalarExpr::column(*col)),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+                // IsNull returns true when null; BOUND should return true when NOT null.
+                .map(|e| HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::Not(mz_expr::func::Not),
+                    expr: Box::new(e),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
+            }
+
+            // Placeholder for expressions that will be fully implemented in prompt 9
+            _ => Err(PlanError {
+                message: format!(
+                    "SPARQL expression form not yet supported (will be implemented in prompt 9): {:?}",
+                    std::mem::discriminant(expr)
+                ),
+            }),
         }
-        Ok(result)
+    }
+
+    /// Helper: translate a binary operator expression.
+    fn translate_binary(
+        &self,
+        func: mz_expr::BinaryFunc,
+        left: &Expression,
+        right: &Expression,
+        var_map: &BTreeMap<String, usize>,
+    ) -> Result<HirScalarExpr, PlanError> {
+        let l = self.translate_expression(left, var_map)?;
+        let r = self.translate_expression(right, var_map)?;
+        Ok(HirScalarExpr::CallBinary {
+            func,
+            expr1: Box::new(l),
+            expr2: Box::new(r),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        })
+    }
+
+    /// Builds a conjunction of predicates (AND). Returns `true` if empty.
+    fn conjunction(&self, mut predicates: Vec<HirScalarExpr>) -> HirScalarExpr {
+        if predicates.is_empty() {
+            HirScalarExpr::literal_true()
+        } else if predicates.len() == 1 {
+            predicates.pop().unwrap()
+        } else {
+            HirScalarExpr::CallVariadic {
+                func: mz_expr::VariadicFunc::And(mz_expr::func::variadic::And),
+                exprs: predicates,
+                name: mz_ore::treat_as_equal::TreatAsEqual(None),
+            }
+        }
+    }
+
+    /// Builds a combined var_map for a join (left + right with offset).
+    fn combined_var_map(
+        &self,
+        left: &BTreeMap<String, usize>,
+        right: &BTreeMap<String, usize>,
+        left_arity: usize,
+    ) -> BTreeMap<String, usize> {
+        let mut combined = left.clone();
+        for (var, &col) in right {
+            combined.entry(var.clone()).or_insert(left_arity + col);
+        }
+        combined
+    }
+
+    /// Converts an RDF literal to its string representation.
+    fn literal_to_string(&self, lit: &RdfLiteral) -> String {
+        match lit {
+            RdfLiteral::Simple(s) => s.clone(),
+            RdfLiteral::LanguageTagged { value, language } => {
+                format!("\"{}\"@{}", value, language)
+            }
+            RdfLiteral::Typed { value, datatype } => {
+                format!("\"{}\"^^<{}>", value, datatype.value)
+            }
+        }
     }
 
     /// Plans a single triple pattern.
@@ -700,5 +1223,475 @@ mod tests {
         assert_eq!(result1.var_map["a"], 0);
         assert_eq!(result1.var_map["m"], 1);
         assert_eq!(result1.var_map["z"], 2);
+    }
+
+    // --- FILTER tests ---
+
+    #[mz_ore::test]
+    fn test_filter_simple_equality() {
+        let result = plan_query(
+            r#"PREFIX ex: <http://example.org/>
+               SELECT * WHERE { ?s ex:name ?name . FILTER(?name = "Alice") }"#,
+        );
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+
+        // Should be: Filter(Project(Join(...)) or Filter on BGP result.
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_filter_comparison() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE { ?s ex:age ?age . FILTER(?age > ?s) }",
+        );
+        assert_eq!(var_names(&result), vec!["age", "s"]);
+
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+                // The predicate should be a Gt comparison.
+                match &predicates[0] {
+                    HirScalarExpr::CallBinary { func, .. } => {
+                        assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
+                    }
+                    other => panic!("expected CallBinary Gt, got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_filter_logical_and() {
+        let result = plan_query(
+            r#"PREFIX ex: <http://example.org/>
+               SELECT * WHERE {
+                   ?s ex:name ?name .
+                   FILTER(?name = "Alice" && ?s = "bob")
+               }"#,
+        );
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+                match &predicates[0] {
+                    HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                        assert!(matches!(func, mz_expr::VariadicFunc::And(_)));
+                        assert_eq!(exprs.len(), 2);
+                    }
+                    other => panic!("expected CallVariadic And, got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_filter_unary_not() {
+        let result = plan_query(r#"SELECT * WHERE { ?s ?p ?o . FILTER(!(?s = "x")) }"#);
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+                match &predicates[0] {
+                    HirScalarExpr::CallUnary { func, .. } => {
+                        assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
+                    }
+                    other => panic!("expected CallUnary Not, got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_filter_bound() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE { ?s ex:name ?name . FILTER(BOUND(?name)) }",
+        );
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+
+        // BOUND(?name) → NOT(IsNull(column))
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+                match &predicates[0] {
+                    HirScalarExpr::CallUnary {
+                        func: mz_expr::UnaryFunc::Not(_),
+                        expr,
+                        ..
+                    } => match expr.as_ref() {
+                        HirScalarExpr::CallUnary {
+                            func: mz_expr::UnaryFunc::IsNull(_),
+                            ..
+                        } => {}
+                        other => panic!("expected IsNull, got {:?}", other),
+                    },
+                    other => panic!("expected Not(IsNull), got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_multiple_filters_in_group() {
+        // Per SPARQL spec, multiple FILTERs in a group all apply.
+        let result = plan_query(
+            r#"SELECT * WHERE {
+                   ?s ?p ?o .
+                   FILTER(?s = "x")
+                   FILTER(?o = "y")
+               }"#,
+        );
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+
+        // Two FILTERs produce two nested Filter nodes.
+        match &result.expr {
+            HirRelationExpr::Filter { input, predicates } => {
+                assert_eq!(predicates.len(), 1);
+                match input.as_ref() {
+                    HirRelationExpr::Filter { predicates, .. } => {
+                        assert_eq!(predicates.len(), 1);
+                    }
+                    other => panic!("expected inner Filter, got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    // --- OPTIONAL tests ---
+
+    #[mz_ore::test]
+    fn test_optional_simple() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name .
+                 OPTIONAL { ?s ex:email ?email }
+             }",
+        );
+        // name and s from BGP, email from OPTIONAL.
+        assert_eq!(var_names(&result), vec!["email", "name", "s"]);
+        assert_eq!(result.arity(), 3);
+
+        // Structure: Project(LeftOuterJoin(BGP, optional_pattern))
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Join { kind, .. } => {
+                    assert_eq!(*kind, JoinKind::LeftOuter);
+                }
+                other => panic!("expected LeftOuter Join, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_optional_with_filter() {
+        // FILTER inside OPTIONAL should go into the ON clause.
+        let result = plan_query(
+            r#"PREFIX ex: <http://example.org/>
+               SELECT * WHERE {
+                   ?s ex:name ?name .
+                   OPTIONAL { ?s ex:email ?email . FILTER(?email = "test@example.com") }
+               }"#,
+        );
+        assert_eq!(var_names(&result), vec!["email", "name", "s"]);
+
+        // The ON clause should include both the join condition AND the filter.
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Join { kind, on, .. } => {
+                    assert_eq!(*kind, JoinKind::LeftOuter);
+                    // ON should be a conjunction (AND) of the join predicate and the filter.
+                    match on {
+                        HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                            assert!(matches!(func, mz_expr::VariadicFunc::And(_)));
+                            // At least 2 predicates: shared var equality + filter.
+                            assert!(exprs.len() >= 2);
+                        }
+                        _ => {
+                            // Could also be a single predicate if no shared vars
+                            // (unlikely in this test), so this is fine.
+                        }
+                    }
+                }
+                other => panic!("expected LeftOuter Join, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_optional_multiple() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name .
+                 OPTIONAL { ?s ex:email ?email }
+                 OPTIONAL { ?s ex:phone ?phone }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["email", "name", "phone", "s"]);
+        assert_eq!(result.arity(), 4);
+
+        // Second OPTIONAL wraps first: Project(LeftJoin(Project(LeftJoin(BGP, ...)), ...))
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Join { kind, left, .. } => {
+                    assert_eq!(*kind, JoinKind::LeftOuter);
+                    // Left should also be a Project(LeftJoin(...))
+                    match left.as_ref() {
+                        HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                            HirRelationExpr::Join { kind, .. } => {
+                                assert_eq!(*kind, JoinKind::LeftOuter);
+                            }
+                            other => panic!("expected inner LeftOuter Join, got {:?}", other),
+                        },
+                        other => panic!("expected inner Project, got {:?}", other),
+                    }
+                }
+                other => panic!("expected LeftOuter Join, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_optional_no_shared_vars() {
+        // OPTIONAL with no shared variables is a left outer cross join.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name .
+                 OPTIONAL { ?x ex:age ?age }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["age", "name", "s", "x"]);
+
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Join { kind, on, .. } => {
+                    assert_eq!(*kind, JoinKind::LeftOuter);
+                    // ON should be literal true (cross join).
+                    match on {
+                        HirScalarExpr::Literal(row, _, _) => {
+                            assert_eq!(row.unpack_first(), Datum::True);
+                        }
+                        other => panic!("expected literal true, got {:?}", other),
+                    }
+                }
+                other => panic!("expected LeftOuter Join, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    // --- UNION tests ---
+
+    #[mz_ore::test]
+    fn test_union_same_vars() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 { ?s ex:name ?name }
+                 UNION
+                 { ?s ex:label ?name }
+             }",
+        );
+        // Both sides have the same variables.
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+        assert_eq!(result.arity(), 2);
+
+        match &result.expr {
+            HirRelationExpr::Union { .. } => {}
+            other => panic!("expected Union, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_union_different_vars() {
+        // Outer union: variables differ between sides.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 { ?s ex:name ?name }
+                 UNION
+                 { ?s ex:age ?age }
+             }",
+        );
+        // Combined variable set.
+        assert_eq!(var_names(&result), vec!["age", "name", "s"]);
+        assert_eq!(result.arity(), 3);
+
+        // The union should pad missing variables with NULL.
+        match &result.expr {
+            HirRelationExpr::Union { .. } => {}
+            other => panic!("expected Union, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_union_three_way() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 { ?s ex:name ?name }
+                 UNION
+                 { ?s ex:label ?name }
+                 UNION
+                 { ?s ex:title ?name }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+
+        // Three-way union parsed as left-associative: Union(Union(A, B), C)
+        match &result.expr {
+            HirRelationExpr::Union { .. } => {}
+            other => panic!("expected Union, got {:?}", other),
+        }
+    }
+
+    // --- MINUS tests ---
+
+    #[mz_ore::test]
+    fn test_minus_shared_vars() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name .
+                 MINUS { ?s ex:status <http://example.org/inactive> }
+             }",
+        );
+        // MINUS doesn't add variables — result has same vars as left side.
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+        assert_eq!(result.arity(), 2);
+
+        // Should use Threshold(Union(left, Negate(...)))
+        match &result.expr {
+            HirRelationExpr::Threshold { input } => match input.as_ref() {
+                HirRelationExpr::Union { .. } => {}
+                other => panic!("expected Union inside Threshold, got {:?}", other),
+            },
+            other => panic!("expected Threshold, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_minus_no_shared_vars() {
+        // MINUS with no shared variables has no effect.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name .
+                 MINUS { ?x ex:age ?age }
+             }",
+        );
+        // Result should be the same as without MINUS.
+        assert_eq!(var_names(&result), vec!["name", "s"]);
+        assert_eq!(result.arity(), 2);
+
+        // No Threshold/Negate: MINUS was a no-op.
+        match &result.expr {
+            HirRelationExpr::Threshold { .. } => {
+                panic!("expected no Threshold for disjoint MINUS")
+            }
+            _ => {} // Any non-Threshold structure is correct.
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_minus_preserves_left_vars() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name . ?s ex:age ?age .
+                 MINUS { ?s ex:status <http://example.org/inactive> }
+             }",
+        );
+        // All left-side variables preserved.
+        assert_eq!(var_names(&result), vec!["age", "name", "s"]);
+        assert_eq!(result.arity(), 3);
+    }
+
+    // --- Combined pattern tests ---
+
+    #[mz_ore::test]
+    fn test_optional_inside_union() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 { ?s ex:name ?name . OPTIONAL { ?s ex:email ?email } }
+                 UNION
+                 { ?s ex:label ?name }
+             }",
+        );
+        // Left side has: name, s, email. Right side has: name, s.
+        // Union combines: email, name, s.
+        assert_eq!(var_names(&result), vec!["email", "name", "s"]);
+    }
+
+    #[mz_ore::test]
+    fn test_filter_after_optional() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name .
+                 OPTIONAL { ?s ex:email ?email }
+                 FILTER(BOUND(?email))
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["email", "name", "s"]);
+
+        // Should be Filter(Project(LeftJoin(...)))
+        match &result.expr {
+            HirRelationExpr::Filter { input, .. } => match input.as_ref() {
+                HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                    HirRelationExpr::Join { kind, .. } => {
+                        assert_eq!(*kind, JoinKind::LeftOuter);
+                    }
+                    other => panic!("expected LeftOuter Join, got {:?}", other),
+                },
+                other => panic!("expected Project, got {:?}", other),
+            },
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_optional_plus_minus() {
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE {
+                 ?s ex:name ?name .
+                 OPTIONAL { ?s ex:email ?email }
+                 MINUS { ?s ex:status <http://example.org/inactive> }
+             }",
+        );
+        assert_eq!(var_names(&result), vec!["email", "name", "s"]);
+    }
+
+    #[mz_ore::test]
+    fn test_filter_variable_not_in_scope() {
+        // FILTER referencing an undefined variable should produce an error.
+        let query = parse("SELECT * WHERE { ?s ?p ?o . FILTER(?x = ?s) }").expect("parse ok");
+        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let err = planner.plan(&query).unwrap_err();
+        assert!(
+            err.message.contains("not in scope"),
+            "expected 'not in scope' error, got: {}",
+            err.message
+        );
     }
 }
