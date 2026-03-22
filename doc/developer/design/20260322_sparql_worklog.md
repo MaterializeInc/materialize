@@ -407,3 +407,58 @@ New parser tests (22):
 - Nested groups
 - Combinations: OPTIONAL inside UNION, OPTIONAL + MINUS, BIND + VALUES,
   all forms combined in one query
+
+## 2026-03-22: Prompt 4 — Parse CONSTRUCT, ASK, DESCRIBE
+
+### What was done
+
+Extended `parse_query()` to dispatch on all four SPARQL query forms (SELECT,
+CONSTRUCT, ASK, DESCRIBE) instead of only SELECT. Added three new parser
+methods and updated the error message for unknown query forms.
+
+**CONSTRUCT** (two forms):
+- **Full form**: `CONSTRUCT { template } WHERE { pattern }` — parses the
+  template as a triples block inside braces via `parse_construct_template()`,
+  then parses the WHERE clause normally.
+- **Short form**: `CONSTRUCT WHERE { pattern }` — detected by checking if the
+  next token after CONSTRUCT is WHERE. The template is extracted from the WHERE
+  pattern by collecting all `Basic` triple patterns (via
+  `extract_triples_from_pattern()`). This matches the W3C spec Section 16.2.2.
+
+**ASK**: Parses `ASK [WHERE] { pattern }`. Produces `QueryForm::Ask` with just
+a WHERE clause. The WHERE keyword is optional (handled by `parse_where_clause`).
+
+**DESCRIBE** (three forms):
+- `DESCRIBE <iri>` / `DESCRIBE ?var` — one or more resources
+- `DESCRIBE ?x ?y <iri>` — mixed variables and IRIs
+- `DESCRIBE *` — represented as empty `resources` vec (the planner interprets
+  this as "describe all resources from WHERE clause")
+- Optional WHERE clause: if `WHERE` or `{` follows, parse it; otherwise use
+  empty `Basic(vec![])`.
+
+### Key decisions
+
+1. **CONSTRUCT WHERE short form**: Rather than re-parsing the template, we
+   extract triples from the already-parsed WHERE pattern. This is simpler and
+   avoids parsing the same braces twice. The extraction is shallow — it only
+   collects `Basic` triples from the top-level and `Group` patterns, which
+   matches the spec's intent (CONSTRUCT WHERE only makes sense with simple BGPs).
+
+2. **DESCRIBE * representation**: An empty `resources` vec signals "describe
+   all". This avoids adding a new enum variant and is unambiguous since
+   `DESCRIBE` without resources is a parse error.
+
+3. **Error message improvement**: The error for unknown query forms now says
+   "expected SELECT, CONSTRUCT, ASK, or DESCRIBE" instead of just "expected
+   SELECT".
+
+### Test results
+
+95 tests pass (18 lexer + 77 parser), 0 failures, 0 warnings.
+
+New parser tests (22):
+- CONSTRUCT: basic, multi-template, semicolon shorthand, empty template,
+  WHERE short form, with prefix, with blank node, with literal object
+- ASK: basic, with prefix, with WHERE keyword, with FILTER, with OPTIONAL
+- DESCRIBE: single IRI, variable, multiple resources, star, with WHERE, no WHERE
+- Errors: unknown query form, empty DESCRIBE, CONSTRUCT missing brace

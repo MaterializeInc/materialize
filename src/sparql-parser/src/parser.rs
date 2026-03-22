@@ -181,40 +181,102 @@ impl<'a> Parser<'a> {
         let base = self.parse_base_decl()?;
         let prefixes = self.parse_prefix_decls()?;
 
-        // Query form — only SELECT for now (CONSTRUCT/ASK/DESCRIBE in prompt 4)
+        // Query form dispatch
         match self.peek() {
-            Some(Token::Keyword(Keyword::Select)) => {}
+            Some(Token::Keyword(Keyword::Select)) => {
+                let form = self.parse_select_clause()?;
+                let where_clause = self.parse_where_clause()?;
+                // Solution modifiers — not yet supported, will be added in prompt 6
+                Ok(SparqlQuery {
+                    base,
+                    prefixes,
+                    form,
+                    where_clause,
+                    group_by: vec![],
+                    having: None,
+                    order_by: vec![],
+                    limit: None,
+                    offset: None,
+                })
+            }
             Some(Token::Keyword(Keyword::Construct)) => {
-                return Err(self.error("CONSTRUCT queries not yet supported (see prompt 4)"));
+                self.bump();
+                // Two forms: CONSTRUCT { template } WHERE { pattern }
+                //        or: CONSTRUCT WHERE { pattern } (short form: template = pattern)
+                if matches!(self.peek(), Some(Token::Keyword(Keyword::Where))) {
+                    // Short form: CONSTRUCT WHERE { pattern }
+                    let where_clause = self.parse_where_clause()?;
+                    let template = self.extract_triples_from_pattern(&where_clause);
+                    Ok(SparqlQuery {
+                        base,
+                        prefixes,
+                        form: QueryForm::Construct { template },
+                        where_clause,
+                        group_by: vec![],
+                        having: None,
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    })
+                } else {
+                    // Full form: CONSTRUCT { template } WHERE { pattern }
+                    let template = self.parse_construct_template()?;
+                    let where_clause = self.parse_where_clause()?;
+                    // Solution modifiers — not yet supported, will be added in prompt 6
+                    Ok(SparqlQuery {
+                        base,
+                        prefixes,
+                        form: QueryForm::Construct { template },
+                        where_clause,
+                        group_by: vec![],
+                        having: None,
+                        order_by: vec![],
+                        limit: None,
+                        offset: None,
+                    })
+                }
             }
             Some(Token::Keyword(Keyword::Ask)) => {
-                return Err(self.error("ASK queries not yet supported (see prompt 4)"));
+                self.bump();
+                let where_clause = self.parse_where_clause()?;
+                Ok(SparqlQuery {
+                    base,
+                    prefixes,
+                    form: QueryForm::Ask,
+                    where_clause,
+                    group_by: vec![],
+                    having: None,
+                    order_by: vec![],
+                    limit: None,
+                    offset: None,
+                })
             }
             Some(Token::Keyword(Keyword::Describe)) => {
-                return Err(self.error("DESCRIBE queries not yet supported (see prompt 4)"));
+                self.bump();
+                let resources = self.parse_describe_resources()?;
+                // WHERE clause is optional for DESCRIBE
+                let where_clause = if matches!(
+                    self.peek(),
+                    Some(Token::Keyword(Keyword::Where)) | Some(Token::LBrace)
+                ) {
+                    self.parse_where_clause()?
+                } else {
+                    GroupGraphPattern::Basic(vec![])
+                };
+                Ok(SparqlQuery {
+                    base,
+                    prefixes,
+                    form: QueryForm::Describe { resources },
+                    where_clause,
+                    group_by: vec![],
+                    having: None,
+                    order_by: vec![],
+                    limit: None,
+                    offset: None,
+                })
             }
-            _ => return Err(self.expected("SELECT")),
+            _ => Err(self.expected("SELECT, CONSTRUCT, ASK, or DESCRIBE")),
         }
-
-        let form = self.parse_select_clause()?;
-
-        // WHERE clause
-        let where_clause = self.parse_where_clause()?;
-
-        // Solution modifiers — not yet supported, will be added in prompt 6
-        // For now, just return the query as-is. The caller (parse()) checks for EOF.
-
-        Ok(SparqlQuery {
-            base,
-            prefixes,
-            form,
-            where_clause,
-            group_by: vec![],
-            having: None,
-            order_by: vec![],
-            limit: None,
-            offset: None,
-        })
     }
 
     fn parse_base_decl(&mut self) -> Result<Option<Iri>, ParseError> {
@@ -301,6 +363,61 @@ impl<'a> Parser<'a> {
         // The WHERE keyword is optional in SPARQL
         self.eat_keyword(Keyword::Where);
         self.parse_group_graph_pattern()
+    }
+
+    /// Parse a CONSTRUCT template: `{ TriplesSameSubject ( '.' TriplesSameSubject )* '.'? }`.
+    ///
+    /// Similar to a triples block but enclosed in braces and without non-triple
+    /// patterns (no FILTER, OPTIONAL, etc.).
+    fn parse_construct_template(&mut self) -> Result<Vec<TriplePattern>, ParseError> {
+        self.expect(&Token::LBrace, "'{'")?;
+        let mut triples = Vec::new();
+        if self.can_start_triple() {
+            triples = self.parse_triples_block()?;
+        }
+        self.expect(&Token::RBrace, "'}'")?;
+        Ok(triples)
+    }
+
+    /// Parse the resource list for DESCRIBE: `'*' | (VarOrIri)+`.
+    fn parse_describe_resources(&mut self) -> Result<Vec<VarOrIri>, ParseError> {
+        if self.eat(&Token::Star) {
+            // DESCRIBE * — empty resources list signals "all"
+            // We represent this as an empty vec; the planner interprets it as
+            // "describe all resources from WHERE clause".
+            return Ok(vec![]);
+        }
+        let mut resources = Vec::new();
+        loop {
+            match self.peek() {
+                Some(Token::Variable(_)) => {
+                    let var = self.parse_variable()?;
+                    resources.push(VarOrIri::Variable(var));
+                }
+                Some(Token::Iri(_)) | Some(Token::PrefixedName { .. }) => {
+                    let iri = self.parse_iri()?;
+                    resources.push(VarOrIri::Iri(iri));
+                }
+                _ => break,
+            }
+        }
+        if resources.is_empty() {
+            return Err(self.expected("variable, IRI, or '*' after DESCRIBE"));
+        }
+        Ok(resources)
+    }
+
+    /// Extract triple patterns from a group graph pattern (used for
+    /// CONSTRUCT WHERE short form where the template equals the WHERE pattern).
+    fn extract_triples_from_pattern(&self, pattern: &GroupGraphPattern) -> Vec<TriplePattern> {
+        match pattern {
+            GroupGraphPattern::Basic(triples) => triples.clone(),
+            GroupGraphPattern::Group(patterns) => patterns
+                .iter()
+                .flat_map(|p| self.extract_triples_from_pattern(p))
+                .collect(),
+            _ => vec![],
+        }
     }
 
     // === Graph pattern parsing ===
@@ -2181,5 +2298,304 @@ SELECT ?s ?label ?extra WHERE {
         } else {
             panic!("expected Group pattern, got {:?}", q.where_clause);
         }
+    }
+
+    // === CONSTRUCT tests ===
+
+    #[test]
+    fn test_construct_basic() {
+        let q = p(r#"CONSTRUCT { ?s <http://example.org/knows> ?o }
+WHERE { ?s <http://example.org/friend> ?o }"#);
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 1);
+            assert!(matches!(&template[0].subject, VarOrTerm::Variable(v) if v.name == "s"));
+            assert!(matches!(
+                &template[0].predicate,
+                VerbPath::Path(PropertyPath::Iri(iri)) if iri.value == "http://example.org/knows"
+            ));
+            assert!(matches!(&template[0].object, VarOrTerm::Variable(v) if v.name == "o"));
+        } else {
+            panic!("expected Construct, got {:?}", q.form);
+        }
+        if let GroupGraphPattern::Basic(triples) = &q.where_clause {
+            assert_eq!(triples.len(), 1);
+        } else {
+            panic!("expected Basic pattern in WHERE");
+        }
+    }
+
+    #[test]
+    fn test_construct_multi_template() {
+        let q = p(r#"PREFIX ex: <http://example.org/>
+CONSTRUCT {
+  ?s ex:label ?name .
+  ?s ex:type ex:Person
+}
+WHERE { ?s ex:name ?name }"#);
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 2);
+        } else {
+            panic!("expected Construct");
+        }
+    }
+
+    #[test]
+    fn test_construct_with_semicolon_shorthand() {
+        let q = p(r#"PREFIX ex: <http://example.org/>
+CONSTRUCT { ?s ex:a ?o ; ex:b ?o2 }
+WHERE { ?s ex:x ?o . ?s ex:y ?o2 }"#);
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 2);
+            // Both should share the same subject ?s
+            assert!(matches!(&template[0].subject, VarOrTerm::Variable(v) if v.name == "s"));
+            assert!(matches!(&template[1].subject, VarOrTerm::Variable(v) if v.name == "s"));
+        } else {
+            panic!("expected Construct");
+        }
+    }
+
+    #[test]
+    fn test_construct_empty_template() {
+        let q = p("CONSTRUCT { } WHERE { ?s ?p ?o }");
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 0);
+        } else {
+            panic!("expected Construct");
+        }
+    }
+
+    #[test]
+    fn test_construct_where_shortform() {
+        // CONSTRUCT WHERE { pattern } — template equals the WHERE pattern
+        let q = p("CONSTRUCT WHERE { ?s ?p ?o }");
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 1);
+            assert!(matches!(&template[0].subject, VarOrTerm::Variable(v) if v.name == "s"));
+            assert!(matches!(&template[0].predicate, VerbPath::Variable(v) if v.name == "p"));
+            assert!(matches!(&template[0].object, VarOrTerm::Variable(v) if v.name == "o"));
+        } else {
+            panic!("expected Construct");
+        }
+        // WHERE clause should also have the same pattern
+        if let GroupGraphPattern::Basic(triples) = &q.where_clause {
+            assert_eq!(triples.len(), 1);
+        } else {
+            panic!("expected Basic pattern in WHERE");
+        }
+    }
+
+    #[test]
+    fn test_construct_with_prefix() {
+        let q = p(r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+CONSTRUCT { ?person foaf:name ?name }
+WHERE { ?person foaf:firstName ?name }"#);
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 1);
+            if let VerbPath::Path(PropertyPath::Iri(iri)) = &template[0].predicate {
+                assert_eq!(iri.value, "http://xmlns.com/foaf/0.1/name");
+            } else {
+                panic!("expected IRI predicate in template");
+            }
+        } else {
+            panic!("expected Construct");
+        }
+    }
+
+    #[test]
+    fn test_construct_with_blank_node() {
+        let q = p(r#"PREFIX ex: <http://example.org/>
+CONSTRUCT { _:b ex:value ?v }
+WHERE { ?s ex:data ?v }"#);
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 1);
+            assert!(matches!(
+                &template[0].subject,
+                VarOrTerm::Term(GraphTerm::BlankNode(label)) if label == "b"
+            ));
+        } else {
+            panic!("expected Construct");
+        }
+    }
+
+    #[test]
+    fn test_construct_with_literal_object() {
+        let q = p(r#"PREFIX ex: <http://example.org/>
+CONSTRUCT { ?s ex:status "active" }
+WHERE { ?s ex:enabled true }"#);
+        if let QueryForm::Construct { template } = &q.form {
+            assert_eq!(template.len(), 1);
+            assert!(matches!(
+                &template[0].object,
+                VarOrTerm::Term(GraphTerm::Literal(RdfLiteral::Simple(s))) if s == "active"
+            ));
+        } else {
+            panic!("expected Construct");
+        }
+    }
+
+    // === ASK tests ===
+
+    #[test]
+    fn test_ask_basic() {
+        let q = p("ASK { ?s ?p ?o }");
+        assert!(matches!(q.form, QueryForm::Ask));
+        if let GroupGraphPattern::Basic(triples) = &q.where_clause {
+            assert_eq!(triples.len(), 1);
+        } else {
+            panic!("expected Basic pattern");
+        }
+    }
+
+    #[test]
+    fn test_ask_with_prefix() {
+        let q = p(r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+ASK { ?x foaf:name "Alice" }"#);
+        assert!(matches!(q.form, QueryForm::Ask));
+        if let GroupGraphPattern::Basic(triples) = &q.where_clause {
+            assert_eq!(triples.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_ask_with_where_keyword() {
+        let q = p("ASK WHERE { ?s ?p ?o }");
+        assert!(matches!(q.form, QueryForm::Ask));
+    }
+
+    #[test]
+    fn test_ask_with_filter() {
+        let q = p(r#"PREFIX ex: <http://example.org/>
+ASK { ?s ex:age ?age . FILTER(?age > 18) }"#);
+        assert!(matches!(q.form, QueryForm::Ask));
+        if let GroupGraphPattern::Group(patterns) = &q.where_clause {
+            assert_eq!(patterns.len(), 2);
+            assert!(matches!(&patterns[0], GroupGraphPattern::Basic(_)));
+            assert!(matches!(&patterns[1], GroupGraphPattern::Filter(_)));
+        } else {
+            panic!("expected Group pattern");
+        }
+    }
+
+    #[test]
+    fn test_ask_with_optional() {
+        let q = p(r#"PREFIX ex: <http://example.org/>
+ASK {
+  ?s ex:name ?name .
+  OPTIONAL { ?s ex:email ?email }
+}"#);
+        assert!(matches!(q.form, QueryForm::Ask));
+        if let GroupGraphPattern::Group(patterns) = &q.where_clause {
+            assert_eq!(patterns.len(), 2);
+        }
+    }
+
+    // === DESCRIBE tests ===
+
+    #[test]
+    fn test_describe_single_iri() {
+        let q = p("DESCRIBE <http://example.org/Alice>");
+        if let QueryForm::Describe { resources } = &q.form {
+            assert_eq!(resources.len(), 1);
+            assert!(matches!(
+                &resources[0],
+                VarOrIri::Iri(iri) if iri.value == "http://example.org/Alice"
+            ));
+        } else {
+            panic!("expected Describe");
+        }
+        // No WHERE clause → empty Basic
+        assert!(matches!(q.where_clause, GroupGraphPattern::Basic(ref t) if t.is_empty()));
+    }
+
+    #[test]
+    fn test_describe_variable() {
+        let q = p("DESCRIBE ?x WHERE { ?x ?p ?o }");
+        if let QueryForm::Describe { resources } = &q.form {
+            assert_eq!(resources.len(), 1);
+            assert!(matches!(&resources[0], VarOrIri::Variable(v) if v.name == "x"));
+        } else {
+            panic!("expected Describe");
+        }
+        if let GroupGraphPattern::Basic(triples) = &q.where_clause {
+            assert_eq!(triples.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_describe_multiple_resources() {
+        let q = p(r#"PREFIX ex: <http://example.org/>
+DESCRIBE ?x ex:Alice ex:Bob"#);
+        if let QueryForm::Describe { resources } = &q.form {
+            assert_eq!(resources.len(), 3);
+            assert!(matches!(&resources[0], VarOrIri::Variable(v) if v.name == "x"));
+            assert!(
+                matches!(&resources[1], VarOrIri::Iri(iri) if iri.value == "http://example.org/Alice")
+            );
+            assert!(
+                matches!(&resources[2], VarOrIri::Iri(iri) if iri.value == "http://example.org/Bob")
+            );
+        } else {
+            panic!("expected Describe");
+        }
+    }
+
+    #[test]
+    fn test_describe_star() {
+        let q = p("DESCRIBE * WHERE { ?s ?p ?o }");
+        if let QueryForm::Describe { resources } = &q.form {
+            assert!(
+                resources.is_empty(),
+                "DESCRIBE * should have empty resources"
+            );
+        } else {
+            panic!("expected Describe");
+        }
+    }
+
+    #[test]
+    fn test_describe_with_where() {
+        let q = p(r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
+        if let QueryForm::Describe { resources } = &q.form {
+            assert_eq!(resources.len(), 1);
+        }
+        if let GroupGraphPattern::Basic(triples) = &q.where_clause {
+            assert_eq!(triples.len(), 1);
+        }
+    }
+
+    #[test]
+    fn test_describe_no_where() {
+        let q = p("DESCRIBE <http://example.org/thing>");
+        assert!(matches!(q.form, QueryForm::Describe { .. }));
+        assert!(matches!(q.where_clause, GroupGraphPattern::Basic(ref t) if t.is_empty()));
+    }
+
+    // === Error cases for new query forms ===
+
+    #[test]
+    fn test_error_expected_query_form() {
+        let err = parse("FOOBAR { ?s ?p ?o }").unwrap_err();
+        assert!(
+            err.message.contains("SELECT, CONSTRUCT, ASK, or DESCRIBE"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_error_describe_empty() {
+        let err = parse("DESCRIBE").unwrap_err();
+        assert!(
+            err.message.contains("variable, IRI, or '*' after DESCRIBE"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn test_error_construct_missing_brace() {
+        let err = parse("CONSTRUCT ?s ?p ?o WHERE { ?s ?p ?o }").unwrap_err();
+        assert!(err.message.contains("'{'"), "got: {}", err.message);
     }
 }

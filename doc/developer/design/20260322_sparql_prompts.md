@@ -43,15 +43,15 @@ includes the goal, key files to read, and acceptance criteria.
 >
 > ~~Read first: W3C SPARQL 1.1 Sections 6-8, 10.~~
 
-### Prompt 4: Parse CONSTRUCT, ASK, DESCRIBE
+### ~~Prompt 4: Parse CONSTRUCT, ASK, DESCRIBE~~
 
-> Add parsing for the three non-SELECT query forms. CONSTRUCT has a template
-> (list of triple patterns) and a WHERE clause. ASK has only a WHERE clause.
-> DESCRIBE has a list of resources/variables and an optional WHERE clause.
-> Also parse `CONSTRUCT WHERE { ... }` (short form where template = WHERE
-> pattern). Add tests.
+> ~~Add parsing for the three non-SELECT query forms. CONSTRUCT has a template~~
+> ~~(list of triple patterns) and a WHERE clause. ASK has only a WHERE clause.~~
+> ~~DESCRIBE has a list of resources/variables and an optional WHERE clause.~~
+> ~~Also parse `CONSTRUCT WHERE { ... }` (short form where template = WHERE~~
+> ~~pattern). Add tests.~~
 >
-> Read first: W3C SPARQL 1.1 Sections 16.2-16.4.
+> ~~Read first: W3C SPARQL 1.1 Sections 16.2-16.4.~~
 
 ### Prompt 5: Parse property paths
 
