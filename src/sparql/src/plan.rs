@@ -14,13 +14,13 @@
 
 use std::collections::BTreeMap;
 
-use mz_expr::Id;
+use mz_expr::{ColumnOrder, Id};
 use mz_repr::{Datum, GlobalId, SqlColumnType, SqlRelationType, SqlScalarType};
-use mz_sql::plan::{HirRelationExpr, HirScalarExpr, JoinKind};
+use mz_sql::plan::{AggregateExpr, AggregateFunc, HirRelationExpr, HirScalarExpr, JoinKind};
 
 use mz_sparql_parser::ast::{
-    Expression, GraphTerm, GroupGraphPattern, Iri, RdfLiteral, SparqlQuery, TriplePattern,
-    VarOrTerm, Variable, VerbPath,
+    Expression, GraphTerm, GroupGraphPattern, Iri, QueryForm, RdfLiteral, SelectClause,
+    SelectModifier, SelectVariable, SparqlQuery, TriplePattern, VarOrTerm, Variable, VerbPath,
 };
 
 /// Column indices in the quad table `(subject, predicate, object, graph)`.
@@ -96,11 +96,496 @@ impl SparqlPlanner {
 
     /// Plans a complete SPARQL query, returning the HIR expression and variable mapping.
     ///
-    /// Currently supports SELECT queries with basic graph patterns only.
-    /// Later prompts will add FILTER, OPTIONAL, UNION, MINUS, aggregates, etc.
+    /// The planning pipeline is:
+    /// 1. Plan WHERE clause (graph pattern) → base relation
+    /// 2. GROUP BY + aggregates → Reduce (if present)
+    /// 3. HAVING → Filter post-Reduce
+    /// 4. SELECT projection (variables, expressions, *) → Map + Project
+    /// 5. DISTINCT → Distinct
+    /// 6. ORDER BY + LIMIT/OFFSET → TopK
     pub fn plan(&self, query: &SparqlQuery) -> Result<PlannedRelation, PlanError> {
-        // Plan the WHERE clause (graph pattern).
-        self.plan_pattern(&query.where_clause)
+        // Step 1: Plan the WHERE clause.
+        let mut result = self.plan_pattern(&query.where_clause)?;
+
+        // Step 2-6 depend on the query form.
+        match &query.form {
+            QueryForm::Select {
+                modifier,
+                projection,
+            } => {
+                // Step 2: GROUP BY + aggregates.
+                if !query.group_by.is_empty() || self.has_aggregates_in_select(projection) {
+                    result =
+                        self.plan_group_by_and_aggregates(result, &query.group_by, projection)?;
+
+                    // Step 3: HAVING filter (applied after Reduce).
+                    if let Some(having) = &query.having {
+                        result = self.apply_filter(result, having)?;
+                    }
+
+                    // Step 4: SELECT projection (post-aggregation).
+                    result = self.plan_select_projection_post_agg(result, projection)?;
+                } else {
+                    // No aggregation: apply HAVING as a regular filter if present.
+                    if let Some(having) = &query.having {
+                        result = self.apply_filter(result, having)?;
+                    }
+
+                    // Step 4: SELECT projection (non-aggregate).
+                    result = self.plan_select_projection(result, projection)?;
+                }
+
+                // Step 5: DISTINCT / REDUCED.
+                match modifier {
+                    SelectModifier::Distinct => {
+                        result = PlannedRelation {
+                            expr: HirRelationExpr::Distinct {
+                                input: Box::new(result.expr),
+                            },
+                            var_map: result.var_map,
+                        };
+                    }
+                    SelectModifier::Reduced => {
+                        // REDUCED allows but doesn't require duplicate elimination.
+                        // We treat it as Distinct for correctness.
+                        result = PlannedRelation {
+                            expr: HirRelationExpr::Distinct {
+                                input: Box::new(result.expr),
+                            },
+                            var_map: result.var_map,
+                        };
+                    }
+                    SelectModifier::Default => {}
+                }
+
+                // Step 6: ORDER BY + LIMIT/OFFSET → TopK.
+                result =
+                    self.plan_order_limit(result, &query.order_by, query.limit, query.offset)?;
+            }
+            // Non-SELECT forms: just apply solution modifiers.
+            _ => {
+                if let Some(having) = &query.having {
+                    result = self.apply_filter(result, having)?;
+                }
+                result =
+                    self.plan_order_limit(result, &query.order_by, query.limit, query.offset)?;
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Checks if any SELECT expression contains an aggregate function.
+    fn has_aggregates_in_select(&self, projection: &SelectClause) -> bool {
+        match projection {
+            SelectClause::Wildcard => false,
+            SelectClause::Variables(vars) => vars.iter().any(|v| match v {
+                SelectVariable::Variable(_) => false,
+                SelectVariable::Expression(expr, _) => self.expr_has_aggregate(expr),
+            }),
+        }
+    }
+
+    /// Checks if an expression contains an aggregate function call.
+    fn expr_has_aggregate(&self, expr: &Expression) -> bool {
+        match expr {
+            Expression::Count { .. }
+            | Expression::Sum { .. }
+            | Expression::Avg { .. }
+            | Expression::Min { .. }
+            | Expression::Max { .. }
+            | Expression::GroupConcat { .. }
+            | Expression::Sample { .. } => true,
+            Expression::Add(l, r)
+            | Expression::Subtract(l, r)
+            | Expression::Multiply(l, r)
+            | Expression::Divide(l, r)
+            | Expression::And(l, r)
+            | Expression::Or(l, r)
+            | Expression::Equal(l, r)
+            | Expression::NotEqual(l, r)
+            | Expression::LessThan(l, r)
+            | Expression::GreaterThan(l, r)
+            | Expression::LessThanOrEqual(l, r)
+            | Expression::GreaterThanOrEqual(l, r) => {
+                self.expr_has_aggregate(l) || self.expr_has_aggregate(r)
+            }
+            Expression::UnaryNot(e)
+            | Expression::UnaryPlus(e)
+            | Expression::UnaryMinus(e)
+            | Expression::Str(e)
+            | Expression::Lang(e)
+            | Expression::Datatype(e)
+            | Expression::IsIri(e)
+            | Expression::IsBlank(e)
+            | Expression::IsLiteral(e)
+            | Expression::IsNumeric(e)
+            | Expression::Strlen(e)
+            | Expression::Ucase(e)
+            | Expression::Lcase(e) => self.expr_has_aggregate(e),
+            Expression::If(a, b, c) => {
+                self.expr_has_aggregate(a)
+                    || self.expr_has_aggregate(b)
+                    || self.expr_has_aggregate(c)
+            }
+            Expression::Coalesce(exprs) | Expression::Concat(exprs) => {
+                exprs.iter().any(|e| self.expr_has_aggregate(e))
+            }
+            _ => false,
+        }
+    }
+
+    /// Plans GROUP BY + aggregates, producing a Reduce node.
+    ///
+    /// The output relation has group key columns first, then aggregate result columns.
+    /// A post-reduce var_map maps the group key variables and aggregate aliases.
+    fn plan_group_by_and_aggregates(
+        &self,
+        input: PlannedRelation,
+        group_by: &[Expression],
+        projection: &SelectClause,
+    ) -> Result<PlannedRelation, PlanError> {
+        // Determine group key columns: resolve each GROUP BY expression to a column index.
+        let mut group_key = Vec::new();
+        let mut group_key_vars: Vec<Option<String>> = Vec::new();
+
+        for gb_expr in group_by {
+            match gb_expr {
+                Expression::Variable(v) => {
+                    let col = input.var_map.get(&v.name).ok_or_else(|| PlanError {
+                        message: format!("GROUP BY variable ?{} not in scope", v.name),
+                    })?;
+                    group_key.push(*col);
+                    group_key_vars.push(Some(v.name.clone()));
+                }
+                _ => {
+                    return Err(PlanError {
+                        message: "GROUP BY expressions (non-variable) not yet supported"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+
+        // Collect aggregate expressions from the SELECT clause.
+        let mut aggregates: Vec<AggregateExpr> = Vec::new();
+        let mut agg_aliases: Vec<String> = Vec::new();
+
+        if let SelectClause::Variables(vars) = projection {
+            for sel_var in vars {
+                if let SelectVariable::Expression(expr, alias) = sel_var {
+                    if self.expr_has_aggregate(expr) {
+                        let agg_expr = self.translate_aggregate(expr, &input.var_map)?;
+                        aggregates.push(agg_expr);
+                        agg_aliases.push(alias.name.clone());
+                    }
+                }
+            }
+        }
+
+        // If no explicit GROUP BY but there are aggregates, the entire input is one group.
+        // group_key stays empty → single-group aggregation.
+
+        let reduce = HirRelationExpr::Reduce {
+            input: Box::new(input.expr),
+            group_key: group_key.clone(),
+            aggregates: aggregates.clone(),
+            expected_group_size: None,
+        };
+
+        // Build var_map for the Reduce output:
+        // Columns 0..group_key.len() are the group keys.
+        // Columns group_key.len().. are aggregate results.
+        let mut new_var_map = BTreeMap::new();
+        for (i, var_name) in group_key_vars.iter().enumerate() {
+            if let Some(name) = var_name {
+                new_var_map.insert(name.clone(), i);
+            }
+        }
+        for (i, alias) in agg_aliases.iter().enumerate() {
+            new_var_map.insert(alias.clone(), group_key.len() + i);
+        }
+
+        Ok(PlannedRelation {
+            expr: reduce,
+            var_map: new_var_map,
+        })
+    }
+
+    /// Translates a SPARQL aggregate expression to an HIR AggregateExpr.
+    fn translate_aggregate(
+        &self,
+        expr: &Expression,
+        var_map: &BTreeMap<String, usize>,
+    ) -> Result<AggregateExpr, PlanError> {
+        match expr {
+            Expression::Count {
+                expr: inner,
+                distinct,
+            } => {
+                let hir_expr = match inner {
+                    Some(e) => self.translate_expression(e, var_map)?,
+                    None => {
+                        // COUNT(*) — use literal true (counts all rows).
+                        HirScalarExpr::literal_true()
+                    }
+                };
+                Ok(AggregateExpr {
+                    func: AggregateFunc::Count,
+                    expr: Box::new(hir_expr),
+                    distinct: *distinct,
+                })
+            }
+            Expression::Sum {
+                expr: inner,
+                distinct,
+            } => {
+                let hir_expr = self.to_float64(self.translate_expression(inner, var_map)?);
+                Ok(AggregateExpr {
+                    func: AggregateFunc::SumFloat64,
+                    expr: Box::new(hir_expr),
+                    distinct: *distinct,
+                })
+            }
+            Expression::Avg {
+                expr: inner,
+                distinct,
+            } => {
+                // AVG is not directly available in HIR AggregateFunc.
+                // Implement as SUM / COUNT.
+                // For now, produce an error and handle in a future prompt.
+                let _ = (inner, distinct);
+                Err(PlanError {
+                    message: "AVG aggregate not yet fully supported; use SUM/COUNT manually"
+                        .to_string(),
+                })
+            }
+            Expression::Min {
+                expr: inner,
+                distinct,
+            } => {
+                let hir_expr = self.translate_expression(inner, var_map)?;
+                Ok(AggregateExpr {
+                    func: AggregateFunc::MinString,
+                    expr: Box::new(hir_expr),
+                    distinct: *distinct,
+                })
+            }
+            Expression::Max {
+                expr: inner,
+                distinct,
+            } => {
+                let hir_expr = self.translate_expression(inner, var_map)?;
+                Ok(AggregateExpr {
+                    func: AggregateFunc::MaxString,
+                    expr: Box::new(hir_expr),
+                    distinct: *distinct,
+                })
+            }
+            Expression::GroupConcat {
+                expr: inner,
+                separator,
+                distinct,
+            } => {
+                let hir_expr = self.translate_expression(inner, var_map)?;
+                let _ = (separator, distinct);
+                Ok(AggregateExpr {
+                    func: AggregateFunc::StringAgg {
+                        order_by: Vec::new(),
+                    },
+                    expr: Box::new(hir_expr),
+                    distinct: *distinct,
+                })
+            }
+            Expression::Sample {
+                expr: inner,
+                distinct,
+            } => {
+                // SAMPLE returns an arbitrary value from the group.
+                // Approximate with MIN for now.
+                let hir_expr = self.translate_expression(inner, var_map)?;
+                Ok(AggregateExpr {
+                    func: AggregateFunc::MinString,
+                    expr: Box::new(hir_expr),
+                    distinct: *distinct,
+                })
+            }
+            _ => Err(PlanError {
+                message: format!("expected aggregate expression, got {:?}", expr),
+            }),
+        }
+    }
+
+    /// Plans SELECT projection after GROUP BY + aggregation.
+    ///
+    /// Post-aggregation, the var_map already has the right columns from the Reduce.
+    /// We just need to project to the selected variables in order.
+    fn plan_select_projection_post_agg(
+        &self,
+        input: PlannedRelation,
+        projection: &SelectClause,
+    ) -> Result<PlannedRelation, PlanError> {
+        match projection {
+            SelectClause::Wildcard => {
+                // SELECT * with GROUP BY: keep all columns from Reduce output.
+                Ok(input)
+            }
+            SelectClause::Variables(vars) => {
+                let mut output_cols = Vec::new();
+                let mut new_var_map = BTreeMap::new();
+
+                for sel_var in vars {
+                    match sel_var {
+                        SelectVariable::Variable(v) => {
+                            let col = input.var_map.get(&v.name).ok_or_else(|| PlanError {
+                                message: format!(
+                                    "variable ?{} not available after GROUP BY",
+                                    v.name
+                                ),
+                            })?;
+                            new_var_map.insert(v.name.clone(), output_cols.len());
+                            output_cols.push(*col);
+                        }
+                        SelectVariable::Expression(_, alias) => {
+                            // The aggregate alias was registered in var_map by plan_group_by_and_aggregates.
+                            let col = input.var_map.get(&alias.name).ok_or_else(|| PlanError {
+                                message: format!(
+                                    "aggregate alias ?{} not in Reduce output",
+                                    alias.name
+                                ),
+                            })?;
+                            new_var_map.insert(alias.name.clone(), output_cols.len());
+                            output_cols.push(*col);
+                        }
+                    }
+                }
+
+                Ok(PlannedRelation {
+                    expr: HirRelationExpr::Project {
+                        input: Box::new(input.expr),
+                        outputs: output_cols,
+                    },
+                    var_map: new_var_map,
+                })
+            }
+        }
+    }
+
+    /// Plans SELECT projection (non-aggregate case).
+    ///
+    /// - `SELECT *`: keep all in-scope variables (no change)
+    /// - `SELECT ?v1 ?v2`: project to named variables
+    /// - `SELECT (expr AS ?v)`: Map + Project
+    fn plan_select_projection(
+        &self,
+        input: PlannedRelation,
+        projection: &SelectClause,
+    ) -> Result<PlannedRelation, PlanError> {
+        match projection {
+            SelectClause::Wildcard => Ok(input),
+            SelectClause::Variables(vars) => {
+                // First pass: add any computed expressions via Map.
+                let mut current = input;
+                let mut computed_vars: Vec<(String, usize)> = Vec::new();
+
+                for sel_var in vars {
+                    if let SelectVariable::Expression(expr, alias) = sel_var {
+                        let hir_expr = self.translate_expression(expr, &current.var_map)?;
+                        let new_col = current.arity();
+                        current = PlannedRelation {
+                            expr: HirRelationExpr::Map {
+                                input: Box::new(current.expr),
+                                scalars: vec![hir_expr],
+                            },
+                            var_map: {
+                                let mut m = current.var_map.clone();
+                                m.insert(alias.name.clone(), new_col);
+                                m
+                            },
+                        };
+                        computed_vars.push((alias.name.clone(), new_col));
+                    }
+                }
+
+                // Second pass: project to the requested variables in order.
+                let mut output_cols = Vec::new();
+                let mut new_var_map = BTreeMap::new();
+
+                for sel_var in vars {
+                    let var_name = match sel_var {
+                        SelectVariable::Variable(v) => &v.name,
+                        SelectVariable::Expression(_, alias) => &alias.name,
+                    };
+                    let col = current.var_map.get(var_name).ok_or_else(|| PlanError {
+                        message: format!("variable ?{} not in scope for SELECT", var_name),
+                    })?;
+                    new_var_map.insert(var_name.clone(), output_cols.len());
+                    output_cols.push(*col);
+                }
+
+                Ok(PlannedRelation {
+                    expr: HirRelationExpr::Project {
+                        input: Box::new(current.expr),
+                        outputs: output_cols,
+                    },
+                    var_map: new_var_map,
+                })
+            }
+        }
+    }
+
+    /// Plans ORDER BY + LIMIT/OFFSET → TopK.
+    fn plan_order_limit(
+        &self,
+        input: PlannedRelation,
+        order_by: &[mz_sparql_parser::ast::OrderCondition],
+        limit: Option<u64>,
+        offset: Option<u64>,
+    ) -> Result<PlannedRelation, PlanError> {
+        if order_by.is_empty() && limit.is_none() && offset.is_none() {
+            return Ok(input);
+        }
+
+        // Translate ORDER BY expressions to ColumnOrder.
+        let mut order_key = Vec::new();
+        for cond in order_by {
+            match &cond.expr {
+                Expression::Variable(v) => {
+                    let col = input.var_map.get(&v.name).ok_or_else(|| PlanError {
+                        message: format!("ORDER BY variable ?{} not in scope", v.name),
+                    })?;
+                    order_key.push(ColumnOrder {
+                        column: *col,
+                        desc: !cond.ascending,
+                        nulls_last: !cond.ascending, // nulls last for DESC, first for ASC
+                    });
+                }
+                _ => {
+                    return Err(PlanError {
+                        message: "ORDER BY non-variable expressions not yet supported".to_string(),
+                    });
+                }
+            }
+        }
+
+        // Convert limit/offset to the types TopK expects.
+        let limit_expr =
+            limit.map(|l| HirScalarExpr::literal(Datum::Int64(l as i64), SqlScalarType::Int64));
+        let offset_val = offset.unwrap_or(0);
+        let offset_expr =
+            HirScalarExpr::literal(Datum::Int64(offset_val as i64), SqlScalarType::Int64);
+
+        Ok(PlannedRelation {
+            expr: HirRelationExpr::TopK {
+                input: Box::new(input.expr),
+                group_key: Vec::new(), // no partitioning
+                order_key,
+                limit: limit_expr,
+                offset: offset_expr,
+                expected_group_size: None,
+            },
+            var_map: input.var_map,
+        })
     }
 
     /// Plans a graph pattern into a relational expression.
@@ -2815,5 +3300,382 @@ mod tests {
             "expected aggregate error, got: {}",
             err.message
         );
+    }
+
+    // --- Prompt 10: SELECT projection, aggregates, solution modifiers ---
+
+    #[mz_ore::test]
+    fn test_select_star() {
+        // SELECT * keeps all in-scope variables.
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+        assert_eq!(result.arity(), 3);
+    }
+
+    #[mz_ore::test]
+    fn test_select_specific_vars() {
+        // SELECT ?s ?o projects to just those two variables.
+        let result = plan_query("SELECT ?s ?o WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["o", "s"]);
+        assert_eq!(result.arity(), 2);
+        // Outermost should be Project.
+        match &result.expr {
+            HirRelationExpr::Project { outputs, .. } => {
+                assert_eq!(outputs.len(), 2);
+            }
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_select_single_var() {
+        // SELECT ?s projects to just one variable.
+        let result = plan_query("SELECT ?s WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["s"]);
+        assert_eq!(result.arity(), 1);
+    }
+
+    #[mz_ore::test]
+    fn test_select_expression() {
+        // SELECT (UCASE(?o) AS ?upper) adds a computed column and projects to it.
+        let result = plan_query("SELECT ?s (UCASE(?o) AS ?upper) WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["s", "upper"]);
+        assert_eq!(result.arity(), 2);
+        // Should be Project(Map(...))
+        match &result.expr {
+            HirRelationExpr::Project { input, outputs } => {
+                assert_eq!(outputs.len(), 2);
+                match input.as_ref() {
+                    HirRelationExpr::Map { scalars, .. } => {
+                        assert_eq!(scalars.len(), 1); // one computed expression
+                    }
+                    other => panic!("expected Map, got {:?}", other),
+                }
+            }
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_select_distinct() {
+        let result = plan_query("SELECT DISTINCT ?s WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["s"]);
+        // Outermost should be Distinct(Project(...)).
+        match &result.expr {
+            HirRelationExpr::Distinct { input } => match input.as_ref() {
+                HirRelationExpr::Project { .. } => {}
+                other => panic!("expected Project inside Distinct, got {:?}", other),
+            },
+            other => panic!("expected Distinct, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_select_reduced() {
+        // REDUCED is treated as Distinct.
+        let result = plan_query("SELECT REDUCED ?s WHERE { ?s ?p ?o }");
+        match &result.expr {
+            HirRelationExpr::Distinct { .. } => {}
+            other => panic!("expected Distinct for REDUCED, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_limit() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o } LIMIT 10");
+        // Outermost should be TopK.
+        match &result.expr {
+            HirRelationExpr::TopK { limit, .. } => {
+                assert!(limit.is_some());
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_offset() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o } OFFSET 5");
+        match &result.expr {
+            HirRelationExpr::TopK { offset, .. } => {
+                // Offset should be literal 5.
+                match offset {
+                    HirScalarExpr::Literal(row, _, _) => {
+                        assert_eq!(row.unpack_first(), Datum::Int64(5));
+                    }
+                    other => panic!("expected literal offset, got {:?}", other),
+                }
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_limit_offset() {
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o } LIMIT 10 OFFSET 20");
+        match &result.expr {
+            HirRelationExpr::TopK { limit, offset, .. } => {
+                assert!(limit.is_some());
+                match offset {
+                    HirScalarExpr::Literal(row, _, _) => {
+                        assert_eq!(row.unpack_first(), Datum::Int64(20));
+                    }
+                    other => panic!("expected literal offset, got {:?}", other),
+                }
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_order_by_single() {
+        let result = plan_query("SELECT ?s ?o WHERE { ?s ?p ?o } ORDER BY ?s");
+        match &result.expr {
+            HirRelationExpr::TopK { order_key, .. } => {
+                assert_eq!(order_key.len(), 1);
+                assert!(!order_key[0].desc); // ASC by default
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_order_by_desc() {
+        let result = plan_query("SELECT ?s ?o WHERE { ?s ?p ?o } ORDER BY DESC(?o)");
+        match &result.expr {
+            HirRelationExpr::TopK { order_key, .. } => {
+                assert_eq!(order_key.len(), 1);
+                assert!(order_key[0].desc);
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_order_by_multiple() {
+        let result = plan_query("SELECT ?s ?o WHERE { ?s ?p ?o } ORDER BY ?s DESC(?o)");
+        match &result.expr {
+            HirRelationExpr::TopK { order_key, .. } => {
+                assert_eq!(order_key.len(), 2);
+                assert!(!order_key[0].desc); // ?s ASC
+                assert!(order_key[1].desc); // ?o DESC
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_order_by_limit() {
+        let result = plan_query("SELECT ?s ?o WHERE { ?s ?p ?o } ORDER BY ?s LIMIT 5");
+        match &result.expr {
+            HirRelationExpr::TopK {
+                order_key, limit, ..
+            } => {
+                assert_eq!(order_key.len(), 1);
+                assert!(limit.is_some());
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_distinct_with_order() {
+        // DISTINCT + ORDER BY: Distinct wraps Project, then TopK wraps Distinct.
+        let result = plan_query("SELECT DISTINCT ?s WHERE { ?s ?p ?o } ORDER BY ?s");
+        match &result.expr {
+            HirRelationExpr::TopK { input, .. } => match input.as_ref() {
+                HirRelationExpr::Distinct { .. } => {}
+                other => panic!("expected Distinct inside TopK, got {:?}", other),
+            },
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_count_star_aggregate() {
+        // SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }
+        let result = plan_query("SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["count"]);
+        // Should be Project(Reduce(...))
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Reduce {
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    assert!(group_key.is_empty()); // no GROUP BY → single group
+                    assert_eq!(aggregates.len(), 1);
+                    assert!(!aggregates[0].distinct);
+                }
+                other => panic!("expected Reduce, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_count_distinct_aggregate() {
+        let result = plan_query("SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["count"]);
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Reduce { aggregates, .. } => {
+                    assert_eq!(aggregates.len(), 1);
+                    assert!(aggregates[0].distinct);
+                }
+                other => panic!("expected Reduce, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_group_by_with_count() {
+        // SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s a ?type } GROUP BY ?type
+        let result =
+            plan_query("SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s a ?type } GROUP BY ?type");
+        assert_eq!(var_names(&result), vec!["count", "type"]);
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Reduce {
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    assert_eq!(group_key.len(), 1); // GROUP BY ?type
+                    assert_eq!(aggregates.len(), 1); // COUNT(?s)
+                }
+                other => panic!("expected Reduce, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_group_by_multiple_keys() {
+        let result = plan_query(
+            "SELECT ?type ?name (COUNT(?s) AS ?count) \
+             WHERE { ?s a ?type . ?s <http://example.org/name> ?name } \
+             GROUP BY ?type ?name",
+        );
+        assert_eq!(var_names(&result), vec!["count", "name", "type"]);
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Reduce {
+                    group_key,
+                    aggregates,
+                    ..
+                } => {
+                    assert_eq!(group_key.len(), 2);
+                    assert_eq!(aggregates.len(), 1);
+                }
+                other => panic!("expected Reduce, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_min_max_aggregate() {
+        let result =
+            plan_query("SELECT (MIN(?o) AS ?min_val) (MAX(?o) AS ?max_val) WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["max_val", "min_val"]);
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Reduce { aggregates, .. } => {
+                    assert_eq!(aggregates.len(), 2);
+                }
+                other => panic!("expected Reduce, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_full_aggregation_query() {
+        // SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s a ?type }
+        // GROUP BY ?type ORDER BY DESC(?count) LIMIT 10
+        let result = plan_query(
+            "SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s a ?type } \
+             GROUP BY ?type ORDER BY DESC(?count) LIMIT 10",
+        );
+        assert_eq!(var_names(&result), vec!["count", "type"]);
+        // Outermost should be TopK(Project(Reduce(...)))
+        match &result.expr {
+            HirRelationExpr::TopK {
+                input,
+                order_key,
+                limit,
+                ..
+            } => {
+                assert_eq!(order_key.len(), 1);
+                assert!(order_key[0].desc);
+                assert!(limit.is_some());
+                match input.as_ref() {
+                    HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                        HirRelationExpr::Reduce {
+                            group_key,
+                            aggregates,
+                            ..
+                        } => {
+                            assert_eq!(group_key.len(), 1);
+                            assert_eq!(aggregates.len(), 1);
+                        }
+                        other => panic!("expected Reduce, got {:?}", other),
+                    },
+                    other => panic!("expected Project, got {:?}", other),
+                }
+            }
+            other => panic!("expected TopK, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_select_projection_preserves_order() {
+        // Variables should appear in the order specified by SELECT, not alphabetically.
+        let result = plan_query("SELECT ?o ?s WHERE { ?s ?p ?o }");
+        assert_eq!(result.var_map["o"], 0);
+        assert_eq!(result.var_map["s"], 1);
+    }
+
+    #[mz_ore::test]
+    fn test_select_var_not_in_scope() {
+        let query = parse("SELECT ?x WHERE { ?s ?p ?o }").expect("parse ok");
+        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let err = planner.plan(&query).unwrap_err();
+        assert!(
+            err.message.contains("not in scope"),
+            "expected scope error, got: {}",
+            err.message
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_no_modifiers_no_topk() {
+        // Without ORDER BY, LIMIT, or OFFSET, there should be no TopK wrapper.
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o }");
+        match &result.expr {
+            HirRelationExpr::TopK { .. } => panic!("should not have TopK without modifiers"),
+            _ => {} // good
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_sum_aggregate() {
+        let result = plan_query(
+            "SELECT ?type (SUM(?val) AS ?total) \
+             WHERE { ?s a ?type . ?s <http://example.org/value> ?val } \
+             GROUP BY ?type",
+        );
+        assert_eq!(var_names(&result), vec!["total", "type"]);
+        match &result.expr {
+            HirRelationExpr::Project { input, .. } => match input.as_ref() {
+                HirRelationExpr::Reduce { aggregates, .. } => {
+                    assert_eq!(aggregates.len(), 1);
+                }
+                other => panic!("expected Reduce, got {:?}", other),
+            },
+            other => panic!("expected Project, got {:?}", other),
+        }
     }
 }

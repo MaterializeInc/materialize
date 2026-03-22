@@ -902,3 +902,99 @@ New tests (28):
 - EXISTS: simple EXISTS, NOT EXISTS
 - Combined: BIND+VALUES+FILTER together in one query
 - Error: aggregate in FILTER (produces expected error message)
+
+## 2026-03-22: Prompt 10 — Plan SELECT projection, aggregates, solution modifiers
+
+### What was done
+
+Extended the SPARQL planner in `src/sparql/src/plan.rs` to implement the full
+query planning pipeline: SELECT projection, GROUP BY + aggregates, HAVING,
+DISTINCT/REDUCED, ORDER BY, LIMIT/OFFSET.
+
+**`plan()` rewrite** — The top-level `plan()` method now implements the full
+SPARQL query evaluation pipeline:
+1. Plan WHERE clause → base relation
+2. GROUP BY + aggregates → `HirRelationExpr::Reduce`
+3. HAVING → `Filter` post-Reduce
+4. SELECT projection → `Map` + `Project`
+5. DISTINCT/REDUCED → `Distinct`
+6. ORDER BY + LIMIT/OFFSET → `TopK`
+
+**SELECT projection** (`plan_select_projection`):
+- `SELECT *` → identity (keep all in-scope variables)
+- `SELECT ?v1 ?v2` → `Project` to the named columns in the specified order
+- `SELECT (expr AS ?v)` → `Map` to add computed column, then `Project`
+- Variables in SELECT must be in scope (error if not)
+
+**GROUP BY + aggregates** (`plan_group_by_and_aggregates`):
+- GROUP BY variables become the `group_key` in `Reduce`
+- Aggregate expressions in SELECT are extracted and become `aggregates` in `Reduce`
+- No GROUP BY + aggregates → single-group aggregation (empty group_key)
+- Post-Reduce var_map maps group key variables (first) and aggregate aliases (after)
+
+**Aggregate translation** (`translate_aggregate`):
+- `COUNT(*)` → `AggregateFunc::Count` with literal true input
+- `COUNT(expr)` / `COUNT(DISTINCT expr)` → `AggregateFunc::Count`
+- `SUM(expr)` → cast to float64, then `AggregateFunc::SumFloat64`
+- `MIN(expr)` → `AggregateFunc::MinString` (string comparison)
+- `MAX(expr)` → `AggregateFunc::MaxString`
+- `GROUP_CONCAT(expr)` → `AggregateFunc::StringAgg` (separator handling TBD)
+- `SAMPLE(expr)` → approximated with `MinString` (arbitrary value)
+- `AVG(expr)` → deferred (requires SUM/COUNT decomposition)
+
+**DISTINCT/REDUCED** — Both map to `HirRelationExpr::Distinct`. REDUCED
+technically allows but doesn't require dedup; we always dedup for correctness.
+
+**ORDER BY + LIMIT/OFFSET** (`plan_order_limit`):
+- ORDER BY variables → `ColumnOrder` with `desc` and `nulls_last` flags
+- LIMIT → `TopK.limit` (Some(literal_int64))
+- OFFSET → `TopK.offset` (literal_int64, default 0)
+- No modifiers → no TopK wrapper (short-circuit)
+- ORDER BY expressions (non-variable) deferred with clear error
+
+**mz-sql change**: Added `AggregateFunc` to the public re-exports in
+`src/sql/src/plan.rs` (needed by downstream crates to construct `AggregateExpr`
+values for `HirRelationExpr::Reduce`).
+
+### Key decisions
+
+1. **Pipeline ordering matches SPARQL spec**: The SPARQL 1.1 spec defines a
+   strict evaluation order: pattern → group → aggregation → having → projection
+   → distinct → order → limit/offset. Our pipeline follows this exactly.
+
+2. **Aggregates detected in SELECT**: Rather than requiring explicit declaration,
+   the planner scans SELECT expressions for aggregate function calls using
+   `has_aggregates_in_select()` / `expr_has_aggregate()`. If any aggregate is
+   found, the query goes through the GROUP BY + aggregation path.
+
+3. **String-typed aggregates**: Since all quad table columns are TEXT, we use
+   `MinString`/`MaxString` for MIN/MAX and `SumFloat64` (with cast) for SUM.
+   This is correct for the current encoding but may need refinement when typed
+   literal extraction is added (prompt 17).
+
+4. **AVG deferred**: HIR doesn't have a direct AVG aggregate. The correct
+   implementation is SUM/COUNT decomposition, but this requires careful handling
+   of NULL semantics and type casting. Deferred to avoid complexity.
+
+5. **TopK for all solution modifiers**: Even ORDER BY without LIMIT uses TopK
+   (with limit=None). This is how Materialize handles ordering generally — the
+   optimizer can later optimize away the TopK if not needed.
+
+6. **REDUCED = DISTINCT**: The SPARQL spec says REDUCED "permits" but doesn't
+   require duplicate elimination. We always eliminate for correctness and
+   simplicity.
+
+### Test results
+
+84 tests pass (60 old + 24 new), 0 failures, 1 warning (unused QUAD_ARITY constant).
+
+New tests (24):
+- SELECT projection: star, specific variables, single variable, expression (UCASE AS),
+  variable ordering preserved, variable not in scope (error)
+- DISTINCT: simple, REDUCED (treated as DISTINCT)
+- LIMIT: simple, with offset, combined limit+offset
+- ORDER BY: single (ASC default), DESC, multiple, with LIMIT
+- DISTINCT + ORDER BY: verifies TopK(Distinct(...)) nesting
+- Aggregates: COUNT(*), COUNT(DISTINCT), GROUP BY + COUNT, GROUP BY multiple keys,
+  MIN/MAX, SUM, full aggregation query (GROUP BY + COUNT + ORDER BY DESC + LIMIT)
+- Edge cases: no modifiers → no TopK wrapper

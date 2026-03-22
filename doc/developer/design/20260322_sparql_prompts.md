@@ -117,14 +117,14 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~typed values from TEXT encoding, cast to appropriate Materialize types for~~
 > ~~arithmetic/comparison).~~
 
-### Prompt 10: Plan SELECT projection, aggregates, solution modifiers
+### ~~Prompt 10: Plan SELECT projection, aggregates, solution modifiers~~
 
-> Implement: SELECT variable projection (→ Project), SELECT * (all in-scope
-> variables), SELECT expressions (→ Map + Project), DISTINCT (→ Distinct),
-> GROUP BY + aggregates (→ Reduce), HAVING (→ Filter post-Reduce), ORDER BY
-> (ordering metadata), LIMIT/OFFSET (→ TopK). Test with aggregation queries
-> like `SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s rdf:type ?type }
-> GROUP BY ?type ORDER BY DESC(?count) LIMIT 10`.
+> ~~Implement: SELECT variable projection (→ Project), SELECT * (all in-scope~~
+> ~~variables), SELECT expressions (→ Map + Project), DISTINCT (→ Distinct),~~
+> ~~GROUP BY + aggregates (→ Reduce), HAVING (→ Filter post-Reduce), ORDER BY~~
+> ~~(ordering metadata), LIMIT/OFFSET (→ TopK). Test with aggregation queries~~
+> ~~like `SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s rdf:type ?type }~~
+> ~~GROUP BY ?type ORDER BY DESC(?count) LIMIT 10`.~~
 
 ### Prompt 11: Plan CONSTRUCT, ASK, DESCRIBE
 
