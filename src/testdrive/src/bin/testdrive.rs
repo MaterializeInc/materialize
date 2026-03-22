@@ -65,6 +65,10 @@ struct Args {
     /// to clean up AWS state after each script.
     #[clap(long, action = ArgAction::SetTrue)]
     no_reset: bool,
+    /// Run in server mode: create connections once and accept multiple scripts
+    /// on stdin, each delimited by a line containing `\0`. Implies --no-reset.
+    #[clap(long, action = ArgAction::SetTrue)]
+    server: bool,
     /// Force the use of the specified temporary directory.
     ///
     /// If unspecified, testdrive creates a temporary directory with a random
@@ -469,6 +473,18 @@ async fn main() {
     if args.junit_report.is_some() && args.rewrite_results {
         eprintln!("--rewrite-results is not compatible with --junit-report");
         process::exit(1);
+    }
+
+    if args.server {
+        // Server mode: create state once and accept scripts on stdin.
+        // Implies --no-reset since state is shared across scripts.
+        let mut config = config;
+        config.reset = false;
+        if let Err(error) = mz_testdrive::run_server(&config).await {
+            let _ = error.print_error();
+            process::exit(1);
+        }
+        return;
     }
 
     // Build the list of files to test.

@@ -448,6 +448,41 @@ impl State {
         std::mem::replace(&mut self.consistency_checks_adhoc_skip, false)
     }
 
+    /// Reset per-script mutable state so that settings from one script don't
+    /// leak into the next when running in server mode.
+    pub async fn reset_per_script(&mut self) -> Result<(), anyhow::Error> {
+        self.cmd_vars.clear();
+        self.timeout = self.default_timeout;
+        self.max_tries = self.config.default_max_tries;
+        self.consistency_checks_adhoc_skip = false;
+        self.regex = None;
+        self.regex_replacement = set::DEFAULT_REGEX_REPLACEMENT.into();
+        self.error_line_count = 0;
+        self.error_string = String::new();
+        self.rewrites.clear();
+        self.rewrite_pos_start = 0;
+        self.rewrite_pos_end = 0;
+
+        // Reset the MZ session to pick up role defaults (e.g. from
+        // ALTER ROLE ... SET) without the cost of a full reconnect.
+        self.materialize
+            .pgclient
+            .batch_execute("DISCARD ALL")
+            .await
+            .context("DISCARD ALL")?;
+
+        // Re-apply materialize_params on the reset session.
+        for (key, val) in &self.config.materialize_params {
+            self.materialize
+                .pgclient
+                .batch_execute(&format!("SET {key} = {val}"))
+                .await
+                .context(format!("setting {key}={val}"))?;
+        }
+
+        Ok(())
+    }
+
     pub async fn reset_materialize(&self) -> Result<(), anyhow::Error> {
         let (inner_client, _) = postgres_client(
             &format!(

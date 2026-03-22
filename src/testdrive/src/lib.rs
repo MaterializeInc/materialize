@@ -20,6 +20,7 @@ use action::Run;
 use anyhow::{Context, anyhow};
 use mz_ore::error::ErrorExt;
 use tempfile::NamedTempFile;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing::debug;
 
 use crate::action::ControlFlow;
@@ -191,6 +192,139 @@ pub(crate) async fn run_line_reader(
         Ok(())
     } else {
         // Only surface the first error encountered for sake of simplicity
+        Err(errors.remove(0))
+    }
+}
+
+/// Runs testdrive in server mode: creates state once and accepts multiple
+/// scripts on stdin, delimited by a line containing `\0`.
+///
+/// After each script, writes `\0OK\n` or `\0ERR:<message>\n` to stdout.
+/// Normal testdrive output (e.g. `>> CREATE TABLE ...`) goes to stdout
+/// as usual; protocol lines are distinguished by the `\0` prefix.
+pub async fn run_server(config: &Config) -> Result<(), Error> {
+    let (mut state, state_cleanup) = action::create_state(config).await?;
+
+    let stdin = tokio::io::stdin();
+    let mut lines = BufReader::new(stdin).lines();
+    let mut script = String::new();
+
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                if line == "\0" {
+                    // Reset per-script state and issue DISCARD ALL to
+                    // refresh session defaults without reconnecting.
+                    if let Err(e) = state.reset_per_script().await {
+                        let msg = format!("{:#}", e).replace('\n', "\\n");
+                        println!("\0ERR:{msg}");
+                        let _ = io::stdout().flush();
+                        script.clear();
+                        continue;
+                    }
+                    if let Err(e) = state.initialize_cmd_vars().await {
+                        let msg = format!("{:#}", e).replace('\n', "\\n");
+                        println!("\0ERR:{msg}");
+                        let _ = io::stdout().flush();
+                        script.clear();
+                        continue;
+                    }
+
+                    let result = run_script_with_state(&mut state, config, &script).await;
+                    // Flush any buffered println! output from the script before
+                    // writing the protocol result marker.
+                    let _ = io::stdout().flush();
+                    match result {
+                        Ok(()) => println!("\0OK"),
+                        Err(e) => {
+                            let msg = format!("{:#}", e.source).replace('\n', "\\n");
+                            println!("\0ERR:{msg}");
+                        }
+                    }
+                    let _ = io::stdout().flush();
+                    script.clear();
+                } else {
+                    script.push_str(&line);
+                    script.push('\n');
+                }
+            }
+            Ok(None) => break, // EOF
+            Err(e) => {
+                return Err(anyhow!("failed to read stdin: {e}").into());
+            }
+        }
+    }
+
+    // Run consistency checks once at shutdown.
+    if config.consistency_checks == action::consistency::Level::File {
+        if let Err(e) = action::consistency::run_consistency_checks(&state).await {
+            eprintln!("consistency check failed: {:#}", e);
+        }
+    }
+
+    drop(state);
+    if let Err(e) = state_cleanup.await {
+        return Err(anyhow!("cleanup failed: {}", e.to_string_with_causes()).into());
+    }
+
+    Ok(())
+}
+
+/// Execute a single testdrive script using an existing shared State.
+/// Used by server mode to avoid recreating connections for each script.
+async fn run_script_with_state(
+    state: &mut action::State,
+    _config: &Config,
+    contents: &str,
+) -> Result<(), PosError> {
+    let mut line_reader = LineReader::new(contents);
+    let cmds = parser::parse(&mut line_reader)?;
+
+    if cmds.is_empty() {
+        // Empty scripts are fine in server mode (e.g. trailing whitespace).
+        return Ok(());
+    }
+
+    debug!("Received {} commands to run", cmds.len());
+
+    let mut errors = Vec::new();
+    let mut skipping = false;
+
+    for cmd in cmds {
+        if skipping {
+            if let Command::Builtin(builtin, _) = cmd.command {
+                if builtin.name == "skip-end" {
+                    println!("skip-end reached");
+                    skipping = false;
+                } else if builtin.name == "skip-if" {
+                    errors.push(PosError {
+                        source: anyhow!("nested skip-if not allowed"),
+                        pos: Some(cmd.pos),
+                    });
+                    break;
+                }
+            }
+            continue;
+        }
+
+        match cmd.run(state).await {
+            Ok(ControlFlow::Continue) => (),
+            Ok(ControlFlow::SkipBegin) => {
+                skipping = true;
+            }
+            Ok(ControlFlow::SkipEnd) => (),
+            Err(e) => {
+                errors.push(e);
+                break;
+            }
+        }
+    }
+
+    state.clear_skip_consistency_checks();
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
         Err(errors.remove(0))
     }
 }

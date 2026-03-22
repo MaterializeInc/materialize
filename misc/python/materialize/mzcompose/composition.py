@@ -133,6 +133,7 @@ class Composition:
         self.current_test_case_name_override: str | None = None
         self.host_network = host_network
         self.resolve_image_specs = resolve_image_specs
+        self._testdrive_servers: dict[str, subprocess.Popen] = {}
 
         if name in self.repo.compositions:
             self.path = self.repo.compositions[name]
@@ -616,6 +617,8 @@ class Composition:
         deps.acquire()
 
         self.files = {}
+        # Stop testdrive servers whose config may have changed.
+        self._stop_testdrive_servers()
 
         # Ensure image freshness
         self.pull_if_variable([service.name for service in services])
@@ -624,6 +627,8 @@ class Composition:
             # Run the next composition.
             yield
         finally:
+            # Stop testdrive servers before restoring the old composition.
+            self._stop_testdrive_servers()
             # If sanity_restart existed in the overriden service, but
             # override() disabled it by removing the label,
             # keep the sanity check disabled
@@ -1261,6 +1266,7 @@ class Composition:
             sanity_restart_mz: Try restarting materialize first if it is part
                 of the composition, as a sanity check.
         """
+        self._stop_testdrive_servers()
         if os.getenv("CI_FINAL_PREFLIGHT_CHECK_VERSION") is not None:
             self.final_preflight_check()
         elif sanity_restart_mz and self.is_sanity_restart_mz:
@@ -1295,6 +1301,8 @@ class Composition:
             signal: The signal to deliver.
             wait: Wait for the container die
         """
+        # Stop testdrive servers whose connections will break.
+        self._stop_testdrive_servers()
         self.invoke("kill", f"-s{signal}", *services)
 
         if wait:
@@ -1479,14 +1487,28 @@ class Composition:
     ) -> subprocess.CompletedProcess:
         """Run a string as a testdrive script.
 
+        Uses server mode by default: a single testdrive process stays alive
+        across calls, reusing connections to Materialize/Kafka/etc. Falls back
+        to spawning a new process when custom mz_service or args are specified.
+
         Args:
             args: Additional arguments to pass to testdrive
             service: Optional name of the testdrive service to use.
             input: The string to execute.
-            persistent: Whether a persistent testdrive container will be used.
             caller: The python source line that invoked testdrive()
             mz_service: The Materialize service name to target
         """
+
+        # Server mode: reuse a persistent testdrive process when possible.
+        # Fall back to one-shot mode for calls with custom mz_service or args.
+        if mz_service is None and not args:
+            return self._testdrive_server(
+                input,
+                service=service,
+                quiet=quiet,
+                silent=silent,
+                print_prefix=print_prefix,
+            )
 
         caller = caller or getframeinfo(stack()[1][0])
         args = args + [
@@ -1517,6 +1539,122 @@ class Composition:
             silent=silent,
             print_prefix=print_prefix,
         )
+
+    def _testdrive_server(
+        self,
+        input: str,
+        service: str = "testdrive",
+        quiet: bool = False,
+        silent: bool = False,
+        print_prefix: str | None = None,
+    ) -> subprocess.CompletedProcess:
+        """Execute a testdrive script via a persistent server process."""
+        proc = self._testdrive_servers.get(service)
+        if proc is None or proc.poll() is not None:
+            proc = self._start_testdrive_server(service)
+
+        # Write script followed by the \0 delimiter line.
+        assert proc.stdin is not None
+        proc.stdin.write(input)
+        if not input.endswith("\n"):
+            proc.stdin.write("\n")
+        proc.stdin.write("\0\n")
+        proc.stdin.flush()
+
+        # Read stdout lines until we see the protocol result marker (\0-prefixed).
+        assert proc.stdout is not None
+        output_lines: list[str] = []
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                # Server died. Clear it so the next call restarts.
+                self._testdrive_servers.pop(service, None)
+                raise RuntimeError(
+                    "testdrive server process died unexpectedly.\n"
+                    + "".join(output_lines)
+                )
+            if line.startswith("\0"):
+                if line.startswith("\0OK"):
+                    break
+                elif line.startswith("\0ERR:"):
+                    error_msg = line[5:].strip().replace("\\n", "\n")
+                    raise subprocess.CalledProcessError(
+                        1,
+                        "testdrive",
+                        output="".join(output_lines),
+                        stderr=error_msg,
+                    )
+            else:
+                output_lines.append(line)
+                if not quiet and not silent:
+                    if print_prefix:
+                        print(f"{print_prefix}{line}", end="", flush=True)
+                    else:
+                        print(line, end="", flush=True)
+
+        return subprocess.CompletedProcess("testdrive", 0, "".join(output_lines), "")
+
+    def _start_testdrive_server(self, service: str) -> subprocess.Popen:
+        """Start a persistent testdrive server process via docker compose exec."""
+        if not self.is_running(service):
+            self.up(Service(service, idle=True))
+
+        entrypoint = self.compose["services"][service].get("entrypoint", [])
+
+        # Build the docker compose exec command, same as invoke() does.
+        thread_id = threading.get_ident()
+        file = self.files.get(thread_id)
+        if not file:
+            file = TemporaryFile(mode="w")
+            os.set_inheritable(file.fileno(), True)
+            yaml.dump(self.compose, file)
+            os.fsync(file.fileno())
+            self.files[thread_id] = file
+
+        file.seek(0)
+        cmd = [
+            "docker",
+            "compose",
+            f"-f/dev/fd/{file.fileno()}",
+            "--project-directory",
+            self.path,
+            "--project-name",
+            self.project_name,
+            "exec",
+            "-T",
+            service,
+            *entrypoint,
+            "--server",
+        ]
+
+        if not self.silent:
+            print(
+                f"$ docker compose exec -T {service} ... --server",
+                file=sys.stderr,
+            )
+
+        proc = subprocess.Popen(
+            cmd,
+            close_fds=False,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        self._testdrive_servers[service] = proc
+        return proc
+
+    def _stop_testdrive_servers(self) -> None:
+        """Gracefully shut down all testdrive server processes."""
+        for service, proc in self._testdrive_servers.items():
+            if proc.poll() is None:
+                try:
+                    assert proc.stdin is not None
+                    proc.stdin.close()  # EOF triggers graceful shutdown
+                    proc.wait(timeout=30)
+                except Exception:
+                    proc.kill()
+        self._testdrive_servers.clear()
 
     def enable_minio_versioning(self) -> None:
         self.up("minio", Service("mc", idle=True))
