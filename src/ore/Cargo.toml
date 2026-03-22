@@ -39,16 +39,16 @@ mz-ore-proc = { path = "../ore-proc", default-features = false }
 num = "0.4.3"
 num-traits = { version = "0.2", optional = true }
 # The vendored feature is transitively depended upon by tokio-openssl.
-openssl = { version = "0.10.75", features = ["vendored"], optional = true }
+openssl = { version = "0.10.76", features = ["vendored"], optional = true }
 parquet = { version = "57", optional = true, default-features = false }
 paste = "1.0.11"
-pin-project = "1.1.10"
+pin-project = "1.1.11"
 prometheus = { version = "0.14.0", default-features = false, optional = true }
 proptest = { version = "1.10.0", default-features = false, features = ["std"], optional = true }
 proptest-derive = { version = "0.8.0", optional = true }
 rand = { version = "0.9.2", optional = true }
 smallvec = { version = "1.15.1", optional = true }
-stacker = { version = "0.1.22", optional = true }
+stacker = { version = "0.1.23", optional = true }
 sentry = { version = "0.46.1", optional = true, default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
 sentry-panic = { version = "0.46.1", optional = true }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -68,7 +68,7 @@ tracing-capture = { version = "0.1.0", optional = true }
 # log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
-tracing-subscriber = { version = "0.3.22", default-features = false, features = [
+tracing-subscriber = { version = "0.3.23", default-features = false, features = [
     "env-filter",
     "fmt",
     "json",
@@ -84,15 +84,15 @@ tracing = { version = "0.1.44", optional = true }
 tracing-opentelemetry = { version = "0.32.1", optional = true }
 tonic = { version = "0.14.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.1", optional = true }
-native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
+native-tls = { version = "0.2.18", features = ["alpn"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
 hyper-util = { version = "0.1.20", optional = true }
 opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
-opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"], optional = true }
+opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"], optional = true }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"], optional = true }
 console-subscriber = { version = "0.5.0", optional = true }
 sentry-tracing = { version = "0.46.1", optional = true }
-turmoil = { version = "0.7.0", optional = true }
+turmoil = { version = "0.7.1", optional = true }
 yansi = { version = "1.0.1", optional = true }
 
 [dev-dependencies]
@@ -104,7 +104,7 @@ scopeguard = "1.2.0"
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.5"
-tracing-subscriber = "0.3.22"
+tracing-subscriber = "0.3.23"
 
 [features]
 default = ["tokio-console", "workspace-hack", "mz-ore-proc/workspace-hack"]
