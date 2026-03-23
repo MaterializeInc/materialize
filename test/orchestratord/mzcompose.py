@@ -1927,12 +1927,10 @@ class CertificateSource(Modification):
 
 
 def operator_supports_v1alpha2(definition: dict[str, Any]):
-    operator_version = Version.parse(
-        definition["operator"]["operator"]["image"]["tag"].removeprefix("v")
+    operator_version = MzVersion.parse(
+        definition["operator"]["operator"]["image"]["tag"]
     )
-    if operator_version >= Version.parse("26.17.0-dev.0"):
-        return True
-    return False
+    return operator_version >= MzVersion.parse("v26.20.0-dev.0")
 
 
 class Properties(Enum):
