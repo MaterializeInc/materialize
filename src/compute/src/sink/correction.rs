@@ -174,6 +174,7 @@ impl<D: Data> CorrectionV1<D> {
     pub fn insert(&mut self, updates: &mut Vec<(D, Timestamp, Diff)>) {
         let Some(since_ts) = self.since.as_option() else {
             // If the since frontier is empty, discard all updates.
+            updates.clear();
             return;
         };
 

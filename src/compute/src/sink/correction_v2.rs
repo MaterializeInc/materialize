@@ -388,6 +388,11 @@ impl<D: Data> CorrectionV2<D> {
             new_length += chain.update_count;
         }
 
+        self.update_metrics_inner(new_size, new_length);
+    }
+
+    /// Update persist sink metrics to the given new size and length.
+    fn update_metrics_inner(&mut self, new_size: SizeMetrics, new_length: usize) {
         let old_size = self.prev_size;
         let old_length = self.prev_update_count;
         let len_delta = UpdateDelta::new(new_length, old_length);
@@ -412,6 +417,7 @@ impl<D: Data> CorrectionV2<D> {
 impl<D: Data> Drop for CorrectionV2<D> {
     fn drop(&mut self) {
         self.chains.iter().for_each(|c| self.log_chain_dropped(c));
+        self.update_metrics_inner(Default::default(), 0);
     }
 }
 
