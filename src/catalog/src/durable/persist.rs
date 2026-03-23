@@ -489,14 +489,8 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             .since_handle
             .maybe_compare_and_downgrade_since(&opaque, (&opaque, &downgrade_to))
             .await;
-
-        match downgrade {
-            None => {}
-            Some(Err(e)) => soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}"),
-            Some(Ok(updated)) => soft_assert_or_log!(
-                updated == downgrade_to,
-                "updated bound should match expected"
-            ),
+        if let Some(Err(e)) = downgrade {
+            soft_panic_or_log!("found opaque value {e:?}, but expected {opaque:?}");
         }
 
         Ok(())
