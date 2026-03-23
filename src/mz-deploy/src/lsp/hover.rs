@@ -13,6 +13,13 @@
 //! and types) using the `types.cache` and `types.lock` data. The result is
 //! formatted as a Markdown table for display in the editor.
 //!
+//! ## Function Hover
+//!
+//! If the identifier is not a project object, [`resolve_hover`] falls back to
+//! the static function registry ([`functions::lookup`]). Single unqualified
+//! names that match a built-in function show the function kind, signature, and
+//! description.
+//!
 //! ### Resolution
 //!
 //! 1. Identifier parts are resolved to an [`ObjectId`] using the same
@@ -42,7 +49,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use tower_lsp::lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Url};
 
-use super::goto_definition;
+use super::{functions, goto_definition};
 
 /// Resolve hover information for a variable reference at the given byte offset.
 ///
@@ -93,8 +100,21 @@ pub fn resolve_hover(
     project: &planned::Project,
     types_cache: &Types,
 ) -> Option<Hover> {
-    let id = goto_definition::resolve_object_id(parts, file_uri, root)?;
-    let obj = project.find_object(&id)?;
+    let id = goto_definition::resolve_object_id(parts, file_uri, root);
+
+    // Try resolving as a project object first
+    let obj = id.as_ref().and_then(|id| project.find_object(id));
+
+    // If not a project object, try function lookup (single unqualified name)
+    if obj.is_none() {
+        if let Some(func_hover) = resolve_function_hover(parts) {
+            return Some(func_hover);
+        }
+        return None;
+    }
+
+    let id = id.unwrap();
+    let obj = obj.unwrap();
     let kind = obj.typed_object.stmt.kind();
     let fqn = id.to_string();
 
@@ -201,6 +221,39 @@ fn extract_description(comments: &[CommentStatement<Raw>]) -> Option<String> {
         }
     }
     None
+}
+
+/// Resolve hover for a SQL function name.
+///
+/// Matches single unqualified names against the static function registry.
+/// Returns a Markdown tooltip showing the function kind, signature, and
+/// description.
+fn resolve_function_hover(parts: &[String]) -> Option<Hover> {
+    if parts.len() != 1 {
+        return None;
+    }
+    let name = &parts[0];
+    let func = functions::lookup(name)?;
+    let kind = match func.kind {
+        functions::FunctionKind::Scalar => "scalar function",
+        functions::FunctionKind::Aggregate => "aggregate function",
+        functions::FunctionKind::Window => "window function",
+        functions::FunctionKind::Table => "table function",
+    };
+
+    let markdown = format!(
+        "**{kind}** `{sig}`\n\n{desc}",
+        sig = func.signature,
+        desc = func.description,
+    );
+
+    Some(Hover {
+        contents: HoverContents::Markup(MarkupContent {
+            kind: MarkupKind::Markdown,
+            value: markdown,
+        }),
+        range: None,
+    })
 }
 
 /// Build a map of column name → comment text from `COMMENT ON COLUMN` statements.

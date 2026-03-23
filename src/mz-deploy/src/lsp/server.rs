@@ -21,21 +21,50 @@
 //! - **`root`** — Set during `initialize` from `InitializeParams::root_uri`.
 //! - **`settings`** / **`variables`** — Cached from `project.toml` via
 //!   [`load_settings()`]. Reloaded at startup and on every save.
+//!
+//! ## Typecheck on Save
+//!
+//! After every `rebuild_project()`, the server runs [`run_typecheck()`] which
+//! performs incremental typechecking via the local Docker container. If AST
+//! hashes are unchanged since the last typecheck, Docker is skipped entirely.
+//! If Docker is unavailable, typechecking is silently skipped — the catalog
+//! retains its last known column data.
+//!
+//! ## Custom Notifications
+//!
+//! - **`mz-deploy/projectRebuilt`** — Sent to the client after
+//!   `rebuild_project()` and again after `run_typecheck()` if column data
+//!   changed. The VS Code extension uses this to refresh the catalog sidebar
+//!   and DAG panel with fresh data.
 
-use crate::config::ProjectSettings;
-use crate::lsp::{catalog, code_lens, completion, dag, diagnostics, goto_definition, hover};
+use crate::config::{ProjectSettings, DEFAULT_DOCKER_IMAGE};
+use crate::lsp::{
+    catalog, code_lens, completion, dag, diagnostics, document_symbol, goto_definition, hover,
+    references, workspace_symbol,
+};
 use crate::project;
 use crate::project::error::{ProjectError, ValidationErrors};
 use crate::project::planned;
+use crate::types::docker_runtime::DockerRuntime;
 use crate::types::{self, Types};
 use ropey::Rope;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer};
+
+/// Custom notification sent to the client after a project rebuild completes.
+///
+/// The extension listens for this to refresh catalog and DAG data, replacing
+/// the old timer-based approach that was prone to race conditions.
+struct ProjectRebuilt;
+
+impl tower_lsp::lsp_types::notification::Notification for ProjectRebuilt {
+    type Params = ();
+    const METHOD: &'static str = "mz-deploy/projectRebuilt";
+}
 
 /// Actions to take after a project rebuild, expressed as pure data.
 ///
@@ -109,8 +138,9 @@ pub struct Backend {
     client: Client,
     /// Per-file text ropes, keyed by document URI.
     documents: Mutex<BTreeMap<Url, Rope>>,
-    /// The latest successfully built project model.
-    project: RwLock<Option<planned::Project>>,
+    /// The latest successfully built project model (wrapped in Arc for
+    /// cheap sharing across async typecheck operations).
+    project: RwLock<Option<Arc<planned::Project>>>,
     /// Types cache for hover column schemas (types.cache.bin merged with types.lock).
     types_cache: RwLock<Option<Types>>,
     /// File URIs that currently have project-level validation diagnostics.
@@ -297,7 +327,7 @@ impl Backend {
 
         // Store the new project on success.
         if let Ok(p) = build_result {
-            *self.project.write().unwrap() = Some(p);
+            *self.project.write().unwrap() = Some(Arc::new(p));
         }
 
         // Apply diagnostic actions (I/O).
@@ -315,6 +345,74 @@ impl Backend {
         if let Some(merged) = load_merged_types(&root) {
             *self.types_cache.write().unwrap() = Some(merged);
         }
+
+        // Notify the client that the project has been rebuilt so it can
+        // refresh catalog/DAG data.
+        self.client
+            .send_notification::<ProjectRebuilt>(())
+            .await;
+    }
+
+    /// Run incremental typechecking via Docker after a project rebuild.
+    ///
+    /// Checks if any SQL AST hashes have changed since the last typecheck. If
+    /// so, connects to the local Docker container and type-checks only the dirty
+    /// views. On success, writes `types.cache.bin` and `typecheck.snapshot.bin`,
+    /// then reloads the types cache and sends a `projectRebuilt` notification so
+    /// the extension can refresh column data in the catalog.
+    ///
+    /// Silently returns on any failure (no Docker, typecheck errors) — the
+    /// catalog simply won't have updated column data until the next successful
+    /// typecheck.
+    async fn run_typecheck(&self) {
+        let root = self.root.read().unwrap().clone();
+
+        let project = self.project.read().unwrap().as_ref().map(Arc::clone);
+        let project = match project {
+            Some(p) => p,
+            None => return,
+        };
+
+        let plan = match types::plan_typecheck(&root, &project) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        if plan.is_up_to_date() {
+            return;
+        }
+
+        let docker_image = self
+            .settings
+            .read()
+            .unwrap()
+            .as_ref()
+            .map(|s| s.docker_image())
+            .unwrap_or_else(|| DEFAULT_DOCKER_IMAGE.to_string());
+
+        let types_lock = types::load_types_lock(&root).unwrap_or_default();
+
+        let runtime = DockerRuntime::new().with_image(&docker_image);
+        let mut client = match runtime.get_client(&types_lock).await {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let staged_fqns: BTreeSet<String> = types_lock.tables.keys().cloned().collect();
+
+        if let Ok(completed_plan) =
+            types::typecheck_with_client(&mut client, &project, &root, &staged_fqns, plan).await
+        {
+            let _ = types::write_snapshot_from_plan(&root, &completed_plan);
+        }
+
+        // Reload types cache and notify client
+        if let Some(merged) = load_merged_types(&root) {
+            *self.types_cache.write().unwrap() = Some(merged);
+        }
+        self.client
+            .send_notification::<ProjectRebuilt>(())
+            .await;
     }
 }
 
@@ -343,6 +441,9 @@ impl LanguageServer for Backend {
                 )),
                 completion_provider: Some(CompletionOptions::default()),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 code_lens_provider: Some(CodeLensOptions {
                     resolve_provider: Some(false),
@@ -376,6 +477,7 @@ impl LanguageServer for Backend {
 
     async fn did_save(&self, _params: DidSaveTextDocumentParams) {
         self.rebuild_project().await;
+        self.run_typecheck().await;
     }
 
     async fn goto_definition(
@@ -403,6 +505,80 @@ impl LanguageServer for Backend {
 
         let location = goto_definition::resolve_reference(&parts, &uri, &root, project);
         Ok(location.map(GotoDefinitionResponse::Scalar))
+    }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+
+        let (_, _, parts) = match self.snapshot_at_position(&uri, position) {
+            Some(s) => s,
+            None => return Ok(None),
+        };
+        let parts = match parts {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let root = self.root.read().unwrap().clone();
+        let project_guard = self.project.read().unwrap();
+        let project = match project_guard.as_ref() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let locations = references::find_references(
+            &parts,
+            &uri,
+            &root,
+            project,
+            params.context.include_declaration,
+        );
+        if locations.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(locations))
+        }
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let file_uri = params.text_document.uri;
+        let root = self.root.read().unwrap().clone();
+
+        let project_guard = self.project.read().unwrap();
+        let project = match project_guard.as_ref() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let symbols = document_symbol::document_symbols(&file_uri, &root, project);
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+        }
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let root = self.root.read().unwrap().clone();
+        let project_guard = self.project.read().unwrap();
+        let project = match project_guard.as_ref() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        let symbols = workspace_symbol::workspace_symbols(&params.query, project, &root);
+        if symbols.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(symbols))
+        }
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -464,7 +640,7 @@ impl LanguageServer for Backend {
         let project_guard = self.project.read().unwrap();
         let cache_guard = self.types_cache.read().unwrap();
         let items = completion::complete(
-            project_guard.as_ref(),
+            project_guard.as_deref(),
             cache_guard.as_ref(),
             &file_uri,
             &root,

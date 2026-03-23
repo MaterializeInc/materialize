@@ -2,7 +2,7 @@
 //!
 //! Provides IDE integration for `.sql` files in mz-deploy projects via the
 //! Language Server Protocol (LSP). The server runs over stdio and supports
-//! five capabilities:
+//! eight capabilities:
 //!
 //! ## Go-to-definition
 //!
@@ -15,6 +15,12 @@
 //! 2. **Project model lookup** — Resolves the identifier against the planned
 //!    project model using [`ObjectId::from_item_name()`] conventions (1-part uses
 //!    default db+schema from file path, 2-part uses default db, 3-part as-is).
+//!
+//! ## Find References
+//!
+//! Finds all project objects that depend on a given identifier. This is the
+//! inverse of go-to-definition: it answers "who uses this table/view/source?"
+//! by building the reverse dependency graph from [`planned::Project`].
 //!
 //! ## Hover
 //!
@@ -36,6 +42,19 @@
 //!   schema.object, 2+ dots = db.schema.object). Each item carries a
 //!   `text_edit` that replaces the entire typed prefix, so the editor
 //!   substitutes rather than appends.
+//!
+//! ## Document Symbols
+//!
+//! Returns the structural outline of a `.sql` file: the main CREATE statement
+//! as the root symbol, with supporting statements (indexes, constraints, grants,
+//! comments, unit tests) as children. Powers the editor's "Outline" view and
+//! breadcrumb navigation.
+//!
+//! ## Workspace Symbols
+//!
+//! Searches all objects in the project by name, enabling fuzzy-find across the
+//! entire workspace. Results include the object kind, file location, and a
+//! `database.schema` container label for grouping.
 //!
 //! ## Parse error diagnostics
 //!
@@ -86,9 +105,14 @@ mod code_lens;
 mod completion;
 mod dag;
 pub mod diagnostics;
+mod document_symbol;
+pub mod functions;
 pub mod goto_definition;
 pub mod hover;
+mod references;
 mod run;
 mod server;
+mod symbol_kind;
+mod workspace_symbol;
 
 pub use run::run;

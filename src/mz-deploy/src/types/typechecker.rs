@@ -541,8 +541,8 @@ async fn typecheck_incremental(
 
 /// Read-only context shared by lazy dependency creation functions.
 ///
-/// Bundles the lookup tables and configuration that `ensure_dep_exists` and
-/// `collect_deps_to_create` need, avoiding 7+ parameters on each call.
+/// Bundles the lookup tables and configuration that [`plan_dep_creation`] and
+/// [`execute_dep_action`] need, avoiding 7+ parameters on each call.
 struct DepContext<'a> {
     cached_types: &'a super::Types,
     object_map: &'a BTreeMap<ObjectId, &'a crate::project::typed::DatabaseObject>,
@@ -553,21 +553,43 @@ struct DepContext<'a> {
     project_root: &'a Path,
 }
 
-/// Lazily create a dependency in Docker if it doesn't already exist.
+/// An action to create a dependency in the Docker container.
 ///
-/// - Tables: created from AST (self-contained)
-/// - Views with cached columns: created as stub temp tables (self-contained)
-/// - Views without cache (rare fallback): created as real views, which
-///   requires recursively ensuring THEIR dependencies exist first
+/// Produced by [`plan_dep_creation`] (pure) and executed by [`execute_dep_action`]
+/// (async I/O). This separation allows the planning logic to be unit-tested
+/// without a database connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DepAction {
+    /// Create a stub temp table from cached column types (self-contained).
+    StubFromCache(ObjectId),
+    /// Create a temp view/table from AST.
+    CreateFromAST(ObjectId),
+}
+
+impl DepAction {
+    fn object_id(&self) -> &ObjectId {
+        match self {
+            DepAction::StubFromCache(o) => o,
+            DepAction::CreateFromAST(o) => o,
+        }
+    }
+}
+
+/// Plan what actions are needed to create a dependency in Docker.
 ///
-/// Stubs are self-contained (`CREATE TEMPORARY TABLE` with hardcoded columns),
-/// so they do NOT require their own dependencies to exist.
-async fn ensure_dep_exists(
+/// Returns an ordered list of [`DepAction`]s — including the dep itself — that
+/// must be executed to make `dep_id` available. Returns an empty vec when the
+/// dep is already created, staged from types.lock, external, or unknown.
+///
+/// Classification rules:
+/// - `CreateTable` → [`DepAction::CreateFromAST`] (self-contained)
+/// - View/MV with cached columns → [`DepAction::StubFromCache`] (self-contained)
+/// - View/MV without cache (rare) → DFS transitive deps + [`DepAction::CreateFromAST`]
+fn plan_dep_creation(
     dep_id: &ObjectId,
-    created: &mut BTreeSet<String>,
-    client: &Client,
+    created: &BTreeSet<String>,
     ctx: &DepContext<'_>,
-) -> Result<(), TypeCheckError> {
+) -> Vec<DepAction> {
     let dep_fqn = dep_id.to_string();
 
     // Already created, staged from types.lock, or an external dependency
@@ -575,125 +597,46 @@ async fn ensure_dep_exists(
         || ctx.staged_fqns.contains(&dep_fqn)
         || ctx.external_deps.contains(dep_id)
     {
-        return Ok(());
+        return Vec::new();
     }
 
     let typed_object = match ctx.object_map.get(dep_id) {
         Some(obj) => obj,
-        None => return Ok(()), // External or unknown dep — skip
+        None => return Vec::new(), // External or unknown dep — skip
     };
 
     match &typed_object.stmt {
         Statement::CreateTable(_) => {
-            // Tables are created from AST (self-contained)
-            let fqn = fqn_from_object_id(dep_id);
-            if let Some(statement) = create_temporary_view_sql(&typed_object.stmt, &fqn) {
-                let sql = statement.to_string();
-                client.execute(&sql, &[]).await.map_err(|e| {
-                    let error =
-                        build_typecheck_error(dep_id, &sql, &e, ctx.object_paths, ctx.project_root);
-                    TypeCheckError::TypeCheckFailed(error)
-                })?;
-                verbose!("  ✓ Created temp table from AST (lazy): {}", dep_id);
-            }
-            created.insert(dep_fqn);
+            vec![DepAction::CreateFromAST(dep_id.clone())]
         }
         stmt if is_view_or_materialized_view(stmt) => {
-            if let Some(cached_cols) = ctx.cached_types.get_table(&dep_fqn) {
-                // View with cached columns — create as stub temp table (self-contained)
-                create_stub_table(client, &dep_fqn, cached_cols).await?;
-                verbose!("  ✓ Stubbed (lazy, cached): {}", dep_id);
-                created.insert(dep_fqn);
+            if ctx.cached_types.get_table(&dep_fqn).is_some() {
+                vec![DepAction::StubFromCache(dep_id.clone())]
             } else {
-                // View without cache (rare fallback) — need to create as real view,
-                // which requires its own dependencies to exist first.
-                let deps_to_create = collect_deps_to_create(dep_id, created, ctx);
-
-                // Create collected dependencies in dependency order
-                for needed_id in &deps_to_create {
-                    let needed_fqn = needed_id.to_string();
-                    if created.contains(&needed_fqn) {
-                        continue;
+                // Non-cached view — collect transitive deps first, then self
+                let mut actions = Vec::new();
+                let mut visited = BTreeSet::new();
+                if let Some(deps) = ctx.dependency_graph.get(dep_id) {
+                    for sub_dep in deps {
+                        plan_deps_dfs(sub_dep, &mut actions, &mut visited, created, ctx);
                     }
-                    if let Some(needed_obj) = ctx.object_map.get(needed_id) {
-                        if let Some(cached_cols) = ctx.cached_types.get_table(&needed_fqn) {
-                            // Stub from cache
-                            create_stub_table(client, &needed_fqn, cached_cols).await?;
-                            verbose!("  ✓ Stubbed (lazy, cached): {}", needed_id);
-                        } else {
-                            // Create as real view/table
-                            let fqn = fqn_from_object_id(needed_id);
-                            if let Some(statement) =
-                                create_temporary_view_sql(&needed_obj.stmt, &fqn)
-                            {
-                                let sql = statement.to_string();
-                                client.execute(&sql, &[]).await.map_err(|e| {
-                                    let error = build_typecheck_error(
-                                        needed_id,
-                                        &sql,
-                                        &e,
-                                        ctx.object_paths,
-                                        ctx.project_root,
-                                    );
-                                    TypeCheckError::TypeCheckFailed(error)
-                                })?;
-                                verbose!("  ✓ Created (lazy, fallback): {}", needed_id);
-                            }
-                        }
-                    }
-                    created.insert(needed_fqn);
                 }
-
-                // Now create the dep itself as a real view
-                let fqn = fqn_from_object_id(dep_id);
-                if let Some(statement) = create_temporary_view_sql(&typed_object.stmt, &fqn) {
-                    let sql = statement.to_string();
-                    client.execute(&sql, &[]).await.map_err(|e| {
-                        let error = build_typecheck_error(
-                            dep_id,
-                            &sql,
-                            &e,
-                            ctx.object_paths,
-                            ctx.project_root,
-                        );
-                        TypeCheckError::TypeCheckFailed(error)
-                    })?;
-                    verbose!("  ✓ Created (lazy, fallback): {}", dep_id);
-                }
-                created.insert(dep_fqn);
+                actions.push(DepAction::CreateFromAST(dep_id.clone()));
+                actions
             }
         }
-        _ => {
-            // Other statement types (sources, sinks, etc.) — skip
-        }
+        _ => Vec::new(),
     }
-
-    Ok(())
 }
 
-/// Collect transitive dependencies that need to be created for a fallback view.
+/// Inner DFS for [`plan_dep_creation`]'s non-cached view fallback.
 ///
-/// Performs a sync DFS walk. For cached views (stub-able), adds them to the result
-/// but does **not** recurse into their deps (stubs are self-contained). For
-/// non-cached views, recurses into their deps first (since they need real views).
-/// Tables are added without recursion.
-///
-/// Returns objects in dependency order (post-order DFS).
-fn collect_deps_to_create(
+/// Walks transitive dependencies in post-order, classifying each as
+/// [`DepAction::StubFromCache`] or [`DepAction::CreateFromAST`]. Cached views
+/// and tables are self-contained, so their subtrees are not traversed.
+fn plan_deps_dfs(
     dep_id: &ObjectId,
-    created: &BTreeSet<String>,
-    ctx: &DepContext<'_>,
-) -> Vec<ObjectId> {
-    let mut result = Vec::new();
-    let mut visited = BTreeSet::new();
-    collect_deps_dfs(dep_id, &mut result, &mut visited, created, ctx);
-    result
-}
-
-/// Inner DFS for [`collect_deps_to_create`].
-fn collect_deps_dfs(
-    dep_id: &ObjectId,
-    result: &mut Vec<ObjectId>,
+    actions: &mut Vec<DepAction>,
     visited: &mut BTreeSet<String>,
     created: &BTreeSet<String>,
     ctx: &DepContext<'_>,
@@ -716,25 +659,90 @@ fn collect_deps_dfs(
 
     match &typed_object.stmt {
         Statement::CreateTable(_) => {
-            // Tables are self-contained — add without recursion
-            result.push(dep_id.clone());
+            actions.push(DepAction::CreateFromAST(dep_id.clone()));
         }
         stmt if is_view_or_materialized_view(stmt) => {
             if ctx.cached_types.get_table(&dep_id.to_string()).is_some() {
                 // Cached view — stub is self-contained, no recursion needed
-                result.push(dep_id.clone());
+                actions.push(DepAction::StubFromCache(dep_id.clone()));
             } else {
                 // Non-cached view — recurse into its deps first
                 if let Some(deps) = ctx.dependency_graph.get(dep_id) {
                     for sub_dep in deps {
-                        collect_deps_dfs(sub_dep, result, visited, created, ctx);
+                        plan_deps_dfs(sub_dep, actions, visited, created, ctx);
                     }
                 }
-                result.push(dep_id.clone());
+                actions.push(DepAction::CreateFromAST(dep_id.clone()));
             }
         }
         _ => {}
     }
+}
+
+/// Execute a single [`DepAction`] by creating the object in Docker.
+///
+/// Defensively skips objects already in `created` (handles cross-call overlap
+/// when multiple `ensure_dep_exists` calls produce overlapping plans).
+async fn execute_dep_action(
+    action: &DepAction,
+    created: &mut BTreeSet<String>,
+    client: &Client,
+    ctx: &DepContext<'_>,
+) -> Result<(), TypeCheckError> {
+    let object_id = action.object_id();
+    let fqn = object_id.to_string();
+
+    if created.contains(&fqn) {
+        return Ok(());
+    }
+
+    match action {
+        DepAction::StubFromCache(id) => {
+            let cached_cols = ctx
+                .cached_types
+                .get_table(&fqn)
+                .expect("StubFromCache only emitted when cache entry exists");
+            create_stub_table(client, &fqn, cached_cols).await?;
+            verbose!("  ✓ Stubbed (lazy, cached): {}", id);
+        }
+        DepAction::CreateFromAST(id) => {
+            let typed_object = ctx
+                .object_map
+                .get(id)
+                .expect("CreateFromAST only emitted when object exists");
+            let ast_fqn = fqn_from_object_id(id);
+            if let Some(statement) = create_temporary_view_sql(&typed_object.stmt, &ast_fqn) {
+                let sql = statement.to_string();
+                client.execute(&sql, &[]).await.map_err(|e| {
+                    let error =
+                        build_typecheck_error(id, &sql, &e, ctx.object_paths, ctx.project_root);
+                    TypeCheckError::TypeCheckFailed(error)
+                })?;
+                verbose!("  ✓ Created (lazy): {}", id);
+            }
+        }
+    }
+
+    created.insert(fqn);
+    Ok(())
+}
+
+/// Lazily create a dependency in Docker if it doesn't already exist.
+///
+/// Separates decision-making from I/O: [`plan_dep_creation`] produces an ordered
+/// list of [`DepAction`]s (pure), then this function executes them sequentially
+/// via [`execute_dep_action`] (async I/O).
+async fn ensure_dep_exists(
+    dep_id: &ObjectId,
+    created: &mut BTreeSet<String>,
+    client: &Client,
+    ctx: &DepContext<'_>,
+) -> Result<(), TypeCheckError> {
+    let actions = plan_dep_creation(dep_id, created, ctx);
+    for action in actions {
+        execute_dep_action(&action, created, client, ctx).await?;
+    }
+    Ok(())
 }
 
 /// Build the FQN AST node from an ObjectId.
@@ -896,5 +904,193 @@ fn create_temporary_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Opti
             // cannot be type-checked in this way
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod plan_dep_creation_tests {
+    use super::*;
+    use crate::project::typed::DatabaseObject;
+    use crate::types::{ColumnType, Types};
+
+    fn oid(db: &str, schema: &str, obj: &str) -> ObjectId {
+        ObjectId::new(db.to_string(), schema.to_string(), obj.to_string())
+    }
+
+    fn make_object(sql: &str) -> DatabaseObject {
+        let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+        let stmt = match parsed.into_iter().next().unwrap().ast {
+            mz_sql_parser::ast::Statement::CreateView(s) => Statement::CreateView(s),
+            mz_sql_parser::ast::Statement::CreateMaterializedView(s) => {
+                Statement::CreateMaterializedView(s)
+            }
+            mz_sql_parser::ast::Statement::CreateTable(s) => Statement::CreateTable(s),
+            other => panic!("Unexpected statement type: {:?}", other),
+        };
+        DatabaseObject {
+            path: PathBuf::from("test.sql"),
+            stmt,
+            indexes: Vec::new(),
+            constraints: Vec::new(),
+            grants: Vec::new(),
+            comments: Vec::new(),
+            tests: Vec::new(),
+        }
+    }
+
+    fn make_cached_types(entries: &[(&ObjectId, &[(&str, &str)])]) -> Types {
+        let mut tables = BTreeMap::new();
+        for (oid, cols) in entries {
+            let columns = cols
+                .iter()
+                .map(|(name, typ)| {
+                    (
+                        name.to_string(),
+                        ColumnType {
+                            r#type: typ.to_string(),
+                            nullable: true,
+                        },
+                    )
+                })
+                .collect();
+            tables.insert(oid.to_string(), columns);
+        }
+        Types {
+            version: 1,
+            tables,
+            kinds: BTreeMap::new(),
+        }
+    }
+
+    struct TestCtx<'a> {
+        cached_types: &'a Types,
+        object_map: BTreeMap<ObjectId, &'a DatabaseObject>,
+        dependency_graph: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
+        external_deps: BTreeSet<ObjectId>,
+        staged_fqns: BTreeSet<String>,
+        object_paths: BTreeMap<ObjectId, PathBuf>,
+    }
+
+    impl<'a> TestCtx<'a> {
+        fn new(cached_types: &'a Types) -> Self {
+            Self {
+                cached_types,
+                object_map: BTreeMap::new(),
+                dependency_graph: BTreeMap::new(),
+                external_deps: BTreeSet::new(),
+                staged_fqns: BTreeSet::new(),
+                object_paths: BTreeMap::new(),
+            }
+        }
+
+        fn dep_ctx(&self) -> DepContext<'_> {
+            DepContext {
+                cached_types: self.cached_types,
+                object_map: &self.object_map,
+                dependency_graph: &self.dependency_graph,
+                external_deps: &self.external_deps,
+                staged_fqns: &self.staged_fqns,
+                object_paths: &self.object_paths,
+                project_root: Path::new("/test"),
+            }
+        }
+    }
+
+    #[test]
+    fn table_produces_create_from_ast() {
+        let id = oid("db", "sc", "t");
+        let obj = make_object("CREATE TABLE db.sc.t (id INT)");
+        let types = Types::default();
+        let mut ctx = TestCtx::new(&types);
+        ctx.object_map.insert(id.clone(), &obj);
+
+        let actions = plan_dep_creation(&id, &BTreeSet::new(), &ctx.dep_ctx());
+        assert_eq!(actions, vec![DepAction::CreateFromAST(id)]);
+    }
+
+    #[test]
+    fn cached_view_produces_stub() {
+        let id = oid("db", "sc", "v");
+        let obj = make_object("CREATE VIEW db.sc.v AS SELECT 1 AS x");
+        let types = make_cached_types(&[(&id, &[("x", "integer")])]);
+        let mut ctx = TestCtx::new(&types);
+        ctx.object_map.insert(id.clone(), &obj);
+
+        let actions = plan_dep_creation(&id, &BTreeSet::new(), &ctx.dep_ctx());
+        assert_eq!(actions, vec![DepAction::StubFromCache(id)]);
+    }
+
+    #[test]
+    fn non_cached_view_with_cached_dep() {
+        let dep_view_id = oid("db", "sc", "dep_v");
+        let view_id = oid("db", "sc", "v");
+
+        let dep_view_obj = make_object("CREATE VIEW db.sc.dep_v AS SELECT 1 AS id");
+        let view_obj = make_object("CREATE VIEW db.sc.v AS SELECT id FROM db.sc.dep_v");
+
+        let types = make_cached_types(&[(&dep_view_id, &[("id", "integer")])]);
+        let mut ctx = TestCtx::new(&types);
+        ctx.object_map.insert(dep_view_id.clone(), &dep_view_obj);
+        ctx.object_map.insert(view_id.clone(), &view_obj);
+        ctx.dependency_graph
+            .insert(view_id.clone(), BTreeSet::from([dep_view_id.clone()]));
+
+        let actions = plan_dep_creation(&view_id, &BTreeSet::new(), &ctx.dep_ctx());
+        assert_eq!(
+            actions,
+            vec![
+                DepAction::StubFromCache(dep_view_id),
+                DepAction::CreateFromAST(view_id),
+            ]
+        );
+    }
+
+    #[test]
+    fn already_created_returns_empty() {
+        let id = oid("db", "sc", "t");
+        let obj = make_object("CREATE TABLE db.sc.t (id INT)");
+        let types = Types::default();
+        let mut ctx = TestCtx::new(&types);
+        ctx.object_map.insert(id.clone(), &obj);
+
+        let created = BTreeSet::from([id.to_string()]);
+        let actions = plan_dep_creation(&id, &created, &ctx.dep_ctx());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn external_dep_returns_empty() {
+        let id = oid("db", "sc", "src");
+        let obj = make_object("CREATE TABLE db.sc.src (id INT)");
+        let types = Types::default();
+        let mut ctx = TestCtx::new(&types);
+        ctx.object_map.insert(id.clone(), &obj);
+        ctx.external_deps.insert(id.clone());
+
+        let actions = plan_dep_creation(&id, &BTreeSet::new(), &ctx.dep_ctx());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn unknown_dep_returns_empty() {
+        let id = oid("db", "sc", "unknown");
+        let types = Types::default();
+        let ctx = TestCtx::new(&types);
+
+        let actions = plan_dep_creation(&id, &BTreeSet::new(), &ctx.dep_ctx());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn staged_dep_returns_empty() {
+        let id = oid("db", "sc", "t");
+        let obj = make_object("CREATE TABLE db.sc.t (id INT)");
+        let types = Types::default();
+        let mut ctx = TestCtx::new(&types);
+        ctx.object_map.insert(id.clone(), &obj);
+        ctx.staged_fqns.insert(id.to_string());
+
+        let actions = plan_dep_creation(&id, &BTreeSet::new(), &ctx.dep_ctx());
+        assert!(actions.is_empty());
     }
 }

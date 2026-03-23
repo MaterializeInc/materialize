@@ -230,6 +230,33 @@ fn object_type_name(stmt: &crate::project::ast::Statement) -> &'static str {
     }
 }
 
+/// Extract the main statement's IN CLUSTER value, if any.
+///
+/// Only materialized views, sources, and sinks carry an IN CLUSTER clause.
+/// Plain views, tables, secrets, and connections never have one. This
+/// intentionally excludes clusters from indexes and constraints — those are
+/// shown on their respective index entries in the catalog.
+fn statement_cluster(stmt: &crate::project::ast::Statement) -> Option<String> {
+    use crate::project::ast::Statement;
+    use mz_sql_parser::ast::RawClusterName;
+
+    let in_cluster = match stmt {
+        Statement::CreateMaterializedView(mv) => mv.in_cluster.as_ref(),
+        Statement::CreateSource(source) => source.in_cluster.as_ref(),
+        Statement::CreateSink(sink) => sink.in_cluster.as_ref(),
+        Statement::CreateView(_)
+        | Statement::CreateTable(_)
+        | Statement::CreateTableFromSource(_)
+        | Statement::CreateSecret(_)
+        | Statement::CreateConnection(_) => None,
+    };
+
+    match in_cluster {
+        Some(RawClusterName::Unresolved(name)) => Some(name.to_string()),
+        _ => None,
+    }
+}
+
 /// Extract the COMMENT ON object-level description (not column comments).
 fn extract_description(
     comments: &[mz_sql_parser::ast::CommentStatement<mz_sql_parser::ast::Raw>],
@@ -575,7 +602,7 @@ fn build_catalog_object(
         schema: obj.id.schema.clone(),
         name: obj.id.object.clone(),
         object_type: object_type_name(&typed.stmt).to_string(),
-        cluster: typed.clusters().into_iter().next(),
+        cluster: statement_cluster(&typed.stmt),
         file_path,
         description: extract_description(&typed.comments),
         is_external: false,

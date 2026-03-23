@@ -18,7 +18,13 @@
 //!
 //! ## Phase 2: Gather Candidates
 //!
-//! Three independent gatherers produce [`CompletionCandidate`]s:
+//! Four independent gatherers produce [`CompletionCandidate`]s:
+//!
+//! ### Functions ([`gather_functions`])
+//!
+//! Static list from [`super::functions::FUNCTIONS`]. Only offered when
+//! `dots == 0`. Label is the function name, detail is the full signature.
+//! Kind: `FUNCTION`. Sort: `4_`.
 //!
 //! ### Keywords ([`gather_keywords`])
 //!
@@ -191,6 +197,9 @@ enum CompletionCandidate<'a> {
         name: &'a str,
         col_type: &'a ColumnType,
     },
+    Function {
+        info: &'a super::functions::FunctionInfo,
+    },
 }
 
 /// Gather keyword candidates. Only offered when `dots == 0`.
@@ -203,6 +212,17 @@ fn gather_keywords(ctx: &CompletionContext<'_>) -> Vec<CompletionCandidate<'stat
         .map(|(_, kw)| CompletionCandidate::Keyword {
             label: kw.as_str().to_string(),
         })
+        .collect()
+}
+
+/// Gather function candidates from the static function registry.
+/// Only offered when `dots == 0` (unqualified context).
+fn gather_functions(prefix: &PrefixContext<'_>) -> Vec<CompletionCandidate<'static>> {
+    if prefix.dots > 0 {
+        return Vec::new();
+    }
+    super::functions::search_prefix(prefix.text)
+        .map(|info| CompletionCandidate::Function { info })
         .collect()
 }
 
@@ -414,6 +434,13 @@ fn format_candidate(candidate: &CompletionCandidate<'_>) -> CompletionItem {
             sort_text: Some(format!("0_{}", name)),
             ..Default::default()
         },
+        CompletionCandidate::Function { info } => CompletionItem {
+            label: info.name.to_string(),
+            kind: Some(CompletionItemKind::FUNCTION),
+            detail: Some(info.signature.to_string()),
+            sort_text: Some(format!("4_{}", info.name)),
+            ..Default::default()
+        },
     }
 }
 
@@ -438,6 +465,8 @@ pub fn complete(
     let ctx = project.and_then(|p| resolve_context(file_uri, root, p, prefix));
 
     let mut candidates: Vec<CompletionCandidate<'_>> = Vec::new();
+    // Functions are always available (static registry, no project needed)
+    candidates.extend(gather_functions(prefix));
     if let Some(ctx) = &ctx {
         candidates.extend(gather_keywords(ctx));
         candidates.extend(gather_objects(ctx, project.unwrap(), types_cache));
