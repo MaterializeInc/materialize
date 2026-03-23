@@ -402,6 +402,140 @@ async fn reload_table(
     }
 }
 
+/// Attempt a single commit of a batch of data files to an Iceberg table.
+/// On conflict or failure, reloads the table and returns a retryable error.
+/// On success, returns the updated table state.
+async fn try_commit_batch(
+    mut table: Table,
+    snapshot_properties: Vec<(String, String)>,
+    data_files: Vec<DataFile>,
+    delete_files: Vec<DataFile>,
+    catalog: &dyn Catalog,
+    conn_namespace: &str,
+    conn_table: &str,
+    sink_version: u64,
+    frontier: &Antichain<Timestamp>,
+    batch_lower: &Antichain<Timestamp>,
+    batch_upper: &Antichain<Timestamp>,
+    metrics: &IcebergSinkMetrics,
+) -> (Table, RetryResult<(), anyhow::Error>) {
+    let tx = Transaction::new(&table);
+    let mut action = tx
+        .row_delta()
+        .set_snapshot_properties(snapshot_properties.into_iter().collect())
+        .with_check_duplicate(false);
+
+    if !data_files.is_empty() || !delete_files.is_empty() {
+        action = action
+            .add_data_files(data_files)
+            .add_delete_files(delete_files);
+    }
+
+    let tx = match action
+        .apply(tx)
+        .context("Failed to apply data file addition to iceberg table transaction")
+    {
+        Ok(tx) => tx,
+        Err(e) => {
+            match reload_table(
+                catalog,
+                conn_namespace.to_string(),
+                conn_table.to_string(),
+                table.clone(),
+            )
+            .await
+            {
+                Ok(reloaded) => table = reloaded,
+                Err(reload_err) => {
+                    return (table, RetryResult::RetryableErr(anyhow!(reload_err)));
+                }
+            }
+            return (
+                table,
+                RetryResult::RetryableErr(anyhow!(
+                    "Failed to apply data file addition to iceberg table transaction: {}",
+                    e
+                )),
+            );
+        }
+    };
+
+    let new_table = tx.commit(catalog).await;
+    match new_table {
+        Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
+            metrics.commit_conflicts.inc();
+            match reload_table(
+                catalog,
+                conn_namespace.to_string(),
+                conn_table.to_string(),
+                table.clone(),
+            )
+            .await
+            {
+                Ok(reloaded) => table = reloaded,
+                Err(e) => {
+                    return (table, RetryResult::RetryableErr(anyhow!(e)));
+                }
+            };
+
+            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+            let last = retrieve_upper_from_snapshots(&mut snapshots);
+            let last = match last {
+                Ok(val) => val,
+                Err(e) => {
+                    return (table, RetryResult::RetryableErr(anyhow!(e)));
+                }
+            };
+
+            // Check if another writer has advanced the frontier beyond ours (fencing check)
+            if let Some((last_frontier, last_version)) = last {
+                if last_version > sink_version {
+                    return (
+                        table,
+                        RetryResult::FatalErr(anyhow!(
+                            "Iceberg table '{}' has been modified by another writer \
+                             with version {}. Current sink version: {}. \
+                             Frontiers may be out of sync, aborting to avoid data loss.",
+                            conn_table,
+                            last_version,
+                            sink_version,
+                        )),
+                    );
+                }
+                if PartialOrder::less_equal(frontier, &last_frontier) {
+                    return (
+                        table,
+                        RetryResult::FatalErr(anyhow!(
+                            "Iceberg table '{}' has been modified by another writer. \
+                             Current frontier: {:?}, last frontier: {:?}.",
+                            conn_table,
+                            frontier,
+                            last_frontier,
+                        )),
+                    );
+                }
+            }
+
+            (
+                table,
+                RetryResult::RetryableErr(anyhow!(
+                    "Commit conflict detected when committing batch [{}, {}) \
+                     to Iceberg table '{}.{}'. Retrying...",
+                    batch_lower.pretty(),
+                    batch_upper.pretty(),
+                    conn_namespace,
+                    conn_table
+                )),
+            )
+        }
+        Err(e) => {
+            metrics.commit_failures.inc();
+            (table, RetryResult::RetryableErr(anyhow!(e)))
+        }
+        Ok(new_table) => (new_table, RetryResult::Ok(())),
+    }
+}
+
 /// Load an existing Iceberg table or create it if it doesn't exist.
 async fn load_or_create_table(
     catalog: &dyn Catalog,
@@ -1553,22 +1687,18 @@ where
             while let Some(_) = table_ready_input.next().await {
                 // Wait for table to be ready
             }
-            let mut table = catalog
-                .load_table(&table_ident)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to load Iceberg table '{}.{}' in commit_to_iceberg operator",
-                        connection.namespace, connection.table
-                    )
-                })?;
+            let mut table = catalog.load_table(&table_ident).await.with_context(|| {
+                format!(
+                    "Failed to load Iceberg table '{}.{}' in commit_to_iceberg operator",
+                    connection.namespace, connection.table
+                )
+            })?;
 
             #[allow(clippy::disallowed_types)]
             let mut batch_descriptions: std::collections::HashMap<
                 (Antichain<Timestamp>, Antichain<Timestamp>),
                 BoundedDataFileSet,
             > = std::collections::HashMap::new();
-
 
             let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
             let mut input_frontier = Antichain::from_elem(Timestamp::minimum());
@@ -1583,10 +1713,8 @@ where
                     match event {
                         Event::Data(_cap, data) => {
                             for batch_desc in data {
-                                let prev = batch_descriptions.insert(
-                                    batch_desc,
-                                    BoundedDataFileSet { data_files: vec![] },
-                                );
+                                let prev = batch_descriptions
+                                    .insert(batch_desc, BoundedDataFileSet { data_files: vec![] });
                                 if let Some(prev) = prev {
                                     anyhow::bail!(
                                         "Duplicate batch description received \
@@ -1626,9 +1754,7 @@ where
                 // finished emitting files for this batch and dropped its capability.
                 let mut done_batches: Vec<_> = batch_descriptions
                     .keys()
-                    .filter(|(lower, _upper)| {
-                        PartialOrder::less_than(lower, &input_frontier)
-                    })
+                    .filter(|(lower, _upper)| PartialOrder::less_than(lower, &input_frontier))
                     .cloned()
                     .collect();
 
@@ -1658,8 +1784,8 @@ where
                             iceberg::spec::DataContentType::Data => {
                                 data_files.push(file.into_data_file());
                             }
-                            iceberg::spec::DataContentType::PositionDeletes |
-                            iceberg::spec::DataContentType::EqualityDeletes => {
+                            iceberg::spec::DataContentType::PositionDeletes
+                            | iceberg::spec::DataContentType::EqualityDeletes => {
                                 delete_files.push(file.into_data_file());
                             }
                         }
@@ -1689,123 +1815,37 @@ where
                     ];
 
                     let (table_state, commit_result) = Retry::default()
-                            .max_tries(5)
-                            .retry_async_with_state(table, |_, mut table| {
-                        let snapshot_properties = snapshot_properties.clone();
-                        let data_files = data_files.clone();
-                        let delete_files = delete_files.clone();
-                        let metrics = Arc::clone(&metrics);
-                        let catalog = Arc::clone(&catalog);
-                        let conn_namespace = connection.namespace.clone();
-                        let conn_table = connection.table.clone();
-                        let frontier = frontier.clone();
-                        let batch_lower = batch.0.clone();
-                        let batch_upper = batch.1.clone();
-                        async move {
-                            let tx = Transaction::new(&table);
-                            let mut action = tx.row_delta()
-                                .set_snapshot_properties(snapshot_properties.into_iter().collect())
-                                .with_check_duplicate(false);
-
-                            if !data_files.is_empty() || !delete_files.is_empty() {
-                                action = action
-                                    .add_data_files(data_files)
-                                    .add_delete_files(delete_files);
+                        .max_tries(5)
+                        .retry_async_with_state(table, |_, table| {
+                            let snapshot_properties = snapshot_properties.clone();
+                            let data_files = data_files.clone();
+                            let delete_files = delete_files.clone();
+                            let metrics = Arc::clone(&metrics);
+                            let catalog = Arc::clone(&catalog);
+                            let conn_namespace = connection.namespace.clone();
+                            let conn_table = connection.table.clone();
+                            let frontier = frontier.clone();
+                            let batch_lower = batch.0.clone();
+                            let batch_upper = batch.1.clone();
+                            async move {
+                                try_commit_batch(
+                                    table,
+                                    snapshot_properties,
+                                    data_files,
+                                    delete_files,
+                                    catalog.as_ref(),
+                                    &conn_namespace,
+                                    &conn_table,
+                                    sink_version,
+                                    &frontier,
+                                    &batch_lower,
+                                    &batch_upper,
+                                    &metrics,
+                                )
+                                .await
                             }
-
-                            let tx = match action.apply(tx).context(
-                                "Failed to apply data file addition to iceberg table transaction",
-                            ) {
-                                Ok(tx) => tx,
-                                Err(e) => {
-                                    let reloaded_table = reload_table(
-                                        catalog.as_ref(),
-                                        conn_namespace.clone(),
-                                        conn_table.clone(),
-                                        table.clone(),
-                                    ).await;
-                                    match reloaded_table {
-                                        Ok(reloaded) => table = reloaded,
-                                        Err(reload_err) => {
-                                            return (
-                                                table,
-                                                RetryResult::RetryableErr(anyhow!(reload_err))
-                                            );
-                                        }
-                                    }
-                                    return (table, RetryResult::RetryableErr(anyhow!(
-                                        "Failed to apply data file addition to iceberg table transaction: {}",
-                                        e
-                                    )));
-                                }
-                            };
-
-                            let new_table = tx.clone().commit(catalog.as_ref()).await;
-                            match new_table {
-                                Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
-                                    metrics.commit_conflicts.inc();
-                                    let reloaded_table = reload_table(
-                                        catalog.as_ref(),
-                                        conn_namespace.clone(),
-                                        conn_table.clone(),
-                                        table.clone(),
-                                    ).await;
-                                    match reloaded_table {
-                                        Ok(reloaded) => table = reloaded,
-                                        Err(e) => {
-                                            return (table, RetryResult::RetryableErr(anyhow!(e)));
-                                        }
-                                    };
-
-                                    let mut snapshots: Vec<_> =
-                                        table.metadata().snapshots().cloned().collect();
-                                    let last = retrieve_upper_from_snapshots(&mut snapshots);
-                                    let last = match last {
-                                        Ok(val) => val,
-                                        Err(e) => {
-                                            return (table, RetryResult::RetryableErr(anyhow!(e)));
-                                        }
-                                    };
-
-                                    // Check if another writer has advanced the frontier beyond ours (fencing check)
-                                    if let Some((last_frontier, last_version)) = last {
-                                        if last_version > sink_version {
-                                            return (table, RetryResult::FatalErr(anyhow!(
-                                                "Iceberg table '{}' has been modified by another writer with version {}. Current sink version: {}. Frontiers may be out of sync, aborting to avoid data loss.",
-                                                conn_table,
-                                                last_version,
-                                                sink_version,
-                                            )));
-                                        }
-                                        if PartialOrder::less_equal(&frontier, &last_frontier) {
-                                            return (table, RetryResult::FatalErr(anyhow!(
-                                                "Iceberg table '{}' has been modified by another writer. Current frontier: {:?}, last frontier: {:?}.",
-                                                conn_table,
-                                                frontier,
-                                                last_frontier,
-                                            )));
-                                        }
-                                    }
-
-                                    (table, RetryResult::RetryableErr(anyhow!(
-                                        "Commit conflict detected when committing batch [{}, {}) to Iceberg table '{}.{}'. Retrying...",
-                                        batch_lower.pretty(),
-                                        batch_upper.pretty(),
-                                        conn_namespace,
-                                        conn_table
-                                    )))
-                                }
-                                Err(e) => {
-                                    metrics.commit_failures.inc();
-                                    (table, RetryResult::RetryableErr(anyhow!(e)))
-                                },
-                                Ok(new_table) => {
-                                    (new_table, RetryResult::Ok(()))
-                                }
-                            }
-                        }
-                    })
-                    .await;
+                        })
+                        .await;
                     let commit_result = commit_result.with_context(|| {
                         format!(
                             "failed to commit batch to Iceberg table '{}.{}'",
@@ -1854,10 +1894,8 @@ where
                         }
                     }
                     write_frontier.borrow_mut().clone_from(&frontier);
-
                 }
             }
-
 
             Ok(())
         })
