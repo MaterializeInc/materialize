@@ -2419,9 +2419,14 @@ def get_materialize_v1alpha1() -> dict[str, Any]:
     return data["items"][0]
 
 
-def get_materialize_status_v1alpha1() -> dict[str, Any] | None:
-    """Get the status of the first Materialize resource at v1alpha1."""
-    return get_materialize_v1alpha1().get("status")
+def get_materialize_at_stored_version() -> dict[str, Any]:
+    """Get the first Materialize resource at the stored version (currently v1alpha1)."""
+    return get_materialize_v1alpha1()
+
+
+def get_materialize_status_at_stored_version() -> dict[str, Any] | None:
+    """Get the status of the first Materialize resource at the stored version."""
+    return get_materialize_at_stored_version().get("status")
 
 
 def get_materialize_v1alpha2() -> dict[str, Any]:
@@ -2694,36 +2699,14 @@ def wait_for_ready_to_promote() -> None:
         if is_ready_to_manually_promote():
             break
     else:
-        spawn.runv(
-            [
-                "kubectl",
-                "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "yaml",
-            ],
-        )
+        print(yaml.dump(get_materialize_at_stored_version()))
         raise RuntimeError("Never became ready for manual promotion")
 
     # Verify it stays in ReadyToPromote (doesn't auto-promote).
     time.sleep(30)
     if not is_ready_to_manually_promote():
-        spawn.runv(
-            [
-                "kubectl",
-                "get",
-                "materializes",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "yaml",
-            ],
-        )
-        raise RuntimeError(
-            "Stopped being ready for manual promotion before promoting"
-        )
+        print(yaml.dump(get_materialize_at_stored_version()))
+        raise RuntimeError("Stopped being ready for manual promotion before promoting")
 
 
 def wait_for_rollout_complete() -> None:
@@ -2731,7 +2714,7 @@ def wait_for_rollout_complete() -> None:
     for _ in range(900):
         time.sleep(1)
         try:
-            status = get_materialize_status_v1alpha1()
+            status = get_materialize_status_at_stored_version()
             if not status:
                 continue
             conditions = status.get("conditions", [])
@@ -2743,17 +2726,7 @@ def wait_for_rollout_complete() -> None:
                 return
         except subprocess.CalledProcessError:
             pass
-    spawn.runv(
-        [
-            "kubectl",
-            "get",
-            "materializes",
-            "-n",
-            "materialize-environment",
-            "-o",
-            "yaml",
-        ],
-    )
+    print(yaml.dump(get_materialize_at_stored_version()))
     raise RuntimeError("Rollout never completed")
 
 
@@ -3440,7 +3413,7 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
 
 
 def is_ready_to_manually_promote():
-    mz = get_materialize_v1alpha1()
+    mz = get_materialize_at_stored_version()
     conditions = mz.get("status", {}).get("conditions")
     return (
         conditions is not None
@@ -3452,12 +3425,12 @@ def is_ready_to_manually_promote():
 
 
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
-    # Read at v1alpha1 explicitly to avoid going through the conversion
-    # webhook, which may not be ready yet during initial deployment.
+    # Read at the stored version explicitly to avoid going through the
+    # conversion webhook, which may not be ready yet during initial deployment.
     for i in range(900):
         time.sleep(1)
         try:
-            status = get_materialize_status_v1alpha1()
+            status = get_materialize_status_at_stored_version()
             if not status:
                 continue
             if expect_fail:
