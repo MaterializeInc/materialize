@@ -44,6 +44,7 @@ impl DecodeMetricDefs {
                 PreDelimitedFormat::Text => "text",
                 PreDelimitedFormat::Regex(..) => "regex",
                 PreDelimitedFormat::Protobuf(..) => "protobuf",
+                PreDelimitedFormat::Rdf(..) => "rdf",
             },
         };
         let success_label = if success { "success" } else { "error" };

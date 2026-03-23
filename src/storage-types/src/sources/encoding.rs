@@ -97,6 +97,7 @@ pub enum DataEncoding<C: ConnectionAccess = InlinedConnection> {
     Bytes,
     Json,
     Text,
+    Rdf(RdfEncoding),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<DataEncoding, R>
@@ -111,6 +112,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<DataEncoding, R>
             Self::Bytes => DataEncoding::Bytes,
             Self::Json => DataEncoding::Json,
             Self::Text => DataEncoding::Text,
+            Self::Rdf(enc) => DataEncoding::Rdf(enc),
         }
     }
 }
@@ -134,6 +136,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
             Self::Bytes => "bytes",
             Self::Json => "json",
             Self::Text => "text",
+            Self::Rdf(_) => "rdf",
         }
     }
 
@@ -205,6 +208,12 @@ impl<C: ConnectionAccess> DataEncoding<C> {
             Self::Text => RelationDesc::builder()
                 .with_column("text", SqlScalarType::String.nullable(false))
                 .finish(),
+            Self::Rdf(_) => RelationDesc::builder()
+                .with_column("subject", SqlScalarType::String.nullable(false))
+                .with_column("predicate", SqlScalarType::String.nullable(false))
+                .with_column("object", SqlScalarType::String.nullable(false))
+                .with_column("graph", SqlScalarType::String.nullable(true))
+                .finish(),
         })
     }
 
@@ -217,6 +226,7 @@ impl<C: ConnectionAccess> DataEncoding<C> {
             Self::Regex { .. } => "Regex",
             Self::Csv(_) => "Csv",
             Self::Text => "Text",
+            Self::Rdf(_) => "Rdf",
         }
     }
 }
@@ -373,4 +383,22 @@ impl ColumnSpec {
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct RegexEncoding {
     pub regex: mz_repr::adt::regex::Regex,
+}
+
+/// Encoding in RDF format. Each message is decoded into (subject, predicate, object, graph) rows.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub struct RdfEncoding {
+    /// The specific RDF serialization format.
+    pub format: RdfEncodingFormat,
+}
+
+/// The specific RDF serialization format for decoding.
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+pub enum RdfEncodingFormat {
+    /// N-Triples: one triple per line, `<s> <p> <o> .`
+    NTriples,
+    /// Turtle: compact triple notation with prefixes
+    Turtle,
+    /// RDF/XML: XML-based RDF serialization
+    RdfXml,
 }

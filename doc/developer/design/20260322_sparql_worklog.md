@@ -1839,3 +1839,105 @@ parser → planner → HIR → MIR → execution).
 
 - `bin/fmt`: passes (except missing `buf` tool)
 - `bin/lint`: only pre-existing missing-tool failures (buf, helm-docs, trufflehog, npm perms)
+
+## 2026-03-24: Prompt 21 — RDF data ingestion (sources)
+
+### What was done
+
+Implemented `CREATE SOURCE ... FORMAT RDF` for ingesting RDF data from streaming
+sources (e.g., Kafka topics containing RDF payloads). The source produces rows in
+`(subject, predicate, object, graph)` format. Three RDF serialization formats are
+supported at the parser/planner level: N-Triples, Turtle, and RDF/XML.
+
+**SQL parser** (`src/sql-parser/`):
+- Added `RDF`, `NTRIPLES`, `TURTLE`, `RDFXML` keywords to `keywords.txt`.
+- Added `Format::Rdf { format: RdfFormat }` variant to the `Format<T>` enum.
+- Added `RdfFormat` enum with `NTriples`, `Turtle`, `RdfXml` variants.
+- Extended `parse_format()` to parse `FORMAT RDF NTRIPLES`, `FORMAT RDF TURTLE`,
+  `FORMAT RDF RDFXML`.
+- Added `AstDisplay` for `RdfFormat` (renders as `NTRIPLES`, `TURTLE`, `RDFXML`).
+
+**Storage types** (`src/storage-types/src/sources/encoding.rs`):
+- Added `DataEncoding::Rdf(RdfEncoding)` variant.
+- Added `RdfEncoding { format: RdfEncodingFormat }` struct.
+- Added `RdfEncodingFormat` enum (`NTriples`, `Turtle`, `RdfXml`).
+- `desc()` returns 4-column schema: `(subject TEXT NOT NULL, predicate TEXT NOT NULL,
+  object TEXT NOT NULL, graph TEXT NULL)`.
+- Updated `type_()` → `"rdf"`, `op_name()` → `"Rdf"`.
+- Updated `IntoInlineConnection` and `AlterCompatible` impls.
+
+**SQL planner** (`src/sql/src/plan/statement/ddl.rs`):
+- Extended `get_encoding_inner()` to map `Format::Rdf { format }` →
+  `DataEncoding::Rdf(RdfEncoding { format })`.
+- Updated `get_unnamed_key_envelope()` to treat RDF as composite encoding.
+- Added `RdfFormat` to the import list.
+
+**Purification** (`src/sql/src/pure.rs`):
+- Added `Format::Rdf { .. }` to three exhaustive match arms (no special
+  purification needed for RDF — no schema registry resolution).
+
+**Decoder** (`src/storage/src/decode.rs`):
+- Added `PreDelimitedFormat::Rdf(Row)` variant for line-delimited RDF decoding.
+- Implemented N-Triples line parser (`parse_ntriples_line` + `parse_ntriples_term`).
+- N-Triples decoder handles: IRI references (`<...>`), blank nodes (`_:...`),
+  plain literals (`"..."`), typed literals (`"..."^^<type>`), language-tagged
+  literals (`"..."@lang`), escape sequences in string values.
+- Skips empty lines and comment lines (starting with `#`).
+- Graph column is `NULL` for N-Triples (which has no named graph support;
+  N-Quads extension could be added later).
+- Updated `get_decoder()` to route `DataEncoding::Rdf` through the
+  newline-delimited pipeline (appropriate for N-Triples' one-triple-per-line format).
+
+**Metrics** (`src/storage/src/metrics/decode.rs`):
+- Added `PreDelimitedFormat::Rdf(..) => "rdf"` label for decode metrics.
+
+### Key decisions
+
+1. **FORMAT, not source connection**: RDF is a data format (like JSON or CSV), not
+   a source connection (like Kafka or Postgres). Users combine it with any existing
+   source: `CREATE SOURCE ... FROM KAFKA ... FORMAT RDF NTRIPLES`. This is more
+   composable and avoids creating a new source connection type.
+
+2. **Three sub-formats**: The `FORMAT RDF` keyword requires a sub-format specifier
+   (`NTRIPLES`, `TURTLE`, `RDFXML`) because these have very different parsing
+   requirements. Only N-Triples has a full decoder implementation.
+
+3. **N-Triples only for now**: N-Triples is trivially parseable (one triple per
+   line, space-separated terms, no prefix abbreviations) and fits naturally into
+   Materialize's line-delimited decode pipeline. Turtle and RDF/XML require
+   stateful multi-line parsers; they are accepted by the parser/planner but will
+   need separate decoder implementations (likely using the `oxrdf` crate).
+
+4. **4-column output schema**: The output is `(subject, predicate, object, graph)`
+   matching the `rdf_quads` table expected by the SPARQL planner. The graph column
+   is `NULL` for N-Triples (single-graph format). N-Quads support could populate
+   it from the fourth field.
+
+5. **No new Rust dependencies**: The N-Triples parser is hand-written (~80 lines)
+   since the format is simple enough. Adding a full RDF parsing library (like
+   `oxrdf` or `rio_turtle`) would be appropriate when implementing Turtle/RDF-XML.
+
+6. **serde-serialized (no proto)**: `RdfEncoding` uses `Serialize`/`Deserialize`
+   like the existing `CsvEncoding`, `RegexEncoding`, etc. No `.proto` file needed.
+
+### Future work
+
+- **Turtle decoder**: Requires a stateful parser for prefix declarations, subject
+  grouping with `;` and `,` shorthand, and multi-line literals.
+- **RDF/XML decoder**: Requires an XML parser. Consider using `oxrdf`'s parser.
+- **N-Quads support**: Extension of N-Triples with an optional fourth field for
+  the named graph. Would populate the `graph` column.
+- **File sources**: Once Materialize supports file-based sources, RDF files could
+  be ingested directly.
+
+### Test results
+
+- mz-sql-parser: 13 tests pass + 2 doctests, 0 failures. 3 new parse-statement
+  tests for `FORMAT RDF NTRIPLES`, `FORMAT RDF TURTLE`, `FORMAT RDF RDFXML`.
+- mz-sql: compiles cleanly (all exhaustive match arms updated).
+- mz-storage: compiles cleanly with new decoder.
+- mz-storage decode tests: 11 new unit tests for N-Triples parsing (IRIs, literals,
+  typed literals, language tags, blank nodes, escape sequences, comments, empty lines,
+  invalid input, full decoder integration).
+- `bin/fmt`: passes (except missing `buf` tool)
+- `bin/lint`: only pre-existing missing-tool failures

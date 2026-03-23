@@ -266,15 +266,15 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~Read first: `test/sqllogictest/` for existing SLT conventions,~~
 > ~~`doc/developer/guide-testing.md` for the testing guide.~~
 
-### Prompt 21: RDF data ingestion (sources)
+### ~~Prompt 21: RDF data ingestion (sources)~~
 
-> Design and implement `CREATE SOURCE ... FORMAT RDF` for ingesting RDF
-> data from files (N-Triples, Turtle, RDF/XML) or streaming sources
-> (Kafka topics with RDF payloads). The source produces rows in
-> `(subject, predicate, object, graph)` format. This is a convenience
-> feature — users can also load RDF via INSERT or external ETL.
+> ~~Design and implement `CREATE SOURCE ... FORMAT RDF` for ingesting RDF~~
+> ~~data from files (N-Triples, Turtle, RDF/XML) or streaming sources~~
+> ~~(Kafka topics with RDF payloads). The source produces rows in~~
+> ~~`(subject, predicate, object, graph)` format. This is a convenience~~
+> ~~feature — users can also load RDF via INSERT or external ETL.~~
 >
-> Read first: `src/storage-types/src/sources/` for source format definitions.
+> ~~Read first: `src/storage-types/src/sources/` for source format definitions.~~
 
 ### Prompt 22: Extract HIR to a separate crate
 

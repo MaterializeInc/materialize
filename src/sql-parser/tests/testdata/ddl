@@ -896,7 +896,7 @@ CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])),
 parse-statement
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY FORMAT VALUE FORMAT JSON
 ----
-error: Expected AVRO, PROTOBUF, REGEX, CSV, JSON, TEXT, or BYTES, found VALUE
+error: Expected AVRO, PROTOBUF, REGEX, CSV, JSON, TEXT, BYTES, or RDF, found VALUE
 CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC = 'topic') KEY FORMAT VALUE FORMAT JSON
                                                                                 ^
 
@@ -2636,6 +2636,27 @@ CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') KEY FORMAT TEXT VAL
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC = 'baz') KEY FORMAT TEXT VALUE FORMAT CSV WITH 2 COLUMNS DELIMITED BY ';'
 =>
 CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("src1")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("baz"))) }] }, include_metadata: [], format: Some(KeyValue { key: Text, value: Csv { columns: Count(2), delimiter: ';' } }), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE rdf_src FROM KAFKA CONNECTION conn1 (TOPIC 'rdf-triples') FORMAT RDF NTRIPLES
+----
+CREATE SOURCE rdf_src FROM KAFKA CONNECTION conn1 (TOPIC = 'rdf-triples') FORMAT RDF NTRIPLES
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("rdf_src")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("rdf-triples"))) }] }, include_metadata: [], format: Some(Bare(Rdf { format: NTriples })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE rdf_src FROM KAFKA CONNECTION conn1 (TOPIC 'rdf-data') FORMAT RDF TURTLE
+----
+CREATE SOURCE rdf_src FROM KAFKA CONNECTION conn1 (TOPIC = 'rdf-data') FORMAT RDF TURTLE
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("rdf_src")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("rdf-data"))) }] }, include_metadata: [], format: Some(Bare(Rdf { format: Turtle })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
+
+parse-statement
+CREATE SOURCE rdf_src FROM KAFKA CONNECTION conn1 (TOPIC 'rdf-xml') FORMAT RDF RDFXML
+----
+CREATE SOURCE rdf_src FROM KAFKA CONNECTION conn1 (TOPIC = 'rdf-xml') FORMAT RDF RDFXML
+=>
+CreateSource(CreateSourceStatement { name: UnresolvedItemName([Ident("rdf_src")]), in_cluster: None, col_names: [], connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSourceConfigOption { name: Topic, value: Some(Value(String("rdf-xml"))) }] }, include_metadata: [], format: Some(Bare(Rdf { format: RdfXml })), envelope: None, if_not_exists: false, key_constraint: None, with_options: [], external_references: None, progress_subsource: None })
 
 parse-statement
 CREATE SOURCE src1 FROM KAFKA CONNECTION conn1 (TOPIC 'baz') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn (AVRO KEY FULLNAME = 'some.neat.class.foo', AVRO VALUE FULLNAME = 'some.neat.class.bar')

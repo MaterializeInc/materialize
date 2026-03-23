@@ -2079,10 +2079,18 @@ impl<'a> Parser<'a> {
             Format::Text
         } else if self.parse_keyword(BYTES) {
             Format::Bytes
+        } else if self.parse_keyword(RDF) {
+            let format = match self.expect_one_of_keywords(&[NTRIPLES, TURTLE, RDFXML])? {
+                NTRIPLES => RdfFormat::NTriples,
+                TURTLE => RdfFormat::Turtle,
+                RDFXML => RdfFormat::RdfXml,
+                _ => unreachable!(),
+            };
+            Format::Rdf { format }
         } else {
             return self.expected(
                 self.peek_pos(),
-                "AVRO, PROTOBUF, REGEX, CSV, JSON, TEXT, or BYTES",
+                "AVRO, PROTOBUF, REGEX, CSV, JSON, TEXT, BYTES, or RDF",
                 self.peek_token(),
             );
         };

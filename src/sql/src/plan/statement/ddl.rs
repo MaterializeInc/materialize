@@ -74,12 +74,12 @@ use mz_sql_parser::ast::{
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
     MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
     NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RdfFormat,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName, Statement,
+    TableConstraint, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
@@ -2484,6 +2484,17 @@ fn get_encoding_inner(
         Format::Json { array: false } => DataEncoding::Json,
         Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sources"),
         Format::Text => DataEncoding::Text,
+        Format::Rdf { format } => {
+            use mz_storage_types::sources::encoding::RdfEncodingFormat;
+            let rdf_format = match format {
+                RdfFormat::NTriples => RdfEncodingFormat::NTriples,
+                RdfFormat::Turtle => RdfEncodingFormat::Turtle,
+                RdfFormat::RdfXml => RdfEncodingFormat::RdfXml,
+            };
+            DataEncoding::Rdf(mz_storage_types::sources::encoding::RdfEncoding {
+                format: rdf_format,
+            })
+        }
     };
     Ok(SourceDataEncoding { key: None, value })
 }
@@ -2534,7 +2545,8 @@ fn get_unnamed_key_envelope(
             DataEncoding::Avro(_)
             | DataEncoding::Csv(_)
             | DataEncoding::Protobuf(_)
-            | DataEncoding::Regex { .. },
+            | DataEncoding::Regex { .. }
+            | DataEncoding::Rdf(_),
         ) => true,
         None => false,
     };
