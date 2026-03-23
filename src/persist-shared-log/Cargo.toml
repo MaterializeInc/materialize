@@ -1,0 +1,67 @@
+[package]
+name = "mz-persist-shared-log"
+description = "Group commit consensus service for Materialize persist."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+autobins = false
+autoexamples = false
+autobenches = false
+
+[lints]
+workspace = true
+
+[lib]
+bench = false
+
+[[bin]]
+name = "mz-persist-shared-log"
+bench = false
+
+[[example]]
+name = "specsheet"
+
+[dependencies]
+anyhow = "1.0.101"
+arrow = { version = "57", default-features = false }
+async-trait = "0.1.89"
+aws-sdk-s3 = { version = "1.94.0", default-features = false, features = ["rt-tokio"] }
+axum = "0.8.8"
+bincode = "1.3.3"
+differential-dataflow = "0.20.0"
+bytes = "1.11.1"
+clap = { version = "4.5.23", features = ["derive", "env"] }
+mz-aws-util = { path = "../aws-util", features = ["s3"] }
+mz-dyncfg = { path = "../dyncfg" }
+mz-build-info = { path = "../build-info" }
+mz-http-util = { path = "../http-util" }
+mz-ore = { path = "../ore", default-features = false, features = ["metrics"] }
+serde = { version = "1.0.219", features = ["derive"] }
+mz-persist = { path = "../persist" }
+mz-persist-client = { path = "../persist-client" }
+mz-persist-types = { path = "../persist-types" }
+prometheus = { version = "0.14.0", default-features = false }
+prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "time", "net", "tracing"] }
+tokio-stream = "0.1"
+tonic = "0.14.2"
+timely = "0.27.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["metrics", "test"] }
+mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
+rand = "0.8"
+serde_json = "1.0.149"
+serde_yaml = "0.9.34"
+stateright = "0.31.0"
+tokio = { version = "1.49.0", features = ["test-util", "rt-multi-thread"] }
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

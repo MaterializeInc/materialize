@@ -437,6 +437,19 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: testdrive-shared-log
+        label: "testdrive with persist shared log"
+        depends_on: build-aarch64
+        timeout_in_minutes: 180
+        inputs: [test/testdrive, src/persist-shared-log]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              env:
+                - PERSIST_CONSENSUS_BACKEND: shared-log
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
       - id: testdrive-in-cloudtest
         label: "Full Testdrive in Cloudtest (K8s)"
         depends_on: build-aarch64

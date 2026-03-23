@@ -90,7 +90,7 @@ def activate_venv(py_dir: Path) -> Path:
             logger.info("python exec error: %s", e)
         print(f"==> Initializing virtualenv in {venv_dir}", file=sys.stderr)
         try:
-            subprocess.check_call(["uv", "venv", venv_dir])
+            subprocess.check_call(["uv", "venv", "--python", "3.13", "--clear", venv_dir])
         except FileNotFoundError:
             # Install Python into the virtualenv via a symlink rather than copying,
             # except on Windows. This matches the behavior of the `python -m venv`

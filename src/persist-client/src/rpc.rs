@@ -710,7 +710,7 @@ impl PubSubSender for NoopPubSubSender {
 }
 
 /// Spawns a Tokio task that consumes a [PubSubReceiver], applying its diffs to a [StateCache].
-pub(crate) fn subscribe_state_cache_to_pubsub(
+pub fn subscribe_state_cache_to_pubsub(
     cache: Arc<StateCache>,
     mut pubsub_receiver: Box<dyn PubSubReceiver>,
 ) -> JoinHandle<()> {

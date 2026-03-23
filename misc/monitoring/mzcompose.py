@@ -46,13 +46,14 @@ SERVICES = [
         "grafana",
         {
             "image": "grafana/grafana:10.0.3",
-            "ports": ["3000:3000"],
+            "ports": ["3001:3000"],
             "environment": [
                 "GF_AUTH_ANONYMOUS_ENABLED=true",
                 "GF_AUTH_ANONYMOUS_ORG_ROLE=Admin",
             ],
             "volumes": [
                 "./grafana/datasources:/etc/grafana/provisioning/datasources",
+                "./grafana/dashboards:/etc/grafana/provisioning/dashboards",
             ],
             "allow_host_ports": True,
         },

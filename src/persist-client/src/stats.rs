@@ -40,7 +40,7 @@ pub const STATS_AUDIT_PANIC: Config<bool> = Config::new(
 ///
 /// These can be used at read time to entirely skip fetching a part based on its
 /// statistics. See [STATS_FILTER_ENABLED].
-pub(crate) const STATS_COLLECTION_ENABLED: Config<bool> = Config::new(
+pub const STATS_COLLECTION_ENABLED: Config<bool> = Config::new(
     "persist_stats_collection_enabled",
     true,
     "\
