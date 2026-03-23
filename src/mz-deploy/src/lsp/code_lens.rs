@@ -1,31 +1,33 @@
-//! Code lenses for inline unit tests.
+//! Code lenses for unit tests and explain plans.
 //!
-//! Places a clickable "Run Test" link above each `EXECUTE UNIT TEST` statement
-//! in a SQL file. When clicked, the editor dispatches a `mz-deploy.runTest`
-//! command with the test filter string as argument.
+//! Places clickable links above SQL statements:
+//!
+//! - **"Run Test"** above each `EXECUTE UNIT TEST` statement — dispatches
+//!   `mz-deploy.runTest` with the test filter string.
+//! - **"Explain"** above `CREATE MATERIALIZED VIEW` statements and named
+//!   `CREATE INDEX` statements — dispatches `mz-deploy.runExplain` with the
+//!   fully qualified target (`database.schema.object` or
+//!   `database.schema.object#index_name`).
 //!
 //! ## Algorithm
 //!
 //! 1. Derive the file's `ObjectId` from its URI path (same `models/<db>/<schema>/`
 //!    convention used by completions and go-to-definition).
-//! 2. Look up the object in the project model to get its `typed_object.tests`.
-//! 3. For each test, scan the file text for the `EXECUTE UNIT TEST <name>` line
-//!    and emit a `CodeLens` with the `mz-deploy.runTest` command.
-//!
-//! ## Filter format
-//!
-//! The command argument is `database.schema.object#test_name`, matching the
-//! filter syntax accepted by `mz-deploy test --filter`.
+//! 2. Look up the object in the project model.
+//! 3. Emit test lenses for `typed_object.tests`.
+//! 4. Emit an explain lens if the object is a materialized view.
+//! 5. Emit explain lenses for each named index in `typed_object.indexes`.
 
+use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
 use std::path::Path;
 use tower_lsp::lsp_types::*;
 
-/// Build code lenses for all unit tests in the file identified by `file_uri`.
+/// Build code lenses for tests and explain targets in the file.
 ///
-/// Returns an empty vec if the file is not under `models/<db>/<schema>/`, the
-/// object is not found in the project, or the object has no tests.
+/// Returns an empty vec if the file is not under `models/<db>/<schema>/` or
+/// the object is not found in the project.
 pub fn code_lenses(
     file_uri: &Url,
     file_text: &str,
@@ -53,21 +55,50 @@ pub fn code_lenses(
         None => return Vec::new(),
     };
 
-    obj.typed_object
-        .tests
-        .iter()
-        .filter_map(|test| {
-            let test_name = test.name.to_string();
-            let line = find_test_line(file_text, &test_name)?;
-            let filter = format!(
-                "{}.{}.{}#{}",
-                file_object_id.database(),
-                file_object_id.schema(),
-                file_object_id.object(),
-                test_name,
-            );
+    let fqn = file_object_id.to_string();
+    let mut lenses = Vec::new();
 
-            Some(CodeLens {
+    // Explain lens for materialized views
+    if matches!(obj.typed_object.stmt, Statement::CreateMaterializedView(_)) {
+        if let Some(line) = find_statement_line(file_text, "create materialized view") {
+            lenses.push(CodeLens {
+                range: Range::new(Position::new(line, 0), Position::new(line, 0)),
+                command: Some(Command {
+                    title: "\u{25b6} Explain".to_string(),
+                    command: "mz-deploy.runExplain".to_string(),
+                    arguments: Some(vec![serde_json::Value::String(fqn.clone())]),
+                }),
+                data: None,
+            });
+        }
+    }
+
+    // Explain lenses for named indexes
+    for index in &obj.typed_object.indexes {
+        let index_name = match &index.name {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        if let Some(line) = find_index_line(file_text, &index_name) {
+            let target = format!("{}#{}", fqn, index_name);
+            lenses.push(CodeLens {
+                range: Range::new(Position::new(line, 0), Position::new(line, 0)),
+                command: Some(Command {
+                    title: "\u{25b6} Explain".to_string(),
+                    command: "mz-deploy.runExplain".to_string(),
+                    arguments: Some(vec![serde_json::Value::String(target)]),
+                }),
+                data: None,
+            });
+        }
+    }
+
+    // Test lenses
+    for test in &obj.typed_object.tests {
+        let test_name = test.name.to_string();
+        if let Some(line) = find_test_line(file_text, &test_name) {
+            let filter = format!("{}#{}", fqn, test_name);
+            lenses.push(CodeLens {
                 range: Range::new(Position::new(line, 0), Position::new(line, 0)),
                 command: Some(Command {
                     title: "\u{25b6} Run Test".to_string(),
@@ -75,16 +106,40 @@ pub fn code_lenses(
                     arguments: Some(vec![serde_json::Value::String(filter)]),
                 }),
                 data: None,
-            })
-        })
-        .collect()
+            });
+        }
+    }
+
+    lenses
+}
+
+/// Find the 0-based line number where a statement keyword appears.
+///
+/// Case-insensitive scan for lines starting with `keyword` (e.g.,
+/// `"create materialized view"`).
+fn find_statement_line(file_text: &str, keyword: &str) -> Option<u32> {
+    for (i, line) in file_text.lines().enumerate() {
+        if line.trim().to_lowercase().starts_with(keyword) {
+            return u32::try_from(i).ok();
+        }
+    }
+    None
+}
+
+/// Find the 0-based line number where `CREATE INDEX <name>` appears.
+fn find_index_line(file_text: &str, index_name: &str) -> Option<u32> {
+    let target = format!("create index {}", index_name);
+    let target_lower = target.to_lowercase();
+
+    for (i, line) in file_text.lines().enumerate() {
+        if line.trim().to_lowercase().starts_with(&target_lower) {
+            return u32::try_from(i).ok();
+        }
+    }
+    None
 }
 
 /// Find the 0-based line number where `EXECUTE UNIT TEST <name>` appears.
-///
-/// Performs a case-insensitive scan of `file_text` line-by-line, looking for a
-/// line that contains the tokens `execute`, `unit`, `test`, followed by
-/// `test_name` (after stripping surrounding quotes if present).
 fn find_test_line(file_text: &str, test_name: &str) -> Option<u32> {
     let target = format!("execute unit test {}", test_name);
     let target_lower = target.to_lowercase();

@@ -11,6 +11,7 @@
 //! | `FullyQualifyingTransformer` | Typed phase (default normalization) | `sales` → `materialize.public.sales` |
 //! | `FlatteningTransformer` | Type-checking (single-schema container) | `materialize.public.sales` → `"materialize.public.sales"` |
 //! | `StagingTransformer` | Blue/green staging | `materialize.public.sales` → `materialize.public_v1.sales` |
+//! | `ExplainTransformer` | Explain command (dedicated schema) | `materialize.public.sales` → `materialize._mz_explain."materialize.public.sales"` |
 //!
 //! ## StagingTransformer Rules
 //!
@@ -374,5 +375,90 @@ impl<'a> ClusterTransformer for StagingTransformer<'a> {
             .strip_suffix(&self.staging_suffix)
             .unwrap_or(staged_name)
             .to_string()
+    }
+}
+
+/// Transforms names for the explain command by placing all objects into a
+/// dedicated schema with flattened identifiers.
+///
+/// This strategy rewrites every object reference to live in a single explain
+/// schema using the `"db.schema.obj"` flattened naming convention (same as
+/// [`FlatteningTransformer`]) but qualified with `<database>.<explain_schema>`.
+/// This avoids name collisions between objects from different schemas while
+/// keeping everything in a real (non-temporary) schema that can be dropped
+/// after the explain completes.
+///
+/// Also implements [`ClusterTransformer`] to rewrite all `IN CLUSTER` clauses
+/// to `quickstart`, since explain always runs against that cluster.
+pub struct ExplainTransformer<'a> {
+    fqn: &'a FullyQualifiedName,
+    explain_database: String,
+    explain_schema: String,
+}
+
+impl<'a> ExplainTransformer<'a> {
+    /// Create a new explain transformer.
+    ///
+    /// # Arguments
+    /// * `fqn` - The fully qualified name context for resolving partial names
+    /// * `explain_database` - The database where the explain schema lives
+    /// * `explain_schema` - The dedicated schema name (e.g., `_mz_explain_<uuid>`)
+    pub fn new(
+        fqn: &'a FullyQualifiedName,
+        explain_database: String,
+        explain_schema: String,
+    ) -> Self {
+        Self {
+            fqn,
+            explain_database,
+            explain_schema,
+        }
+    }
+
+    /// Flatten a fully qualified name into a single quoted identifier.
+    fn flatten(&self, parts: &[String; 3]) -> UnresolvedItemName {
+        let flattened = parts.join(".");
+        let flattened_ident = Ident::new(&flattened).expect("valid flattened identifier");
+        let db_ident = Ident::new(&self.explain_database).expect("valid database identifier");
+        let schema_ident = Ident::new(&self.explain_schema).expect("valid schema identifier");
+        UnresolvedItemName(vec![db_ident, schema_ident, flattened_ident])
+    }
+}
+
+impl<'a> NameTransformer for ExplainTransformer<'a> {
+    fn transform_name(&self, name: &UnresolvedItemName) -> UnresolvedItemName {
+        let parts = match name.0.len() {
+            1 => [
+                self.fqn.database().to_string(),
+                self.fqn.schema().to_string(),
+                name.0[0].to_string(),
+            ],
+            2 => [
+                self.fqn.database().to_string(),
+                name.0[0].to_string(),
+                name.0[1].to_string(),
+            ],
+            3 => [
+                name.0[0].to_string(),
+                name.0[1].to_string(),
+                name.0[2].to_string(),
+            ],
+            _ => return name.clone(),
+        };
+        self.flatten(&parts)
+    }
+
+    fn database_name(&self) -> &str {
+        self.fqn.database()
+    }
+}
+
+impl<'a> ClusterTransformer for ExplainTransformer<'a> {
+    fn transform_cluster(&self, _cluster_name: &Ident) -> Ident {
+        Ident::new("quickstart").expect("valid cluster identifier")
+    }
+
+    fn get_original_cluster_name(&self, staged_name: &str) -> String {
+        staged_name.to_string()
     }
 }

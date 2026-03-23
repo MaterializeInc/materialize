@@ -43,6 +43,7 @@ Getting started:
 Develop:
   compile              Compile and validate SQL without connecting to database [aliases: build]
   test                 Run SQL unit tests defined in test files
+  explain              Show the EXPLAIN plan for a materialized view or index
   explore              Generate interactive project documentation
   lsp                  Start Language Server Protocol server for editor integration
 
@@ -158,6 +159,27 @@ enum Command {
         /// Output directory for generated documentation (default: target/docs/)
         #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
         output_dir: Option<PathBuf>,
+    },
+
+    /// Show the EXPLAIN plan for a materialized view or index
+    ///
+    /// Compiles the project, stages the target object's dependencies in a
+    /// temporary schema on the live Materialize instance, creates the target,
+    /// and runs EXPLAIN. The temporary schema is always dropped after completion.
+    ///
+    /// All objects are created on the `quickstart` cluster regardless of
+    /// what cluster is specified in the project.
+    ///
+    /// Examples:
+    ///   mz-deploy explain materialize.public.my_view
+    ///   mz-deploy explain materialize.public.my_view#my_index
+    #[command(
+        hide = true,
+        after_help = "Run 'mz-deploy help explain' for a detailed usage guide."
+    )]
+    Explain {
+        /// Fully qualified object path: database.schema.object[#index_name]
+        target: String,
     },
 
     /// Apply infrastructure objects to Materialize (Terraform-like)
@@ -855,6 +877,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             }
             cli::commands::explore::run(&settings, output_dir, !no_open).await
         }
+        Some(Command::Explain { target }) => cli::commands::explain::run(&settings, &target).await,
         Some(Command::Apply {
             skip_secrets,
             dry_run,

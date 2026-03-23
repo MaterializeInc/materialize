@@ -31,8 +31,8 @@ mod visitor;
 
 // Re-export all public types and functions
 pub use transformers::{
-    ClusterTransformer, FlatteningTransformer, FullyQualifyingTransformer, NameTransformer,
-    StagingTransformer,
+    ClusterTransformer, ExplainTransformer, FlatteningTransformer, FullyQualifyingTransformer,
+    NameTransformer, StagingTransformer,
 };
 pub use visitor::NormalizingVisitor;
 

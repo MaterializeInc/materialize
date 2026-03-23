@@ -35,8 +35,8 @@
 use super::super::cte_scope::CteScope;
 use super::super::typed::FullyQualifiedName;
 use super::transformers::{
-    ClusterTransformer, FlatteningTransformer, FullyQualifyingTransformer, NameTransformer,
-    StagingTransformer,
+    ClusterTransformer, ExplainTransformer, FlatteningTransformer, FullyQualifyingTransformer,
+    NameTransformer, StagingTransformer,
 };
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
@@ -397,6 +397,24 @@ impl<'a> NormalizingVisitor<FlatteningTransformer<'a>> {
     /// Create a visitor that flattens names (`database_schema_object`).
     pub fn flattening(fqn: &'a FullyQualifiedName) -> Self {
         Self::new(FlatteningTransformer { fqn })
+    }
+}
+
+impl<'a> NormalizingVisitor<ExplainTransformer<'a>> {
+    /// Create a visitor that transforms names for the explain command.
+    ///
+    /// All object references are rewritten to `<database>.<explain_schema>."db.schema.obj"`,
+    /// and all `IN CLUSTER` clauses are rewritten to `quickstart`.
+    pub fn explain(
+        fqn: &'a FullyQualifiedName,
+        explain_database: String,
+        explain_schema: String,
+    ) -> Self {
+        Self::new(ExplainTransformer::new(
+            fqn,
+            explain_database,
+            explain_schema,
+        ))
     }
 }
 

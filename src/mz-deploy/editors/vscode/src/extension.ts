@@ -271,7 +271,7 @@ function applyKeywordDecorations(editor: vscode.TextEditor): void {
  * 1. The LSP client pointing at `mz-deploy lsp`
  * 2. The catalog sidebar (`CatalogProvider`) and DAG panel (`DAGPanel`)
  * 3. Message routing between webviews and the extension host
- * 4. Commands: `mz-deploy.openDAG`, `mz-deploy.runTest`
+ * 4. Commands: `mz-deploy.openDAG`, `mz-deploy.runTest`, `mz-deploy.runExplain`
  * 5. The `mz-deploy/projectRebuilt` notification handler for live refresh
  * 6. Keyword highlighting listeners on editor/document changes
  */
@@ -348,6 +348,20 @@ export function activate(context: vscode.ExtensionContext): void {
       terminal.show();
       terminal.sendText(
         `~/materialize/target/release/mz-deploy test '${filter}'`
+      );
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("mz-deploy.runExplain", async (target: string) => {
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        await activeEditor.document.save();
+      }
+      const terminal = vscode.window.createTerminal("mz-deploy explain");
+      terminal.show();
+      terminal.sendText(
+        `~/materialize/target/release/mz-deploy explain '${target}'`
       );
     })
   );

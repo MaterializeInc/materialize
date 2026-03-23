@@ -9,6 +9,7 @@
 //! - **[`new_project`]** — Scaffold a new mz-deploy project directory.
 //! - **[`compile`]** — Parse and validate the project, optionally type-checking
 //!   against a Docker container.
+//! - **[`explain`]** — Show the EXPLAIN plan for a materialized view or index.
 //! - **[`stage`]** — Deploy the project to a staging environment using
 //!   blue/green schemas.
 //! - **[`wait`]** — Check hydration status of a staged deployment.
@@ -57,6 +58,7 @@ pub mod compile;
 pub mod debug;
 pub mod delete;
 pub mod describe;
+pub mod explain;
 pub mod explore;
 pub mod grants;
 pub mod list;
