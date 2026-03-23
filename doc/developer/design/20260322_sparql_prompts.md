@@ -242,29 +242,29 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~subqueries, CONSTRUCT, ASK. Track which tests pass/fail and create~~
 > ~~issues for failures.~~
 
-### Prompt 20: SPARQL sqllogictests
+### ~~Prompt 20: SPARQL sqllogictests~~
 
-> Add end-to-end sqllogictests for the SPARQL pipeline. Create a test file
-> `test/sqllogictest/sparql.slt` that:
-> 1. Creates an `rdf_quads(subject, predicate, object, graph)` table.
-> 2. Inserts a small RDF dataset (people, knows relationships, types, literals).
-> 3. Tests all major SPARQL features via `SPARQL $$ ... $$`:
->    - Basic graph patterns (single triple, multi-triple join)
->    - FILTER (comparison, BOUND, logical operators)
->    - OPTIONAL (with and without inner FILTER)
->    - UNION and MINUS
->    - BIND and VALUES
->    - Property paths (sequence, alternative, transitive closure with +/*)
->    - Aggregates (COUNT, GROUP BY, HAVING, ORDER BY, LIMIT)
->    - CONSTRUCT, ASK, DESCRIBE
->    - SELECT expressions (UCASE, CONCAT, IF, COALESCE)
->    - FROM `<urn:materialize:catalog>` (catalog-as-RDF)
->    - CREATE VIEW / CREATE MATERIALIZED VIEW from SPARQL
->    - SUBSCRIBE TO SPARQL (basic smoke test)
-> 4. Verify result sets match expected output.
+> ~~Add end-to-end sqllogictests for the SPARQL pipeline. Create a test file~~
+> ~~`test/sqllogictest/sparql.slt` that:~~
+> ~~1. Creates an `rdf_quads(subject, predicate, object, graph)` table.~~
+> ~~2. Inserts a small RDF dataset (people, knows relationships, types, literals).~~
+> ~~3. Tests all major SPARQL features via `SPARQL $$ ... $$`:~~
+>    ~~- Basic graph patterns (single triple, multi-triple join)~~
+>    ~~- FILTER (comparison, BOUND, logical operators)~~
+>    ~~- OPTIONAL (with and without inner FILTER)~~
+>    ~~- UNION and MINUS~~
+>    ~~- BIND and VALUES~~
+>    ~~- Property paths (sequence, alternative, transitive closure with +/*)~~
+>    ~~- Aggregates (COUNT, GROUP BY, HAVING, ORDER BY, LIMIT)~~
+>    ~~- CONSTRUCT, ASK, DESCRIBE~~
+>    ~~- SELECT expressions (UCASE, CONCAT, IF, COALESCE)~~
+>    ~~- FROM `<urn:materialize:catalog>` (catalog-as-RDF)~~
+>    ~~- CREATE VIEW / CREATE MATERIALIZED VIEW from SPARQL~~
+>    ~~- SUBSCRIBE TO SPARQL (basic smoke test)~~
+> ~~4. Verify result sets match expected output.~~
 >
-> Read first: `test/sqllogictest/` for existing SLT conventions,
-> `doc/developer/guide-testing.md` for the testing guide.
+> ~~Read first: `test/sqllogictest/` for existing SLT conventions,~~
+> ~~`doc/developer/guide-testing.md` for the testing guide.~~
 
 ### Prompt 21: RDF data ingestion (sources)
 

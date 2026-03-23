@@ -1775,3 +1775,67 @@ data for GRAPH/FROM tests.
 - `check-rust-test-attributes` lint: passes (all `#[test]` → `#[mz_ore::test]`)
 - `bin/fmt`: passes (except missing `buf` tool)
 - `bin/lint`: only missing-tool failures remain (buf, helm-docs, trufflehog)
+
+## 2026-03-23: Prompt 20 — SPARQL sqllogictests
+
+### What was done
+
+Created `test/sqllogictest/sparql.slt` — a comprehensive end-to-end test file
+covering all major SPARQL features through the full pipeline (SQL parser → SPARQL
+parser → planner → HIR → MIR → execution).
+
+**Test sections (17 sections, 40+ test queries)**:
+
+1. **Basic Graph Patterns** (3 tests): All variables, multi-triple BGP join,
+   three-way join with friend names.
+2. **FILTER** (3 tests): Numeric comparison, BOUND function, logical AND+NOT.
+3. **OPTIONAL** (2 tests): Basic with NULLs, inner FILTER (ON clause placement).
+4. **UNION and MINUS** (3 tests): Same variables, different variables (NULL padding),
+   basic MINUS.
+5. **BIND and VALUES** (2 tests): BIND with IF expression, VALUES inline data.
+6. **Property Paths** (6 tests): Sequence, alternative, transitive closure (+),
+   zero-or-more (*), inverse, transitive knows chain.
+7. **Aggregates** (5 tests): COUNT, GROUP BY + COUNT + ORDER BY DESC, HAVING,
+   MIN/MAX, COUNT DISTINCT.
+8. **CONSTRUCT, ASK, DESCRIBE** (4 tests): CONSTRUCT template, ASK positive/negative,
+   DESCRIBE resource.
+9. **SELECT Expressions** (5 tests): UCASE, CONCAT, STRLEN, COALESCE, IF.
+10. **FROM catalog** (2 tests): Query catalog for table name, query catalog for
+    column names and types.
+11. **CREATE VIEW** (3 tests): Create SPARQL view, query via SQL, join with SQL table.
+12. **CREATE MATERIALIZED VIEW** (2 tests): Materialized view from SELECT,
+    CONSTRUCT view with (subject, predicate, object) schema.
+13. **SUBSCRIBE TO SPARQL** (1 test): Declare cursor, fetch 4 rows with timeout.
+14. **FILTER NOT EXISTS / EXISTS** (2 tests): People who know nobody, people with
+    interests.
+15. **Subqueries** (1 test): Subquery with LIMIT joined with outer pattern.
+16. **Three-valued logic** (1 test): Error in FILTER evaluates to false.
+17. **Complex combined** (3 tests): OPTIONAL+FILTER+ORDER+LIMIT, property path
+    aggregate, BIND+VALUES+FILTER.
+
+### Key decisions
+
+1. **Separate from W3C tests**: `sparql.slt` is distinct from `sparql_w3c.slt`.
+   The W3C file focuses on spec compliance traceability; this file focuses on
+   Materialize-specific integration (catalog-as-RDF, views, materialized views,
+   SUBSCRIBE, SQL↔SPARQL interop).
+
+2. **Self-contained dataset**: Same small RDF graph as the W3C file (people, names,
+   ages, emails, knows, interests, class hierarchy, named graph) for consistency
+   and independence.
+
+3. **SUBSCRIBE via DECLARE CURSOR**: Uses the standard `BEGIN` / `DECLARE c CURSOR
+   FOR SUBSCRIBE` / `FETCH n c WITH (timeout)` / `COMMIT` pattern established
+   by other SLT files.
+
+4. **DESCRIBE test included**: Unlike the W3C file which skipped DESCRIBE (output
+   is implementation-defined), this file tests DESCRIBE since we know our
+   implementation's output format.
+
+5. **CASCADE cleanup**: `DROP TABLE rdf_quads CASCADE` at the end cleans up both
+   the table and any remaining views.
+
+### Test results
+
+- `bin/fmt`: passes (except missing `buf` tool)
+- `bin/lint`: only pre-existing missing-tool failures (buf, helm-docs, trufflehog, npm perms)
