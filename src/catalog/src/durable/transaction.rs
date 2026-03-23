@@ -2546,7 +2546,7 @@ impl<'a> Transaction<'a> {
             unfinalized_shards,
             txn_wal_shard,
             audit_log_updates,
-            upper,
+            upper: _,
         } = &mut txn_batch;
         // Consolidate in memory because it will likely be faster than consolidating after the
         // transaction has been made durable.
@@ -2573,12 +2573,6 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
-        assert!(
-            commit_ts >= *upper,
-            "expected commit ts, {}, to be greater than or equal to upper, {}",
-            commit_ts,
-            upper
-        );
         let upper = durable_catalog
             .commit_transaction(txn_batch, commit_ts)
             .await?;
