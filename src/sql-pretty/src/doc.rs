@@ -770,7 +770,11 @@ impl Pretty {
                 ")",
             ));
         }
-        docs.push(nest_title("AS", self.doc_query(&v.query)));
+        if let Some(sparql) = &v.sparql {
+            docs.push(nest_title("AS", RcDoc::text(sparql.to_ast_string_simple())));
+        } else {
+            docs.push(nest_title("AS", self.doc_query(&v.query)));
+        }
         intersperse_line_nest(docs)
     }
 
@@ -783,7 +787,11 @@ impl Pretty {
                 ")",
             ));
         }
-        docs.push(nest_title("AS", self.doc_query(&v.query)));
+        if let Some(sparql) = &v.sparql {
+            docs.push(nest_title("AS", RcDoc::text(sparql.to_ast_string_simple())));
+        } else {
+            docs.push(nest_title("AS", self.doc_query(&v.query)));
+        }
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 

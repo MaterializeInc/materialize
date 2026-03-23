@@ -753,6 +753,9 @@ pub struct CreateViewPlan {
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
     pub ambiguous_columns: bool,
+    /// If set, this view is defined by a SPARQL query. The adapter compiles the
+    /// SPARQL to HIR before optimizing, replacing the placeholder `view.expr`.
+    pub sparql_info: Option<SparqlViewInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -767,6 +770,20 @@ pub struct CreateMaterializedViewPlan {
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
     pub ambiguous_columns: bool,
+    /// If set, this materialized view is defined by a SPARQL query.
+    pub sparql_info: Option<SparqlViewInfo>,
+}
+
+/// Information needed to compile a SPARQL query into HIR at sequencing time.
+/// Used by `CreateViewPlan` and `CreateMaterializedViewPlan` to defer SPARQL
+/// compilation to the adapter (avoiding a cyclic dependency between mz-sql
+/// and mz-sparql).
+#[derive(Debug, Clone)]
+pub struct SparqlViewInfo {
+    /// The parsed SPARQL query.
+    pub query: mz_sparql_parser::ast::SparqlQuery,
+    /// The GlobalId of the quad table to query against.
+    pub quad_table_id: GlobalId,
 }
 
 #[derive(Debug, Clone)]

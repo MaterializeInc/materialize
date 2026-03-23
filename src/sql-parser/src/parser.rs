@@ -3885,12 +3885,36 @@ impl<'a> Parser<'a> {
         let columns = self.parse_parenthesized_column_list(Optional)?;
         // Postgres supports WITH options here, but we don't.
         self.expect_keyword(AS)?;
+
+        // Check for SPARQL $$ ... $$ syntax.
+        if self.parse_keyword(SPARQL) {
+            let body = match self.next_token() {
+                Some(Token::String(s)) => s,
+                other => {
+                    return self.expected(
+                        self.peek_prev_pos(),
+                        "a dollar-quoted string containing a SPARQL query",
+                        other,
+                    );
+                }
+            };
+            // Use a dummy query placeholder — the SPARQL body is authoritative.
+            let query = Self::dummy_query();
+            return Ok(ViewDefinition {
+                name,
+                columns,
+                query,
+                sparql: Some(SparqlStatement { body }),
+            });
+        }
+
         let query = self.parse_query()?;
         // Optional `WITH [ CASCADED | LOCAL ] CHECK OPTION` is widely supported here.
         Ok(ViewDefinition {
             name,
             columns,
             query,
+            sparql: None,
         })
     }
 
@@ -3940,7 +3964,24 @@ impl<'a> Parser<'a> {
         };
 
         self.expect_keyword(AS)?;
-        let query = self.parse_query()?;
+
+        // Check for SPARQL $$ ... $$ syntax.
+        let (query, sparql) = if self.parse_keyword(SPARQL) {
+            let body = match self.next_token() {
+                Some(Token::String(s)) => s,
+                other => {
+                    return self.expected(
+                        self.peek_prev_pos(),
+                        "a dollar-quoted string containing a SPARQL query",
+                        other,
+                    );
+                }
+            };
+            (Self::dummy_query(), Some(SparqlStatement { body }))
+        } else {
+            (self.parse_query()?, None)
+        };
+
         let as_of = self.parse_optional_internal_as_of()?;
 
         Ok(Statement::CreateMaterializedView(
@@ -3954,6 +3995,7 @@ impl<'a> Parser<'a> {
                 query,
                 as_of,
                 with_options,
+                sparql,
             },
         ))
     }
@@ -10182,6 +10224,19 @@ impl<'a> Parser<'a> {
     ///
     /// The `SPARQL` keyword has already been consumed. Expects a dollar-quoted
     /// string containing the SPARQL query body.
+    /// Create a minimal dummy `Query<Raw>` placeholder for SPARQL view definitions.
+    /// The actual query body is in the `sparql` field; this placeholder is never used
+    /// for planning.
+    fn dummy_query() -> Query<Raw> {
+        Query {
+            ctes: CteBlock::Simple(vec![]),
+            body: SetExpr::Values(Values(vec![])),
+            order_by: vec![],
+            limit: None,
+            offset: None,
+        }
+    }
+
     fn parse_sparql(&mut self) -> Result<Statement<Raw>, ParserError> {
         let body = match self.next_token() {
             Some(Token::String(s)) => s,

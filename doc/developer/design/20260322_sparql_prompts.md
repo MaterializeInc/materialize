@@ -183,16 +183,16 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~Read first: `src/adapter/src/coord/sequencer/inner/subscribe.rs`,~~
 > ~~`src/sql/src/plan/statement/dml.rs` (plan_subscribe).~~
 
-### Prompt 15: CREATE [MATERIALIZED] VIEW from SPARQL
+### ~~Prompt 15: CREATE [MATERIALIZED] VIEW from SPARQL~~
 
-> Support `CREATE VIEW name AS SPARQL $$ ... $$` and
-> `CREATE MATERIALIZED VIEW name AS SPARQL $$ ... $$`. The SPARQL query
-> is planned into HirRelationExpr and stored as a view definition.
-> For CONSTRUCT views, the output schema is (subject, predicate, object).
-> For SELECT views, the output schema uses SPARQL variable names as column
-> names.
+> ~~Support `CREATE VIEW name AS SPARQL $$ ... $$` and~~
+> ~~`CREATE MATERIALIZED VIEW name AS SPARQL $$ ... $$`. The SPARQL query~~
+> ~~is planned into HirRelationExpr and stored as a view definition.~~
+> ~~For CONSTRUCT views, the output schema is (subject, predicate, object).~~
+> ~~For SELECT views, the output schema uses SPARQL variable names as column~~
+> ~~names.~~
 >
-> Read first: `src/sql/src/plan/statement/ddl.rs` (plan_create_view).
+> ~~Read first: `src/sql/src/plan/statement/ddl.rs` (plan_create_view).~~
 
 ### Prompt 16: Implement catalog-as-RDF named graph
 

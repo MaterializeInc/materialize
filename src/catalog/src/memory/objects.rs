@@ -1495,6 +1495,7 @@ impl MaterializedView {
             query: rpl_stmt.query,
             as_of: rpl_stmt.as_of,
             with_options: rpl_stmt.with_options,
+            sparql: rpl_stmt.sparql,
         };
         let create_sql = new_stmt.to_ast_string_stable();
 

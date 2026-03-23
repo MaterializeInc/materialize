@@ -578,6 +578,7 @@ fn generate_rbac_requirements(
             drop_ids: _,
             if_not_exists: _,
             ambiguous_columns: _,
+            sparql_info: _,
         }) => RbacRequirements {
             ownership: replace
                 .map(|id| vec![ObjectId::Item(id)])
@@ -597,6 +598,7 @@ fn generate_rbac_requirements(
             drop_ids: _,
             if_not_exists: _,
             ambiguous_columns: _,
+            sparql_info: _,
         }) => RbacRequirements {
             ownership: replace
                 .map(|id| vec![ObjectId::Item(id)])

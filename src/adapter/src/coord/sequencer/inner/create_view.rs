@@ -245,12 +245,22 @@ impl Coordinator {
     #[instrument]
     fn create_view_validate(
         &self,
-        plan: plan::CreateViewPlan,
+        mut plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
         // sequencing an EXPLAIN for this statement.
         explain_ctx: ExplainContext,
     ) -> Result<CreateViewStage, AdapterError> {
+        // If this is a SPARQL view, compile the SPARQL query to HIR now,
+        // replacing the placeholder expression.
+        if let Some(sparql_info) = plan.sparql_info.take() {
+            let planner = mz_sparql::plan::SparqlPlanner::new(sparql_info.quad_table_id);
+            let planned = planner
+                .plan(&sparql_info.query)
+                .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{}", e.message)))?;
+            plan.view.expr = planned.expr;
+        }
+
         let plan::CreateViewPlan {
             view: plan::View { expr, .. },
             ambiguous_columns,

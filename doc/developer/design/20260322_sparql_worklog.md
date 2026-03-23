@@ -1275,3 +1275,110 @@ Extended `SUBSCRIBE` to accept SPARQL queries: `SUBSCRIBE TO SPARQL $$ ... $$`.
 
 3. **All subscribe options supported**: AS OF, UP TO, WITH (SNAPSHOT, PROGRESS), and envelope
    options all work with SPARQL subscribes since they operate on the `SubscribePlan` wrapper.
+
+## 2026-03-23: Prompt 15 — CREATE [MATERIALIZED] VIEW from SPARQL
+
+### What was done
+
+Implemented `CREATE VIEW name AS SPARQL $$ ... $$` and
+`CREATE MATERIALIZED VIEW name AS SPARQL $$ ... $$` end-to-end.
+
+**SQL parser** (`src/sql-parser/`):
+- Extended `parse_view_definition()` to detect `AS SPARQL` after the view name
+  and column list. When found, parses the dollar-quoted SPARQL body as a
+  `SparqlStatement` and sets it in the new `sparql: Option<SparqlStatement>`
+  field on `ViewDefinition<T>`. A dummy `Query` placeholder occupies the
+  existing `query` field.
+- Extended `parse_create_materialized_view()` with the same `AS SPARQL` detection
+  after the `AS` keyword, setting `sparql: Option<SparqlStatement>` on
+  `CreateMaterializedViewStatement<T>`.
+- Added `dummy_query()` helper that creates a minimal `Query<Raw>` with empty
+  VALUES — used as the placeholder `query` field for SPARQL views.
+- Updated `AstDisplay` for both types to render `SPARQL $$body$$` instead of
+  the query when `sparql` is `Some`.
+
+**Normalization and transform** (`src/sql/src/normalize.rs`, `src/sql/src/ast/transform.rs`):
+- When `sparql.is_some()`, skip `QueryNormalizer::visit_query_mut()` and
+  `rewrite_query()` — the `query` field is a dummy that should not be touched.
+
+**sql-pretty** (`src/sql-pretty/src/doc.rs`):
+- Updated `doc_view_definition()` and `doc_create_materialized_view()` to
+  render SPARQL syntax when the `sparql` field is present.
+
+**Plan types** (`src/sql/src/plan.rs`):
+- Added `SparqlViewInfo { query, quad_table_id }` struct.
+- Added `sparql_info: Option<SparqlViewInfo>` to both `CreateViewPlan` and
+  `CreateMaterializedViewPlan`.
+
+**DDL planner** (`src/sql/src/plan/statement/ddl.rs`):
+- Modified `plan_view()` to return `(name, view, Option<SparqlViewInfo>)`.
+  When SPARQL is detected: resolves the `rdf_quads` quad table from the catalog,
+  parses the SPARQL body, builds the output `RelationDesc`, and creates a
+  placeholder `HirRelationExpr::Get` on the quad table (ensuring `depends_on()`
+  returns the correct dependency set for timeline validation).
+- Modified `plan_create_materialized_view()` with the same SPARQL detection
+  and placeholder HIR construction.
+- Made `dml::resolve_quad_table()` and `dml::sparql_query_desc()` `pub(crate)`
+  so they can be called from DDL planning.
+
+**Adapter** (`src/adapter/src/coord/sequencer/inner/`):
+- In `create_view_validate()`: when `sparql_info` is present, compiles
+  SPARQL → HIR using `mz_sparql::plan::SparqlPlanner` and replaces the
+  placeholder `view.expr` before timeline validation and optimization.
+- In `create_materialized_view_validate()`: same approach — compiles SPARQL
+  to HIR and replaces `materialized_view.expr`.
+
+**Other files updated for new struct fields**:
+- `src/sql/src/rbac.rs` — added `sparql_info: _` to plan destructuring.
+- `src/catalog/src/memory/objects.rs` — added `sparql` field to
+  `CreateMaterializedViewStatement` construction.
+- `src/adapter/src/coord/command_handler.rs` — same.
+- `src/adapter/src/catalog/migrate.rs` — added `sparql: None` to
+  `ViewDefinition` construction.
+
+### Key decisions
+
+1. **Deferred SPARQL compilation**: Like the SUBSCRIBE path, SPARQL → HIR
+   compilation happens in the adapter's validate step, not the SQL planner.
+   This avoids the cyclic dependency between `mz-sql` and `mz-sparql`. The
+   `SparqlViewInfo` struct carries the parsed query through the plan layer.
+
+2. **Placeholder HIR via Get**: The placeholder `HirRelationExpr::Get` on the
+   quad table ensures that `depends_on()` returns the correct dependency set
+   ({quad_table_id}). This means timeline validation in the validate step works
+   correctly even before SPARQL compilation replaces the placeholder.
+
+3. **Optional sparql field**: Rather than creating new AST enum variants (which
+   would require many changes across the codebase), we added an optional
+   `sparql: Option<SparqlStatement>` field to existing types. When `Some`, the
+   `query` field is a dummy placeholder. All code paths that touch `query`
+   check `sparql` first and skip query processing when SPARQL is active.
+
+4. **Round-trip correctness**: The `AstDisplay` implementations render
+   `AS SPARQL $$body$$` when sparql is set. This means `create_sql`
+   normalization produces the correct durable SQL string, and re-parsing that
+   string recreates the SPARQL view definition (tested by the parser
+   round-trip tests).
+
+5. **Output schema**: Uses the same `sparql_query_desc()` helper as SPARQL
+   SELECT — variable names become column names for SELECT views,
+   (subject, predicate, object) for CONSTRUCT/DESCRIBE, and (result) for ASK.
+
+6. **All view options work**: OR REPLACE, IF NOT EXISTS, column renaming,
+   WITH options (for materialized views), IN CLUSTER, etc. all work because
+   the SPARQL path feeds into the same plan creation logic — only the HIR
+   expression source differs.
+
+### Test results
+
+All existing tests pass. 4 new parser test cases added to
+`src/sql-parser/tests/testdata/ddl`:
+- CREATE VIEW ... AS SPARQL (SELECT form)
+- CREATE MATERIALIZED VIEW ... AS SPARQL (SELECT form)
+- CREATE VIEW ... AS SPARQL (CONSTRUCT form)
+- CREATE OR REPLACE VIEW ... AS SPARQL
+
+Full test counts:
+- mz-sparql-parser: 154 pass, 0 fail
+- mz-sparql: 107 pass, 0 fail
+- mz-sql-parser: all pass (existing test expectations updated for new `sparql: None` field)

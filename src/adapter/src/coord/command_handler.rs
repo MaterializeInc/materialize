@@ -1411,6 +1411,7 @@ impl Coordinator {
                         query: cmvs.query,
                         with_options: cmvs.with_options,
                         as_of: None,
+                        sparql: cmvs.sparql,
                     });
 
                 // (Purifying CreateMaterializedView doesn't happen async, so no need to send

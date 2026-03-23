@@ -1341,6 +1341,9 @@ pub struct ViewDefinition<T: AstInfo> {
     pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
     pub query: Query<T>,
+    /// If set, this view is defined by a SPARQL query rather than the SQL `query` field.
+    /// The `query` field is a dummy placeholder when this is `Some`.
+    pub sparql: Option<SparqlStatement>,
 }
 
 impl<T: AstInfo> AstDisplay for ViewDefinition<T> {
@@ -1354,7 +1357,11 @@ impl<T: AstInfo> AstDisplay for ViewDefinition<T> {
         }
 
         f.write_str(" AS ");
-        f.write_node(&self.query);
+        if let Some(sparql) = &self.sparql {
+            f.write_node(sparql);
+        } else {
+            f.write_node(&self.query);
+        }
     }
 }
 impl_display_t!(ViewDefinition);
@@ -1401,6 +1408,10 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub query: Query<T>,
     pub as_of: Option<u64>,
     pub with_options: Vec<MaterializedViewOption<T>>,
+    /// If set, this materialized view is defined by a SPARQL query rather than
+    /// the SQL `query` field. The `query` field is a dummy placeholder when
+    /// this is `Some`.
+    pub sparql: Option<SparqlStatement>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -1458,7 +1469,11 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
         }
 
         f.write_str(" AS ");
-        f.write_node(&self.query);
+        if let Some(sparql) = &self.sparql {
+            f.write_node(sparql);
+        } else {
+            f.write_node(&self.query);
+        }
 
         if let Some(time) = &self.as_of {
             f.write_str(" AS OF ");

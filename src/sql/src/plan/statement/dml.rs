@@ -339,7 +339,7 @@ fn sparql_desc(stmt: &SparqlStatement) -> Result<RelationDesc, PlanError> {
 }
 
 /// Build a [`RelationDesc`] for the output of a parsed SPARQL query.
-fn sparql_query_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc {
+pub(crate) fn sparql_query_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc {
     use mz_sparql_parser::ast::{QueryForm, SelectClause};
 
     let mut desc = RelationDesc::builder();
@@ -376,7 +376,7 @@ fn sparql_query_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc
 }
 
 /// Resolve the `rdf_quads` table from the catalog and return its [`GlobalId`].
-fn resolve_quad_table(scx: &StatementContext) -> Result<GlobalId, PlanError> {
+pub(crate) fn resolve_quad_table(scx: &StatementContext) -> Result<GlobalId, PlanError> {
     use crate::names::PartialItemName;
     let quad_table_name = PartialItemName {
         database: None,

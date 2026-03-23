@@ -478,6 +478,7 @@ fn rewrite_sources_to_tables(
                                 limit: None,
                                 offset: None,
                             },
+                            sparql: None,
                         },
                     });
 

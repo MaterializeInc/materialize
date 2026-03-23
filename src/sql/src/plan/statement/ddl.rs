@@ -161,7 +161,7 @@ use crate::plan::{
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
     MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
     PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
-    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    Source, SparqlViewInfo, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
     WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
     transform_ast,
 };
@@ -171,6 +171,8 @@ use crate::session::vars::{
     ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
 };
 use crate::{names, parse};
+
+use super::dml;
 
 mod connection;
 
@@ -2555,7 +2557,7 @@ pub fn plan_view(
     scx: &StatementContext,
     def: &mut ViewDefinition<Aug>,
     temporary: bool,
-) -> Result<(QualifiedItemName, View), PlanError> {
+) -> Result<(QualifiedItemName, View, Option<SparqlViewInfo>), PlanError> {
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -2569,26 +2571,54 @@ pub fn plan_view(
         name,
         columns,
         query,
+        sparql,
     } = def;
 
-    let query::PlannedRootQuery {
-        expr,
-        mut desc,
-        finishing,
-        scope: _,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
-    // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
-    // Note: Earlier, we were thinking to maybe persist the finishing information with the view
-    // here to help with database-issues#236. However, in the meantime, there might be a better
-    // approach to solve database-issues#236:
-    // https://github.com/MaterializeInc/database-issues/issues/236#issuecomment-1688293709
-    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
-        &finishing,
-        expr.arity()
-    ));
-    if expr.contains_parameters()? {
-        return Err(PlanError::ParameterNotAllowed("views".to_string()));
-    }
+    let (expr, mut desc, sparql_info) = if let Some(sparql_stmt) = sparql {
+        // SPARQL view: resolve the quad table and build a placeholder HIR.
+        // The adapter will compile the real SPARQL → HIR at sequencing time.
+        let quad_table_id = dml::resolve_quad_table(scx)?;
+        let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+        let desc = dml::sparql_query_desc(&sparql_query);
+
+        // Placeholder: Get on the quad table. This ensures depends_on() returns
+        // the correct dependency set for timeline validation.
+        let quad_type = SqlRelationType::new(vec![
+            SqlColumnType {
+                scalar_type: SqlScalarType::String,
+                nullable: true,
+            };
+            4
+        ]);
+        let placeholder_expr = HirRelationExpr::Get {
+            id: mz_expr::Id::Global(quad_table_id),
+            typ: quad_type,
+        };
+
+        let info = SparqlViewInfo {
+            query: sparql_query,
+            quad_table_id,
+        };
+
+        (placeholder_expr, desc, Some(info))
+    } else {
+        let query::PlannedRootQuery {
+            expr,
+            desc,
+            finishing,
+            scope: _,
+        } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
+        // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
+        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+            &finishing,
+            expr.arity()
+        ));
+        if expr.contains_parameters()? {
+            return Err(PlanError::ParameterNotAllowed("views".to_string()));
+        }
+        (expr, desc, None)
+    };
 
     let dependencies = expr
         .depends_on()
@@ -2621,7 +2651,7 @@ pub fn plan_view(
         temporary,
     };
 
-    Ok((name, view))
+    Ok((name, view, sparql_info))
 }
 
 pub fn plan_create_view(
@@ -2633,7 +2663,7 @@ pub fn plan_create_view(
         if_exists,
         definition,
     } = &mut stmt;
-    let (name, view) = plan_view(scx, definition, *temporary)?;
+    let (name, view, sparql_info) = plan_view(scx, definition, *temporary)?;
 
     // Override the statement-level IfExistsBehavior with Skip if this is
     // explicitly requested in the PlanContext (the default is `false`).
@@ -2707,6 +2737,7 @@ pub fn plan_create_view(
         drop_ids,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
+        sparql_info,
     }))
 }
 
@@ -2791,22 +2822,50 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
-    let query::PlannedRootQuery {
-        expr,
-        mut desc,
-        finishing,
-        scope: _,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
-    // We get back a trivial finishing, see comment in `plan_view`.
-    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
-        &finishing,
-        expr.arity()
-    ));
-    if expr.contains_parameters()? {
-        return Err(PlanError::ParameterNotAllowed(
-            "materialized views".to_string(),
+    let (expr, mut desc, sparql_info) = if let Some(sparql_stmt) = &stmt.sparql {
+        // SPARQL materialized view: resolve quad table and build placeholder HIR.
+        let quad_table_id = dml::resolve_quad_table(scx)?;
+        let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+        let desc = dml::sparql_query_desc(&sparql_query);
+
+        let quad_type = SqlRelationType::new(vec![
+            SqlColumnType {
+                scalar_type: SqlScalarType::String,
+                nullable: true,
+            };
+            4
+        ]);
+        let placeholder_expr = HirRelationExpr::Get {
+            id: mz_expr::Id::Global(quad_table_id),
+            typ: quad_type,
+        };
+
+        let info = SparqlViewInfo {
+            query: sparql_query,
+            quad_table_id,
+        };
+
+        (placeholder_expr, desc, Some(info))
+    } else {
+        let query::PlannedRootQuery {
+            expr,
+            desc,
+            finishing,
+            scope: _,
+        } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+        // We get back a trivial finishing, see comment in `plan_view`.
+        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+            &finishing,
+            expr.arity()
         ));
-    }
+        if expr.contains_parameters()? {
+            return Err(PlanError::ParameterNotAllowed(
+                "materialized views".to_string(),
+            ));
+        }
+        (expr, desc, None)
+    };
 
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
@@ -3110,6 +3169,7 @@ pub fn plan_create_materialized_view(
         drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
+        sparql_info,
     }))
 }
 

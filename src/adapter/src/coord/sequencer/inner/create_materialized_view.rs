@@ -317,12 +317,22 @@ impl Coordinator {
     fn create_materialized_view_validate(
         &self,
         session: &Session,
-        plan: plan::CreateMaterializedViewPlan,
+        mut plan: plan::CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
         // sequencing an EXPLAIN for this statement.
         explain_ctx: ExplainContext,
     ) -> Result<CreateMaterializedViewStage, AdapterError> {
+        // If this is a SPARQL materialized view, compile the SPARQL query to HIR
+        // now, replacing the placeholder expression.
+        if let Some(sparql_info) = plan.sparql_info.take() {
+            let planner = mz_sparql::plan::SparqlPlanner::new(sparql_info.quad_table_id);
+            let planned = planner
+                .plan(&sparql_info.query)
+                .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{}", e.message)))?;
+            plan.materialized_view.expr = planned.expr;
+        }
+
         let plan::CreateMaterializedViewPlan {
             materialized_view:
                 plan::MaterializedView {
