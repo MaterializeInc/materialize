@@ -68,7 +68,7 @@ pub fn upgrade(
                 // Set login to true to differentiate users from other roles.
                 (Some(true), Some(v81::AutoProvisionSource::Frontegg))
             } else {
-                (Some(false), None)
+                (role.value.attributes.login, None)
             };
 
         let new_role = v81::StateUpdateKind::Role(v81::Role {
@@ -189,7 +189,7 @@ mod tests {
             None
         );
 
-        assert_eq!(manually_created_role.value.attributes.login, Some(false));
+        assert_eq!(manually_created_role.value.attributes.login, None);
     }
 
     #[mz_ore::test]
