@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::net::ToSocketAddrs;
+
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -286,15 +286,6 @@ impl State {
     pub async fn initialize_cmd_vars(&mut self) -> Result<(), anyhow::Error> {
         self.cmd_vars
             .insert("testdrive.kafka-addr".into(), self.kafka_addr.clone());
-        self.cmd_vars.insert(
-            "testdrive.kafka-addr-resolved".into(),
-            self.kafka_addr
-                .to_socket_addrs()
-                .ok()
-                .and_then(|mut addrs| addrs.next())
-                .map(|addr| addr.to_string())
-                .unwrap_or_else(|| "#RESOLUTION-FAILURE#".into()),
-        );
         self.cmd_vars.insert(
             "testdrive.schema-registry-url".into(),
             self.schema_registry_url.to_string(),
