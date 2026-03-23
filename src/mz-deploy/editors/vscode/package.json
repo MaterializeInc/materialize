@@ -1,0 +1,77 @@
+{
+  "name": "mz-deploy-lsp",
+  "displayName": "mz-deploy",
+  "description": "SQL language support for mz-deploy projects (go-to-definition, parse diagnostics)",
+  "version": "0.1.0",
+  "publisher": "materialize",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "workspaceContains:project.toml"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.webview.json",
+    "watch": "tsc -p tsconfig.json --watch"
+  },
+  "contributes": {
+    "configuration": {
+      "title": "mz-deploy",
+      "properties": {
+        "mz-deploy.path": {
+          "type": "string",
+          "default": "mz-deploy",
+          "description": "Path to the mz-deploy binary"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "mz-deploy",
+          "title": "mz-deploy",
+          "icon": "icons/mz-logo.svg"
+        }
+      ]
+    },
+    "views": {
+      "mz-deploy": [
+        {
+          "type": "webview",
+          "id": "mz-deploy-catalog",
+          "name": "Data Catalog"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "mz-deploy.openDAG",
+        "title": "mz-deploy: Open DAG View",
+        "icon": "$(type-hierarchy)"
+      }
+    ],
+    "colors": [
+      {
+        "id": "mzDeploy.keywordForeground",
+        "description": "Color for Materialize SQL keywords",
+        "defaults": {
+          "dark": "#569CD6",
+          "light": "#0000FF",
+          "highContrast": "#569CD6"
+        }
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "@types/vscode": "^1.110.0",
+    "typescript": "^5.9.3"
+  }
+}
