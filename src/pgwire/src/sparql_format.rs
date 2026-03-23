@@ -496,7 +496,7 @@ mod tests {
         row
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_classify_uri() {
         match classify_term("<http://example.org/foo>") {
             RdfTermKind::Uri(uri) => assert_eq!(uri, "http://example.org/foo"),
@@ -504,7 +504,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_classify_bnode() {
         match classify_term("_:b0") {
             RdfTermKind::Bnode(id) => assert_eq!(id, "b0"),
@@ -512,7 +512,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_classify_typed_literal() {
         match classify_term("\"42\"^^<http://www.w3.org/2001/XMLSchema#integer>") {
             RdfTermKind::TypedLiteral { value, datatype } => {
@@ -523,7 +523,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_classify_lang_literal() {
         match classify_term("\"hello\"@en") {
             RdfTermKind::LangLiteral { value, lang } => {
@@ -534,7 +534,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_classify_plain_literal() {
         match classify_term("\"hello\"") {
             RdfTermKind::PlainLiteral(v) => assert_eq!(v, "hello"),
@@ -542,7 +542,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_classify_unquoted_literal() {
         match classify_term("hello") {
             RdfTermKind::PlainLiteral(v) => assert_eq!(v, "hello"),
@@ -550,7 +550,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_sparql_json_select() {
         let vars = vec!["s", "p"];
         let mut out = Vec::new();
@@ -572,7 +572,7 @@ mod tests {
         assert!(result.ends_with("}}\n"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_sparql_json_null_binding() {
         let vars = vec!["s", "o"];
         let mut out = Vec::new();
@@ -587,7 +587,7 @@ mod tests {
         assert!(!result.contains("\"o\""));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_sparql_xml_select() {
         let vars = vec!["s", "p"];
         let mut out = Vec::new();
@@ -609,7 +609,7 @@ mod tests {
         assert!(result.contains("</sparql>"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ntriples_row() {
         let row = make_row(&[
             "<http://ex.org/Alice>",
@@ -625,7 +625,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ntriples_literal_object() {
         let row = make_row(&["<http://ex.org/Alice>", "<http://ex.org/name>", "\"Alice\""]);
         let mut out = Vec::new();
@@ -637,7 +637,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ntriples_unquoted_literal() {
         let row = make_row(&["<http://ex.org/Alice>", "<http://ex.org/name>", "Alice"]);
         let mut out = Vec::new();
@@ -649,7 +649,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_turtle_row() {
         let row = make_row(&[
             "<http://ex.org/Alice>",
@@ -665,7 +665,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_jsonld_output() {
         let mut out = Vec::new();
         jsonld_header(&mut out);
@@ -694,7 +694,7 @@ mod tests {
         assert!(result.ends_with("]\n"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_json_escape() {
         assert_eq!(json_escape("hello"), "hello");
         assert_eq!(json_escape("he\"llo"), "he\\\"llo");
@@ -702,7 +702,7 @@ mod tests {
         assert_eq!(json_escape("line\nnew"), "line\\nnew");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_xml_escape() {
         assert_eq!(xml_escape("hello"), "hello");
         assert_eq!(xml_escape("<b>hi</b>"), "&lt;b&gt;hi&lt;/b&gt;");
@@ -710,7 +710,7 @@ mod tests {
         assert_eq!(xml_escape("say \"hi\""), "say &quot;hi&quot;");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ntriples_escape() {
         assert_eq!(ntriples_escape("hello"), "hello");
         assert_eq!(ntriples_escape("he\"llo"), "he\\\"llo");

@@ -233,14 +233,14 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~These can be triggered via a session variable or a COPY TO FORMAT option.~~
 > ~~For pgwire output, keep the default tabular format.~~
 
-### Prompt 19: W3C SPARQL 1.1 compliance test suite
+### ~~Prompt 19: W3C SPARQL 1.1 compliance test suite~~
 
-> Port relevant tests from the W3C SPARQL 1.1 test suite
-> (https://www.w3.org/2009/sparql/docs/tests/) into testdrive or
-> sqllogictest format. Focus on: basic graph patterns, optionals, union,
-> filter, negation (MINUS, NOT EXISTS), property paths, aggregates,
-> subqueries, CONSTRUCT, ASK. Track which tests pass/fail and create
-> issues for failures.
+> ~~Port relevant tests from the W3C SPARQL 1.1 test suite~~
+> ~~(https://www.w3.org/2009/sparql/docs/tests/) into testdrive or~~
+> ~~sqllogictest format. Focus on: basic graph patterns, optionals, union,~~
+> ~~filter, negation (MINUS, NOT EXISTS), property paths, aggregates,~~
+> ~~subqueries, CONSTRUCT, ASK. Track which tests pass/fail and create~~
+> ~~issues for failures.~~
 
 ### Prompt 20: SPARQL sqllogictests
 

@@ -7909,6 +7909,7 @@ dependencies = [
 name = "mz-sparql-parser"
 version = "0.0.0"
 dependencies = [
+ "mz-ore",
  "workspace-hack",
 ]
 

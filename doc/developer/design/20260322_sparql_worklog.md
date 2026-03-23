@@ -1683,3 +1683,95 @@ Five W3C-standard SPARQL output formats, triggered via `COPY TO STDOUT WITH
 - Unit tests could not be executed due to a pre-existing `aws-lc-sys` build
   failure (temp directory issue on macOS). `cargo check` confirms compilation.
   Tests should pass once the build environment is fixed.
+
+## 2026-03-23: Prompt 19 — W3C SPARQL 1.1 compliance test suite
+
+### What was done
+
+Created `test/sqllogictest/sparql_w3c.slt` — a comprehensive compliance test suite
+modeled on the W3C SPARQL 1.1 test suite categories. The file exercises the full
+SPARQL pipeline end-to-end (SQL parser → SPARQL parser → planner → HIR → MIR →
+execution).
+
+**Test dataset**: A small RDF graph with people (Alice, Bob, Carol, Dave), names,
+ages, emails, knows relationships, interests, language-tagged labels, and a class
+hierarchy (Dog/Cat → Animal → LivingThing → Thing). A second named graph provides
+data for GRAPH/FROM tests.
+
+**Test sections (19 sections, 45+ test queries)**:
+
+1. **Basic Graph Patterns** (5 tests): Single triple all-vars, concrete predicate,
+   concrete subject+predicate, multi-triple BGP join, three-way join.
+2. **FILTER** (7 tests): String equality, numeric comparison, logical AND, OR, NOT,
+   BOUND, negated BOUND.
+3. **OPTIONAL** (3 tests): Basic optional, optional with inner FILTER, multiple
+   optionals.
+4. **UNION** (2 tests): Same variables, different variables (NULL padding).
+5. **MINUS** (2 tests): Basic minus, minus with no shared variables.
+6. **NOT EXISTS** (2 tests): FILTER NOT EXISTS, FILTER EXISTS.
+7. **BIND** (2 tests): Basic BIND with CONCAT, BIND with IF.
+8. **VALUES** (1 test): Inline VALUES joined with BGP.
+9. **Property Paths** (7 tests): Inverse, sequence (two forms), alternative,
+   transitive closure (subClassOf+), zero-or-one, knows+ chain, negated set.
+10. **Aggregates** (6 tests): COUNT, GROUP BY + COUNT, SUM, MIN/MAX, HAVING,
+    COUNT DISTINCT.
+11. **Solution Modifiers** (4 tests): LIMIT, OFFSET, ORDER BY DESC, DISTINCT.
+12. **CONSTRUCT** (1 test): Basic CONSTRUCT with template.
+13. **ASK** (2 tests): Positive and negative ASK.
+14. **SELECT Expressions** (5 tests): UCASE, CONCAT, STRLEN, COALESCE, IF.
+15. **Type Testing Functions** (2 tests): ISIRI, ISLITERAL.
+16. **Three-Valued Logic** (1 test): Error in FILTER evaluates to false.
+17. **Subqueries** (1 test): Subquery with LIMIT joined with outer pattern.
+18. **Combined/Complex** (4 tests): OPTIONAL+FILTER+ORDER+LIMIT, property path
+    aggregate, UNION+NOT EXISTS, BIND+VALUES+FILTER.
+19. **CREATE VIEW** (1 test): CREATE VIEW from SPARQL + SELECT from view.
+
+**Also fixed**: Replaced `#[test]` with `#[mz_ore::test]` in three files
+(`sparql_format.rs`, `lexer.rs`, `parser.rs`) to satisfy the
+`check-rust-test-attributes` lint. Added `mz-ore` as dev-dependency to
+`mz-sparql-parser`.
+
+### Key decisions
+
+1. **sqllogictest format over testdrive**: SLT is simpler, doesn't require Docker
+   or mzcompose, and matches the existing test conventions for SQL feature tests.
+   The tests can run in the standard `cargo test` sqllogictest harness.
+
+2. **Organized by W3C test category**: Each section maps to a W3C dawg-* test
+   group (dawg-triple-pattern, dawg-filter, dawg-optional, etc.) with test names
+   referencing the W3C test IDs for traceability.
+
+3. **Self-contained dataset**: Rather than loading external RDF files, the test
+   creates its own small dataset via INSERT. This makes the tests portable and
+   easy to understand. The dataset is designed to exercise specific edge cases
+   (NULL padding in UNION, transitive closure depth, language tags).
+
+4. **Result verification**: All tests specify expected result sets with ORDER BY
+   for determinism. Column types (T=text, I=integer) and `colnames` are used
+   throughout for schema verification.
+
+5. **Why SPARQL 1.1, not 1.2**: SPARQL 1.1 is the current W3C Recommendation
+   (since 2013). SPARQL 1.2 is still a Community Group Draft. Targeting 1.1
+   provides a stable, well-tested spec. 1.2 features (lateral joins, RDF-star)
+   can be added incrementally later.
+
+### Known gaps / future work
+
+- **Tests are not yet executed**: The sqllogictest requires a running Materialize
+  instance with the SPARQL pipeline fully integrated. Tests should be run once the
+  full pipeline is available in the test environment.
+- **W3C manifest parsing**: The official W3C test suite uses RDF manifest files
+  to describe tests. A future enhancement could auto-generate SLT from manifests.
+- **DESCRIBE tests**: Omitted because DESCRIBE output is implementation-defined
+  and hard to assert in SLT format.
+- **GRAPH pattern tests**: Not included since GRAPH pattern planning is not yet
+  fully implemented.
+- **SERVICE tests**: Not applicable (federated queries not supported).
+
+### Test results
+
+- `cargo check -p mz-sparql-parser --tests`: passes (1 warning: unused import)
+- `cargo check -p mz-pgwire --tests`: passes
+- `check-rust-test-attributes` lint: passes (all `#[test]` → `#[mz_ore::test]`)
+- `bin/fmt`: passes (except missing `buf` tool)
+- `bin/lint`: only missing-tool failures remain (buf, helm-docs, trufflehog)

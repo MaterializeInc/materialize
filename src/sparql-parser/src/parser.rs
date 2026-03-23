@@ -1918,7 +1918,7 @@ mod tests {
 
     // === Basic structure tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_simple_select() {
         let q = p("SELECT ?s ?p ?o WHERE { ?s ?p ?o }");
         assert!(matches!(
@@ -1948,7 +1948,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_select_star() {
         let q = p("SELECT * WHERE { ?s ?p ?o }");
         assert!(matches!(
@@ -1960,7 +1960,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_select_distinct() {
         let q = p("SELECT DISTINCT ?s WHERE { ?s ?p ?o }");
         assert!(matches!(
@@ -1972,7 +1972,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_prefix_resolution() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 SELECT ?s WHERE { ?s ex:name "Alice" }"#);
@@ -1998,7 +1998,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multiple_prefixes() {
         let q = p(r#"PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
 PREFIX foaf: <http://xmlns.com/foaf/0.1/>
@@ -2020,7 +2020,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Multiple triple patterns ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_multiple_triples_with_dot() {
         let q = p("SELECT ?s ?o WHERE { ?s ?p ?o . ?s ?p2 ?o2 }");
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2030,7 +2030,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_semicolon_shorthand() {
         // ?s ?p1 ?o1 ; ?p2 ?o2 → two triples sharing subject ?s
         let q = p("SELECT * WHERE { ?s <http://ex.org/p1> ?o1 ; <http://ex.org/p2> ?o2 }");
@@ -2045,7 +2045,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_comma_shorthand() {
         // ?s ?p ?o1, ?o2 → two triples sharing subject and predicate
         let q = p("SELECT * WHERE { ?s ?p ?o1, ?o2 }");
@@ -2059,7 +2059,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_rdf_type_shorthand() {
         let q = p("SELECT ?s ?type WHERE { ?s a ?type }");
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2075,7 +2075,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === FILTER tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_simple_comparison() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(?o > 42) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2091,7 +2091,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_compound_and_or() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(?o > 42 && ?o < 100) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2108,7 +2108,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_or() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(?o = 1 || ?o = 2) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2118,7 +2118,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_bound() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(BOUND(?o)) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2132,7 +2132,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_isiri() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(isIRI(?s)) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2142,7 +2142,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_str_equality() {
         let q = p(r#"SELECT ?s WHERE { ?s ?p ?o . FILTER(STR(?o) = "hello") }"#);
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2160,7 +2160,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_lang() {
         let q = p(r#"SELECT ?s WHERE { ?s ?p ?o . FILTER(LANG(?o) = "en") }"#);
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2172,7 +2172,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_not() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(!(?o = 42)) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2186,7 +2186,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_datatype() {
         let q = p(
             "SELECT ?s WHERE { ?s ?p ?o . FILTER(DATATYPE(?o) = <http://www.w3.org/2001/XMLSchema#integer>) }",
@@ -2201,7 +2201,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_arithmetic() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(?o + 1 > 10 * 2) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2217,7 +2217,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_in() {
         let q = p(r#"SELECT ?s WHERE { ?s ?p ?o . FILTER(?o IN (1, 2, 3)) }"#);
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2231,7 +2231,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_regex() {
         let q = p(r#"SELECT ?s WHERE { ?s ?p ?o . FILTER(REGEX(?o, "^hello", "i")) }"#);
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2247,7 +2247,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Typed and language-tagged literals in patterns ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_typed_literal_in_pattern() {
         let q = p(r#"SELECT ?s WHERE { ?s ?p "42"^^<http://www.w3.org/2001/XMLSchema#integer> }"#);
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2262,7 +2262,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_language_tagged_literal_in_pattern() {
         let q = p(r#"SELECT ?s WHERE { ?s ?p "chat"@fr }"#);
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2281,7 +2281,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === WHERE keyword optional ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_where_keyword_optional() {
         let q = p("SELECT ?s ?p ?o { ?s ?p ?o }");
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2291,7 +2291,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Select expression ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_select_expression() {
         let q = p("SELECT ?s (?o + 1 AS ?inc) WHERE { ?s ?p ?o }");
         if let QueryForm::Select {
@@ -2312,13 +2312,13 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Error tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_missing_brace() {
         let err = parse("SELECT ?s WHERE ?s ?p ?o }").unwrap_err();
         assert!(err.message.contains("'{'"), "got: {}", err.message);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_unknown_prefix() {
         let err = parse("SELECT ?s WHERE { ?s ex:name ?o }").unwrap_err();
         assert!(
@@ -2328,13 +2328,13 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_missing_select() {
         let err = parse("WHERE { ?s ?p ?o }").unwrap_err();
         assert!(err.message.contains("SELECT"), "got: {}", err.message);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_empty_select_variables() {
         let err = parse("SELECT WHERE { ?s ?p ?o }").unwrap_err();
         assert!(
@@ -2344,7 +2344,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_lexer_propagates() {
         let err = parse("SELECT ?s WHERE { ?s <http://broken ").unwrap_err();
         assert!(
@@ -2356,7 +2356,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Full IRI in patterns ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_full_iri_in_patterns() {
         let q = p(
             "SELECT ?s WHERE { ?s <http://example.org/name> ?o . ?o <http://example.org/age> ?a }",
@@ -2374,7 +2374,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Empty WHERE clause ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_empty_where() {
         let q = p("SELECT * WHERE { }");
         assert!(matches!(q.where_clause, GroupGraphPattern::Basic(ref t) if t.is_empty()));
@@ -2382,7 +2382,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Numeric literal in pattern ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_numeric_object() {
         let q = p("SELECT ?s WHERE { ?s ?p 42 }");
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2395,7 +2395,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Boolean literal ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_boolean_object() {
         let q = p("SELECT ?s WHERE { ?s ?p true }");
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2408,7 +2408,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Blank node in pattern ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_blank_node_subject() {
         let q = p("SELECT ?p ?o WHERE { _:b0 ?p ?o }");
         if let GroupGraphPattern::Basic(triples) = &q.where_clause {
@@ -2421,7 +2421,7 @@ SELECT ?name WHERE { ?x rdf:type foaf:Person . ?x foaf:name ?name }"#);
 
     // === Complex query combining many features ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_complex_query() {
         let q = p(r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
@@ -2454,7 +2454,7 @@ WHERE {
 
     // === OPTIONAL tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_optional_simple() {
         let q = p("SELECT ?s ?o WHERE { ?s ?p ?o . OPTIONAL { ?s <http://ex.org/q> ?q } }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2474,7 +2474,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_optional_with_filter() {
         // OPTIONAL with FILTER inside — critical for correct semantics
         let q = p(
@@ -2494,7 +2494,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multiple_optionals() {
         let q = p(
             "SELECT * WHERE { ?s ?p ?o . OPTIONAL { ?s <http://ex.org/a> ?a } OPTIONAL { ?s <http://ex.org/b> ?b } }",
@@ -2509,7 +2509,7 @@ WHERE {
 
     // === UNION tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_union_simple() {
         let q =
             p("SELECT ?s WHERE { { ?s <http://ex.org/a> ?o } UNION { ?s <http://ex.org/b> ?o } }");
@@ -2521,7 +2521,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_union_three_way() {
         let q = p("SELECT ?s WHERE { { ?s ?p 1 } UNION { ?s ?p 2 } UNION { ?s ?p 3 } }");
         // Should be Union(Union(1, 2), 3) — left-associative
@@ -2533,7 +2533,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_union_with_triples() {
         // Triples before UNION
         let q = p(
@@ -2548,7 +2548,7 @@ WHERE {
 
     // === MINUS tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_minus_simple() {
         let q =
             p("SELECT ?s WHERE { ?s <http://ex.org/p> ?o . MINUS { ?s <http://ex.org/q> ?z } }");
@@ -2565,7 +2565,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_minus_disjoint_variables() {
         // MINUS with no shared variables — should still parse
         let q = p("SELECT ?s WHERE { ?s ?p ?o . MINUS { ?a ?b ?c } }");
@@ -2577,7 +2577,7 @@ WHERE {
 
     // === BIND tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_bind_simple() {
         let q = p("SELECT ?s ?label WHERE { ?s ?p ?o . BIND(STR(?o) AS ?label) }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2591,7 +2591,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_bind_arithmetic() {
         let q =
             p("SELECT ?x ?doubled WHERE { ?x <http://ex.org/val> ?v . BIND(?v * 2 AS ?doubled) }");
@@ -2605,7 +2605,7 @@ WHERE {
 
     // === VALUES tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_values_single_var() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . VALUES ?o { 1 2 3 } }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2624,7 +2624,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_values_multi_var() {
         let q = p(r#"SELECT ?s ?type WHERE {
             ?s a ?type .
@@ -2641,7 +2641,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_values_with_undef() {
         let q = p(r#"SELECT * WHERE {
             ?s ?p ?o .
@@ -2660,7 +2660,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_values_string_literals() {
         let q = p(r#"SELECT ?s WHERE { ?s ?p ?name . VALUES ?name { "Alice" "Bob" } }"#);
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2677,7 +2677,7 @@ WHERE {
 
     // === EXISTS / NOT EXISTS tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_exists() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER EXISTS { ?s <http://ex.org/q> ?z } }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2691,7 +2691,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_filter_not_exists() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER NOT EXISTS { ?s <http://ex.org/q> ?z } }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2705,7 +2705,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_not_exists_in_expression() {
         // NOT EXISTS used inside a compound expression
         let q = p("SELECT ?s WHERE { ?s ?p ?o . FILTER(!NOT EXISTS { ?s <http://ex.org/q> ?z }) }");
@@ -2722,7 +2722,7 @@ WHERE {
 
     // === Nested groups ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_nested_group() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o . { ?o <http://ex.org/r> ?r } }");
         if let GroupGraphPattern::Group(patterns) = &q.where_clause {
@@ -2734,7 +2734,7 @@ WHERE {
 
     // === Combination tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_optional_inside_union() {
         let q = p(
             "SELECT * WHERE { { ?s <http://ex.org/a> ?o . OPTIONAL { ?o <http://ex.org/b> ?z } } UNION { ?s <http://ex.org/c> ?o } }",
@@ -2751,7 +2751,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_optional_and_minus_combined() {
         let q = p(
             "SELECT ?s WHERE { ?s ?p ?o . OPTIONAL { ?s <http://ex.org/a> ?a } MINUS { ?s <http://ex.org/b> ?b } }",
@@ -2764,7 +2764,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_bind_values_combined() {
         let q = p(r#"SELECT ?s ?label WHERE {
             VALUES ?type { <http://ex.org/T1> <http://ex.org/T2> }
@@ -2780,7 +2780,7 @@ WHERE {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_complex_with_all_forms() {
         // Test combining OPTIONAL, UNION, MINUS, BIND, VALUES, FILTER, EXISTS
         let q = p(r#"PREFIX ex: <http://example.org/>
@@ -2810,7 +2810,7 @@ SELECT ?s ?label ?extra WHERE {
 
     // === CONSTRUCT tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_basic() {
         let q = p(r#"CONSTRUCT { ?s <http://example.org/knows> ?o }
 WHERE { ?s <http://example.org/friend> ?o }"#);
@@ -2832,7 +2832,7 @@ WHERE { ?s <http://example.org/friend> ?o }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_multi_template() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 CONSTRUCT {
@@ -2847,7 +2847,7 @@ WHERE { ?s ex:name ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_with_semicolon_shorthand() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 CONSTRUCT { ?s ex:a ?o ; ex:b ?o2 }
@@ -2862,7 +2862,7 @@ WHERE { ?s ex:x ?o . ?s ex:y ?o2 }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_empty_template() {
         let q = p("CONSTRUCT { } WHERE { ?s ?p ?o }");
         if let QueryForm::Construct { template } = &q.form {
@@ -2872,7 +2872,7 @@ WHERE { ?s ex:x ?o . ?s ex:y ?o2 }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_where_shortform() {
         // CONSTRUCT WHERE { pattern } — template equals the WHERE pattern
         let q = p("CONSTRUCT WHERE { ?s ?p ?o }");
@@ -2892,7 +2892,7 @@ WHERE { ?s ex:x ?o . ?s ex:y ?o2 }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_with_prefix() {
         let q = p(r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 CONSTRUCT { ?person foaf:name ?name }
@@ -2909,7 +2909,7 @@ WHERE { ?person foaf:firstName ?name }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_with_blank_node() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 CONSTRUCT { _:b ex:value ?v }
@@ -2925,7 +2925,7 @@ WHERE { ?s ex:data ?v }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_with_literal_object() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 CONSTRUCT { ?s ex:status "active" }
@@ -2943,7 +2943,7 @@ WHERE { ?s ex:enabled true }"#);
 
     // === ASK tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_ask_basic() {
         let q = p("ASK { ?s ?p ?o }");
         assert!(matches!(q.form, QueryForm::Ask));
@@ -2954,7 +2954,7 @@ WHERE { ?s ex:enabled true }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ask_with_prefix() {
         let q = p(r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 ASK { ?x foaf:name "Alice" }"#);
@@ -2964,13 +2964,13 @@ ASK { ?x foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ask_with_where_keyword() {
         let q = p("ASK WHERE { ?s ?p ?o }");
         assert!(matches!(q.form, QueryForm::Ask));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ask_with_filter() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 ASK { ?s ex:age ?age . FILTER(?age > 18) }"#);
@@ -2984,7 +2984,7 @@ ASK { ?s ex:age ?age . FILTER(?age > 18) }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_ask_with_optional() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 ASK {
@@ -2999,7 +2999,7 @@ ASK {
 
     // === DESCRIBE tests ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_describe_single_iri() {
         let q = p("DESCRIBE <http://example.org/Alice>");
         if let QueryForm::Describe { resources } = &q.form {
@@ -3015,7 +3015,7 @@ ASK {
         assert!(matches!(q.where_clause, GroupGraphPattern::Basic(ref t) if t.is_empty()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_describe_variable() {
         let q = p("DESCRIBE ?x WHERE { ?x ?p ?o }");
         if let QueryForm::Describe { resources } = &q.form {
@@ -3029,7 +3029,7 @@ ASK {
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_describe_multiple_resources() {
         let q = p(r#"PREFIX ex: <http://example.org/>
 DESCRIBE ?x ex:Alice ex:Bob"#);
@@ -3047,7 +3047,7 @@ DESCRIBE ?x ex:Alice ex:Bob"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_describe_star() {
         let q = p("DESCRIBE * WHERE { ?s ?p ?o }");
         if let QueryForm::Describe { resources } = &q.form {
@@ -3060,7 +3060,7 @@ DESCRIBE ?x ex:Alice ex:Bob"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_describe_with_where() {
         let q = p(r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
@@ -3072,7 +3072,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_describe_no_where() {
         let q = p("DESCRIBE <http://example.org/thing>");
         assert!(matches!(q.form, QueryForm::Describe { .. }));
@@ -3081,7 +3081,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
 
     // === Error cases for new query forms ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_expected_query_form() {
         let err = parse("FOOBAR { ?s ?p ?o }").unwrap_err();
         assert!(
@@ -3091,7 +3091,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_describe_empty() {
         let err = parse("DESCRIBE").unwrap_err();
         assert!(
@@ -3101,7 +3101,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_error_construct_missing_brace() {
         let err = parse("CONSTRUCT ?s ?p ?o WHERE { ?s ?p ?o }").unwrap_err();
         assert!(err.message.contains("'{'"), "got: {}", err.message);
@@ -3130,7 +3130,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_simple_iri() {
         // A simple IRI in predicate position is parsed as a property path.
         let pred = parse_first_predicate("SELECT * WHERE { ?s <http://ex.org/p> ?o }");
@@ -3140,7 +3140,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_a_keyword() {
         let pred = parse_first_predicate("SELECT * WHERE { ?s a ?o }");
         match unwrap_path(pred) {
@@ -3151,7 +3151,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_inverse() {
         let pred = parse_first_predicate("SELECT * WHERE { ?s ^<http://ex.org/p> ?o }");
         match unwrap_path(pred) {
@@ -3163,7 +3163,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_sequence() {
         let pred = parse_first_predicate(
             "PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:a/ex:b/ex:c ?o }",
@@ -3184,7 +3184,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_alternative() {
         let pred =
             parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:a|ex:b ?o }");
@@ -3204,7 +3204,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_zero_or_more() {
         let pred =
             parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:p* ?o }");
@@ -3217,7 +3217,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_one_or_more() {
         let pred =
             parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:p+ ?o }");
@@ -3230,7 +3230,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_zero_or_one() {
         let pred =
             parse_first_predicate("PREFIX ex: <http://ex.org/> SELECT * WHERE { ?s ex:p? ?o }");
@@ -3243,7 +3243,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_negated_single() {
         // !ex:p — negated single IRI
         let pred =
@@ -3262,7 +3262,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_negated_set_multi() {
         // !(ex:a | ^ex:b | ex:c)
         let pred = parse_first_predicate(
@@ -3285,7 +3285,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_negated_a() {
         // !a — negated rdf:type
         let pred = parse_first_predicate("SELECT * WHERE { ?s !a ?o }");
@@ -3303,7 +3303,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_parenthesized() {
         // (ex:a / ex:b) — grouped path
         let pred = parse_first_predicate(
@@ -3317,7 +3317,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_precedence_seq_over_alt() {
         // ex:a / ex:b | ex:c  should parse as (ex:a / ex:b) | ex:c
         // because `/` binds tighter than `|`
@@ -3342,7 +3342,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_precedence_alt_over_seq_with_parens() {
         // (ex:a | ex:b) / ex:c  — parens override precedence
         let pred = parse_first_predicate(
@@ -3361,7 +3361,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_inverse_with_modifier() {
         // ^ex:p+ — inverse of (ex:p+) or (^ex:p)+ ?
         // Per SPARQL grammar: PathEltOrInverse ::= PathElt | '^' PathElt
@@ -3381,7 +3381,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_complex_transitive_closure() {
         // rdfs:subClassOf+ — typical transitive closure query
         let q = parse(
@@ -3406,7 +3406,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_combined_sequence_inverse_modifier() {
         // ex:knows / ^ex:likes* — sequence of ex:knows then inverse of ex:likes*
         let pred = parse_first_predicate(
@@ -3432,7 +3432,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_three_way_alternative() {
         // ex:a | ex:b | ex:c
         let pred = parse_first_predicate(
@@ -3444,7 +3444,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_in_construct() {
         // Property paths in CONSTRUCT WHERE clause
         let q = parse(
@@ -3463,7 +3463,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_with_filter() {
         // Property paths combined with FILTER
         let q = parse(
@@ -3489,14 +3489,14 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_variable_predicate_still_works() {
         // Variable predicates should still work alongside path support
         let pred = parse_first_predicate("SELECT * WHERE { ?s ?p ?o }");
         assert!(matches!(pred, VerbPath::Variable(v) if v.name == "p"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_negated_empty_parens() {
         // !() — empty negated set (matches all predicates — vacuously true negation)
         let pred = parse_first_predicate("SELECT * WHERE { ?s !() ?o }");
@@ -3506,7 +3506,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_nested_parens_with_modifiers() {
         // (ex:a / ex:b)+ — parenthesized sequence with modifier
         let pred = parse_first_predicate(
@@ -3521,7 +3521,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_multiple_triples_with_paths() {
         // Multiple triple patterns, some with paths
         let q = parse(
@@ -3545,7 +3545,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_path_semicolon_shorthand() {
         // Property paths with semicolon shorthand
         let q = parse(
@@ -3571,14 +3571,14 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
 
     // === Prompt 6: Aggregates, subqueries, GRAPH, solution modifiers ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_group_by_simple() {
         let q = p("SELECT ?type WHERE { ?s <http://type> ?type } GROUP BY ?type");
         assert_eq!(q.group_by.len(), 1);
         assert!(matches!(&q.group_by[0], Expression::Variable(v) if v.name == "type"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_group_by_multiple() {
         let q = p("SELECT ?a ?b WHERE { ?s ?p ?o } GROUP BY ?a ?b");
         assert_eq!(q.group_by.len(), 2);
@@ -3586,7 +3586,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert!(matches!(&q.group_by[1], Expression::Variable(v) if v.name == "b"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_having() {
         let q = p(
             "SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s <http://type> ?type } GROUP BY ?type HAVING (COUNT(?s) > 5)",
@@ -3598,7 +3598,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         ));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_order_by_simple() {
         let q = p("SELECT ?s ?p WHERE { ?s ?p ?o } ORDER BY ?s");
         assert_eq!(q.order_by.len(), 1);
@@ -3606,21 +3606,21 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert!(matches!(&q.order_by[0].expr, Expression::Variable(v) if v.name == "s"));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_order_by_desc() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o } ORDER BY DESC(?s)");
         assert_eq!(q.order_by.len(), 1);
         assert!(!q.order_by[0].ascending);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_order_by_asc() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o } ORDER BY ASC(?s)");
         assert_eq!(q.order_by.len(), 1);
         assert!(q.order_by[0].ascending);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_order_by_multiple() {
         let q = p("SELECT ?s ?p WHERE { ?s ?p ?o } ORDER BY ?s DESC(?p)");
         assert_eq!(q.order_by.len(), 2);
@@ -3628,28 +3628,28 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert!(!q.order_by[1].ascending);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_limit() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o } LIMIT 10");
         assert_eq!(q.limit, Some(10));
         assert_eq!(q.offset, None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_offset() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o } OFFSET 5");
         assert_eq!(q.limit, None);
         assert_eq!(q.offset, Some(5));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_limit_offset() {
         let q = p("SELECT ?s WHERE { ?s ?p ?o } LIMIT 10 OFFSET 20");
         assert_eq!(q.limit, Some(10));
         assert_eq!(q.offset, Some(20));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_all_solution_modifiers() {
         let q = p("SELECT ?type (COUNT(?s) AS ?count) \
              WHERE { ?s <http://type> ?type } \
@@ -3668,7 +3668,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
 
     // --- Aggregates ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_count_star() {
         let q = p("SELECT (COUNT(*) AS ?n) WHERE { ?s ?p ?o }");
         if let QueryForm::Select {
@@ -3688,7 +3688,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_count_expr() {
         let q = p("SELECT (COUNT(?s) AS ?n) WHERE { ?s ?p ?o }");
         if let QueryForm::Select {
@@ -3707,7 +3707,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_count_distinct() {
         let q = p("SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE { ?s ?p ?o }");
         if let QueryForm::Select {
@@ -3726,7 +3726,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_sum() {
         let q = p("SELECT (SUM(?val) AS ?total) WHERE { ?s <http://val> ?val }");
         if let QueryForm::Select {
@@ -3749,7 +3749,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_avg() {
         let q = p("SELECT (AVG(?val) AS ?mean) WHERE { ?s <http://val> ?val }");
         if let QueryForm::Select {
@@ -3772,7 +3772,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_min_max() {
         let q = p("SELECT (MIN(?v) AS ?lo) (MAX(?v) AS ?hi) WHERE { ?s <http://v> ?v }");
         if let QueryForm::Select {
@@ -3794,7 +3794,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_group_concat() {
         let q = p(
             "SELECT (GROUP_CONCAT(?name ; SEPARATOR = \", \") AS ?names) \
@@ -3824,7 +3824,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_group_concat_no_separator() {
         let q = p("SELECT (GROUP_CONCAT(?name) AS ?names) WHERE { ?s <http://name> ?name }");
         if let QueryForm::Select {
@@ -3844,7 +3844,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_sample() {
         let q = p("SELECT (SAMPLE(?v) AS ?s) WHERE { ?x <http://v> ?v }");
         if let QueryForm::Select {
@@ -3863,7 +3863,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
 
     // --- GRAPH ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_graph_iri() {
         let q = p("SELECT * WHERE { GRAPH <http://g1> { ?s ?p ?o } }");
         match &q.where_clause {
@@ -3875,7 +3875,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_graph_variable() {
         let q = p("SELECT * WHERE { GRAPH ?g { ?s ?p ?o } }");
         match &q.where_clause {
@@ -3886,7 +3886,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_graph_with_triples() {
         // Triples before GRAPH
         let q = p("SELECT * WHERE { ?a ?b ?c . GRAPH <http://g> { ?s ?p ?o } }");
@@ -3902,7 +3902,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
 
     // --- Subqueries ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_subquery_simple() {
         let q = p("SELECT ?s ?name WHERE { \
                ?s <http://name> ?name . \
@@ -3918,7 +3918,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_subquery_with_limit() {
         let q = p("SELECT * WHERE { \
                { SELECT ?s WHERE { ?s ?p ?o } LIMIT 5 } \
@@ -3931,7 +3931,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_subquery_with_aggregates() {
         let q = p("SELECT ?type ?count WHERE { \
                { SELECT ?type (COUNT(?s) AS ?count) \
@@ -3957,7 +3957,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
 
     // --- Combined tests ---
 
-    #[test]
+    #[mz_ore::test]
     fn test_full_aggregation_query() {
         // The example from the prompt: find types with counts, ordered, limited
         let q = p("PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> \
@@ -3973,21 +3973,21 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert_eq!(q.offset, None);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_construct_with_limit() {
         let q = p("CONSTRUCT { ?s <http://p> ?o } WHERE { ?s <http://q> ?o } LIMIT 100");
         assert!(matches!(q.form, QueryForm::Construct { .. }));
         assert_eq!(q.limit, Some(100));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_describe_with_limit() {
         let q = p("DESCRIBE ?s WHERE { ?s ?p ?o } LIMIT 5");
         assert!(matches!(q.form, QueryForm::Describe { .. }));
         assert_eq!(q.limit, Some(5));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_aggregate_in_having() {
         // HAVING can reference aggregates
         let q = p("SELECT ?type WHERE { ?s <http://type> ?type } \
@@ -4000,7 +4000,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_graph_in_subquery() {
         let q = p("SELECT * WHERE { \
                GRAPH <http://g1> { \
@@ -4015,7 +4015,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_multiple_aggregates() {
         let q = p(
             "SELECT (COUNT(*) AS ?total) (AVG(?age) AS ?avg_age) (MAX(?age) AS ?max_age) \
@@ -4044,7 +4044,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         }
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_order_by_expression() {
         // ORDER BY with a function call expression
         let q = p("SELECT ?s WHERE { ?s <http://name> ?name } ORDER BY LCASE(?name)");
@@ -4053,7 +4053,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert!(matches!(&q.order_by[0].expr, Expression::Lcase(_)));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_group_by_expression() {
         // GROUP BY with a built-in function call
         let q = p("SELECT (COUNT(*) AS ?n) WHERE { ?s <http://name> ?name } GROUP BY LCASE(?name)");
@@ -4063,7 +4063,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
 
     // === FROM / FROM NAMED (dataset clauses) ===
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_single_default_graph() {
         let q = p("SELECT ?s ?p ?o FROM <urn:materialize:catalog> WHERE { ?s ?p ?o }");
         assert_eq!(q.from.len(), 1);
@@ -4071,7 +4071,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert_eq!(q.from[0].iri.value, "urn:materialize:catalog");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_multiple_default_graphs() {
         let q = p("SELECT * FROM <http://g1> FROM <http://g2> WHERE { ?s ?p ?o }");
         assert_eq!(q.from.len(), 2);
@@ -4081,7 +4081,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert_eq!(q.from[1].iri.value, "http://g2");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_named() {
         let q = p("SELECT * FROM NAMED <http://ng> WHERE { GRAPH <http://ng> { ?s ?p ?o } }");
         assert_eq!(q.from.len(), 1);
@@ -4089,7 +4089,7 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert_eq!(q.from[0].iri.value, "http://ng");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_mixed_default_and_named() {
         let q = p("SELECT * FROM <http://g1> FROM NAMED <http://ng1> WHERE { ?s ?p ?o }");
         assert_eq!(q.from.len(), 2);
@@ -4097,34 +4097,34 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         assert!(q.from[1].named);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_no_clauses() {
         let q = p("SELECT * WHERE { ?s ?p ?o }");
         assert!(q.from.is_empty());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_with_construct() {
         let q = p("CONSTRUCT { ?s ?p ?o } FROM <http://g1> WHERE { ?s ?p ?o }");
         assert_eq!(q.from.len(), 1);
         assert_eq!(q.from[0].iri.value, "http://g1");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_with_ask() {
         let q = p("ASK FROM <http://g1> WHERE { ?s ?p ?o }");
         assert_eq!(q.from.len(), 1);
         assert_eq!(q.from[0].iri.value, "http://g1");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_with_describe() {
         let q = p("DESCRIBE <http://ex> FROM <http://g1> WHERE { ?s ?p ?o }");
         assert_eq!(q.from.len(), 1);
         assert_eq!(q.from[0].iri.value, "http://g1");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_from_with_prefix() {
         let q = p("PREFIX g: <http://graphs/> SELECT * FROM g:main WHERE { ?s ?p ?o }");
         assert_eq!(q.from.len(), 1);

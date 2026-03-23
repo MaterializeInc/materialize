@@ -928,7 +928,7 @@ fn next_char(input: &str, pos: &mut usize) -> char {
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_simple_select() {
         let input = "SELECT ?s ?p ?o WHERE { ?s ?p ?o }";
         let tokens = lex(input).unwrap();
@@ -945,7 +945,7 @@ mod tests {
         assert_eq!(tokens.len(), 10);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_prefix_and_iri() {
         let input = r#"PREFIX ex: <http://example.org/>
 SELECT ?s WHERE { ?s ex:name "Alice" }"#;
@@ -978,7 +978,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         assert_eq!(tokens[10].kind, Token::RBrace);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_filter_with_operators() {
         let input = "FILTER(?age >= 18 && ?age < 65)";
         let tokens = lex(input).unwrap();
@@ -995,7 +995,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         assert_eq!(tokens[9].kind, Token::RParen);
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_typed_literal() {
         let input = r#""42"^^<http://www.w3.org/2001/XMLSchema#integer>"#;
         let tokens = lex(input).unwrap();
@@ -1007,7 +1007,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_language_tagged_literal() {
         let input = r#""chat"@fr"#;
         let tokens = lex(input).unwrap();
@@ -1015,7 +1015,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         assert_eq!(tokens[1].kind, Token::LangTag("fr".to_string()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_blank_node() {
         let input = "_:b0 ?p ?o";
         let tokens = lex(input).unwrap();
@@ -1024,7 +1024,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         assert_eq!(tokens[2].kind, Token::Variable("o".to_string()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_numeric_literals() {
         let input = "42 3.14 1.5e10";
         let tokens = lex(input).unwrap();
@@ -1033,7 +1033,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         assert_eq!(tokens[2].kind, Token::Double("1.5e10".to_string()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_property_path_operators() {
         let input = "^ex:knows/ex:name|ex:label";
         let tokens = lex(input).unwrap();
@@ -1063,7 +1063,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_comment_skipping() {
         let input = "SELECT ?s # this is a comment\n?p ?o";
         let tokens = lex(input).unwrap();
@@ -1073,7 +1073,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         assert_eq!(tokens[3].kind, Token::Variable("o".to_string()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_case_insensitive_keywords() {
         let input = "select WHERE optional FILTER";
         let tokens = lex(input).unwrap();
@@ -1083,7 +1083,7 @@ SELECT ?s WHERE { ?s ex:name "Alice" }"#;
         assert_eq!(tokens[3].kind, Token::Keyword(Keyword::Filter));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_full_query() {
         let input = r#"PREFIX foaf: <http://xmlns.com/foaf/0.1/>
 SELECT ?name ?email
@@ -1106,7 +1106,7 @@ LIMIT 10"#;
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_string_escapes() {
         let input = r#""hello\nworld""#;
         let tokens = lex(input).unwrap();
@@ -1116,7 +1116,7 @@ LIMIT 10"#;
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_empty_prefix() {
         // `:localName` — prefixed name with empty prefix.
         let input = ":foo";
@@ -1146,7 +1146,7 @@ LIMIT 10"#;
         );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_dollar_variable() {
         let input = "SELECT $x $y WHERE { $x ?p $y }";
         let tokens = lex(input).unwrap();
@@ -1154,7 +1154,7 @@ LIMIT 10"#;
         assert_eq!(tokens[2].kind, Token::Variable("y".to_string()));
     }
 
-    #[test]
+    #[mz_ore::test]
     fn test_lex_offsets() {
         let input = "SELECT ?s";
         let tokens = lex(input).unwrap();
