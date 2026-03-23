@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "publisher": "materialize",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.88.0"
   },
   "categories": [
     "Programming Languages"
@@ -36,6 +36,13 @@
           "title": "mz-deploy",
           "icon": "icons/mz-logo.svg"
         }
+      ],
+      "panel": [
+        {
+          "id": "mz-deploy-panel",
+          "title": "Materialize Worksheet",
+          "icon": "icons/mz-logo.svg"
+        }
       ]
     },
     "views": {
@@ -45,6 +52,13 @@
           "id": "mz-deploy-catalog",
           "name": "Data Catalog"
         }
+      ],
+      "mz-deploy-panel": [
+        {
+          "type": "webview",
+          "id": "mz-deploy-worksheet",
+          "name": "Worksheet"
+        }
       ]
     },
     "commands": [
@@ -52,6 +66,14 @@
         "command": "mz-deploy.openDAG",
         "title": "mz-deploy: Open DAG View",
         "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "mz-deploy.executeStatement",
+        "title": "mz-deploy: Execute Statement"
+      },
+      {
+        "command": "mz-deploy.openWorksheet",
+        "title": "mz-deploy: Open Worksheet"
       }
     ],
     "colors": [

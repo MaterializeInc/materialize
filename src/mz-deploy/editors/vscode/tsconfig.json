@@ -13,5 +13,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/panels/dag.ts", "src/sidebar/catalog.ts"]
+  "exclude": ["src/panels/dag.ts", "src/sidebar/catalog.ts", "src/panels/worksheet.ts"]
 }

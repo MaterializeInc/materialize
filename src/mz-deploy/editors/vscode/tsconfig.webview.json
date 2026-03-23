@@ -9,5 +9,5 @@
     "skipLibCheck": true,
     "sourceMap": true
   },
-  "include": ["src/panels/dag.ts", "src/sidebar/catalog.ts", "src/types.ts"]
+  "include": ["src/panels/dag.ts", "src/sidebar/catalog.ts", "src/panels/worksheet.ts", "src/types.ts"]
 }

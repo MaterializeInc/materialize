@@ -147,3 +147,80 @@ export interface SchemaColorTriple {
   bg: string;
   border: string;
 }
+
+// ---------------------------------------------------------------------------
+// Worksheet LSP Response Types
+// ---------------------------------------------------------------------------
+
+export interface ConnectionInfoResponse {
+  connected: boolean;
+  host?: string;
+  port?: number;
+  user?: string;
+  profile?: string;
+  message?: string;
+}
+
+export interface ExecuteQueryResponse {
+  columns?: string[];
+  rows?: (string | number | boolean | null)[][];
+  raw_text?: string;
+  truncated: boolean;
+  elapsed_ms: number;
+  affected_rows?: number;
+}
+
+export interface WorksheetError {
+  code: string;
+  message: string;
+  hint?: string;
+}
+
+export interface WorksheetContextResponse {
+  profiles: string[];
+  current_profile?: string;
+  database_schemas: Record<string, string[]>;
+  clusters: string[];
+  current_database?: string;
+  current_schema?: string;
+  current_cluster?: string;
+}
+
+export interface SubscribeStarted {
+  subscribe_id: string;
+}
+
+export interface SubscribeBatch {
+  subscribe_id: string;
+  timestamp: string;
+  progress_only: boolean;
+  columns?: string[];
+  diffs: { diff: number; values: (string | number | boolean | null)[] }[];
+}
+
+export interface SubscribeComplete {
+  subscribe_id: string;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Extension ↔ Worksheet Webview Messages
+// ---------------------------------------------------------------------------
+
+export type WorksheetInboundMessage =
+  | { type: "connection-info"; data: ConnectionInfoResponse }
+  | { type: "query-result"; data: ExecuteQueryResponse }
+  | { type: "query-error"; error: WorksheetError }
+  | { type: "worksheet-context"; data: WorksheetContextResponse }
+  | { type: "subscribe-started"; data: SubscribeStarted }
+  | { type: "subscribe-batch"; data: SubscribeBatch }
+  | { type: "subscribe-complete"; data: SubscribeComplete };
+
+export type WorksheetOutboundMessage =
+  | { type: "ready" }
+  | { type: "execute"; query: string; timeout_ms: number }
+  | { type: "cancel" }
+  | { type: "request-connection-info" }
+  | { type: "request-worksheet-context" }
+  | { type: "set-session"; database?: string; schema?: string; cluster?: string }
+  | { type: "set-profile"; profile: string };

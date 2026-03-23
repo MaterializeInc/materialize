@@ -1502,5 +1502,7 @@ pub fn lookup(name: &str) -> Option<&'static FunctionInfo> {
 /// Return all functions whose name starts with the given prefix (case-insensitive).
 pub fn search_prefix(prefix: &str) -> impl Iterator<Item = &'static FunctionInfo> {
     let prefix_lower = prefix.to_lowercase();
-    FUNCTIONS.iter().filter(move |f| f.name.starts_with(&prefix_lower))
+    FUNCTIONS
+        .iter()
+        .filter(move |f| f.name.starts_with(&prefix_lower))
 }

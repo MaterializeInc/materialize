@@ -85,6 +85,32 @@
 //!   keywords as a JSON array of uppercase strings. Used by the VS Code
 //!   extension to apply keyword syntax highlighting via editor decorations.
 //!
+//! - **`mz-deploy/connection-info`** — Returns the resolved profile
+//!   connection details (host, port, user, profile name) without making
+//!   a connection. Used by the worksheet panel to show connection status.
+//!
+//! - **`mz-deploy/execute-query`** — Executes a read-only SQL query
+//!   (SELECT, SHOW, EXPLAIN) against the configured Materialize instance.
+//!   Enforces read-only access, injects LIMIT for unbounded SELECTs, and
+//!   returns columnar or raw-text results. See the [`worksheet`] module.
+//!
+//! - **`mz-deploy/cancel-query`** — Cancels the in-flight worksheet
+//!   query or active SUBSCRIBE using the PostgreSQL cancel protocol.
+//!
+//! - **`mz-deploy/subscribe`** — Starts a SUBSCRIBE query on a dedicated
+//!   connection. Returns immediately with a `subscribe_id`. Results stream
+//!   to the client via `mz-deploy/subscribeBatch` notifications (one per
+//!   timestamp group). Ends with a `mz-deploy/subscribeComplete` notification.
+//!   See the [`worksheet`] module for the full data flow.
+//!
+//! - **`mz-deploy/worksheet-context`** — Returns available databases (with
+//!   their schemas), clusters, and current session values for the worksheet
+//!   dropdowns.
+//!
+//! - **`mz-deploy/set-session`** — Applies `SET database/search_path/cluster`
+//!   on the worksheet connection. Returns refreshed context so schema
+//!   dropdowns update after a database change.
+//!
 //! ## Architecture
 //!
 //! ```text
@@ -92,7 +118,8 @@
 //!                                          ├─ documents: per-file Rope (updated on change)
 //!                                          ├─ project: planned::Project (rebuilt on save)
 //!                                          ├─ types_cache: Types (rebuilt on save)
-//!                                          ├─ completions: keyword CompletionItems (static)
+//!                                          ├─ worksheet_connection: lazy DB connection
+//!                                          ├─ subscribe_task: background SUBSCRIBE loop
 //!                                          └─ root: project root directory
 //! ```
 //!
@@ -113,6 +140,7 @@ mod references;
 mod run;
 mod server;
 mod symbol_kind;
+mod worksheet;
 mod workspace_symbol;
 
 pub use run::run;

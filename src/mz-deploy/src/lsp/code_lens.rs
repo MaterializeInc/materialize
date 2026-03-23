@@ -1,4 +1,4 @@
-//! Code lenses for unit tests and explain plans.
+//! Code lenses for unit tests, explain plans, and worksheet execution.
 //!
 //! Places clickable links above SQL statements:
 //!
@@ -8,15 +8,14 @@
 //!   `CREATE INDEX` statements — dispatches `mz-deploy.runExplain` with the
 //!   fully qualified target (`database.schema.object` or
 //!   `database.schema.object#index_name`).
+//! - **"Execute"** above each statement in `worksheets/` files — dispatches
+//!   `mz-deploy.executeStatement` with the statement SQL text.
 //!
-//! ## Algorithm
+//! ## Worksheet Detection
 //!
-//! 1. Derive the file's `ObjectId` from its URI path (same `models/<db>/<schema>/`
-//!    convention used by completions and go-to-definition).
-//! 2. Look up the object in the project model.
-//! 3. Emit test lenses for `typed_object.tests`.
-//! 4. Emit an explain lens if the object is a materialized view.
-//! 5. Emit explain lenses for each named index in `typed_object.indexes`.
+//! Files inside `<project_root>/worksheets/` are treated as worksheet files.
+//! They get "Execute" code lenses instead of the project-based "Run Test" /
+//! "Explain" lenses.
 
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
@@ -24,16 +23,76 @@ use crate::project::planned;
 use std::path::Path;
 use tower_lsp::lsp_types::*;
 
-/// Build code lenses for tests and explain targets in the file.
+/// Returns true if the file is inside the `worksheets/` directory.
+pub fn is_worksheet_file(file_uri: &Url, root: &Path) -> bool {
+    match file_uri.to_file_path() {
+        Ok(path) => path.starts_with(root.join("worksheets")),
+        Err(_) => false,
+    }
+}
+
+/// Build "Execute" code lenses for each statement in a worksheet file.
+///
+/// Parses the SQL and emits one lens per statement at its starting line.
+/// The statement's SQL text is passed as the command argument so the
+/// extension can send it to the `mz-deploy/execute-query` endpoint.
+fn worksheet_code_lenses(file_text: &str, cluster: Option<&str>) -> Vec<CodeLens> {
+    let stmts = match mz_sql_parser::parser::parse_statements(file_text) {
+        Ok(stmts) => stmts,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut lenses = Vec::new();
+    for stmt in &stmts {
+        // Compute byte offset of this statement within the source text.
+        // stmt.sql is a slice of file_text, so pointer arithmetic gives the offset.
+        #[allow(clippy::as_conversions)]
+        let byte_offset = stmt.sql.as_ptr() as usize - file_text.as_ptr() as usize;
+        let line = file_text[..byte_offset].matches('\n').count();
+
+        lenses.push(CodeLens {
+            range: Range::new(
+                Position::new(u32::try_from(line).unwrap_or(0), 0),
+                Position::new(u32::try_from(line).unwrap_or(0), 0),
+            ),
+            command: Some(Command {
+                title: {
+                    let verb = if super::worksheet::is_dml_statement(&stmt.ast) {
+                        "Run"
+                    } else {
+                        "Execute"
+                    };
+                    match cluster {
+                        Some(c) => format!("\u{25b6} {verb} on {c}"),
+                        None => format!("\u{25b6} {verb}"),
+                    }
+                },
+                command: "mz-deploy.executeStatement".to_string(),
+                arguments: Some(vec![serde_json::Value::String(stmt.sql.to_string())]),
+            }),
+            data: None,
+        });
+    }
+    lenses
+}
+
+/// Build code lenses for tests and explain targets in the file, or
+/// "Execute" lenses for worksheet files.
 ///
 /// Returns an empty vec if the file is not under `models/<db>/<schema>/` or
-/// the object is not found in the project.
+/// the object is not found in the project (and the file is not a worksheet).
 pub fn code_lenses(
     file_uri: &Url,
     file_text: &str,
     root: &Path,
     project: &planned::Project,
+    worksheet_cluster: Option<&str>,
 ) -> Vec<CodeLens> {
+    // Worksheet files get "Execute" lenses instead of project lenses.
+    if is_worksheet_file(file_uri, root) {
+        return worksheet_code_lenses(file_text, worksheet_cluster);
+    }
+
     let (default_db, default_schema) = match ObjectId::default_db_schema_from_uri(file_uri, root) {
         Some(pair) => pair,
         None => return Vec::new(),
@@ -204,7 +263,7 @@ mod tests {
         let uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
         let file_text =
             std::fs::read_to_string(root.path().join("models/mydb/public/foo.sql")).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project);
+        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
 
         assert_eq!(lenses.len(), 1);
         let lens = &lenses[0];
@@ -232,7 +291,7 @@ mod tests {
         let uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
         let file_text =
             std::fs::read_to_string(root.path().join("models/mydb/public/foo.sql")).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project);
+        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
 
         assert_eq!(lenses.len(), 2);
 
@@ -263,7 +322,7 @@ mod tests {
         let uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
         let file_text =
             std::fs::read_to_string(root.path().join("models/mydb/public/foo.sql")).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project);
+        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
 
         assert!(lenses.is_empty());
     }
@@ -282,7 +341,7 @@ mod tests {
         std::fs::write(&outside, "SELECT 1;").unwrap();
         let uri = Url::from_file_path(&outside).unwrap();
         let file_text = std::fs::read_to_string(&outside).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project);
+        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
 
         assert!(lenses.is_empty());
     }
