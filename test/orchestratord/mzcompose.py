@@ -725,6 +725,9 @@ class EnvironmentdImageRef(Modification):
         def check() -> None:
             environmentd = get_environmentd_data()
             for item in environmentd["items"]:
+                # Skip terminating pods from a previous rolling update
+                if item.get("metadata", {}).get("deletionTimestamp"):
+                    continue
                 image = item["spec"]["containers"][0]["image"]
                 expected = f"materialize/environmentd:{self.value}"
                 assert (
@@ -733,6 +736,9 @@ class EnvironmentdImageRef(Modification):
 
             balancerd = get_balancerd_data()
             for item in balancerd["items"]:
+                # Skip terminating pods from a previous rolling update
+                if item.get("metadata", {}).get("deletionTimestamp"):
+                    continue
                 image = item["spec"]["containers"][0]["image"]
                 expected = f"materialize/balancerd:{self.value}"
                 assert (
