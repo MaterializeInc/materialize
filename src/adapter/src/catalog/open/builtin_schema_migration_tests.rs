@@ -101,10 +101,10 @@ fn test_builtin_schema_migration() {
             };
             let step = MigrationStep {
                 version: version.clone(),
-                object: Object {
-                    type_: object.object_type,
-                    schema: object.schema_name.clone().leak(),
-                    name: object.object_name.clone().leak(),
+                object: SystemObjectDescription {
+                    object_type: object.object_type,
+                    schema_name: object.schema_name.clone(),
+                    object_name: object.object_name.clone(),
                 },
                 mechanism,
             };

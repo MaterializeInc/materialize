@@ -29,7 +29,7 @@
 //! `doc/developer/design/20251015_builtin_schema_migration.md`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use anyhow::bail;
 use futures::FutureExt;
@@ -72,53 +72,40 @@ use crate::catalog::migrate::get_migration_version;
 /// can delete all migration steps with versions before `(N-1).0.0`.
 ///
 /// Smallest supported version: 0.147.0
-const MIGRATIONS: &[MigrationStep] = &[
-    MigrationStep {
-        version: Version::new(0, 149, 0),
-        object: Object {
-            type_: CatalogItemType::Source,
-            schema: MZ_INTERNAL_SCHEMA,
-            name: "mz_sink_statistics_raw",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-    MigrationStep {
-        version: Version::new(0, 149, 0),
-        object: Object {
-            type_: CatalogItemType::Source,
-            schema: MZ_INTERNAL_SCHEMA,
-            name: "mz_source_statistics_raw",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-    MigrationStep {
-        version: Version::new(0, 159, 0),
-        object: Object {
-            type_: CatalogItemType::Source,
-            schema: MZ_INTERNAL_SCHEMA,
-            name: "mz_cluster_replica_metrics_history",
-        },
-        mechanism: Mechanism::Evolution,
-    },
-    MigrationStep {
-        version: Version::new(0, 160, 0),
-        object: Object {
-            type_: CatalogItemType::Table,
-            schema: MZ_CATALOG_SCHEMA,
-            name: "mz_roles",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-    MigrationStep {
-        version: Version::new(0, 160, 0),
-        object: Object {
-            type_: CatalogItemType::Table,
-            schema: MZ_CATALOG_SCHEMA,
-            name: "mz_sinks",
-        },
-        mechanism: Mechanism::Replacement,
-    },
-];
+static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
+    vec![
+        MigrationStep::replacement(
+            "0.149.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_sink_statistics_raw",
+        ),
+        MigrationStep::replacement(
+            "0.149.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_source_statistics_raw",
+        ),
+        MigrationStep::evolution(
+            "0.159.0",
+            CatalogItemType::Source,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_replica_metrics_history",
+        ),
+        MigrationStep::replacement(
+            "0.160.0",
+            CatalogItemType::Table,
+            MZ_CATALOG_SCHEMA,
+            "mz_roles",
+        ),
+        MigrationStep::replacement(
+            "0.160.0",
+            CatalogItemType::Table,
+            MZ_CATALOG_SCHEMA,
+            "mz_sinks",
+        ),
+    ]
+});
 
 /// A migration required to upgrade past a specific version.
 #[derive(Clone, Debug)]
@@ -126,9 +113,37 @@ struct MigrationStep {
     /// The build version that requires this migration.
     version: Version,
     /// The object that requires migration.
-    object: Object,
+    object: SystemObjectDescription,
     /// The migration mechanism to be used.
     mechanism: Mechanism,
+}
+
+impl MigrationStep {
+    /// Helper to construct an `Evolution` migration step.
+    fn evolution(version: &str, type_: CatalogItemType, schema: &str, name: &str) -> Self {
+        Self {
+            version: Version::parse(version).expect("valid"),
+            object: SystemObjectDescription {
+                schema_name: schema.into(),
+                object_type: type_,
+                object_name: name.into(),
+            },
+            mechanism: Mechanism::Evolution,
+        }
+    }
+
+    /// Helper to construct a `Replacement` migration step.
+    fn replacement(version: &str, type_: CatalogItemType, schema: &str, name: &str) -> Self {
+        Self {
+            version: Version::parse(version).expect("valid"),
+            object: SystemObjectDescription {
+                schema_name: schema.into(),
+                object_type: type_,
+                object_name: name.into(),
+            },
+            mechanism: Mechanism::Replacement,
+        }
+    }
 }
 
 /// The mechanism to use to migrate the schema of a builtin collection.
@@ -144,27 +159,6 @@ enum Mechanism {
     ///
     /// Works for arbitrary schema changes but loses existing contents.
     Replacement,
-}
-
-/// The object of a migration.
-///
-/// This has the same information as [`SystemObjectDescription`] but can be constructed in `const`
-/// contexts, like the `MIGRATIONS` list.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct Object {
-    type_: CatalogItemType,
-    schema: &'static str,
-    name: &'static str,
-}
-
-impl From<Object> for SystemObjectDescription {
-    fn from(object: Object) -> Self {
-        SystemObjectDescription {
-            schema_name: object.schema.into(),
-            object_type: object.type_,
-            object_name: object.name.into(),
-        }
-    }
 }
 
 /// The result of a builtin schema migration.
@@ -241,7 +235,7 @@ pub(super) async fn run(
         config,
     };
 
-    let result = migration.run(MIGRATIONS).await.map_err(|e| {
+    let result = migration.run(&MIGRATIONS).await.map_err(|e| {
         Error::new(ErrorKind::FailedBuiltinSchemaMigration {
             last_seen_version: durable_version.to_string(),
             this_version: build_version.to_string(),
@@ -412,7 +406,7 @@ impl Migration {
                 self.target_version,
             );
 
-            let object = SystemObjectDescription::from(step.object.clone());
+            let object = &step.object;
 
             // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly, it would
             // cause the table to be truncated because the contents are not also stored in the durable
@@ -422,18 +416,18 @@ impl Migration {
             //
             // TODO: Confirm the above reasoning, it might be outdated?
             assert_ne!(
-                *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, object,
+                &*MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, object,
                 "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
             );
 
             // `mz_catalog_raw` cannot be migrated because it contains the durable catalog and it
             // wouldn't be very durable if we allowed it to be truncated.
             assert_ne!(
-                *MZ_CATALOG_RAW_DESCRIPTION, object,
+                &*MZ_CATALOG_RAW_DESCRIPTION, object,
                 "mz_catalog_raw cannot be migrated"
             );
 
-            let Some(object_info) = self.system_objects.get(&object) else {
+            let Some(object_info) = self.system_objects.get(object) else {
                 panic!("migration step for non-existent builtin: {object:?}");
             };
 
@@ -471,8 +465,8 @@ impl Migration {
         let mut plan = Plan::default();
         for (object, mechanism) in by_object {
             match mechanism {
-                Mechanism::Evolution => plan.evolve.push(object.into()),
-                Mechanism::Replacement => plan.replace.push(object.into()),
+                Mechanism::Evolution => plan.evolve.push(object),
+                Mechanism::Replacement => plan.replace.push(object),
             }
         }
 
