@@ -310,6 +310,97 @@ GROUP BY ?table
 HAVING (COUNT(?col) > 10)
 ```
 
+### Component 4b: Unified Quad Surface — Bridging Relational and RDF
+
+A key design goal is avoiding data silos: users should not have to choose
+between "relational" and "RDF" for their data. The system should allow any
+Materialize relation to participate in SPARQL queries, and the catalog should
+be queryable alongside user data in a single SPARQL query.
+
+**The design has three layers:**
+
+**Layer 1: Explicit RDF mappings via SQL views.** Users project their relational
+tables into `(subject, predicate, object, graph)` form using standard SQL views.
+This is the primary mechanism for exposing relational data as RDF:
+
+```sql
+-- Map a users table to RDF triples
+CREATE VIEW users_rdf AS
+  SELECT
+    '<urn:myapp:user/' || id || '>' AS subject,
+    '<http://xmlns.com/foaf/0.1/name>' AS predicate,
+    '"' || name || '"' AS object,
+    '<urn:myapp:users>' AS graph
+  FROM users
+  UNION ALL
+  SELECT
+    '<urn:myapp:user/' || id || '>' AS subject,
+    '<http://xmlns.com/foaf/0.1/mbox>' AS predicate,
+    '"' || email || '"' AS object,
+    '<urn:myapp:users>' AS graph
+  FROM users;
+```
+
+This approach is explicit, composable, and requires no new DDL. Users control
+exactly which columns map to which RDF predicates. The mapping views are
+ordinary Materialize views — they can be materialized, indexed, and subscribed
+to just like any other view.
+
+**Layer 2: Named graph registry.** The `rdf_quads` table that the SPARQL
+planner queries is a union of all registered triple sources:
+
+```sql
+CREATE VIEW rdf_quads AS
+  SELECT * FROM mz_internal.mz_rdf_catalog_triples   -- system catalog
+  UNION ALL SELECT * FROM users_rdf                   -- user mapping
+  UNION ALL SELECT * FROM orders_rdf                  -- another mapping
+  UNION ALL SELECT * FROM raw_triples;                -- native RDF data
+```
+
+The SPARQL planner resolves `rdf_quads` from the catalog and plans against it.
+Because `rdf_quads` is a view over unions, the optimizer can push filters down
+into individual sources — a `FILTER(?graph = <urn:myapp:users>)` prunes away
+all branches except `users_rdf`.
+
+A future enhancement could introduce `ALTER GRAPH ADD SOURCE <view>` syntax
+to manage the union declaratively, but the view-based approach works today with
+no new DDL.
+
+**Layer 3: FROM / FROM NAMED graph selection.** SPARQL's `FROM <graph>` clause
+controls which named graphs are active for a query. The planner translates this
+to a filter on the `graph` column of `rdf_quads`:
+
+```sparql
+-- Query only the users graph
+SELECT ?user ?name
+FROM <urn:myapp:users>
+WHERE { ?user foaf:name ?name }
+
+-- Query users + catalog together
+SELECT ?user ?table
+FROM <urn:myapp:users>
+FROM <urn:materialize:catalog>
+WHERE {
+    ?user foaf:name ?name .
+    ?table rdf:type mz:Table .
+    ?table mz:name ?name .
+}
+```
+
+**Why this avoids siloing:**
+
+- Relational tables stay relational — no ingestion into a triple store required.
+- Users choose what to expose as triples via familiar SQL views.
+- Native RDF data (loaded via INSERT or future `FORMAT RDF` sources) coexists
+  in the same `rdf_quads` union.
+- SPARQL queries transparently span system catalog, user mappings, and native
+  RDF in a single query.
+- `SUBSCRIBE TO SPARQL` works over these views since they are standard
+  Materialize expressions — changes to the underlying relational tables
+  propagate incrementally through the mapping views into SPARQL results.
+- The mapping views can themselves be materialized for performance, giving
+  users control over the computation/freshness tradeoff.
+
 ### Component 5: SUBSCRIBE Integration
 
 SPARQL queries integrate with SUBSCRIBE at the plan level. Since SPARQL queries
@@ -463,9 +554,12 @@ parsing/planning.
 
 ## Open Questions
 
-1. **Triple table schema**: Should we enforce a single canonical `rdf_quads`
+1. **Triple table schema**: ~~Should we enforce a single canonical `rdf_quads`
    table, or allow users to designate any 3/4-column table as a triple store
-   via a `CREATE SOURCE ... FORMAT RDF` or similar syntax?
+   via a `CREATE SOURCE ... FORMAT RDF` or similar syntax?~~ **Resolved**: The
+   planner resolves a single `rdf_quads` view from the catalog. Users compose
+   this view as a union of mapping views, native triple tables, and the catalog
+   graph (see Component 4b). No special DDL needed — just SQL views.
 
 2. **Dictionary encoding**: When (if ever) should we introduce integer-ID
    dictionary encoding for IRIs? This is a major performance optimization for
@@ -480,9 +574,13 @@ parsing/planning.
    scoped? Per-query? Per-materialized-view? Blank node identity across
    SUBSCRIBE diffs needs careful design.
 
-5. **Multi-table SPARQL**: Should SPARQL queries be able to join across multiple
+5. **Multi-table SPARQL**: ~~Should SPARQL queries be able to join across multiple
    triple tables (e.g., FROM <table1> FROM NAMED <table2>)? How does this
-   interact with Materialize schemas?
+   interact with Materialize schemas?~~ **Resolved**: `rdf_quads` is a union
+   view over all triple sources. `FROM <graph>` translates to a filter on the
+   `graph` column; the optimizer pushes this down to prune irrelevant branches.
+   Multiple graphs are queried by listing multiple `FROM` clauses (see
+   Component 4b).
 
 6. **Catalog RDF ontology**: What ontology should the catalog graph use? A
    Materialize-specific vocabulary (`mz:*`)? An existing standard like DCAT,
