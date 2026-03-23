@@ -2022,6 +2022,13 @@ fn plan_copy_to_expr(
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
         CopyFormat::Text => bail_unsupported!("FORMAT TEXT"),
+        CopyFormat::SparqlJson
+        | CopyFormat::SparqlXml
+        | CopyFormat::NTriples
+        | CopyFormat::Turtle
+        | CopyFormat::JsonLd => {
+            sql_bail!("SPARQL output formats are only supported with COPY TO STDOUT")
+        }
     };
 
     // Converting the to expr to a HirScalarExpr
@@ -2153,6 +2160,13 @@ fn plan_copy_from(
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
         CopyFormat::Parquet => CopyFormatParams::Parquet,
+        CopyFormat::SparqlJson
+        | CopyFormat::SparqlXml
+        | CopyFormat::NTriples
+        | CopyFormat::Turtle
+        | CopyFormat::JsonLd => {
+            sql_bail!("SPARQL output formats are not supported with COPY FROM")
+        }
     };
 
     let filter = match (options.files, options.pattern) {
@@ -2228,6 +2242,11 @@ pub fn plan_copy(
             "csv" => Ok(CopyFormat::Csv),
             "binary" => Ok(CopyFormat::Binary),
             "parquet" => Ok(CopyFormat::Parquet),
+            "sparql_json" | "sparql-json" => Ok(CopyFormat::SparqlJson),
+            "sparql_xml" | "sparql-xml" => Ok(CopyFormat::SparqlXml),
+            "ntriples" | "n-triples" | "n_triples" => Ok(CopyFormat::NTriples),
+            "turtle" | "ttl" => Ok(CopyFormat::Turtle),
+            "jsonld" | "json-ld" | "json_ld" => Ok(CopyFormat::JsonLd),
             _ => sql_bail!("unknown FORMAT: {}", format),
         })
         .transpose()?;

@@ -223,15 +223,15 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~Write a comprehensive test suite based on the W3C SPARQL test suite~~
 > ~~(dawg-test-suite).~~
 
-### Prompt 18: SPARQL result serialization formats
+### ~~Prompt 18: SPARQL result serialization formats~~
 
-> Implement output formatters for standard SPARQL result formats:
-> - SPARQL Query Results JSON (application/sparql-results+json)
-> - SPARQL Query Results XML (application/sparql-results+xml)
-> - For CONSTRUCT: N-Triples, Turtle, JSON-LD
+> ~~Implement output formatters for standard SPARQL result formats:~~
+> ~~- SPARQL Query Results JSON (application/sparql-results+json)~~
+> ~~- SPARQL Query Results XML (application/sparql-results+xml)~~
+> ~~- For CONSTRUCT: N-Triples, Turtle, JSON-LD~~
 >
-> These can be triggered via a session variable or a COPY TO FORMAT option.
-> For pgwire output, keep the default tabular format.
+> ~~These can be triggered via a session variable or a COPY TO FORMAT option.~~
+> ~~For pgwire output, keep the default tabular format.~~
 
 ### Prompt 19: W3C SPARQL 1.1 compliance test suite
 

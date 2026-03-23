@@ -29,6 +29,7 @@ mod message;
 mod metrics;
 mod protocol;
 mod server;
+mod sparql_format;
 
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;

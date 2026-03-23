@@ -2061,6 +2061,21 @@ pub enum CopyFormat {
     Csv,
     Binary,
     Parquet,
+    /// SPARQL Query Results JSON (application/sparql-results+json).
+    /// W3C standard format for SELECT and ASK results.
+    SparqlJson,
+    /// SPARQL Query Results XML (application/sparql-results+xml).
+    /// W3C standard format for SELECT and ASK results.
+    SparqlXml,
+    /// N-Triples (application/n-triples).
+    /// Line-based RDF serialization for CONSTRUCT and DESCRIBE results.
+    NTriples,
+    /// Turtle (text/turtle).
+    /// Compact RDF serialization for CONSTRUCT and DESCRIBE results.
+    Turtle,
+    /// JSON-LD (application/ld+json).
+    /// JSON-based RDF serialization for CONSTRUCT and DESCRIBE results.
+    JsonLd,
 }
 
 #[derive(Debug, Copy, Clone)]

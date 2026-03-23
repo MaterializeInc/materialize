@@ -1605,3 +1605,81 @@ New tests (12):
 - Accessors: LANG uses Position, DATATYPE uses Position + xsd:string fallback
 - Language tag equality: different tags produce different strings
 - Arithmetic + comparison: combined expression planning
+
+## 2026-03-23: Prompt 18 — SPARQL result serialization formats
+
+### What was implemented
+
+Five W3C-standard SPARQL output formats, triggered via `COPY TO STDOUT WITH
+(FORMAT ...)`:
+
+| Format | COPY format name | Content type | Use case |
+|--------|-----------------|--------------|----------|
+| SPARQL JSON | `sparql_json` / `sparql-json` | application/sparql-results+json | SELECT/ASK results |
+| SPARQL XML | `sparql_xml` / `sparql-xml` | application/sparql-results+xml | SELECT/ASK results |
+| N-Triples | `ntriples` / `n-triples` | application/n-triples | CONSTRUCT/DESCRIBE triples |
+| Turtle | `turtle` / `ttl` | text/turtle | CONSTRUCT/DESCRIBE triples |
+| JSON-LD | `jsonld` / `json-ld` | application/ld+json | CONSTRUCT/DESCRIBE triples |
+
+### Files changed
+
+1. **`src/sql/src/plan.rs`** — Extended `CopyFormat` enum with 5 new variants:
+   `SparqlJson`, `SparqlXml`, `NTriples`, `Turtle`, `JsonLd`.
+
+2. **`src/sql/src/plan/statement/dml.rs`** — Extended format string parsing in
+   `plan_copy()` to accept the new format names. Added error messages for SPARQL
+   formats used in unsupported contexts (COPY TO expr, COPY FROM).
+
+3. **`src/pgwire/src/sparql_format.rs`** (new) — Serialization module with:
+   - RDF term classification (`classify_term` → Uri/Bnode/TypedLiteral/LangLiteral/PlainLiteral)
+   - SPARQL JSON: header/row/footer functions per W3C spec (null bindings omitted)
+   - SPARQL XML: header/row/footer with proper escaping
+   - N-Triples: line-per-triple, unquoted values auto-wrapped as xsd:string literals
+   - Turtle: simplified one-triple-per-line (valid but not grouped by subject)
+   - JSON-LD: array of minimal nodes, one per triple
+   - JSON/XML/N-Triples escape helpers
+   - 14 unit tests covering all formats and edge cases
+
+4. **`src/pgwire/src/lib.rs`** — Registered `sparql_format` module.
+
+5. **`src/pgwire/src/protocol.rs`** — Extended `copy_rows()`:
+   - SPARQL formats use text-mode CopyOut framing
+   - Header emitted before row loop (JSON, XML, JSON-LD)
+   - Per-row serialization dispatches to format-specific functions
+   - Footer emitted after loop (JSON, XML, JSON-LD)
+   - Row counting tracks individual rows (needed for JSON comma separation)
+
+### Key decisions
+
+1. **COPY TO FORMAT, not session variable**: Chose COPY format as the primary
+   trigger mechanism. This is more explicit, doesn't affect default pgwire
+   output, and integrates cleanly with the existing COPY infrastructure. A
+   session variable could be added later as sugar.
+
+2. **Serialization in pgwire, not mz-sparql**: The format functions live in
+   `src/pgwire/src/sparql_format.rs` rather than the sparql crate. This avoids
+   adding mz-sparql as a dependency of mz-pgwire. The functions only need
+   `mz-repr` types (RowRef, Datum), which pgwire already depends on.
+
+3. **RDF term detection from string encoding**: Terms are classified by their
+   string prefix/suffix (`<>` for IRIs, `_:` for bnodes, `"..."^^<...>` for
+   typed literals, `"..."@...` for language-tagged). This matches the encoding
+   conventions established by the SPARQL planner.
+
+4. **Turtle without subject grouping**: The Turtle serializer emits one triple
+   per line without grouping by subject. This is valid Turtle but not maximally
+   compact. Subject grouping would require buffering all triples for a subject
+   before emitting, which conflicts with the streaming row-by-row COPY protocol.
+
+5. **N-Triples and Turtle share encoding**: Since our simplified Turtle doesn't
+   use prefix abbreviations, the term encoding is identical to N-Triples.
+
+6. **JSON-LD minimal nodes**: Each triple becomes a separate JSON-LD node with
+   `@id`, predicate, and value. This is valid but not compacted — a more
+   sophisticated serializer could group by subject and use `@context`.
+
+### Blocked
+
+- Unit tests could not be executed due to a pre-existing `aws-lc-sys` build
+  failure (temp directory issue on macOS). `cargo check` confirms compilation.
+  Tests should pass once the build environment is fixed.
