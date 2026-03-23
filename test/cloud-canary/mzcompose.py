@@ -58,6 +58,27 @@ SCHEMA_REGISTRY_ENDPOINT = "https://psrc-e0919.us-east-2.aws.confluent.cloud"
 CONFLUENT_API_KEY = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_USERNAME")
 CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD")
 
+# Confluent Cloud Dedicated cluster with PrivateLink enabled, for testing
+# AWS PRIVATELINKS (plural) with pattern-based AZ routing.
+# The cluster and VPC endpoint service are provisioned manually.
+CONFLUENT_PRIVATELINK_SERVICE_NAME = os.getenv(
+    "CONFLUENT_CLOUD_PRIVATELINK_SERVICE_NAME"
+)
+CONFLUENT_PRIVATELINK_BOOTSTRAP_PORT = os.getenv(
+    "CONFLUENT_CLOUD_PRIVATELINK_BOOTSTRAP_PORT", "9092"
+)
+CONFLUENT_PRIVATELINK_AZS = os.getenv(
+    "CONFLUENT_CLOUD_PRIVATELINK_AZS", "use1-az1,use1-az4"
+).split(",")
+CONFLUENT_PRIVATELINK_API_KEY = os.getenv("CONFLUENT_CLOUD_PRIVATELINK_KAFKA_USERNAME")
+CONFLUENT_PRIVATELINK_API_SECRET = os.getenv(
+    "CONFLUENT_CLOUD_PRIVATELINK_KAFKA_PASSWORD"
+)
+# Public bootstrap server for testdrive's Kafka admin operations (topic creation)
+CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER = os.getenv(
+    "CONFLUENT_CLOUD_PRIVATELINK_BOOTSTRAP_SERVER"
+)
+
 
 class Redpanda:
     def __init__(self, c: Composition, cleanup: bool):
@@ -200,6 +221,85 @@ class Redpanda:
                 self.cloud.delete("resource-groups", resource_group["id"])
 
 
+class ConfluentPrivateLink:
+    """Sets up an AWS PRIVATELINK connection in Materialize Cloud for a
+    pre-existing Confluent Cloud Dedicated cluster with PrivateLink enabled.
+
+    The Confluent cluster and VPC endpoint service must be provisioned manually
+    before running this test. This class creates the Materialize-side connection
+    objects and validates connectivity.
+    """
+
+    def __init__(self, c: Composition) -> None:
+        assert CONFLUENT_PRIVATELINK_SERVICE_NAME
+        assert CONFLUENT_PRIVATELINK_API_KEY
+        assert CONFLUENT_PRIVATELINK_API_SECRET
+
+        azs = ", ".join(f"'{az}'" for az in CONFLUENT_PRIVATELINK_AZS)
+
+        cloud_conn = psycopg.connect(
+            host=c.cloud_hostname(),
+            user=USERNAME,
+            password=APP_PASSWORD,
+            dbname="materialize",
+            port=6875,
+            sslmode="require",
+        )
+        cloud_conn.autocommit = True
+        cloud_cursor = cloud_conn.cursor()
+
+        print(
+            f"Creating AWS PRIVATELINK connection with service "
+            f"{CONFLUENT_PRIVATELINK_SERVICE_NAME}, AZs: {CONFLUENT_PRIVATELINK_AZS}"
+        )
+        cloud_cursor.execute(
+            f"""CREATE CONNECTION IF NOT EXISTS confluent_privatelink_conn
+            TO AWS PRIVATELINK (
+                SERVICE NAME '{CONFLUENT_PRIVATELINK_SERVICE_NAME}',
+                AVAILABILITY ZONES ({azs})
+            );""".encode()
+        )
+
+        cloud_cursor.execute(
+            """SELECT principal
+            FROM mz_aws_privatelink_connections plc
+            JOIN mz_connections c ON plc.id = c.id
+            WHERE c.name = 'confluent_privatelink_conn';"""
+        )
+        results = cloud_cursor.fetchone()
+        assert results
+        print(f"PrivateLink principal: {results[0]}")
+
+        cloud_cursor.close()
+        cloud_conn.close()
+
+        # Wait for the PrivateLink endpoint to become available
+        print("Waiting for PrivateLink connection to be validated...")
+        for attempt in range(30):
+            try:
+                conn = psycopg.connect(
+                    host=c.cloud_hostname(),
+                    user=USERNAME,
+                    password=APP_PASSWORD,
+                    dbname="materialize",
+                    port=6875,
+                    sslmode="require",
+                )
+                conn.autocommit = True
+                conn.cursor().execute("VALIDATE CONNECTION confluent_privatelink_conn;")
+                conn.close()
+                print("PrivateLink connection validated successfully.")
+                return
+            except Exception as e:
+                print(f"Validation attempt {attempt + 1}/30 failed: {e}")
+                time.sleep(30)
+
+        raise RuntimeError(
+            "Confluent PrivateLink connection did not become available "
+            "after 15 minutes"
+        )
+
+
 SERVICES = [
     CockroachOrPostgresMetadata(),
     Materialized(
@@ -290,12 +390,24 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         #     else None
         # )
 
+        confluent_privatelink = None
+        if CONFLUENT_PRIVATELINK_SERVICE_NAME and any(
+            "confluent-privatelinks" in f for f in files
+        ):
+            print("--- Setting up Confluent Cloud PrivateLink connection")
+            confluent_privatelink = ConfluentPrivateLink(c)
+
         try:
             print("--- Running .td files ...")
             td(c, text="> CREATE CLUSTER canary_sources SIZE '25cc'")
 
             def process(filename: str) -> None:
-                td(c, filename, redpanda=redpanda)
+                td(
+                    c,
+                    filename,
+                    redpanda=redpanda,
+                    confluent_privatelink=confluent_privatelink,
+                )
 
             c.test_parts(files, process)
             test_failed = False
@@ -369,6 +481,7 @@ def td(
     filename: str | None = None,
     text: str | None = None,
     redpanda: Redpanda | None = None,
+    confluent_privatelink: ConfluentPrivateLink | None = None,
 ) -> None:
     assert APP_PASSWORD is not None
     materialize_url = f"postgres://{urllib.parse.quote(USERNAME)}:{urllib.parse.quote(APP_PASSWORD)}@{urllib.parse.quote(c.cloud_hostname())}:6875"
@@ -400,7 +513,37 @@ def td(
         ],
     )
 
-    if redpanda and "redpanda" in str(filename):
+    if confluent_privatelink and "confluent-privatelinks" in str(filename):
+        assert CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER
+        assert CONFLUENT_PRIVATELINK_API_KEY
+        assert CONFLUENT_PRIVATELINK_API_SECRET
+        testdrive = Testdrive(
+            default_timeout="1200s",
+            materialize_url=materialize_url,
+            no_reset=True,  # Required so that admin port 6877 is not used
+            seed=1,  # Required for predictable Kafka topic names
+            kafka_url=CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER,
+            no_consistency_checks=True,
+            environment=[
+                "KAFKA_OPTION="
+                + ",".join(
+                    [
+                        "security.protocol=SASL_SSL",
+                        "sasl.mechanisms=PLAIN",
+                        f"sasl.username={CONFLUENT_PRIVATELINK_API_KEY}",
+                        f"sasl.password={CONFLUENT_PRIVATELINK_API_SECRET}",
+                    ]
+                ),
+            ],
+            entrypoint_extra=[
+                f"--var=confluent-pl-api-key={CONFLUENT_PRIVATELINK_API_KEY}",
+                f"--var=confluent-pl-api-secret={CONFLUENT_PRIVATELINK_API_SECRET}",
+                f"--var=confluent-az1={CONFLUENT_PRIVATELINK_AZS[0]}",
+                f"--var=confluent-az2={CONFLUENT_PRIVATELINK_AZS[1]}",
+                f"--var=confluent-pl-port={CONFLUENT_PRIVATELINK_BOOTSTRAP_PORT}",
+            ],
+        )
+    elif redpanda and "redpanda" in str(filename):
         testdrive = Testdrive(
             default_timeout="1200s",
             materialize_url=materialize_url,
