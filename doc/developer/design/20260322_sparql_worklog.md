@@ -1382,3 +1382,116 @@ Full test counts:
 - mz-sparql-parser: 154 pass, 0 fail
 - mz-sparql: 107 pass, 0 fail
 - mz-sql-parser: all pass (existing test expectations updated for new `sparql: None` field)
+
+## 2026-03-23: Prompt 16 — Implement catalog-as-RDF named graph
+
+### What was done
+
+Implemented the catalog-as-RDF feature with three components: a built-in view
+exposing catalog metadata as RDF triples, FROM clause parsing in the SPARQL
+parser, and planner integration that automatically uses the catalog view for
+`FROM <urn:materialize:catalog>`.
+
+**Built-in view** (`mz_internal.mz_rdf_catalog_triples`):
+- Defined in `src/catalog/src/builtin.rs` as a `BuiltinView` with schema
+  `(subject TEXT, predicate TEXT, object TEXT, graph TEXT)`.
+- SQL is a large UNION ALL over catalog system tables, mapping each object to
+  the ontology defined in the design doc (`urn:materialize:catalog:` prefix):
+  - **Databases**: `rdf:type mz:Database`, `mz:name`
+  - **Schemas**: `rdf:type mz:Schema`, `mz:name`, `mz:inDatabase`
+  - **Tables**: `rdf:type mz:Table`, `mz:name`, `mz:inSchema`
+  - **Columns**: `rdf:type mz:Column`, `mz:columnName`, `mz:columnType`,
+    `mz:ordinalPosition`, parent `mz:hasColumn`
+  - **Views**: `rdf:type mz:View`, `mz:name`, `mz:inSchema`
+  - **Materialized views**: `rdf:type mz:MaterializedView`, `mz:name`,
+    `mz:inSchema`, `mz:inCluster`
+  - **Sources**: `rdf:type mz:Source`, `mz:name`, `mz:inSchema`, `mz:sourceType`
+  - **Sinks**: `rdf:type mz:Sink`, `mz:name`, `mz:inSchema`
+  - **Clusters**: `rdf:type mz:Cluster`, `mz:name`
+  - **Indexes**: `rdf:type mz:Index`, `mz:name`, `mz:onRelation`, `mz:inCluster`
+- Registered in `BUILTINS_STATIC` with OID 17069.
+- All graph column values are `'urn:materialize:catalog'`.
+
+**SPARQL parser — FROM/FROM NAMED clauses**:
+- Added `DatasetClause { iri: Iri, named: bool }` to the AST.
+- Added `from: Vec<DatasetClause>` field to `SparqlQuery`.
+- `parse_dataset_clauses()` method: consumes `FROM [NAMED] <iri>` clauses
+  between the query form clause and the WHERE clause. Called for all query
+  forms (SELECT, CONSTRUCT, ASK, DESCRIBE) and subqueries (empty for subqueries).
+- Parser correctly handles prefixed names in FROM clauses (e.g., `FROM g:main`).
+
+**Planner integration**:
+- `SparqlPlanner` now takes `catalog_triples_id: Option<GlobalId>` in addition
+  to `quad_table_id`. The `quad_table_id` is a `Cell<GlobalId>` to allow
+  temporary override during planning.
+- `effective_quad_table_id()`: when FROM `<urn:materialize:catalog>` is the sole
+  default graph and the catalog triples view is available, returns its ID instead
+  of the default quad table.
+- `from_graph_filter()`: for non-catalog FROM graphs, builds a filter expression
+  on the graph column (`graph = 'g1' OR graph = 'g2' OR ...`). No filter is
+  generated when the catalog view is used directly (already scoped).
+- In `plan()`, the effective quad table is set before planning the WHERE clause,
+  then restored afterward. The graph filter is applied after WHERE planning.
+
+**SQL planner / adapter updates**:
+- `resolve_catalog_triples()` helper in `dml.rs`: resolves
+  `mz_internal.mz_rdf_catalog_triples` from the catalog, returning `None` if
+  unavailable (e.g., in tests).
+- `SparqlPlan`, `SparqlViewInfo`, and `SubscribeFrom::Sparql` all gained a
+  `catalog_triples_id: Option<GlobalId>` field.
+- All 5 adapter call sites (`sequence_sparql`, subscribe, create_view,
+  create_materialized_view, catalog_serving) updated to pass the catalog
+  triples ID to `SparqlPlanner::new()`.
+- `depends_on()` for `SubscribeFrom::Sparql` now includes the catalog triples
+  ID in its dependency set.
+
+### Key decisions
+
+1. **Single built-in view, not a table**: The catalog triples are a SQL view
+   (not a table) — the data is always up-to-date with the live catalog. This
+   matches how `mz_relations` and `mz_objects` are implemented.
+
+2. **FROM clause → quad table override (not filter) for catalog**: When
+   `FROM <urn:materialize:catalog>` is specified, the planner scans the catalog
+   triples view directly rather than filtering `rdf_quads` on the graph column.
+   This is more efficient (avoids scanning the entire quad table) and works even
+   when `rdf_quads` doesn't include catalog triples.
+
+3. **Cell<GlobalId> for quad_table_id**: Since `plan()` takes `&self`, we use
+   `Cell` to temporarily override the quad table ID during planning. The original
+   ID is restored after the WHERE clause is planned, ensuring clean state.
+
+4. **FROM NAMED parsed but not yet acted on**: The parser stores `named: bool`
+   on each dataset clause, but the planner currently only processes default graph
+   clauses (non-named). GRAPH pattern planning (which would use FROM NAMED) is
+   deferred to a later prompt.
+
+5. **Multiple FROM = graph column filter**: When multiple default graphs are
+   specified (e.g., `FROM <g1> FROM <g2>`), the planner adds an OR filter on
+   the graph column. This implements the SPARQL spec's RDF merge semantics.
+
+### Future work identified
+
+- **HIR extraction to separate crate**: SPARQL views need the same HIR/MIR/
+  optimization abstractions as SQL views. Extracting HIR to a separate crate
+  would enable this without the current cyclic dependency workaround
+  (deferred compilation in the adapter).
+- **sqllogictests for SPARQL**: Need to add end-to-end tests using the
+  sqllogictest framework for the full SPARQL pipeline.
+
+### Test results
+
+- mz-sparql-parser: 163 tests pass (154 old + 9 new FROM clause tests), 0 failures
+- mz-sparql: 112 tests pass (107 old + 5 new FROM/catalog tests), 0 failures
+- All crates compile cleanly (mz-sparql-parser, mz-sparql, mz-sql, mz-adapter)
+
+New parser tests (9):
+- FROM: single default graph, multiple default graphs, FROM NAMED, mixed
+  default+named, no clauses, with CONSTRUCT, with ASK, with DESCRIBE, with prefix
+
+New planner tests (5):
+- No FROM clauses (default behavior)
+- FROM non-catalog graph (verifies Filter in HIR)
+- FROM catalog graph with catalog view ID (verifies User(2) in HIR)
+- FROM catalog graph without catalog view (fallback to Filter)
+- Multiple FROM graphs (verifies Filter in HIR)

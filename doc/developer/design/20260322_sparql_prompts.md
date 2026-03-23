@@ -194,18 +194,18 @@ includes the goal, key files to read, and acceptance criteria.
 >
 > ~~Read first: `src/sql/src/plan/statement/ddl.rs` (plan_create_view).~~
 
-### Prompt 16: Implement catalog-as-RDF named graph
+### ~~Prompt 16: Implement catalog-as-RDF named graph~~
 
-> Create built-in views that expose the Materialize catalog as RDF triples.
-> Implement `mz_internal.mz_rdf_catalog_triples(subject, predicate, object,
-> graph)` as a UNION over catalog system tables (mz_tables, mz_columns,
-> mz_schemas, mz_databases, mz_views, mz_sources, mz_sinks, mz_clusters,
-> mz_indexes, mz_materialized_views). Map each catalog object to the
-> ontology defined in the design doc. Make the SPARQL planner automatically
-> query this view for `FROM <urn:materialize:catalog>`.
+> ~~Create built-in views that expose the Materialize catalog as RDF triples.~~
+> ~~Implement `mz_internal.mz_rdf_catalog_triples(subject, predicate, object,~~
+> ~~graph)` as a UNION over catalog system tables (mz_tables, mz_columns,~~
+> ~~mz_schemas, mz_databases, mz_views, mz_sources, mz_sinks, mz_clusters,~~
+> ~~mz_indexes, mz_materialized_views). Map each catalog object to the~~
+> ~~ontology defined in the design doc. Make the SPARQL planner automatically~~
+> ~~query this view for `FROM <urn:materialize:catalog>`.~~
 >
-> Read first: `src/catalog/src/builtin.rs` (builtin view definitions),
-> the INFORMATION_SCHEMA views for reference patterns.
+> ~~Read first: `src/catalog/src/builtin.rs` (builtin view definitions),~~
+> ~~the INFORMATION_SCHEMA views for reference patterns.~~
 
 ---
 

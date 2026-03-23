@@ -252,9 +252,11 @@ impl Coordinator {
             SubscribeFrom::Sparql {
                 query,
                 quad_table_id,
+                catalog_triples_id,
                 desc,
             } => {
-                let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id);
+                let planner =
+                    mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
                 let planned = planner.plan(&query).map_err(|e| {
                     AdapterError::Unstructured(anyhow::anyhow!("SPARQL: {}", e.message))
                 })?;

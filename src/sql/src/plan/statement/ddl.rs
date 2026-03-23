@@ -2596,9 +2596,11 @@ pub fn plan_view(
             typ: quad_type,
         };
 
+        let catalog_triples_id = dml::resolve_catalog_triples(scx);
         let info = SparqlViewInfo {
             query: sparql_query,
             quad_table_id,
+            catalog_triples_id,
         };
 
         (placeholder_expr, desc, Some(info))
@@ -2841,9 +2843,11 @@ pub fn plan_create_materialized_view(
             typ: quad_type,
         };
 
+        let catalog_triples_id = dml::resolve_catalog_triples(scx);
         let info = SparqlViewInfo {
             query: sparql_query,
             quad_table_id,
+            catalog_triples_id,
         };
 
         (placeholder_expr, desc, Some(info))

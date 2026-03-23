@@ -784,6 +784,8 @@ pub struct SparqlViewInfo {
     pub query: mz_sparql_parser::ast::SparqlQuery,
     /// The GlobalId of the quad table to query against.
     pub quad_table_id: GlobalId,
+    /// The GlobalId of the catalog triples view, if resolved.
+    pub catalog_triples_id: Option<GlobalId>,
 }
 
 #[derive(Debug, Clone)]
@@ -895,6 +897,8 @@ pub struct SparqlPlan {
     pub query: mz_sparql_parser::ast::SparqlQuery,
     /// The GlobalId of the quad table to query against.
     pub quad_table_id: GlobalId,
+    /// The GlobalId of the catalog triples view, if resolved.
+    pub catalog_triples_id: Option<GlobalId>,
     /// The output column names and types.
     pub desc: RelationDesc,
 }
@@ -971,6 +975,7 @@ pub enum SubscribeFrom {
     Sparql {
         query: mz_sparql_parser::ast::SparqlQuery,
         quad_table_id: GlobalId,
+        catalog_triples_id: Option<GlobalId>,
         desc: RelationDesc,
     },
 }
@@ -980,7 +985,17 @@ impl SubscribeFrom {
         match self {
             SubscribeFrom::Id(id) => BTreeSet::from([*id]),
             SubscribeFrom::Query { expr, .. } => expr.depends_on(),
-            SubscribeFrom::Sparql { quad_table_id, .. } => BTreeSet::from([*quad_table_id]),
+            SubscribeFrom::Sparql {
+                quad_table_id,
+                catalog_triples_id,
+                ..
+            } => {
+                let mut deps = BTreeSet::from([*quad_table_id]);
+                if let Some(id) = catalog_triples_id {
+                    deps.insert(*id);
+                }
+                deps
+            }
         }
     }
 

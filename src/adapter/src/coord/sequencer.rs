@@ -1313,7 +1313,10 @@ impl Coordinator {
         &self,
         sparql_plan: plan::SparqlPlan,
     ) -> Result<plan::SelectPlan, AdapterError> {
-        let planner = mz_sparql::plan::SparqlPlanner::new(sparql_plan.quad_table_id);
+        let planner = mz_sparql::plan::SparqlPlanner::new(
+            sparql_plan.quad_table_id,
+            sparql_plan.catalog_triples_id,
+        );
         let planned = planner
             .plan(&sparql_plan.query)
             .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{}", e.message)))?;

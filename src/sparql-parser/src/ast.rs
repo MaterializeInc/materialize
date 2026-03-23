@@ -352,6 +352,15 @@ pub enum QueryForm {
     },
 }
 
+/// A dataset clause specifying which graphs to query.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DatasetClause {
+    /// The graph IRI.
+    pub iri: Iri,
+    /// Whether this is a FROM NAMED clause (vs plain FROM).
+    pub named: bool,
+}
+
 /// A complete SPARQL query.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SparqlQuery {
@@ -361,6 +370,8 @@ pub struct SparqlQuery {
     pub prefixes: Vec<PrefixDecl>,
     /// The query form (SELECT / CONSTRUCT / ASK / DESCRIBE).
     pub form: QueryForm,
+    /// Dataset clauses (FROM / FROM NAMED).
+    pub from: Vec<DatasetClause>,
     /// The WHERE clause (graph pattern).
     pub where_clause: GroupGraphPattern,
     /// GROUP BY expressions.

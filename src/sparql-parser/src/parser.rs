@@ -198,6 +198,7 @@ impl<'a> Parser<'a> {
         match self.peek() {
             Some(Token::Keyword(Keyword::Select)) => {
                 let form = self.parse_select_clause()?;
+                let from = self.parse_dataset_clauses()?;
                 let where_clause = self.parse_where_clause()?;
                 let (group_by, having, order_by, limit, offset) =
                     self.parse_solution_modifiers()?;
@@ -205,6 +206,7 @@ impl<'a> Parser<'a> {
                     base,
                     prefixes,
                     form,
+                    from,
                     where_clause,
                     group_by,
                     having,
@@ -219,6 +221,7 @@ impl<'a> Parser<'a> {
                 //        or: CONSTRUCT WHERE { pattern } (short form: template = pattern)
                 if matches!(self.peek(), Some(Token::Keyword(Keyword::Where))) {
                     // Short form: CONSTRUCT WHERE { pattern }
+                    let from = self.parse_dataset_clauses()?;
                     let where_clause = self.parse_where_clause()?;
                     let template = self.extract_triples_from_pattern(&where_clause);
                     let (group_by, having, order_by, limit, offset) =
@@ -227,6 +230,7 @@ impl<'a> Parser<'a> {
                         base,
                         prefixes,
                         form: QueryForm::Construct { template },
+                        from,
                         where_clause,
                         group_by,
                         having,
@@ -237,6 +241,7 @@ impl<'a> Parser<'a> {
                 } else {
                     // Full form: CONSTRUCT { template } WHERE { pattern }
                     let template = self.parse_construct_template()?;
+                    let from = self.parse_dataset_clauses()?;
                     let where_clause = self.parse_where_clause()?;
                     let (group_by, having, order_by, limit, offset) =
                         self.parse_solution_modifiers()?;
@@ -244,6 +249,7 @@ impl<'a> Parser<'a> {
                         base,
                         prefixes,
                         form: QueryForm::Construct { template },
+                        from,
                         where_clause,
                         group_by,
                         having,
@@ -255,6 +261,7 @@ impl<'a> Parser<'a> {
             }
             Some(Token::Keyword(Keyword::Ask)) => {
                 self.bump();
+                let from = self.parse_dataset_clauses()?;
                 let where_clause = self.parse_where_clause()?;
                 // ASK doesn't typically use solution modifiers, but parse them
                 // for spec compliance (they're valid in the grammar).
@@ -264,6 +271,7 @@ impl<'a> Parser<'a> {
                     base,
                     prefixes,
                     form: QueryForm::Ask,
+                    from,
                     where_clause,
                     group_by,
                     having,
@@ -275,6 +283,7 @@ impl<'a> Parser<'a> {
             Some(Token::Keyword(Keyword::Describe)) => {
                 self.bump();
                 let resources = self.parse_describe_resources()?;
+                let from = self.parse_dataset_clauses()?;
                 // WHERE clause is optional for DESCRIBE
                 let where_clause = if matches!(
                     self.peek(),
@@ -290,6 +299,7 @@ impl<'a> Parser<'a> {
                     base,
                     prefixes,
                     form: QueryForm::Describe { resources },
+                    from,
                     where_clause,
                     group_by,
                     having,
@@ -380,6 +390,17 @@ impl<'a> Parser<'a> {
             modifier,
             projection,
         })
+    }
+
+    /// Parse dataset clauses: `(FROM (NAMED? IRI))*`.
+    fn parse_dataset_clauses(&mut self) -> Result<Vec<DatasetClause>, ParseError> {
+        let mut clauses = Vec::new();
+        while self.eat_keyword(Keyword::From) {
+            let named = self.eat_keyword(Keyword::Named);
+            let iri = self.parse_iri()?;
+            clauses.push(DatasetClause { iri, named });
+        }
+        Ok(clauses)
     }
 
     fn parse_where_clause(&mut self) -> Result<GroupGraphPattern, ParseError> {
@@ -852,6 +873,7 @@ impl<'a> Parser<'a> {
             base: None,
             prefixes: vec![],
             form,
+            from: vec![],
             where_clause,
             group_by,
             having,
@@ -4037,5 +4059,75 @@ DESCRIBE ?person WHERE { ?person foaf:name "Alice" }"#);
         let q = p("SELECT (COUNT(*) AS ?n) WHERE { ?s <http://name> ?name } GROUP BY LCASE(?name)");
         assert_eq!(q.group_by.len(), 1);
         assert!(matches!(&q.group_by[0], Expression::Lcase(_)));
+    }
+
+    // === FROM / FROM NAMED (dataset clauses) ===
+
+    #[test]
+    fn test_from_single_default_graph() {
+        let q = p("SELECT ?s ?p ?o FROM <urn:materialize:catalog> WHERE { ?s ?p ?o }");
+        assert_eq!(q.from.len(), 1);
+        assert!(!q.from[0].named);
+        assert_eq!(q.from[0].iri.value, "urn:materialize:catalog");
+    }
+
+    #[test]
+    fn test_from_multiple_default_graphs() {
+        let q = p("SELECT * FROM <http://g1> FROM <http://g2> WHERE { ?s ?p ?o }");
+        assert_eq!(q.from.len(), 2);
+        assert!(!q.from[0].named);
+        assert!(!q.from[1].named);
+        assert_eq!(q.from[0].iri.value, "http://g1");
+        assert_eq!(q.from[1].iri.value, "http://g2");
+    }
+
+    #[test]
+    fn test_from_named() {
+        let q = p("SELECT * FROM NAMED <http://ng> WHERE { GRAPH <http://ng> { ?s ?p ?o } }");
+        assert_eq!(q.from.len(), 1);
+        assert!(q.from[0].named);
+        assert_eq!(q.from[0].iri.value, "http://ng");
+    }
+
+    #[test]
+    fn test_from_mixed_default_and_named() {
+        let q = p("SELECT * FROM <http://g1> FROM NAMED <http://ng1> WHERE { ?s ?p ?o }");
+        assert_eq!(q.from.len(), 2);
+        assert!(!q.from[0].named);
+        assert!(q.from[1].named);
+    }
+
+    #[test]
+    fn test_from_no_clauses() {
+        let q = p("SELECT * WHERE { ?s ?p ?o }");
+        assert!(q.from.is_empty());
+    }
+
+    #[test]
+    fn test_from_with_construct() {
+        let q = p("CONSTRUCT { ?s ?p ?o } FROM <http://g1> WHERE { ?s ?p ?o }");
+        assert_eq!(q.from.len(), 1);
+        assert_eq!(q.from[0].iri.value, "http://g1");
+    }
+
+    #[test]
+    fn test_from_with_ask() {
+        let q = p("ASK FROM <http://g1> WHERE { ?s ?p ?o }");
+        assert_eq!(q.from.len(), 1);
+        assert_eq!(q.from[0].iri.value, "http://g1");
+    }
+
+    #[test]
+    fn test_from_with_describe() {
+        let q = p("DESCRIBE <http://ex> FROM <http://g1> WHERE { ?s ?p ?o }");
+        assert_eq!(q.from.len(), 1);
+        assert_eq!(q.from[0].iri.value, "http://g1");
+    }
+
+    #[test]
+    fn test_from_with_prefix() {
+        let q = p("PREFIX g: <http://graphs/> SELECT * FROM g:main WHERE { ?s ?p ?o }");
+        assert_eq!(q.from.len(), 1);
+        assert_eq!(q.from[0].iri.value, "http://graphs/main");
     }
 }

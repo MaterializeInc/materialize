@@ -19,9 +19,9 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use mz_sparql_parser::ast::{
-    Expression, GraphTerm, GroupGraphPattern, Iri, NegatedPathElement, PropertyPath, QueryForm,
-    RdfLiteral, SelectClause, SelectModifier, SelectVariable, SparqlQuery, TriplePattern, VarOrIri,
-    VarOrTerm, Variable, VerbPath,
+    DatasetClause, Expression, GraphTerm, GroupGraphPattern, Iri, NegatedPathElement, PropertyPath,
+    QueryForm, RdfLiteral, SelectClause, SelectModifier, SelectVariable, SparqlQuery,
+    TriplePattern, VarOrIri, VarOrTerm, Variable, VerbPath,
 };
 
 /// Column indices in the quad table `(subject, predicate, object, graph)`.
@@ -72,17 +72,25 @@ impl PlannedRelation {
 // TODO: Introduce a SparqlQueryContext (analogous to SQL's QueryContext) to hold
 // shared planning state: ID generation, catalog access, name resolution, etc.
 pub struct SparqlPlanner {
-    /// The global ID of the quad table.
-    quad_table_id: GlobalId,
+    /// The global ID of the quad table (may be overridden for catalog graph queries).
+    quad_table_id: Cell<GlobalId>,
     /// The relation type of the quad table.
     quad_table_type: SqlRelationType,
     /// Counter for allocating unique `LocalId`s (used by LetRec for recursive paths).
     next_local_id: Cell<u64>,
+    /// The global ID of the catalog triples view (`mz_internal.mz_rdf_catalog_triples`),
+    /// if available. Used when `FROM <urn:materialize:catalog>` is specified.
+    catalog_triples_id: Option<GlobalId>,
+    /// The original quad table ID (before any FROM-clause override).
+    original_quad_table_id: GlobalId,
 }
+
+/// The well-known graph IRI for the Materialize catalog.
+pub const CATALOG_GRAPH_IRI: &str = "urn:materialize:catalog";
 
 impl SparqlPlanner {
     /// Creates a new planner for the given quad table.
-    pub fn new(quad_table_id: GlobalId) -> Self {
+    pub fn new(quad_table_id: GlobalId, catalog_triples_id: Option<GlobalId>) -> Self {
         let text_nullable = SqlColumnType {
             scalar_type: SqlScalarType::String,
             nullable: true,
@@ -94,9 +102,11 @@ impl SparqlPlanner {
             text_nullable,         // graph
         ]);
         SparqlPlanner {
-            quad_table_id,
+            quad_table_id: Cell::new(quad_table_id),
             quad_table_type,
             next_local_id: Cell::new(1),
+            catalog_triples_id,
+            original_quad_table_id: quad_table_id,
         }
     }
 
@@ -109,9 +119,77 @@ impl SparqlPlanner {
     /// 4. SELECT projection (variables, expressions, *) → Map + Project
     /// 5. DISTINCT → Distinct
     /// 6. ORDER BY + LIMIT/OFFSET → TopK
+    /// Returns the effective quad table ID for this query, considering FROM clauses.
+    /// If the only FROM clause is `<urn:materialize:catalog>` and the catalog triples
+    /// view is available, returns its ID. Otherwise returns the default quad table.
+    fn effective_quad_table_id(&self, from: &[DatasetClause]) -> GlobalId {
+        // Check if the catalog graph is the sole default graph source.
+        let default_graphs: Vec<&str> = from
+            .iter()
+            .filter(|c| !c.named)
+            .map(|c| c.iri.value.as_str())
+            .collect();
+        if default_graphs.len() == 1 && default_graphs[0] == CATALOG_GRAPH_IRI {
+            if let Some(id) = self.catalog_triples_id {
+                return id;
+            }
+        }
+        self.original_quad_table_id
+    }
+
+    /// Build a filter expression restricting the graph column to the given FROM IRIs.
+    /// Returns `None` if no FROM clauses are present (no filtering needed).
+    fn from_graph_filter(&self, from: &[DatasetClause]) -> Option<HirScalarExpr> {
+        let default_graphs: Vec<&str> = from
+            .iter()
+            .filter(|c| !c.named)
+            .map(|c| c.iri.value.as_str())
+            .collect();
+        if default_graphs.is_empty() {
+            return None;
+        }
+        // If the catalog graph is the sole source and we have its view, the scan
+        // is already scoped — no graph column filter needed.
+        if default_graphs.len() == 1
+            && default_graphs[0] == CATALOG_GRAPH_IRI
+            && self.catalog_triples_id.is_some()
+        {
+            return None;
+        }
+        // Build: graph = 'g1' OR graph = 'g2' OR ...
+        let predicates: Vec<HirScalarExpr> = default_graphs
+            .iter()
+            .map(|g| {
+                HirScalarExpr::call_binary(
+                    HirScalarExpr::column(QUAD_GRAPH),
+                    HirScalarExpr::literal(Datum::String(g), SqlScalarType::String),
+                    mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                )
+            })
+            .collect();
+        Some(HirScalarExpr::variadic_or(predicates))
+    }
+
     pub fn plan(&self, query: &SparqlQuery) -> Result<PlannedRelation, PlanError> {
+        // Step 0: Set up the effective quad table based on FROM clauses.
+        // If FROM <urn:materialize:catalog> is the sole default graph and the
+        // catalog triples view is available, scan it directly instead of rdf_quads.
+        let effective_id = self.effective_quad_table_id(&query.from);
+        self.quad_table_id.set(effective_id);
+
         // Step 1: Plan the WHERE clause.
         let mut result = self.plan_pattern(&query.where_clause)?;
+
+        // Restore original quad table ID.
+        self.quad_table_id.set(self.original_quad_table_id);
+
+        // Step 1b: Apply FROM graph filtering if present (for non-catalog graphs).
+        if let Some(filter) = self.from_graph_filter(&query.from) {
+            result = PlannedRelation {
+                expr: result.expr.filter(vec![filter]),
+                var_map: result.var_map,
+            };
+        }
 
         // Step 2-6 depend on the query form.
         match &query.form {
@@ -796,7 +874,7 @@ impl SparqlPlanner {
         as_subject: bool,
     ) -> Result<HirRelationExpr, PlanError> {
         let get = HirRelationExpr::Get {
-            id: Id::Global(self.quad_table_id),
+            id: Id::Global(self.quad_table_id.get()),
             typ: self.quad_table_type.clone(),
         };
 
@@ -2073,7 +2151,7 @@ impl SparqlPlanner {
     fn plan_triple(&self, triple: &TriplePattern) -> Result<PlannedRelation, PlanError> {
         // Start with a scan of the quad table.
         let mut expr: HirRelationExpr = HirRelationExpr::Get {
-            id: Id::Global(self.quad_table_id),
+            id: Id::Global(self.quad_table_id.get()),
             typ: self.quad_table_type.clone(),
         };
 
@@ -2454,7 +2532,7 @@ impl SparqlPlanner {
     /// Simple IRI path: scan quad table, filter predicate = IRI, project to (subject, object).
     fn plan_pp_iri(&self, iri: &Iri) -> Result<HirRelationExpr, PlanError> {
         let get = HirRelationExpr::Get {
-            id: Id::Global(self.quad_table_id),
+            id: Id::Global(self.quad_table_id.get()),
             typ: self.quad_table_type.clone(),
         };
         let filtered = HirRelationExpr::Filter {
@@ -2647,7 +2725,7 @@ impl SparqlPlanner {
     ///  SELECT DISTINCT object AS start, object AS end FROM quad_table`
     fn plan_pp_identity(&self) -> Result<HirRelationExpr, PlanError> {
         let get = HirRelationExpr::Get {
-            id: Id::Global(self.quad_table_id),
+            id: Id::Global(self.quad_table_id.get()),
             typ: self.quad_table_type.clone(),
         };
 
@@ -2707,7 +2785,7 @@ impl SparqlPlanner {
             // If there are no forward IRIs but also no inverse IRIs, this
             // degenerates to scanning all triples (which is correct for `!()`).
             let get = HirRelationExpr::Get {
-                id: Id::Global(self.quad_table_id),
+                id: Id::Global(self.quad_table_id.get()),
                 typ: self.quad_table_type.clone(),
             };
 
@@ -2734,7 +2812,7 @@ impl SparqlPlanner {
         if !inverse_iris.is_empty() {
             // Inverse part: predicate NOT IN inverse_iris → (object, subject) [swapped].
             let get = HirRelationExpr::Get {
-                id: Id::Global(self.quad_table_id),
+                id: Id::Global(self.quad_table_id.get()),
                 typ: self.quad_table_type.clone(),
             };
 
@@ -2797,7 +2875,7 @@ mod tests {
     /// Helper: plan a SPARQL query string and return the PlannedRelation.
     fn plan_query(sparql: &str) -> PlannedRelation {
         let query = parse(sparql).expect("parse failed");
-        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let planner = SparqlPlanner::new(GlobalId::User(1), None);
         planner.plan(&query).expect("planning failed")
     }
 
@@ -3536,7 +3614,7 @@ mod tests {
     fn test_filter_variable_not_in_scope() {
         // FILTER referencing an undefined variable should produce an error.
         let query = parse("SELECT * WHERE { ?s ?p ?o . FILTER(?x = ?s) }").expect("parse ok");
-        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let planner = SparqlPlanner::new(GlobalId::User(1), None);
         let err = planner.plan(&query).unwrap_err();
         assert!(
             err.message.contains("not in scope"),
@@ -4062,7 +4140,7 @@ mod tests {
         // Aggregates in FILTER should produce an error (they belong in SELECT/HAVING).
         let query =
             parse("SELECT * WHERE { ?s ?p ?o . FILTER(COUNT(?s) > \"5\") }").expect("parse ok");
-        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let planner = SparqlPlanner::new(GlobalId::User(1), None);
         let err = planner.plan(&query).unwrap_err();
         assert!(
             err.message.contains("aggregate"),
@@ -4410,7 +4488,7 @@ mod tests {
     #[mz_ore::test]
     fn test_select_var_not_in_scope() {
         let query = parse("SELECT ?x WHERE { ?s ?p ?o }").expect("parse ok");
-        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let planner = SparqlPlanner::new(GlobalId::User(1), None);
         let err = planner.plan(&query).unwrap_err();
         assert!(
             err.message.contains("not in scope"),
@@ -4620,7 +4698,7 @@ mod tests {
     fn test_describe_variable_errors() {
         // DESCRIBE ?x without WHERE clause should error (we can't resolve the variable).
         let query = mz_sparql_parser::parser::parse("DESCRIBE ?x").expect("parse failed");
-        let planner = SparqlPlanner::new(GlobalId::User(1));
+        let planner = SparqlPlanner::new(GlobalId::User(1), None);
         let err = planner.plan(&query).unwrap_err();
         assert!(
             err.message.contains("variables requires a WHERE clause"),
@@ -4790,5 +4868,75 @@ mod tests {
         );
         assert_eq!(var_names(&result), vec!["x", "y"]);
         assert_eq!(result.arity(), 2);
+    }
+
+    // === FROM clause / catalog graph tests ===
+
+    #[mz_ore::test]
+    fn test_from_no_clauses_uses_default_quad_table() {
+        // No FROM clause: uses the default quad table (User(1)).
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o }");
+        // Should succeed with the default quad table.
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+    }
+
+    #[mz_ore::test]
+    fn test_from_graph_filter() {
+        // FROM <http://example.org/g1>: should add a graph column filter.
+        let result = plan_query("SELECT ?s ?p ?o FROM <http://example.org/g1> WHERE { ?s ?p ?o }");
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+        // The result should have a Filter wrapping the base pattern.
+        let hir_debug = format!("{:?}", result.expr);
+        assert!(
+            hir_debug.contains("Filter"),
+            "Expected Filter for FROM clause, got: {hir_debug}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_from_catalog_graph_with_catalog_id() {
+        // FROM <urn:materialize:catalog> with a catalog triples view available.
+        let query = parse("SELECT * FROM <urn:materialize:catalog> WHERE { ?s ?p ?o }")
+            .expect("parse failed");
+        // Use User(2) as the catalog triples view ID.
+        let planner = SparqlPlanner::new(GlobalId::User(1), Some(GlobalId::User(2)));
+        let result = planner.plan(&query).expect("planning failed");
+        // The planner should use the catalog triples table (User(2)) instead of the
+        // default quad table (User(1)). Verify via HIR debug output.
+        let hir_debug = format!("{:?}", result.expr);
+        assert!(
+            hir_debug.contains("User(2)"),
+            "Expected catalog triples table (User(2)) in HIR, got: {hir_debug}"
+        );
+        assert!(
+            !hir_debug.contains("User(1)"),
+            "Should not reference the default quad table (User(1)) when catalog graph is used"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_from_catalog_graph_without_catalog_id() {
+        // FROM <urn:materialize:catalog> without a catalog triples view.
+        // Falls back to filtering on the graph column.
+        let query = parse("SELECT * FROM <urn:materialize:catalog> WHERE { ?s ?p ?o }")
+            .expect("parse failed");
+        let planner = SparqlPlanner::new(GlobalId::User(1), None);
+        let result = planner.plan(&query).expect("planning failed");
+        let hir_debug = format!("{:?}", result.expr);
+        assert!(
+            hir_debug.contains("Filter"),
+            "Expected graph column filter when catalog view is unavailable, got: {hir_debug}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_from_multiple_graphs_filter() {
+        // Multiple FROM clauses: should produce OR filter.
+        let result = plan_query("SELECT * FROM <http://g1> FROM <http://g2> WHERE { ?s ?p ?o }");
+        let hir_debug = format!("{:?}", result.expr);
+        assert!(
+            hir_debug.contains("Filter"),
+            "Expected Filter for multiple FROM clauses, got: {hir_debug}"
+        );
     }
 }

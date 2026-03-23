@@ -318,6 +318,7 @@ pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan
         .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
 
     let quad_table_id = resolve_quad_table(scx)?;
+    let catalog_triples_id = resolve_catalog_triples(scx);
     let desc = sparql_query_desc(&sparql_query);
 
     // Return a Plan::Sparql with the parsed query and quad table ID.
@@ -326,6 +327,7 @@ pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan
     Ok(Plan::Sparql(plan::SparqlPlan {
         query: sparql_query,
         quad_table_id,
+        catalog_triples_id,
         desc,
     }))
 }
@@ -391,6 +393,21 @@ pub(crate) fn resolve_quad_table(scx: &StatementContext) -> Result<GlobalId, Pla
     Ok(quad_table.global_id())
 }
 
+/// Try to resolve `mz_internal.mz_rdf_catalog_triples` from the catalog.
+/// Returns `None` if the view does not exist (e.g., in tests).
+pub(crate) fn resolve_catalog_triples(scx: &StatementContext) -> Option<GlobalId> {
+    use crate::names::PartialItemName;
+    let name = PartialItemName {
+        database: None,
+        schema: Some("mz_internal".into()),
+        item: "mz_rdf_catalog_triples".into(),
+    };
+    scx.catalog.resolve_item(&name).ok().map(|item| {
+        item.at_version(mz_repr::RelationVersionSelector::Latest)
+            .global_id()
+    })
+}
+
 /// Plan a SPARQL subscribe. Returns a [`SubscribeFrom::Sparql`] that the
 /// adapter will compile to HIR/MIR at sequencing time.
 fn plan_sparql_subscribe(
@@ -401,6 +418,7 @@ fn plan_sparql_subscribe(
         .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
 
     let quad_table_id = resolve_quad_table(scx)?;
+    let catalog_triples_id = resolve_catalog_triples(scx);
     let desc = sparql_query_desc(&sparql_query);
 
     // Build scope from the output column names.
@@ -412,6 +430,7 @@ fn plan_sparql_subscribe(
     let from = SubscribeFrom::Sparql {
         query: sparql_query,
         quad_table_id,
+        catalog_triples_id,
         desc: desc.clone(),
     };
     Ok((from, desc, scope))

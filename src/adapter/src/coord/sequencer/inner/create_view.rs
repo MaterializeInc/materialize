@@ -254,7 +254,10 @@ impl Coordinator {
         // If this is a SPARQL view, compile the SPARQL query to HIR now,
         // replacing the placeholder expression.
         if let Some(sparql_info) = plan.sparql_info.take() {
-            let planner = mz_sparql::plan::SparqlPlanner::new(sparql_info.quad_table_id);
+            let planner = mz_sparql::plan::SparqlPlanner::new(
+                sparql_info.quad_table_id,
+                sparql_info.catalog_triples_id,
+            );
             let planned = planner
                 .plan(&sparql_info.query)
                 .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{}", e.message)))?;
