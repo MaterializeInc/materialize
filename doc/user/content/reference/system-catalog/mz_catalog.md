@@ -449,6 +449,7 @@ Field            | Type       | Meaning
 `inherit`        | [`boolean`]   | Indicates whether the role has inheritance of privileges.
 `rolcanlogin`    | [`boolean`]   | Indicates whether the role can log in.
 `rolsuper`       | [`boolean`]   | Indicates whether the role is a superuser.
+`autoprovisionsource` | [`text`] | The authenticator that was used to auto-provision this role ('oidc', 'frontegg', or 'none').
 
 ### `mz_role_members`
 

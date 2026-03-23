@@ -118,6 +118,15 @@ const MIGRATIONS: &[MigrationStep] = &[
         },
         mechanism: Mechanism::Replacement,
     },
+    MigrationStep {
+        version: Version::new(26, 17, 0),
+        object: Object {
+            type_: CatalogItemType::Table,
+            schema: MZ_CATALOG_SCHEMA,
+            name: "mz_roles",
+        },
+        mechanism: Mechanism::Evolution,
+    },
 ];
 
 /// A migration required to upgrade past a specific version.

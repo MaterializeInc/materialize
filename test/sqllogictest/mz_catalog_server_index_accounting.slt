@@ -566,6 +566,7 @@ mz_role_auth  password_hash
 mz_role_auth  role_id
 mz_role_auth  role_oid
 mz_role_auth  updated_at
+mz_roles  autoprovisionsource
 mz_roles  id
 mz_roles  inherit
 mz_roles  name

@@ -14,6 +14,8 @@ use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 
 pub use oidc::{GenericOidcAuthenticator, OidcClaims, OidcError, ValidatedClaims};
 
+use mz_auth::AuthenticatorKind;
+
 #[derive(Debug, Clone)]
 pub enum Authenticator {
     Frontegg(FronteggAuthenticator),
@@ -21,4 +23,16 @@ pub enum Authenticator {
     Sasl(AdapterClient),
     Oidc(GenericOidcAuthenticator),
     None,
+}
+
+impl Authenticator {
+    pub fn kind(&self) -> AuthenticatorKind {
+        match self {
+            Authenticator::Frontegg(_) => AuthenticatorKind::Frontegg,
+            Authenticator::Password(_) => AuthenticatorKind::Password,
+            Authenticator::Sasl(_) => AuthenticatorKind::Sasl,
+            Authenticator::Oidc(_) => AuthenticatorKind::Oidc,
+            Authenticator::None => AuthenticatorKind::None,
+        }
+    }
 }
