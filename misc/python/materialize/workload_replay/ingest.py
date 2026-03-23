@@ -91,27 +91,17 @@ async def ingest_webhook(
             )
     assert body_column
 
-    connector = aiohttp.TCPConnector(limit=5000)
+    concurrency = 500
+    connector = aiohttp.TCPConnector(limit=concurrency)
     timeout = aiohttp.ClientTimeout(total=None)
 
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        sem = asyncio.Semaphore(5000)
+        sem = asyncio.Semaphore(concurrency)
 
         progress = 0
-        progress_lock = asyncio.Lock()
-
-        async def report_progress() -> None:
-            nonlocal progress
-            async with progress_lock:
-                progress += 1
-                if progress % 10000 == 0 or progress == num_rows:
-                    print(
-                        f"{progress}/{num_rows} ({progress / num_rows:.1%})",
-                        end="\r",
-                        flush=True,
-                    )
 
         async def send_one(seed: int):
+            nonlocal progress
             rng = random.Random(seed)
             backoff = 0.01
 
@@ -125,8 +115,15 @@ async def ingest_webhook(
                         ),
                     ) as resp:
                         if resp.status == 200:
-                            if print_progress:
-                                await report_progress()
+                            progress += 1
+                            if print_progress and (
+                                progress % 10000 == 0 or progress == num_rows
+                            ):
+                                print(
+                                    f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                                    end="\r",
+                                    flush=True,
+                                )
                             return
                         elif resp.status == 429:
                             await asyncio.sleep(backoff)
@@ -137,9 +134,13 @@ async def ingest_webhook(
                                 f"Webhook ingestion failed: {resp.status}: {text}"
                             )
 
-        await asyncio.gather(
-            *(send_one(random.randrange(SEED_RANGE)) for _ in range(num_rows))
-        )
+        # Process in batches to avoid creating millions of coroutines at once.
+        batch_size = concurrency * 4
+        for start in range(0, num_rows, batch_size):
+            end = min(start + batch_size, num_rows)
+            await asyncio.gather(
+                *(send_one(random.randrange(SEED_RANGE)) for _ in range(end - start))
+            )
         print()
 
 

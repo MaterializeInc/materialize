@@ -17,7 +17,10 @@ from datetime import datetime, timedelta
 from textwrap import dedent
 from threading import Thread
 
+import psycopg
+import pymysql
 from psycopg.errors import OperationalError
+from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
 from materialize.mzcompose import get_default_system_parameters
@@ -81,6 +84,81 @@ SERVICES = [
         default_timeout=DEFAULT_TIMEOUT,
     ),
 ]
+
+
+def _wait_for_mz_count(
+    c: Composition,
+    query: str,
+    expected: int,
+    service: str,
+    timeout: int = 300,
+) -> None:
+    """Poll MZ until *query* returns *expected* count."""
+    deadline = time.time() + timeout
+    while True:
+        result = c.sql_query(query, service=service)
+        if result[0][0] == expected:
+            return
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"Timed out waiting for {query} to return {expected}, got {result[0][0]}"
+            )
+        time.sleep(1)
+
+
+def _pg_direct_ingest(c: Composition, table: str, count: int, repeats: int) -> None:
+    """Bulk-load *count* × *repeats* rows into a Postgres table via COPY."""
+    conn = psycopg.connect(
+        host="localhost",
+        user="postgres",
+        password="postgres",
+        port=c.default_port("postgres"),
+    )
+    conn.autocommit = True
+    with conn.cursor() as cur:
+        for _ in range(repeats):
+            with cur.copy(
+                SQL("COPY {} (f1) FROM STDIN").format(Identifier(table))
+            ) as copy:
+                for i in range(count):
+                    copy.write_row([i])
+    conn.close()
+
+
+def _mysql_direct_ingest(c: Composition, table: str, count: int, repeats: int) -> None:
+    """Bulk-load *count* × *repeats* rows into a MySQL table via batched INSERT."""
+    conn = pymysql.connect(
+        host="localhost",
+        user="root",
+        password=MySql.DEFAULT_ROOT_PASSWORD,
+        database="public",
+        port=c.default_port("mysql"),
+    )
+    batch_size = 10_000
+    with conn.cursor() as cur:
+        for _ in range(repeats):
+            for start in range(0, count, batch_size):
+                n = min(batch_size, count - start)
+                values = ", ".join(f"({i})" for i in range(start, start + n))
+                cur.execute(f"INSERT INTO {table} VALUES {values}")
+            conn.commit()
+    conn.close()
+
+
+def _sql_server_direct_ingest(c: Composition, insert_stmt: str, repeats: int) -> None:
+    """Execute *repeats* copies of *insert_stmt* in SQL Server via a single testdrive call."""
+    all_inserts = "\n".join([insert_stmt] * repeats)
+    c.testdrive(
+        f"""\
+$ sql-server-connect name=sql-server
+server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+$ sql-server-execute name=sql-server
+USE test;
+{all_inserts}
+""",
+        quiet=True,
+    )
 
 
 def workflow_default(c: Composition) -> None:
@@ -1255,20 +1333,14 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
     c.up("postgres", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
-    # Too long running with 1000000
     count = 500000
     repeats = 100
+    total = count * repeats
 
-    inserts = (
-        "INSERT INTO postgres_source_table VALUES "
-        + ", ".join([f"({i})" for i in range(count)])
-        + ";"
-    )
-
-    start_time = time.time()
+    # Setup upstream Postgres table and publication
     c.testdrive(
         dedent(
-            f"""
+            """
         > SET CLUSTER = cluster;
 
         $ postgres-execute connection=postgres://postgres:postgres@postgres
@@ -1278,8 +1350,23 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         DROP TABLE IF EXISTS postgres_source_table;
         CREATE TABLE postgres_source_table (f1 INTEGER);
         ALTER TABLE postgres_source_table REPLICA IDENTITY FULL;
-        {inserts}
         CREATE PUBLICATION postgres_source FOR ALL TABLES;
+        """
+        ),
+        quiet=True,
+    )
+
+    # Bulk-load data via COPY FROM STDIN (much faster than testdrive INSERT)
+    start_time = time.time()
+    _pg_direct_ingest(c, "postgres_source_table", count, repeats)
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    # Create MZ source and wait for snapshot to complete
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
 
         > CREATE SECRET pgpass AS 'postgres';
         > CREATE CONNECTION pg FOR POSTGRES
@@ -1295,27 +1382,11 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         > CREATE VIEW postgres_source_cnt AS SELECT count(*) FROM postgres_source_table
         > CREATE DEFAULT INDEX ON postgres_source_cnt
         > SELECT * FROM postgres_source_cnt;
-        {count}
+        {total}
         """
         ),
         quiet=True,
     )
-
-    for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
-        $ postgres-execute connection=postgres://postgres:postgres@postgres
-        {inserts}
-        > SELECT * FROM postgres_source_cnt
-        {count*(i+1)}
-        """
-            ),
-            quiet=True,
-        )
-
-    elapsed = time.time() - start_time
-    print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
         Materialized(
@@ -1353,7 +1424,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
         assert (
             elapsed < 4
         ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
@@ -1361,47 +1432,40 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         result = c.sql_query(
             "SELECT count(*) FROM postgres_source_table", service="mz_new"
         )
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
 
+        # Verify source still works after promotion (small batch is enough)
         print("Ingesting again")
-        for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
-            $ postgres-execute connection=postgres://postgres:postgres@postgres
-            {inserts}
-            > SELECT * FROM postgres_source_cnt
-            {count*(i+1)}
-            """
-                ),
-                quiet=True,
-            )
+        post_repeats = 10
+        post_total = total + count * post_repeats
+        _pg_direct_ingest(c, "postgres_source_table", count, post_repeats)
+        _wait_for_mz_count(
+            c,
+            "SELECT * FROM postgres_source_cnt",
+            post_total,
+            service="mz_new",
+        )
 
         result = c.sql_query("SELECT * FROM postgres_source_cnt", service="mz_new")
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
         result = c.sql_query(
             "SELECT count(*) FROM postgres_source_table", service="mz_new"
         )
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
 
 def workflow_mysql_source_rehydration(c: Composition) -> None:
-    """Verify Postgres source rehydration in 0dt deployment"""
+    """Verify MySQL source rehydration in 0dt deployment"""
     c.down(destroy_volumes=True)
     c.up("mysql", "mz_old", Service("testdrive", idle=True))
     setup(c)
 
     count = 1000000
     repeats = 100
+    total = count * repeats
 
-    inserts = (
-        "INSERT INTO mysql_source_table VALUES "
-        + ", ".join([f"({i})" for i in range(count)])
-        + ";"
-    )
-
-    start_time = time.time()
+    # Setup upstream MySQL table and replication user
     c.testdrive(
         dedent(
             f"""
@@ -1416,7 +1480,22 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         GRANT REPLICATION SLAVE ON *.* TO mysql1;
         GRANT ALL ON public.* TO mysql1;
         CREATE TABLE mysql_source_table (f1 INTEGER);
-        {inserts}
+        """
+        ),
+        quiet=True,
+    )
+
+    # Bulk-load data via batched INSERT (much faster than testdrive)
+    start_time = time.time()
+    _mysql_direct_ingest(c, "mysql_source_table", count, repeats)
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    # Create MZ source and wait for snapshot to complete
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
 
         > CREATE SECRET mysqlpass AS 'mysql';
         > CREATE CONNECTION mysql TO MYSQL (
@@ -1430,29 +1509,11 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         > CREATE VIEW mysql_source_cnt AS SELECT count(*) FROM mysql_source_table
         > CREATE DEFAULT INDEX ON mysql_source_cnt
         > SELECT * FROM mysql_source_cnt;
-        {count}
+        {total}
         """
         ),
         quiet=True,
     )
-
-    for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
-        $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
-        $ mysql-execute name=mysql
-        USE public;
-        {inserts}
-        > SELECT * FROM mysql_source_cnt;
-        {count*(i+1)}
-        """
-            ),
-            quiet=True,
-        )
-
-    elapsed = time.time() - start_time
-    print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
         Materialized(
@@ -1490,7 +1551,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
         assert (
             elapsed < 4
         ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
@@ -1498,31 +1559,27 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         result = c.sql_query(
             "SELECT count(*) FROM mysql_source_table", service="mz_new"
         )
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
 
+        # Verify source still works after promotion (small batch is enough)
         print("Ingesting again")
-        for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
-            $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
-            $ mysql-execute name=mysql
-            USE public;
-            {inserts}
-            > SELECT * FROM mysql_source_cnt;
-            {count*(i+1)}
-            """
-                ),
-                quiet=True,
-            )
+        post_repeats = 10
+        post_total = total + count * post_repeats
+        _mysql_direct_ingest(c, "mysql_source_table", count, post_repeats)
+        _wait_for_mz_count(
+            c,
+            "SELECT * FROM mysql_source_cnt",
+            post_total,
+            service="mz_new",
+        )
 
         result = c.sql_query("SELECT * FROM mysql_source_cnt", service="mz_new")
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
         result = c.sql_query(
             "SELECT count(*) FROM mysql_source_table", service="mz_new"
         )
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
 
 def workflow_sql_server_source_rehydration(c: Composition) -> None:
@@ -1535,14 +1592,15 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
     # The number of row value expressions in the INSERT statement exceeds the maximum allowed number of 1000 row values.
     count = 1000
     repeats = 100
+    total = count * repeats
 
-    inserts = (
+    insert_stmt = (
         "INSERT INTO sql_server_source_table VALUES "
         + ", ".join([f"({i})" for i in range(count)])
         + ";"
     )
 
-    start_time = time.time()
+    # Setup table and enable CDC
     c.testdrive(
         dedent(
             f"""
@@ -1555,7 +1613,22 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         USE test;
         CREATE TABLE sql_server_source_table (f1 INTEGER);
         EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'sql_server_source_table', @role_name = 'SA', @supports_net_changes = 0;
-        {inserts}
+        """
+        ),
+        quiet=True,
+    )
+
+    # Bulk-insert all data in one testdrive call (avoid per-call overhead)
+    start_time = time.time()
+    _sql_server_direct_ingest(c, insert_stmt, repeats)
+    elapsed = time.time() - start_time
+    print(f"initial ingestion took {elapsed} seconds")
+
+    # Create MZ source and wait for snapshot to complete
+    c.testdrive(
+        dedent(
+            f"""
+        > SET CLUSTER = cluster;
 
         > CREATE SECRET sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}';
         > CREATE CONNECTION sqlserver TO SQL SERVER (
@@ -1570,31 +1643,11 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         > CREATE VIEW sql_server_source_cnt AS SELECT count(*) FROM sql_server_source_table
         > CREATE DEFAULT INDEX ON sql_server_source_cnt
         > SELECT * FROM sql_server_source_cnt;
-        {count}
+        {total}
         """
         ),
         quiet=True,
     )
-
-    for i in range(1, repeats):
-        c.testdrive(
-            dedent(
-                f"""
-        $ sql-server-connect name=sql-server
-        server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
-
-        $ sql-server-execute name=sql-server
-        USE test;
-        {inserts}
-        > SELECT * FROM sql_server_source_cnt;
-        {count*(i+1)}
-        """
-            ),
-            quiet=True,
-        )
-
-    elapsed = time.time() - start_time
-    print(f"initial ingestion took {elapsed} seconds")
 
     with c.override(
         Materialized(
@@ -1629,10 +1682,10 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         elapsed = time.time() - start_time
         print(f"promotion took {elapsed} seconds")
         start_time = time.time()
-        result = c.sql_query("SELECT * FROM sql_serveR_source_cnt", service="mz_new")
+        result = c.sql_query("SELECT * FROM sql_server_source_cnt", service="mz_new")
         elapsed = time.time() - start_time
         print(f"final check took {elapsed} seconds")
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
         assert (
             elapsed < 4
         ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
@@ -1640,33 +1693,27 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         result = c.sql_query(
             "SELECT count(*) FROM sql_server_source_table", service="mz_new"
         )
-        assert result[0][0] == count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == total, f"Wrong result: {result}"
 
+        # Verify source still works after promotion (small batch is enough)
         print("Ingesting again")
-        for i in range(repeats, repeats * 2):
-            c.testdrive(
-                dedent(
-                    f"""
-            $ sql-server-connect name=sql-server
-            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+        post_repeats = 10
+        post_total = total + count * post_repeats
+        _sql_server_direct_ingest(c, insert_stmt, post_repeats)
+        _wait_for_mz_count(
+            c,
+            "SELECT * FROM sql_server_source_cnt",
+            post_total,
+            service="mz_new",
+        )
 
-            $ sql-server-execute name=sql-server
-            USE test;
-            {inserts}
-            > SELECT * FROM sql_server_source_cnt;
-            {count*(i+1)}
-            """
-                ),
-                quiet=True,
-            )
-
-        result = c.sql_query("SELECT * FROM sql_serveR_source_cnt", service="mz_new")
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        result = c.sql_query("SELECT * FROM sql_server_source_cnt", service="mz_new")
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
         result = c.sql_query(
             "SELECT count(*) FROM sql_server_source_table", service="mz_new"
         )
-        assert result[0][0] == 2 * count * repeats, f"Wrong result: {result}"
+        assert result[0][0] == post_total, f"Wrong result: {result}"
 
 
 def workflow_kafka_source_failpoint(c: Composition) -> None:

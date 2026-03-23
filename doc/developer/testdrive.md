@@ -488,7 +488,6 @@ message SimpleId {
 The following variables are defined for every test. Many correspond to the command-line options passed to `testdrive`:
 
 #### `testdrive.kafka-addr`
-#### `testdrive.kafka-addr-resolved`
 
 #### `testdrive.schema-registry-url`
 

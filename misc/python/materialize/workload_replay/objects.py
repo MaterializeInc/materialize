@@ -20,6 +20,7 @@ from typing import Any
 
 import confluent_kafka  # type: ignore
 import psycopg
+import pymysql
 from confluent_kafka.admin import AdminClient  # type: ignore
 from psycopg.sql import SQL, Identifier, Literal
 
@@ -29,6 +30,7 @@ from materialize.mzcompose.helpers.iceberg import (
     get_polaris_access_token,
     setup_polaris_for_iceberg,
 )
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.workload_replay.util import (
     get_kafka_topic,
@@ -161,40 +163,38 @@ def run_create_objects_part_1(
 
     print("Preparing sources")
     if "postgres" in services:
-        c.testdrive(
-            dedent(
-                """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            CREATE DATABASE IF NOT EXISTS materialize;
-            CREATE SCHEMA IF NOT EXISTS public;
-            CREATE SECRET pgpass AS 'postgres'
-            """
-            )
+        c.sql(
+            "CREATE DATABASE IF NOT EXISTS materialize;\nCREATE SCHEMA IF NOT EXISTS public;\nCREATE SECRET pgpass AS 'postgres'",
+            user="mz_system",
+            port=6877,
+            print_statement=verbose,
         )
 
     if "mysql" in services:
-        c.testdrive(
-            dedent(
-                """
-            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
-
-            $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
-            $ mysql-execute name=mysql
-            DROP DATABASE IF EXISTS public;
-            CREATE DATABASE public;
-            """
-            )
+        c.sql(
+            f"CREATE SECRET mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'",
+            user="mz_system",
+            port=6877,
+            print_statement=verbose,
         )
+        mysql_conn = pymysql.connect(
+            host="127.0.0.1",
+            user="root",
+            password=MySql.DEFAULT_ROOT_PASSWORD,
+            port=c.default_port("mysql"),
+            autocommit=True,
+        )
+        with mysql_conn.cursor() as cur:
+            cur.execute("DROP DATABASE IF EXISTS `public`")
+            cur.execute("CREATE DATABASE `public`")
+        mysql_conn.close()
 
     if "sql-server" in services:
-        c.testdrive(
-            dedent(
-                f"""
-            $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
-            CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'
-                """
-            )
+        c.sql(
+            f"CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'",
+            user="mz_system",
+            port=6877,
+            print_statement=verbose,
         )
 
     has_iceberg = any(
@@ -232,6 +232,7 @@ def run_create_objects_part_1(
                 create_polaris_namespace(c, access_token, namespace=ns)
 
     print("Creating connections")
+    pg_conn: psycopg.Connection | None = None
     existing_dbs = {"postgres": {"postgres"}, "sql-server": set()}
     for db, schemas in workload["databases"].items():
         for schema, items in schemas.items():
@@ -245,14 +246,21 @@ def run_create_objects_part_1(
                     assert match, f"No database found in {connection['create_sql']}"
                     ref_database = match.group(2)
                     if ref_database not in existing_dbs["postgres"]:
-                        c.testdrive(
-                            dedent(
-                                f"""
-                                $ postgres-execute connection=postgres://postgres:postgres@postgres
-                                CREATE DATABASE {ref_database};
-                                """
+                        if pg_conn is None:
+                            pg_conn = psycopg.connect(
+                                host="127.0.0.1",
+                                port=c.default_port("postgres"),
+                                user="postgres",
+                                password="postgres",
+                                dbname="postgres",
+                                autocommit=True,
                             )
-                        )
+                        with pg_conn.cursor() as cur:
+                            cur.execute(
+                                SQL("CREATE DATABASE {}").format(
+                                    Identifier(ref_database)
+                                )
+                            )
                         existing_dbs["postgres"].add(ref_database)
                     c.sql(
                         SQL(
@@ -403,6 +411,33 @@ def run_create_objects_part_1(
                     raise ValueError(f"Unhandled connection type {connection['type']}")
 
     print("Preparing sources")
+    # Cache connections to upstream databases to avoid per-DDL overhead.
+    pg_source_conns: dict[str, psycopg.Connection] = {}
+    mysql_source_conns: dict[str, pymysql.Connection] = {}
+
+    def get_pg_source_conn(database: str) -> psycopg.Connection:
+        if database not in pg_source_conns:
+            pg_source_conns[database] = c.sql_connection(
+                service="postgres",
+                user="postgres",
+                password="postgres",
+                database=database,
+                port=5432,
+            )
+        return pg_source_conns[database]
+
+    def get_mysql_source_conn(database: str) -> pymysql.Connection:
+        if database not in mysql_source_conns:
+            mysql_source_conns[database] = pymysql.connect(
+                host="127.0.0.1",
+                user="root",
+                password=MySql.DEFAULT_ROOT_PASSWORD,
+                database=database,
+                port=c.default_port("mysql"),
+                autocommit=True,
+            )
+        return mysql_source_conns[database]
+
     for schemas in workload["databases"].values():
         for items in schemas.values():
             for name, source in items["sources"].items():
@@ -415,27 +450,26 @@ def run_create_objects_part_1(
                             for column in child["columns"]
                         ]
                         if first:
-                            c.testdrive(
-                                dedent(
-                                    f"""
-                                    $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
-                                    $ mysql-execute name=mysql
-                                    DROP DATABASE IF EXISTS `{ref_database}`;
-                                    CREATE DATABASE `{ref_database}`;
-                                    CREATE TABLE `{ref_database}`.dummy (f1 INTEGER);
-                                    """
+                            init_conn = pymysql.connect(
+                                host="127.0.0.1",
+                                user="root",
+                                password=MySql.DEFAULT_ROOT_PASSWORD,
+                                port=c.default_port("mysql"),
+                                autocommit=True,
+                            )
+                            with init_conn.cursor() as cur:
+                                cur.execute(f"DROP DATABASE IF EXISTS `{ref_database}`")
+                                cur.execute(f"CREATE DATABASE `{ref_database}`")
+                                cur.execute(
+                                    f"CREATE TABLE `{ref_database}`.dummy (f1 INTEGER)"
                                 )
-                            )
+                            init_conn.close()
                             first = False
-                        c.testdrive(
-                            dedent(
-                                f"""
-                            $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
-                            $ mysql-execute name=mysql
-                            CREATE TABLE `{ref_database}`.`{ref_table}` ({", ".join(columns)});
-                                """
+                        conn = get_mysql_source_conn(ref_database)
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                f"CREATE TABLE `{ref_table}` ({', '.join(columns)})"
                             )
-                        )
                     elif source["type"] == "postgres":
                         ref_database, ref_schema, ref_table = (
                             get_postgres_reference_db_schema_table(child)
@@ -450,29 +484,34 @@ def run_create_objects_part_1(
                             f"{column['name']} {column['type']} {'NULL' if column['nullable'] else 'NOT NULL'} DEFAULT {'NULL' if column['default'] is None else column['default']}"
                             for column in child["columns"]
                         ]
-                        if first:
-                            c.testdrive(
-                                dedent(
-                                    f"""
-                                    $ postgres-execute connection=postgres://postgres:postgres@postgres/{ref_database}
-                                    ALTER USER postgres WITH replication;
-
-                                    DROP PUBLICATION IF EXISTS "{publication}";
-                                    CREATE PUBLICATION "{publication}" FOR ALL TABLES;
-                                    """
+                        conn = get_pg_source_conn(ref_database)
+                        with conn.cursor() as cur:
+                            if first:
+                                cur.execute(SQL("ALTER USER postgres WITH replication"))
+                                cur.execute(
+                                    SQL("DROP PUBLICATION IF EXISTS {}").format(
+                                        Identifier(publication)
+                                    )
+                                )
+                                cur.execute(
+                                    SQL("CREATE PUBLICATION {} FOR ALL TABLES").format(
+                                        Identifier(publication)
+                                    )
+                                )
+                                first = False
+                            cur.execute(
+                                SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
+                                    Identifier(ref_schema)
                                 )
                             )
-                            first = False
-                        c.testdrive(
-                            dedent(
-                                f"""
-                            $ postgres-execute connection=postgres://postgres:postgres@postgres/{ref_database}
-                            CREATE SCHEMA IF NOT EXISTS "{ref_schema}";
-                            CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)});
-                            ALTER TABLE "{ref_schema}"."{ref_table}" REPLICA IDENTITY FULL;
-                                """
+                            cur.execute(
+                                f'CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)})'.encode()
                             )
-                        )
+                            cur.execute(
+                                SQL("ALTER TABLE {}.{} REPLICA IDENTITY FULL").format(
+                                    Identifier(ref_schema), Identifier(ref_table)
+                                )
+                            )
                     elif source["type"] == "sql-server":
                         ref_database, ref_schema, ref_table = (
                             get_sql_server_reference_db_schema_table(child)
@@ -541,6 +580,13 @@ def run_create_objects_part_1(
                         flags=re.DOTALL | re.IGNORECASE,
                     )
 
+    for conn in pg_source_conns.values():
+        conn.close()
+    for conn in mysql_source_conns.values():
+        conn.close()
+    if pg_conn is not None:
+        pg_conn.close()
+
     return
 
 
@@ -604,17 +650,60 @@ def run_create_objects_part_2(
                 )
 
     print("Creating views, materialized views, sinks")
-    pending = set()
-    for schemas in workload["databases"].values():
-        for items in schemas.values():
-            for view in items["views"].values():
-                pending.add(view["create_sql"])
-            for mv in items["materialized_views"].values():
-                pending.add(mv["create_sql"])
-            for sink in items["sinks"].values():
-                pending.add(sink["create_sql"])
 
-    # TODO: Handle sink -> source roundtrips: scan for topic names to create a dependency graph
+    # Collect all object names that already exist (sources, tables, and their children).
+    known_names: set[str] = set()
+    for db_name, schemas in workload["databases"].items():
+        for schema_name, items in schemas.items():
+            for name in items.get("tables", {}):
+                known_names.add(f"{db_name}.{schema_name}.{name}")
+            for name, source in items.get("sources", {}).items():
+                known_names.add(f"{db_name}.{schema_name}.{name}")
+                for child_name in source.get("children", {}):
+                    known_names.add(f"{db_name}.{schema_name}.{child_name}")
+
+    # Build {fqn: create_sql} for objects to create, and compute dependencies
+    # by scanning the SQL text for references to known or peer object names.
+    to_create: dict[str, str] = {}
+    for db_name, schemas in workload["databases"].items():
+        for schema_name, items in schemas.items():
+            for obj_type in ("views", "materialized_views", "sinks"):
+                for name, obj in items.get(obj_type, {}).items():
+                    fqn = f"{db_name}.{schema_name}.{name}"
+                    to_create[fqn] = obj["create_sql"]
+                    known_names.add(fqn)
+
+    deps: dict[str, set[str]] = {}
+    for fqn, sql in to_create.items():
+        deps[fqn] = {other for other in known_names if other != fqn and other in sql}
+
+    # Topological sort: create objects whose dependencies are already satisfied first.
+    created = known_names - set(to_create.keys())
+    ordered: list[str] = []
+    remaining = set(to_create.keys())
+    while remaining:
+        batch = {n for n in remaining if deps[n].issubset(created)}
+        if not batch:
+            break
+        ordered.extend(sorted(batch))
+        created |= batch
+        remaining -= batch
+
+    # Any leftovers (cycles or missed dependencies) go at the end.
+    ordered.extend(sorted(remaining))
+
+    # Execute in dependency order, falling back to retry for any edge cases.
+    pending = []
+    for fqn in ordered:
+        try:
+            c.sql(to_create[fqn], user="mz_system", port=6877, print_statement=verbose)
+        except psycopg.Error as e:
+            if "unknown catalog item" in str(e):
+                pending.append(to_create[fqn])
+                continue
+            raise
+
+    # Retry any that failed due to missed dependencies.
     while pending:
         progress = False
         for create in pending.copy():

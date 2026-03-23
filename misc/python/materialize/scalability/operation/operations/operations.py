@@ -56,7 +56,7 @@ class SelectUnionAll(SimpleSqlOperation):
 
 class Update(SimpleSqlOperation):
     def sql_statement(self) -> str:
-        return "UPDATE t1 SET f1 = f1 + 1;"
+        return "UPDATE t1 SET f1 = f1 + 1 WHERE f1 > 0;"
 
 
 class CreateTableX(SqlOperationWithSeed):

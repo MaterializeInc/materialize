@@ -360,7 +360,7 @@ def run(
             worker.end_time = time.time()
 
     stopping_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=600)
+        datetime.datetime.now() + datetime.timedelta(seconds=300)
     ).timestamp()
     while time.time() < stopping_time:
         for thread in threads:

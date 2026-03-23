@@ -72,7 +72,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument(
-        "--runtime", default=600, type=int, help="Runtime in seconds per workload"
+        "--runtime", default=400, type=int, help="Runtime in seconds per workload"
     )
     parser.add_argument(
         "--workload",

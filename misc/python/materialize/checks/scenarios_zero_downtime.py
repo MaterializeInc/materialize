@@ -14,6 +14,7 @@ from materialize.checks.actions import (
     GitResetHard,
     Initialize,
     Manipulate,
+    UseOptimizedProfile,
     Validate,
 )
 from materialize.checks.checks import Check
@@ -214,6 +215,7 @@ class ZeroDowntimeBumpedVersion(Scenario):
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
             BumpVersion(),
+            UseOptimizedProfile(),
             *wait_ready_and_promote("mz_2"),
             Manipulate(self, phase=2, mz_service="mz_2"),
             start_mz_read_only(
