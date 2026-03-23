@@ -422,6 +422,8 @@ pub mod v1alpha1 {
 
         pub fn should_force_promote(&self) -> bool {
             self.spec.force_promote == self.spec.request_rollout.hyphenated().to_string()
+                || self.spec.force_promote
+                    == super::v1alpha2::Materialize::from(self.clone()).generate_rollout_hash()
                 || self.spec.rollout_strategy
                     == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
         }
@@ -688,12 +690,7 @@ pub mod v1alpha1 {
                     service_account_labels: value.spec.service_account_labels,
                     pod_annotations: value.spec.pod_annotations,
                     pod_labels: value.spec.pod_labels,
-                    force_promote: match value.spec.force_promote {
-                        Some(s) => Uuid::try_from(s).unwrap_or(Uuid::nil()),
-                        None => Uuid::nil(),
-                    }
-                    .hyphenated()
-                    .to_string(),
+                    force_promote: value.spec.force_promote.unwrap_or_default(),
                     force_rollout: value.spec.force_rollout,
                     rollout_strategy: value.spec.rollout_strategy,
                     backend_secret_name: value.spec.backend_secret_name,
