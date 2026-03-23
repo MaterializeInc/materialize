@@ -950,6 +950,8 @@ class ResolvedImage:
                 str(self.image.path),
             ]
         else:
+            docker_tag = f"docker.io/{self.spec()}"
+            ghcr_tag = f"ghcr.io/materializeinc/{self.spec()}"
             cmd: Sequence[str] = [
                 "docker",
                 "buildx",
@@ -959,12 +961,12 @@ class ResolvedImage:
                 "-",
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
                 "-t",
-                f"docker.io/{self.spec()}",
+                docker_tag,
                 "-t",
-                f"ghcr.io/materializeinc/{self.spec()}",
+                ghcr_tag,
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
-                *(["--push"] if push else ["--load"]),
+                "--load",
             ]
 
         if token := os.getenv("GITHUB_GHCR_TOKEN"):
@@ -981,6 +983,26 @@ class ResolvedImage:
             )
 
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
+
+        if push:
+            # Push to both registries in parallel. With the docker driver,
+            # the image is already in the local daemon after --load, so
+            # docker push is the same mechanism buildx --push uses internally.
+            procs = []
+            for tag in [docker_tag, ghcr_tag]:
+                procs.append(
+                    subprocess.Popen(
+                        ["docker", "push", tag],
+                        stdout=sys.stderr,
+                        stderr=sys.stderr,
+                    )
+                )
+            failures = []
+            for proc in procs:
+                if proc.wait() != 0:
+                    failures.append(proc.args)
+            if failures:
+                raise subprocess.CalledProcessError(1, failures[0])
 
     def try_pull(self, max_retries: int) -> bool:
         """Download the image if it does not exist locally. Returns whether it was found."""
