@@ -106,8 +106,11 @@ describe("buildSourceStatisticsQuery", () => {
         # Wait for statistics to show up on multiple replicas with offsets fully committed.
         # This confirms that stats are being generated for more than one replica and that
         # offset_committed has caught up to offset_known, so offsetDelta will be 0.
+        # We wait on mz_source_statistics_with_history specifically because the console
+        # query reads from that view, which has a separate index that may advance at a
+        # different frontier than mz_source_statistics.
         $ set-sql-timeout duration=20s
-        > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics JOIN mz_sources using(id) where name = 'kafka_multi' AND offset_committed = 3 AND offset_known = 3
+        > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics_with_history JOIN mz_sources using(id) where name = 'kafka_multi' AND offset_committed = 3 AND offset_known = 3 AND messages_received > 0
         3
       `,
       );
