@@ -93,7 +93,15 @@ impl MySqlTableDesc {
         // `columns` is ordered by the ordinal_position of each column in the table,
         // so as long as `self.columns` is a compatible prefix of `other.columns`, we can
         // ignore extra columns from `other.columns`.
-        let mut other_columns = other.columns.iter();
+        let col_names = self
+            .columns
+            .iter()
+            .map(|c| &c.name)
+            .collect::<BTreeSet<_>>();
+        let mut other_columns = other
+            .columns
+            .iter()
+            .filter(|col| col_names.contains(&col.name));
         for self_column in &self.columns {
             let other_column = other_columns.next().ok_or_else(|| {
                 anyhow::anyhow!(
