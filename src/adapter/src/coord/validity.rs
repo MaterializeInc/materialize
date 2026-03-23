@@ -174,6 +174,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use mz_adapter_types::connection::ConnectionId;
+    use mz_auth::AuthenticatorKind;
     use mz_cluster_client::ReplicaId;
     use mz_controller_types::ClusterId;
     use mz_ore::metrics::MetricsRegistry;
@@ -224,6 +225,7 @@ mod tests {
                     client_ip: None,
                     external_metadata_rx: None,
                     helm_chart_version: None,
+                    authenticator_kind: AuthenticatorKind::None,
                 },
                 metrics.session_metrics(),
             );

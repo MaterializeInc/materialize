@@ -60,8 +60,18 @@ COMPLETE 0
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
-statement error SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_login_attribute TO false;
+----
+COMPLETE 0
+
+statement error LOGIN attribute is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 CREATE ROLE foo LOGIN
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_login_attribute TO true;
+----
+COMPLETE 0
 
 simple
 CREATE ROLE foo SUPERUSER
@@ -292,6 +302,16 @@ foo (empty)
 # Enable password authentication in the system.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_password_auth = true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_superuser_attribute = true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_login_attribute = true;
 ----
 COMPLETE 0
 
@@ -595,6 +615,11 @@ ALTER SYSTEM SET enable_password_auth TO true;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_login_attribute TO true;
+----
+COMPLETE 0
+
 # Create a role with an explicit LOGIN attribute
 simple conn=mz_system,user=mz_system
 CREATE ROLE test_retraction_role WITH LOGIN;
@@ -613,6 +638,12 @@ ALTER SYSTEM SET enable_password_auth TO false;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_login_attribute TO false;
+----
+COMPLETE 0
+
+
 # Drop the role
 simple conn=mz_system,user=mz_system
 DROP ROLE test_retraction_role;
@@ -624,8 +655,32 @@ query T
 SELECT name FROM mz_roles WHERE name = 'test_retraction_role'
 ----
 
-# Reset password auth to off for remaining tests
+
+# Test to ensure that the authenticator used during auto-provisioning of a role is correctly tracked
+
+# Running any command on a role should autoprovision it and set auto_provision_source to None
+simple conn=r1,user=user1
+SELECT 1;
+----
+1
+COMPLETE 1
+
+# Create a role manually
 simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_password_auth TO false;
+CREATE ROLE role1;
+----
+COMPLETE 0
+
+# Assert that we track the authenticator used when autoprovisioning a role
+# The manually created role should have autoprovisionsource as NULL since it was created manually
+query TT
+SELECT name, autoprovisionsource FROM mz_roles WHERE name in ('role1', 'user1') ORDER BY name
+----
+role1 NULL
+user1 none
+
+# Drop the role
+simple conn=mz_system,user=mz_system
+DROP ROLE role1;
 ----
 COMPLETE 0

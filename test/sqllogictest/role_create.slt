@@ -22,6 +22,16 @@ ALTER SYSTEM SET enable_password_auth TO false;
 COMPLETE 0
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_superuser_attribute TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_login_attribute TO false;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
 CREATE ROLE regress_role_admin;
 ----
 COMPLETE 0
@@ -247,15 +257,25 @@ db error: ERROR: Expected end of statement, found identifier "noreplication"
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_noiseword LOGIN;
 ----
-db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: LOGIN attribute is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_noiseword NOLOGIN;
 ----
-db error: ERROR: SUPERUSER, PASSWORD, and LOGIN attributes is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
+db error: ERROR: LOGIN attribute is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_password_auth = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_login_attribute = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_superuser_attribute = true
 ----
 COMPLETE 0
 

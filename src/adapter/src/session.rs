@@ -24,6 +24,7 @@ use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
+use mz_auth::AuthenticatorKind;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
@@ -213,6 +214,8 @@ pub struct SessionConfig {
     pub external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
+    /// The authenticator that authenticated this user, if any.
+    pub authenticator_kind: AuthenticatorKind,
 }
 
 impl<T: TimestampManipulation> Session<T> {
@@ -299,6 +302,7 @@ impl<T: TimestampManipulation> Session<T> {
                 client_ip: None,
                 external_metadata_rx: None,
                 helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
             },
             metrics,
         );
@@ -315,6 +319,7 @@ impl<T: TimestampManipulation> Session<T> {
             client_ip,
             mut external_metadata_rx,
             helm_chart_version,
+            authenticator_kind,
         }: SessionConfig,
         metrics: SessionMetrics,
     ) -> Session<T> {
@@ -326,6 +331,7 @@ impl<T: TimestampManipulation> Session<T> {
             external_metadata: external_metadata_rx
                 .as_mut()
                 .map(|rx| rx.borrow_and_update().clone()),
+            authenticator_kind: Some(authenticator_kind),
         };
         let mut vars = SessionVars::new_unchecked(build_info, user, helm_chart_version);
         if let Some(default_cluster) = default_cluster {

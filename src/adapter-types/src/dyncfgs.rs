@@ -117,6 +117,20 @@ pub const ENABLE_PASSWORD_AUTH: Config<bool> = Config::new(
     "Enable password authentication.",
 );
 
+/// Whether to enable the superuser attribute for roles.
+pub const ENABLE_SUPERUSER_ATTRIBUTE: Config<bool> = Config::new(
+    "enable_superuser_attribute",
+    false,
+    "Enable DDL operations with the `SUPERUSER` attribute for roles.",
+);
+
+/// Whether to enable the login attribute for roles.
+pub const ENABLE_LOGIN_ATTRIBUTE: Config<bool> = Config::new(
+    "enable_login_attribute",
+    false,
+    "Enable DDL operations with the `LOGIN` attribute for roles.",
+);
+
 /// OIDC issuer URL.
 pub const OIDC_ISSUER: Config<Option<&'static str>> =
     Config::new("oidc_issuer", None, "OIDC issuer URL.");
@@ -216,6 +230,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_MULTI_REPLICA_SOURCES)
         .add(&ENABLE_PASSWORD_AUTH)
+        .add(&ENABLE_SUPERUSER_ATTRIBUTE)
+        .add(&ENABLE_LOGIN_ATTRIBUTE)
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
         .add(&OIDC_AUTHENTICATION_CLAIM)
