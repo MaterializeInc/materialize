@@ -2489,32 +2489,7 @@ def workflow_v1alpha2_opt_in(
     # The conversion webhook should compute the same hash, deriving the
     # same requestRollout UUID, so no new rollout should occur.
     print("Re-applying same spec at v1alpha2 (expecting no rollout)...")
-    defs = [
-        definition["namespace"],
-        definition["secret"],
-        definition["materialize"],
-    ]
-    yaml_str = yaml.dump_all(defs)
-    max_attempts = 120
-    for attempt in range(max_attempts):
-        result = subprocess.run(
-            ["kubectl", "apply", "-f", "-"],
-            input=yaml_str.encode(),
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            break
-        stderr_str = result.stderr.decode(errors="replace")
-        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
-            print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
-            time.sleep(2)
-            continue
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            result.args,
-            output=result.stdout,
-            stderr=result.stderr,
-        )
+    apply_materialize(definition)
 
     # Wait a bit and verify that no new rollout was triggered.
     time.sleep(30)
@@ -2675,6 +2650,10 @@ def apply_materialize(definition: dict[str, Any]) -> None:
         definition["secret"],
         definition["materialize"],
     ]
+    if "materialize2" in definition:
+        defs.append(definition["materialize2"])
+    if "system_params_configmap" in definition:
+        defs.append(definition["system_params_configmap"])
     yaml_str = yaml.dump_all(defs)
     print(f"Attempting to apply:\n{yaml_str}")
     max_attempts = 120
@@ -3388,78 +3367,10 @@ def wait_for_crd_established():
 
 
 def run(definition: dict[str, Any], expect_fail: bool) -> None:
-    defs = [
-        definition["namespace"],
-        definition["secret"],
-        definition["materialize"],
-    ]
-    if "materialize2" in definition:
-        defs.append(definition["materialize2"])
-    if "system_params_configmap" in definition:
-        defs.append(definition["system_params_configmap"])
-    yaml_str = yaml.dump_all(defs)
-    print(f"Attempting to apply:\n{yaml_str}")
-    # Retry to handle transient webhook unavailability (e.g. endpoint
-    # propagation delay after pod restart during helm upgrade).
-    max_attempts = 120
-    for attempt in range(max_attempts):
-        result = subprocess.run(
-            ["kubectl", "apply", "-f", "-"],
-            input=yaml_str.encode(),
-            capture_output=True,
-        )
-        if result.returncode == 0:
-            break
-        stderr_str = result.stderr.decode(errors="replace")
-        if attempt < max_attempts - 1 and "connection refused" in stderr_str:
-            print(f"Webhook not yet reachable (attempt {attempt + 1}), retrying...")
-            time.sleep(2)
-            continue
-        print(f"Failed to apply: {result.stdout}\nSTDERR:{result.stderr}")
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            result.args,
-            output=result.stdout,
-            stderr=result.stderr,
-        )
+    apply_materialize(definition)
 
     if definition["materialize"]["spec"].get("rolloutStrategy") == "ManuallyPromote":
-        # First wait for it to become ready to promote, but not yet promoted
-        for _ in range(900):
-            time.sleep(1)
-            if is_ready_to_manually_promote():
-                break
-        else:
-            spawn.runv(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "yaml",
-                ],
-            )
-            raise RuntimeError("Never became ready for manual promotion")
-
-        # Wait to see that it doesn't promote
-        time.sleep(30)
-        if not is_ready_to_manually_promote():
-            spawn.runv(
-                [
-                    "kubectl",
-                    "get",
-                    "materializes",
-                    "-n",
-                    "materialize-environment",
-                    "-o",
-                    "yaml",
-                ],
-            )
-            raise RuntimeError(
-                "Stopped being ready for manual promotion before promoting"
-            )
+        wait_for_ready_to_promote()
 
         # Manually promote it by reading the v1alpha1 resource to get the
         # requestRollout UUID, then patching forcePromote to match it.
