@@ -165,7 +165,8 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterDefaultPrivileges(_)
         | Plan::ReassignOwned(_)
         | Plan::ValidateConnection(_)
-        | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
+        | Plan::SideEffectingFunc(_)
+        | Plan::Sparql(_) => return TargetCluster::Active,
     };
 
     // Bail if the user has disabled it via the SessionVar.

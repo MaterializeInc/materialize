@@ -459,6 +459,9 @@ impl<'a> Parser<'a> {
                 Token::Keyword(COMMENT) => Ok(self
                     .parse_comment()
                     .map_parser_err(StatementKind::Comment)?),
+                Token::Keyword(SPARQL) => {
+                    Ok(self.parse_sparql().map_parser_err(StatementKind::Sparql)?)
+                }
                 Token::Keyword(k) if QUERY_START_KEYWORDS.contains(&k) => {
                     self.prev_token();
                     Ok(Statement::Select(
@@ -10161,6 +10164,24 @@ impl<'a> Parser<'a> {
             pos: self.peek_prev_pos(),
             message: e.to_string(),
         })
+    }
+
+    /// Parse a `SPARQL $body$` statement.
+    ///
+    /// The `SPARQL` keyword has already been consumed. Expects a dollar-quoted
+    /// string containing the SPARQL query body.
+    fn parse_sparql(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let body = match self.next_token() {
+            Some(Token::String(s)) => s,
+            other => {
+                return self.expected(
+                    self.peek_prev_pos(),
+                    "a dollar-quoted string containing a SPARQL query",
+                    other,
+                );
+            }
+        };
+        Ok(Statement::Sparql(SparqlStatement { body }))
     }
 }
 

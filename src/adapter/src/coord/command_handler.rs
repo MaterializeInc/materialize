@@ -1124,7 +1124,8 @@ impl Coordinator {
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
                     | Statement::Subscribe(_)
-                    | Statement::Raise(_) => {
+                    | Statement::Raise(_)
+                    | Statement::Sparql(_) => {
                         // Always safe.
                     }
 

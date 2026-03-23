@@ -115,6 +115,7 @@ pub enum Statement<T: AstInfo> {
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
     Comment(CommentStatement<T>),
+    Sparql(SparqlStatement),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -194,6 +195,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::ReassignOwned(stmt) => f.write_node(stmt),
             Statement::ValidateConnection(stmt) => f.write_node(stmt),
             Statement::Comment(stmt) => f.write_node(stmt),
+            Statement::Sparql(stmt) => f.write_node(stmt),
         }
     }
 }
@@ -278,6 +280,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::ReassignOwned => "reassign_owned",
         StatementKind::ValidateConnection => "validate_connection",
         StatementKind::Comment => "comment",
+        StatementKind::Sparql => "sparql",
     }
 }
 
@@ -5758,6 +5761,25 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 }
 
 impl_display_t!(CommentObjectType);
+
+/// `SPARQL $body$`
+///
+/// Wraps a raw SPARQL query string to be parsed and planned by the SPARQL
+/// frontend crates (`mz-sparql-parser` and `mz-sparql`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SparqlStatement {
+    /// The raw SPARQL query body (contents of the dollar-quoted string).
+    pub body: String,
+}
+
+impl AstDisplay for SparqlStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SPARQL $$");
+        f.write_str(&self.body);
+        f.write_str("$$");
+    }
+}
+impl_display!(SparqlStatement);
 
 // Include the `AstDisplay` implementations for simple options derived by the
 // crate's build.rs script.

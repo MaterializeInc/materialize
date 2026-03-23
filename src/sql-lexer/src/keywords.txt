@@ -443,6 +443,7 @@ Snapshot
 Some
 Source
 Sources
+Sparql
 Sql
 Ssh
 Ssl

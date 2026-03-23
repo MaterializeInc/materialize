@@ -70,6 +70,7 @@ use crate::plan::{CopyFromSource, with_options};
 use crate::session::vars::{
     self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF, ENABLE_COPY_FROM_REMOTE,
 };
+use mz_sql_parser::ast::SparqlStatement;
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -302,6 +303,88 @@ fn plan_select_inner(
     };
 
     Ok((plan, desc))
+}
+
+pub fn describe_sparql(
+    _scx: &StatementContext,
+    stmt: SparqlStatement,
+) -> Result<StatementDesc, PlanError> {
+    // Parse the SPARQL query to determine the output schema.
+    let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+
+    let desc = sparql_desc(&sparql_query);
+    Ok(StatementDesc::new(Some(desc)))
+}
+
+pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan, PlanError> {
+    use crate::names::PartialItemName;
+
+    // Step 1: Parse SPARQL.
+    let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+
+    // Step 2: Resolve the quad table from the catalog.
+    let quad_table_name = PartialItemName {
+        database: None,
+        schema: None,
+        item: "rdf_quads".into(),
+    };
+    let quad_table_item = scx
+        .catalog
+        .resolve_item(&quad_table_name)
+        .map_err(|e| PlanError::Unstructured(format!("failed to resolve rdf_quads: {e}")))?;
+    let quad_table = quad_table_item.at_version(mz_repr::RelationVersionSelector::Latest);
+    let quad_table_id = quad_table.global_id();
+
+    // Step 3: Build the output relation description.
+    let desc = sparql_desc(&sparql_query);
+
+    // Return a Plan::Sparql with the parsed query and quad table ID.
+    // The adapter will call the SPARQL planner to produce HIR and sequence
+    // the result as a peek.
+    Ok(Plan::Sparql(plan::SparqlPlan {
+        query: sparql_query,
+        quad_table_id,
+        desc,
+    }))
+}
+
+/// Build a [`RelationDesc`] for the output of a SPARQL query.
+fn sparql_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc {
+    use mz_sparql_parser::ast::{QueryForm, SelectClause};
+
+    let mut desc = RelationDesc::builder();
+    match &query.form {
+        QueryForm::Select { projection, .. } => match projection {
+            SelectClause::Wildcard => {
+                // For SELECT *, we don't know variable names ahead of time.
+                // Return a single column as placeholder; the actual columns come from planning.
+                desc = desc.with_column("result", SqlScalarType::String.nullable(true));
+            }
+            SelectClause::Variables(vars) => {
+                for var in vars {
+                    let name = match var {
+                        mz_sparql_parser::ast::SelectVariable::Variable(v) => v.name.clone(),
+                        mz_sparql_parser::ast::SelectVariable::Expression(_, alias) => {
+                            alias.name.clone()
+                        }
+                    };
+                    desc = desc.with_column(name.as_str(), SqlScalarType::String.nullable(true));
+                }
+            }
+        },
+        QueryForm::Construct { .. } | QueryForm::Describe { .. } => {
+            desc = desc
+                .with_column("subject", SqlScalarType::String.nullable(true))
+                .with_column("predicate", SqlScalarType::String.nullable(true))
+                .with_column("object", SqlScalarType::String.nullable(true));
+        }
+        QueryForm::Ask => {
+            desc = desc.with_column("result", SqlScalarType::String.nullable(true));
+        }
+    }
+    desc.finish()
 }
 
 pub fn describe_explain_plan(

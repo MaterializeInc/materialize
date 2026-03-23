@@ -59,6 +59,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
+mz-sparql-parser = { path = "../sparql-parser" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
 mz-sql-lexer = { path = "../sql-lexer" }

@@ -213,6 +213,7 @@ pub enum Plan {
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
     AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
+    Sparql(SparqlPlan),
 }
 
 impl Plan {
@@ -314,6 +315,7 @@ impl Plan {
             StatementKind::RevokeRole => &[PlanKind::RevokeRole],
             StatementKind::Rollback => &[PlanKind::AbortTransaction],
             StatementKind::Select => &[PlanKind::Select, PlanKind::SideEffectingFunc],
+            StatementKind::Sparql => &[PlanKind::Sparql],
             StatementKind::SetTransaction => &[PlanKind::SetTransaction],
             StatementKind::SetVariable => &[PlanKind::SetVariable],
             StatementKind::Show => &[
@@ -477,6 +479,7 @@ impl Plan {
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
             Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
+            Plan::Sparql(_) => "sparql",
         }
     }
 
@@ -862,6 +865,21 @@ pub struct ResetVariablePlan {
 pub struct SetTransactionPlan {
     pub local: bool,
     pub modes: Vec<TransactionMode>,
+}
+
+/// A plan for SPARQL queries.
+///
+/// The SPARQL query has been parsed but not yet compiled to HIR. The adapter
+/// calls the SPARQL planner to produce HIR, then sequences it as a peek (like
+/// `SelectPlan`).
+#[derive(Clone, Debug)]
+pub struct SparqlPlan {
+    /// The parsed SPARQL query.
+    pub query: mz_sparql_parser::ast::SparqlQuery,
+    /// The GlobalId of the quad table to query against.
+    pub quad_table_id: GlobalId,
+    /// The output column names and types.
+    pub desc: RelationDesc,
 }
 
 /// A plan for select statements.
