@@ -535,9 +535,7 @@ mz_operators                   ""
 mz_pseudo_types                ""
 mz_role_auth                   ""
 mz_roles                       ""
-mz_role_members                ""
 mz_role_parameters             ""
-mz_schemas                     ""
 mz_secrets                     ""
 mz_sinks                       ""
 mz_sources                     ""
@@ -561,6 +559,8 @@ mz_timezone_names          ""
 name                cluster             comment
 ------------------------------------------------
 mz_databases        mz_catalog_server   ""
+mz_role_members     mz_catalog_server   ""
+mz_schemas          mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -604,18 +604,13 @@ name                                     comment
 mz_aggregates                            ""
 mz_aws_connections                       ""
 mz_cluster_schedules                     ""
-mz_cluster_workload_classes              ""
 mz_comments                              ""
 mz_continual_tasks                       ""
 mz_history_retention_strategies          ""
-mz_internal_cluster_replicas             ""
-mz_pending_cluster_replicas              ""
 mz_kafka_source_tables                   ""
 mz_license_keys                          ""
 mz_materialized_view_refresh_strategies  ""
 mz_mysql_source_tables                   ""
-mz_network_policies                      ""
-mz_network_policy_rules                  ""
 mz_object_dependencies                   ""
 mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
@@ -716,6 +711,15 @@ pg_attrdef_all_databases                 ""
 pg_attribute_all_databases               ""
 pg_authid_core                           ""
 
+> SHOW MATERIALIZED VIEWS FROM mz_internal
+name                   cluster             comment
+----------------------------------------------------
+mz_cluster_workload_classes    mz_catalog_server   ""
+mz_internal_cluster_replicas   mz_catalog_server   ""
+mz_network_policies            mz_catalog_server   ""
+mz_network_policy_rules        mz_catalog_server   ""
+mz_pending_cluster_replicas    mz_catalog_server   ""
+
 # Check default sources, tables, and views in mz_introspection.
 
 > SHOW SOURCES FROM mz_introspection
@@ -811,7 +815,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-64
+57
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
