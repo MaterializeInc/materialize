@@ -21,8 +21,8 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt};
 use itertools::Itertools;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
-use mz_auth::Authenticated;
 use mz_auth::password::Password;
+use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::channel::OneshotReceiverExt;
@@ -456,6 +456,7 @@ Issue a SQL query to get started. Need help?
                 client_ip: None,
                 external_metadata_rx: None,
                 helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
             },
             Authenticated,
         );

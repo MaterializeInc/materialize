@@ -22,7 +22,9 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
-use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
+use mz_sql::catalog::{
+    AutoProvisionSource, CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars,
+};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
 };
@@ -105,12 +107,31 @@ impl RustType<crate::objects::MzAclItem> for MzAclItem {
     }
 }
 
+impl RustType<crate::objects::AutoProvisionSource> for AutoProvisionSource {
+    fn into_proto(&self) -> crate::objects::AutoProvisionSource {
+        match self {
+            AutoProvisionSource::Oidc => crate::objects::AutoProvisionSource::Oidc,
+            AutoProvisionSource::Frontegg => crate::objects::AutoProvisionSource::Frontegg,
+            AutoProvisionSource::None => crate::objects::AutoProvisionSource::None,
+        }
+    }
+
+    fn from_proto(proto: crate::objects::AutoProvisionSource) -> Result<Self, TryFromProtoError> {
+        Ok(match proto {
+            crate::objects::AutoProvisionSource::Oidc => AutoProvisionSource::Oidc,
+            crate::objects::AutoProvisionSource::Frontegg => AutoProvisionSource::Frontegg,
+            crate::objects::AutoProvisionSource::None => AutoProvisionSource::None,
+        })
+    }
+}
+
 impl RustType<crate::objects::RoleAttributes> for RoleAttributes {
     fn into_proto(&self) -> crate::objects::RoleAttributes {
         crate::objects::RoleAttributes {
             inherit: self.inherit,
             superuser: self.superuser,
             login: self.login,
+            auto_provision_source: self.auto_provision_source.into_proto(),
         }
     }
 
@@ -120,6 +141,7 @@ impl RustType<crate::objects::RoleAttributes> for RoleAttributes {
         attributes.inherit = proto.inherit;
         attributes.superuser = proto.superuser;
         attributes.login = proto.login;
+        attributes.auto_provision_source = proto.auto_provision_source.into_rust()?;
 
         Ok(attributes)
     }
