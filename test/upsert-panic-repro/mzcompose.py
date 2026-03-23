@@ -13,8 +13,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from threading import Thread
 
-import requests
-
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import (
     Composition,
@@ -27,28 +25,25 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
+# Match production customer config flags
 SYSTEM_PARAMS = {
     **get_default_system_parameters(),
     "max_sources": "10000",
     "max_tables": "10000",
     "max_objects_per_schema": "10000",
-    # Match production defaults — don't override with aggressive test values
-    # that change timing behavior:
-    "storage_use_continual_feedback_upsert": "true",
-    "storage_rocksdb_use_merge_operator": "true",
-    # Tiny memtable = very frequent RocksDB flushes. Each flush triggers
-    # a partial merge that can produce the corrupt diff_sum=2 SST.
-    # Default is ~170MB; 256KB forces flushes after just a few keys.
-    "upsert_rocksdb_optimize_compaction_memtable_budget": "262144",
-    # Production defaults (don't override these — they affect the bug timing):
-    # storage_upsert_prevent_snapshot_buffering: true (compiled default)
-    # storage_upsert_max_snapshot_batch_buffering: None (compiled default, no limit)
-    # storage_dataflow_max_inflight_bytes: None (compiled default, no backpressure)
-    # storage_dataflow_max_inflight_bytes_disk_only: true (compiled default)
     "max_replicas_per_cluster": "10",
+    # Must be true for the continual feedback upsert code path
+    "storage_use_continual_feedback_upsert": "true",
+    # Merge operator — required for diff_sum panic
+    "storage_rocksdb_use_merge_operator": "true",
+    # Match customer: backpressure enabled for ALL sources
+    "storage_dataflow_max_inflight_bytes": "268435456",  # 256MiB
+    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",  # 1%
+    "storage_dataflow_max_inflight_bytes_disk_only": "false",
+    # Multi-replica sources — key for the bug
+    "enable_multi_replica_sources": "true",
 }
 
 SERVICES = [
@@ -57,21 +52,11 @@ SERVICES = [
     SchemaRegistry(),
     Cockroach(setup_materialize=True, in_memory=True),
     Minio(setup_materialize=True),
-    Toxiproxy(),
     Materialized(
         sanity_restart=False,
         system_parameter_defaults=SYSTEM_PARAMS,
-        # Route blob and consensus through toxiproxy to add latency
-        # that delays the persist feedback loop — the correction -1
-        # arrives later, widening the window where drain reads the
-        # corrupt diff_sum=2 SST.
-        persist_blob_url=minio_blob_uri("toxiproxy"),
-        external_metadata_store="toxiproxy",
         metadata_store="cockroach",
         default_replication_factor=2,
-        environment_extra=[
-            "FAILPOINTS=upsert_post_persist_progress_delay=sleep(500)",
-        ],
     ),
     Testdrive(
         no_consistency_checks=True,
@@ -83,73 +68,9 @@ SERVICES = [
 
 PAD = "x" * 5000
 
-def setup_toxiproxy(c):
-    """Create proxies for blob and consensus (no toxics yet)."""
-    port = c.default_port("toxiproxy")
-    toxi_url = f"http://localhost:{port}"
-
-    r = requests.post(f"{toxi_url}/proxies", json={
-        "name": "minio", "listen": "0.0.0.0:9000",
-        "upstream": "minio:9000", "enabled": True,
-    })
-    assert r.status_code == 201, f"Failed: {r.text}"
-
-    r = requests.post(f"{toxi_url}/proxies", json={
-        "name": "consensus", "listen": "0.0.0.0:26257",
-        "upstream": "cockroach:26257", "enabled": True,
-    })
-    assert r.status_code == 201, f"Failed: {r.text}"
-    print("Toxiproxy proxies created (no toxics yet)")
-
-
-def set_toxiproxy_latency(c, enabled):
-    """Toggle persist feedback latency on/off.
-    Enable during steady-state data flow to slow the correction batch.
-    Disable during setup, pre-population, and replica transitions."""
-    port = c.default_port("toxiproxy")
-    toxi_url = f"http://localhost:{port}"
-
-    if not enabled:
-        for name in ["blob-latency", "blob-bw", "consensus-jitter"]:
-            proxy = "minio" if "blob" in name else "consensus"
-            requests.delete(f"{toxi_url}/proxies/{proxy}/toxics/{name}")
-        return
-
-    # Blob: upstream latency + bandwidth limit.
-    # Slows persist_sink writes — the correction batch takes longer
-    # to reach the shard.
-    r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
-        "name": "blob-latency", "type": "latency",
-        "stream": "upstream",
-        "attributes": {"latency": 500, "jitter": 1000},
-    })
-    if r.status_code != 200:
-        requests.patch(f"{toxi_url}/proxies/minio/toxics/blob-latency",
-                       json={"attributes": {"latency": 200, "jitter": 300}})
-
-    r = requests.post(f"{toxi_url}/proxies/minio/toxics", json={
-        "name": "blob-bw", "type": "bandwidth",
-        "stream": "upstream",
-        "attributes": {"rate": 50},  # 50 KB/s
-    })
-    if r.status_code != 200:
-        requests.patch(f"{toxi_url}/proxies/minio/toxics/blob-bw",
-                       json={"attributes": {"rate": 100}})
-
-    # Consensus: jitter on CAS and state watches.
-    r = requests.post(f"{toxi_url}/proxies/consensus/toxics", json={
-        "name": "consensus-jitter", "type": "latency",
-        "attributes": {"latency": 100, "jitter": 300},
-    })
-    if r.status_code != 200:
-        requests.patch(f"{toxi_url}/proxies/consensus/toxics/consensus-jitter",
-                       json={"attributes": {"latency": 100, "jitter": 300}})
-
-
 KEY_SCHEMA = (
     '{"type": "record", "name": "Key", "fields": [{"name": "k", "type": "long"}]}'
 )
-# f_ts is epoch milliseconds — used by temporal MVs with mz_now()
 VAL_SCHEMA = (
     '{"type": "record", "name": "Value", "fields": ['
     '{"name": "f_ts", "type": "long"},'
@@ -158,16 +79,14 @@ VAL_SCHEMA = (
 )
 
 
-
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument("--runtime", type=int, default=3600)
-    parser.add_argument("--num-sources", type=int, default=5)
-    parser.add_argument("--num-keys", type=int, default=50000)
-    parser.add_argument("--num-hot-keys", type=int, default=10000)
-    parser.add_argument("--parallelism", type=int, default=10)
+    parser.add_argument("--num-sources", type=int, default=3)
+    parser.add_argument("--num-keys", type=int, default=500)
+    parser.add_argument("--num-hot-keys", type=int, default=500)
+    parser.add_argument("--parallelism", type=int, default=5)
     parser.add_argument("--seed", type=int, default=None)
-    # How many cycles between DROP/CREATE REPLICA
-    parser.add_argument("--replica-cycle", type=int, default=10)
+    parser.add_argument("--deploy-cycle", type=int, default=10)
     args = parser.parse_args()
 
     seed = args.seed if args.seed is not None else random.randint(0, 2**31)
@@ -177,8 +96,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     n = args.num_sources
     end_time = datetime.now() + timedelta(seconds=args.runtime)
 
-    # High partition counts + many workers = more timing variability.
-    # workers=16 is what triggered the first reproduction.
     partitions = [random.choice([8, 16, 32]) for _ in range(n)]
     workers = 16
     replication_factor = 2
@@ -188,14 +105,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Config: {n} sources, workers={workers}, rf={replication_factor}, "
         f"pump_threads={num_pump_threads}"
     )
-    print(f"Partition counts: {partitions}")
 
     c.down(destroy_volumes=True)
-    c.up("zookeeper", "kafka", "schema-registry", "cockroach", "minio", "toxiproxy")
-    setup_toxiproxy(c)
+    c.up("zookeeper", "kafka", "schema-registry", "cockroach", "minio")
+
     c.up("materialized", Service("testdrive", idle=True))
 
-    # Use a managed cluster so we can DROP/CREATE replicas
     c.testdrive(
         f"""\
 > CREATE CLUSTER upsert_cluster SIZE 'scale=1,workers={workers}', REPLICATION FACTOR {replication_factor};
@@ -227,7 +142,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     print(f"Creating {n} upsert sources...")
     for i in range(n):
         topic = f"testdrive-s-{i}-${{testdrive.seed}}"
-        # Use old-style syntax that flattens Avro columns into the source table
         c.testdrive(
             f"""\
 > CREATE SOURCE s_{i}_tbl
@@ -239,17 +153,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
     print(f"  {n}/{n}.")
 
-    # Create materialized views and indexes on upsert sources to add
-    # compute pressure — when the replica drops, ALL of these must
-    # rehydrate alongside the upsert sources, creating contention.
-    # Create temporal MVs with mz_now() — these cause periodic retraction
-    # bursts as rows age out of the time window, mimicking the production
-    # mz_now() + date_trunc pattern that overwhelms the cluster.
-    # Create temporal MVs with mz_now() on the upsert source tables.
-    # f_ts contains epoch ms — as rows age past the window, the MV
-    # retracts them, creating retraction bursts on the same cluster
-    # that's running the upsert operators.
-    print("Creating temporal materialized views on upsert sources...")
+    # Create temporal MVs with mz_now()
+    print("Creating temporal materialized views...")
     for i in range(n):
         c.testdrive(
             f"""\
@@ -293,7 +198,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 try:
                     f.result()
                 except Exception:
-                    pass  # tolerate errors during replica transitions
+                    pass
 
     def ingest_one(src_id, nk, tag, round_num):
         ts_ms = int(time.time() * 1000)
@@ -308,7 +213,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "\n"
         )
 
-    # --- Background pump: continuously update keys on all sources ---
+    # --- Background pump ---
     pump_stop = False
 
     def background_pump(thread_id):
@@ -332,9 +237,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         pump_threads.append(t)
     print(f"Background pump started ({num_pump_threads} threads).")
 
-    # --- Main loop: data injection + periodic DROP/CREATE REPLICA ---
+    # --- Main loop ---
     cycle = 0
-    replica_drops = 0
+    deploys = 0
     all_srcs = list(range(n))
 
     while datetime.now() < end_time:
@@ -344,76 +249,41 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         t0 = time.monotonic()
 
         # ============================================================
-        # Every N cycles: DROP/CREATE REPLICA
-        # This is the key pattern from platform-checks that triggers
-        # the bug. MZ stays up, data keeps flowing, but the replica
-        # restarts and rehydrates all sources simultaneously.
+        # Every N cycles: 0dt deploy (restart materialized)
+        # Both old and new instances run simultaneously during the
+        # transition — the new instance rehydrates while the old one
+        # continues writing. This is the production scenario.
         # ============================================================
-        if cycle % args.replica_cycle == 0:
-            replica_drops += 1
-            print(f"\n  >>> DROP/CREATE REPLICA (#{replica_drops}) <<<")
+        if cycle % args.deploy_cycle == 0:
+            deploys += 1
+            print(f"\n  >>> RESTART (#{deploys}) <<<")
 
-            # Disable latency for clean replica transition
-            set_toxiproxy_latency(c, enabled=False)
-
-            try:
-                c.testdrive(
-                    "> ALTER CLUSTER upsert_cluster SET (MANAGED = false);\n"
-                )
-            except Exception:
-                pass
-
-            c.testdrive(
-                "> SET CLUSTER = default;\n"
-            )
-            for r in range(replication_factor):
-                try:
-                    c.testdrive(
-                        f"> DROP CLUSTER REPLICA IF EXISTS upsert_cluster.r{r+1};\n"
-                    )
-                except Exception:
-                    pass
-
-            time.sleep(random.uniform(0.5, 1.5))
-
-            for r in range(replication_factor):
-                c.testdrive(
-                    f"> CREATE CLUSTER REPLICA upsert_cluster.r{r+1}"
-                    f" SIZE 'scale=1,workers={workers}';\n"
-                )
-
-            c.testdrive(
-                "> SET CLUSTER = upsert_cluster;\n"
-            )
-
-            # Enable latency NOW — during rehydration + steady state.
-            # This slows the persist feedback loop so the correction
-            # -1 batch arrives late, after drain reads the corrupt SST.
-            set_toxiproxy_latency(c, enabled=True)
+            # Kill materialized — simulates 0dt deploy restart.
+            # The clusterd processes restart and rehydrate from persist
+            # while new Kafka data keeps flowing.
+            c.kill("materialized")
+            time.sleep(2)
+            c.up("materialized")
+            # Wait for MZ to be healthy
+            time.sleep(15)
 
             # Blast data during rehydration
             for rnd_i in range(5):
                 ingest_parallel(
                     all_srcs,
                     lambda s: ingest_one(
-                        s, nk, f"rehydrate{replica_drops}r{rnd_i}",
-                        replica_drops * 1000 + rnd_i,
+                        s, nk, f"deploy{deploys}r{rnd_i}",
+                        deploys * 1000 + rnd_i,
                     ),
                 )
                 time.sleep(random.uniform(1.0, 1.5))
 
             t7 = time.monotonic()
-            print(
-                f"  >>> Replica recreated, latency ON "
-                f"({t7-t0:.1f}s) <<<\n"
-            )
+            print(f"  >>> Deploy done ({t7-t0:.1f}s) <<<\n")
             continue
 
         # ============================================================
-        # Continuous data injection + temporal table refresh.
-        # The mz_now() MVs retract rows as they age out of 10s/30s
-        # windows. We refresh the temporal table each cycle so rows
-        # continuously age in and out, creating retraction pressure.
+        # Normal data injection
         # ============================================================
         ingest_parallel(
             all_srcs,
@@ -430,6 +300,4 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for t in pump_threads:
         t.join(timeout=10)
 
-    print(
-        f"Done. {cycle} cycles, {replica_drops} replica drops. Seed: {seed}."
-    )
+    print(f"Done. {cycle} cycles, {deploys} deploys. Seed: {seed}.")

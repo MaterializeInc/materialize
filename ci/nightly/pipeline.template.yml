@@ -538,9 +538,9 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: upsert-panic-repro
               args: [--runtime=3600]
-        parallelism: 10
+        parallelism: 20
         agents:
-          queue: hetzner-x86-64-dedi-48cpu-192gb
+          queue: hetzner-aarch64-16cpu-32gb
 
   - id: ssh-connection-extended
     label: Extended SSH connection
