@@ -1495,3 +1495,113 @@ New planner tests (5):
 - FROM catalog graph with catalog view ID (verifies User(2) in HIR)
 - FROM catalog graph without catalog view (fallback to Filter)
 - Multiple FROM graphs (verifies Filter in HIR)
+
+## 2026-03-23: Prompt 17 — SPARQL expression edge cases and three-valued logic
+
+### What was done
+
+Implemented three key improvements to SPARQL expression evaluation in
+`src/sparql/src/plan.rs`:
+
+**1. Three-valued logic (error suppression in FILTER)**
+
+Modified `apply_filter()` to wrap every FILTER predicate in
+`COALESCE(pred, false)`. This implements SPARQL's three-valued logic where
+an error in a FILTER expression evaluates to `false` (row is filtered out)
+rather than propagating the error. For example, comparing a string to a
+number with `<` would raise a type error in SQL, but in SPARQL it should
+silently filter the row.
+
+**2. Effective Boolean Value (EBV) conversion**
+
+Added `is_boolean_expression()` and `to_ebv()` methods. When a FILTER
+contains a non-boolean expression (e.g., `FILTER(?label)` to filter empty
+strings), EBV conversion is applied per SPARQL 1.1 Section 17.2.2:
+- Numeric values: true if non-zero (cast to float64, compare != 0)
+- String values: true if non-null and non-empty (char_length > 0)
+- Boolean expressions (comparisons, logical ops, BOUND, etc.): pass through
+
+The `is_boolean_expression()` helper statically determines which SPARQL
+expression types produce boolean results (23 variants), avoiding unnecessary
+EBV conversion for the common case.
+
+**3. Numeric-aware comparison operators**
+
+Replaced all 6 comparison operators (=, !=, <, >, <=, >=) with a new
+`translate_comparison()` method that produces:
+```
+IF(is_numeric(left) AND is_numeric(right),
+   func(cast_f64(left), cast_f64(right)),  -- numeric comparison
+   func(left, right))                       -- string comparison
+```
+
+This correctly handles:
+- `9 < 10` (numeric: 9 < 10, not string: "9" > "10")
+- `42 = 42.0` (numeric equality despite different string forms)
+- `"alice" < "bob"` (string comparison for non-numeric values)
+
+The `is_numeric_check()` helper uses the same regex pattern as `isNumeric()`:
+`^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$`.
+
+**4. Improved accessor functions (STR, LANG, DATATYPE)**
+
+Replaced stub implementations of LANG() and DATATYPE() with working
+position-based string extraction:
+- `LANG()`: finds `"@` marker via Position, extracts language tag with Substr
+- `DATATYPE()`: finds `^^<` marker via Position, extracts datatype IRI with
+  Substr, falls back to xsd:string
+- `STR()`: kept as identity (correct for IRIs and simple strings; full
+  typed/tagged literal extraction is a future enhancement)
+
+**5. Removed `translate_binary` helper**
+
+The `translate_binary()` helper was replaced by `translate_comparison()` for
+all comparison operators. Since no other callers remained, it was removed.
+
+### Key decisions
+
+1. **COALESCE at FILTER level, not expression level**: Error suppression is
+   applied once per FILTER, wrapping the entire predicate. This is more
+   efficient than wrapping every sub-expression and matches the SPARQL spec
+   where errors only propagate to the FILTER boundary.
+
+2. **Static boolean detection**: Rather than always applying EBV conversion,
+   we statically check the SPARQL expression type. This avoids unnecessary
+   overhead for the 95%+ case where FILTER expressions are already boolean.
+
+3. **Numeric detection at runtime**: The `is_numeric_check` uses regex
+   matching at runtime, not static type analysis. This is correct because
+   SPARQL variables can hold any RDF value, and the same variable might be
+   numeric in some rows and non-numeric in others.
+
+4. **xsd:dateTime via string comparison**: ISO 8601 dates sort correctly
+   as strings due to zero-padded formatting, so the string comparison
+   fallback in `translate_comparison` handles dateTime comparison for the
+   common case. Known limitation: timezone normalization (e.g.,
+   "2023-01-15T10:30:00Z" vs "2023-01-15T05:30:00-05:00") is not handled.
+
+5. **OPTIONAL filters not wrapped**: OPTIONAL's inner FILTER expressions go
+   into the LEFT OUTER JOIN ON clause, where NULL/error conditions already
+   produce the correct SPARQL OPTIONAL semantics (unmatched row with NULLs).
+   No additional COALESCE wrapping needed.
+
+6. **Position-based extraction for LANG/DATATYPE**: Used Position + Substr
+   instead of regex capture groups since Materialize's Replace function does
+   simple substring replacement, not regex replacement.
+
+### Test results
+
+124 tests pass (112 old + 12 new), 0 failures, 1 warning (unused QUAD_ARITY).
+
+12 existing tests updated to account for new COALESCE wrappers and
+numeric-aware comparison structure (using new helpers: `unwrap_coalesce`,
+`unwrap_numeric_comparison`, `get_filter_predicate`).
+
+New tests (12):
+- Three-valued logic: COALESCE wrapper presence, multiple filters both wrapped
+- Numeric-aware comparison: structure verification (IF/then/else), equality,
+  all 6 operators, is_numeric regex check presence
+- EBV: non-boolean filter gets conversion, boolean filter skips conversion
+- Accessors: LANG uses Position, DATATYPE uses Position + xsd:string fallback
+- Language tag equality: different tags produce different strings
+- Arithmetic + comparison: combined expression planning

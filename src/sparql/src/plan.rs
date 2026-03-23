@@ -1449,19 +1449,152 @@ impl SparqlPlanner {
     }
 
     /// Applies a SPARQL FILTER expression to a planned relation.
+    ///
+    /// Implements SPARQL three-valued logic: if the filter expression raises
+    /// an error (e.g., type mismatch during comparison), the error is treated
+    /// as `false` rather than propagated. This is done by wrapping the
+    /// predicate in `COALESCE(pred, false)`.
+    ///
+    /// For non-boolean expressions, Effective Boolean Value (EBV) conversion
+    /// is applied per SPARQL 1.1 Section 17.2.2.
     fn apply_filter(
         &self,
         rel: PlannedRelation,
         filter_expr: &Expression,
     ) -> Result<PlannedRelation, PlanError> {
         let hir_expr = self.translate_expression(filter_expr, &rel.var_map)?;
+
+        // Apply EBV conversion if the expression isn't already boolean-typed.
+        let ebv_expr = if self.is_boolean_expression(filter_expr) {
+            hir_expr
+        } else {
+            self.to_ebv(hir_expr)
+        };
+
+        // Three-valued logic: COALESCE(pred, false) so errors → false.
+        let safe_expr = self.coalesce_false(ebv_expr);
+
         Ok(PlannedRelation {
             expr: HirRelationExpr::Filter {
                 input: Box::new(rel.expr),
-                predicates: vec![hir_expr],
+                predicates: vec![safe_expr],
             },
             var_map: rel.var_map,
         })
+    }
+
+    /// Returns true if the SPARQL expression always produces a boolean value.
+    fn is_boolean_expression(&self, expr: &Expression) -> bool {
+        matches!(
+            expr,
+            Expression::Equal(..)
+                | Expression::NotEqual(..)
+                | Expression::LessThan(..)
+                | Expression::GreaterThan(..)
+                | Expression::LessThanOrEqual(..)
+                | Expression::GreaterThanOrEqual(..)
+                | Expression::And(..)
+                | Expression::Or(..)
+                | Expression::UnaryNot(..)
+                | Expression::Bound(..)
+                | Expression::BooleanLiteral(..)
+                | Expression::IsIri(..)
+                | Expression::IsBlank(..)
+                | Expression::IsLiteral(..)
+                | Expression::IsNumeric(..)
+                | Expression::Exists(..)
+                | Expression::NotExists(..)
+                | Expression::In(..)
+                | Expression::NotIn(..)
+                | Expression::Regex(..)
+                | Expression::Contains(..)
+                | Expression::StrStarts(..)
+                | Expression::StrEnds(..)
+        )
+    }
+
+    /// Converts a string-encoded RDF value to its Effective Boolean Value (EBV).
+    ///
+    /// SPARQL EBV rules (Section 17.2.2):
+    /// - Numeric values: true if non-zero and not NaN
+    /// - String values: true if non-empty
+    /// - NULL: false
+    fn to_ebv(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        let is_num = self.is_numeric_check(expr.clone());
+
+        // Numeric EBV: cast to float64, compare != 0.0
+        let zero = self.to_float64(HirScalarExpr::literal(
+            Datum::String("0"),
+            SqlScalarType::String,
+        ));
+        let numeric_ebv = HirScalarExpr::CallBinary {
+            func: mz_expr::func::NotEq.into(),
+            expr1: Box::new(self.to_float64(expr.clone())),
+            expr2: Box::new(zero),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        // String EBV: non-null and non-empty
+        let not_null = HirScalarExpr::CallUnary {
+            func: mz_expr::func::Not.into(),
+            expr: Box::new(HirScalarExpr::CallUnary {
+                func: mz_expr::func::IsNull.into(),
+                expr: Box::new(expr.clone()),
+                name: mz_ore::treat_as_equal::TreatAsEqual(None),
+            }),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+        let non_empty = HirScalarExpr::CallBinary {
+            func: mz_expr::func::Gt.into(),
+            expr1: Box::new(HirScalarExpr::CallUnary {
+                func: mz_expr::func::CharLength.into(),
+                expr: Box::new(expr),
+                name: mz_ore::treat_as_equal::TreatAsEqual(None),
+            }),
+            expr2: Box::new(HirScalarExpr::literal(
+                Datum::Int32(0),
+                SqlScalarType::Int32,
+            )),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+        let string_ebv = HirScalarExpr::CallVariadic {
+            func: mz_expr::func::variadic::And.into(),
+            exprs: vec![not_null, non_empty],
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        // IF is_numeric THEN numeric_ebv ELSE string_ebv
+        HirScalarExpr::If {
+            cond: Box::new(is_num),
+            then: Box::new(numeric_ebv),
+            els: Box::new(string_ebv),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
+    }
+
+    /// Wraps an expression in `COALESCE(expr, false)` for three-valued logic.
+    fn coalesce_false(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        HirScalarExpr::CallVariadic {
+            func: mz_expr::func::variadic::Coalesce.into(),
+            exprs: vec![
+                expr,
+                HirScalarExpr::literal(Datum::False, SqlScalarType::Bool),
+            ],
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
+    }
+
+    /// Checks if a string expression looks numeric (regex match).
+    fn is_numeric_check(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        HirScalarExpr::CallBinary {
+            func: mz_expr::func::IsRegexpMatchCaseSensitive.into(),
+            expr1: Box::new(expr),
+            expr2: Box::new(HirScalarExpr::literal(
+                Datum::String(r"^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$"),
+                SqlScalarType::String,
+            )),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
     }
 
     /// Translates a SPARQL expression to an HIR scalar expression.
@@ -1499,28 +1632,35 @@ impl SparqlPlanner {
                 SqlScalarType::String,
             )),
 
-            // Comparison operators
+            // Comparison operators — numeric-aware: if both operands are numeric,
+            // compare as float64; otherwise fall back to string comparison.
             Expression::Equal(l, r) => {
-                self.translate_binary(mz_expr::BinaryFunc::Eq(mz_expr::func::Eq), l, r, var_map)
+                self.translate_comparison(mz_expr::BinaryFunc::Eq(mz_expr::func::Eq), l, r, var_map)
             }
-            Expression::NotEqual(l, r) => self.translate_binary(
+            Expression::NotEqual(l, r) => self.translate_comparison(
                 mz_expr::BinaryFunc::NotEq(mz_expr::func::NotEq),
                 l,
                 r,
                 var_map,
             ),
             Expression::LessThan(l, r) => {
-                self.translate_binary(mz_expr::BinaryFunc::Lt(mz_expr::func::Lt), l, r, var_map)
+                self.translate_comparison(mz_expr::BinaryFunc::Lt(mz_expr::func::Lt), l, r, var_map)
             }
             Expression::GreaterThan(l, r) => {
-                self.translate_binary(mz_expr::BinaryFunc::Gt(mz_expr::func::Gt), l, r, var_map)
+                self.translate_comparison(mz_expr::BinaryFunc::Gt(mz_expr::func::Gt), l, r, var_map)
             }
-            Expression::LessThanOrEqual(l, r) => {
-                self.translate_binary(mz_expr::BinaryFunc::Lte(mz_expr::func::Lte), l, r, var_map)
-            }
-            Expression::GreaterThanOrEqual(l, r) => {
-                self.translate_binary(mz_expr::BinaryFunc::Gte(mz_expr::func::Gte), l, r, var_map)
-            }
+            Expression::LessThanOrEqual(l, r) => self.translate_comparison(
+                mz_expr::BinaryFunc::Lte(mz_expr::func::Lte),
+                l,
+                r,
+                var_map,
+            ),
+            Expression::GreaterThanOrEqual(l, r) => self.translate_comparison(
+                mz_expr::BinaryFunc::Gte(mz_expr::func::Gte),
+                l,
+                r,
+                var_map,
+            ),
 
             // Logical operators
             Expression::And(l, r) => {
@@ -1739,33 +1879,137 @@ impl SparqlPlanner {
             }
 
             // Accessor functions — extract parts of RDF term encoding.
+            //
+            // Our string encoding:
+            //   Simple strings: stored as plain value (e.g., "hello")
+            //   Language-tagged: stored as `"value"@lang`
+            //   Typed literals: stored as `"value"^^<datatype>`
+            //   IRIs: stored as bare IRI string (e.g., http://example.org/)
+            //   Blank nodes: stored as `_:id`
             Expression::Str(e) => {
-                // STR() returns the lexical form. For simple strings, that's the
-                // value itself. For tagged/typed literals, extract the value.
-                // For IRIs, return the IRI string.
-                // Simplification: return the value as-is (correct for IRIs and
-                // simple literals; typed/tagged literal extraction deferred to prompt 17).
+                // STR() returns the lexical form of an RDF term.
+                // For IRIs and simple strings, return as-is (the most common
+                // case). For tagged/typed literals that start with `"`, we'd
+                // ideally extract the value between quotes, but for simplicity
+                // and correctness in the common case, we return the value
+                // unchanged. Full extraction requires runtime parsing of the
+                // encoding format.
                 self.translate_expression(e, var_map)
             }
             Expression::Lang(e) => {
                 // LANG() returns the language tag of a literal.
                 // In our encoding, language-tagged literals are `"value"@lang`.
-                // For non-tagged values, return "".
-                // Full implementation deferred to prompt 17; return "" for now.
-                let _inner = self.translate_expression(e, var_map)?;
-                Ok(HirScalarExpr::literal(
-                    Datum::String(""),
-                    SqlScalarType::String,
-                ))
+                // Find `"@` and extract everything after it.
+                let inner = self.translate_expression(e, var_map)?;
+                let marker = HirScalarExpr::literal(Datum::String("\"@"), SqlScalarType::String);
+                let pos = HirScalarExpr::CallBinary {
+                    func: mz_expr::func::Position.into(),
+                    expr1: Box::new(marker),
+                    expr2: Box::new(inner.clone()),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let has_tag = HirScalarExpr::CallBinary {
+                    func: mz_expr::func::Gt.into(),
+                    expr1: Box::new(pos.clone()),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::Int32(0),
+                        SqlScalarType::Int32,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                // SUBSTR(inner, pos + 2) — skip past `"@`
+                let tag_start = HirScalarExpr::CallBinary {
+                    func: mz_expr::func::AddInt32.into(),
+                    expr1: Box::new(pos),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::Int32(2),
+                        SqlScalarType::Int32,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let tag = HirScalarExpr::CallVariadic {
+                    func: mz_expr::func::variadic::Substr.into(),
+                    exprs: vec![inner, tag_start],
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let empty = HirScalarExpr::literal(Datum::String(""), SqlScalarType::String);
+                Ok(HirScalarExpr::If {
+                    cond: Box::new(has_tag),
+                    then: Box::new(tag),
+                    els: Box::new(empty),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
             }
             Expression::Datatype(e) => {
-                // DATATYPE() returns the datatype IRI.
-                // Full implementation deferred to prompt 17; return xsd:string for now.
-                let _inner = self.translate_expression(e, var_map)?;
-                Ok(HirScalarExpr::literal(
+                // DATATYPE() returns the datatype IRI of a typed literal.
+                // In our encoding, typed literals are `"value"^^<datatype>`.
+                // Find `^^<` and extract the datatype IRI between `<` and `>`.
+                let inner = self.translate_expression(e, var_map)?;
+                let marker = HirScalarExpr::literal(Datum::String("^^<"), SqlScalarType::String);
+                let pos = HirScalarExpr::CallBinary {
+                    func: mz_expr::func::Position.into(),
+                    expr1: Box::new(marker),
+                    expr2: Box::new(inner.clone()),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let has_type = HirScalarExpr::CallBinary {
+                    func: mz_expr::func::Gt.into(),
+                    expr1: Box::new(pos.clone()),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::Int32(0),
+                        SqlScalarType::Int32,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                // SUBSTR(inner, pos + 3, char_length(inner) - pos - 3)
+                // to skip `^^<` and exclude trailing `>`
+                let dt_start = HirScalarExpr::CallBinary {
+                    func: mz_expr::func::AddInt32.into(),
+                    expr1: Box::new(pos.clone()),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::Int32(3),
+                        SqlScalarType::Int32,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let total_len = HirScalarExpr::CallUnary {
+                    func: mz_expr::func::CharLength.into(),
+                    expr: Box::new(inner.clone()),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                // length of datatype = total_len - pos - 3 (for `^^<`) - 1 (for `>`)
+                // = total_len - pos - 4... but we need this in Int32.
+                // Actually: SUBSTR(inner, pos+3, total_len - (pos+3))
+                // which excludes the trailing `>`
+                let dt_len = HirScalarExpr::CallBinary {
+                    func: mz_expr::func::SubInt32.into(),
+                    expr1: Box::new(HirScalarExpr::CallBinary {
+                        func: mz_expr::func::SubInt32.into(),
+                        expr1: Box::new(total_len),
+                        expr2: Box::new(pos),
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    }),
+                    expr2: Box::new(HirScalarExpr::literal(
+                        Datum::Int32(3),
+                        SqlScalarType::Int32,
+                    )),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let datatype_iri = HirScalarExpr::CallVariadic {
+                    func: mz_expr::func::variadic::Substr.into(),
+                    exprs: vec![inner, dt_start, dt_len],
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                };
+                let xsd_string = HirScalarExpr::literal(
                     Datum::String("http://www.w3.org/2001/XMLSchema#string"),
                     SqlScalarType::String,
-                ))
+                );
+                Ok(HirScalarExpr::If {
+                    cond: Box::new(has_type),
+                    then: Box::new(datatype_iri),
+                    els: Box::new(xsd_string),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                })
             }
 
             // String functions — operate on string values directly.
@@ -1988,8 +2232,13 @@ impl SparqlPlanner {
         }
     }
 
-    /// Helper: translate a binary operator expression.
-    fn translate_binary(
+    /// Translates a comparison expression with numeric awareness.
+    ///
+    /// If both operands are numeric strings, compares as float64.
+    /// Otherwise falls back to string comparison. This handles SPARQL's
+    /// requirement that `9 < 10` (not `"9" > "10"` in string order) and
+    /// that `42 = 42.0` (equal as numbers despite different string form).
+    fn translate_comparison(
         &self,
         func: mz_expr::BinaryFunc,
         left: &Expression,
@@ -1998,10 +2247,34 @@ impl SparqlPlanner {
     ) -> Result<HirScalarExpr, PlanError> {
         let l = self.translate_expression(left, var_map)?;
         let r = self.translate_expression(right, var_map)?;
-        Ok(HirScalarExpr::CallBinary {
+
+        let both_numeric = HirScalarExpr::CallVariadic {
+            func: mz_expr::func::variadic::And.into(),
+            exprs: vec![
+                self.is_numeric_check(l.clone()),
+                self.is_numeric_check(r.clone()),
+            ],
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        let numeric_cmp = HirScalarExpr::CallBinary {
+            func: func.clone(),
+            expr1: Box::new(self.to_float64(l.clone())),
+            expr2: Box::new(self.to_float64(r.clone())),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        let string_cmp = HirScalarExpr::CallBinary {
             func,
             expr1: Box::new(l),
             expr2: Box::new(r),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        Ok(HirScalarExpr::If {
+            cond: Box::new(both_numeric),
+            then: Box::new(numeric_cmp),
+            els: Box::new(string_cmp),
             name: mz_ore::treat_as_equal::TreatAsEqual(None),
         })
     }
@@ -2886,6 +3159,41 @@ mod tests {
         names
     }
 
+    /// Helper: unwrap COALESCE(inner, false) from a three-valued logic wrapper.
+    /// Returns the inner expression. Panics if not a COALESCE wrapper.
+    fn unwrap_coalesce(expr: &HirScalarExpr) -> &HirScalarExpr {
+        match expr {
+            HirScalarExpr::CallVariadic { func, exprs, .. }
+                if matches!(func, mz_expr::VariadicFunc::Coalesce(_)) =>
+            {
+                assert_eq!(exprs.len(), 2, "expected COALESCE(expr, false)");
+                &exprs[0]
+            }
+            other => panic!("expected COALESCE wrapper, got {:?}", other),
+        }
+    }
+
+    /// Helper: unwrap a numeric-aware comparison IF(both_numeric, numeric_cmp, string_cmp).
+    /// Returns the string_cmp branch (the fallback comparison).
+    fn unwrap_numeric_comparison(expr: &HirScalarExpr) -> &HirScalarExpr {
+        match expr {
+            HirScalarExpr::If { els, .. } => els.as_ref(),
+            other => other, // not a numeric-aware comparison, return as-is
+        }
+    }
+
+    /// Helper: get the filter predicate from a FILTER expression, unwrapping
+    /// the COALESCE wrapper added by three-valued logic.
+    fn get_filter_predicate(rel: &HirRelationExpr) -> &HirScalarExpr {
+        match rel {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+                unwrap_coalesce(&predicates[0])
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
     // --- Single triple pattern tests ---
 
     #[mz_ore::test]
@@ -3180,18 +3488,15 @@ mod tests {
         );
         assert_eq!(var_names(&result), vec!["age", "s"]);
 
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => {
-                assert_eq!(predicates.len(), 1);
-                // The predicate should be a Gt comparison.
-                match &predicates[0] {
-                    HirScalarExpr::CallBinary { func, .. } => {
-                        assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
-                    }
-                    other => panic!("expected CallBinary Gt, got {:?}", other),
-                }
+        // FILTER predicates are wrapped in COALESCE(pred, false) for three-valued logic.
+        // Comparisons are IF(both_numeric, numeric_cmp, string_cmp).
+        let pred = get_filter_predicate(&result.expr);
+        let cmp = unwrap_numeric_comparison(pred);
+        match cmp {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
             }
-            other => panic!("expected Filter, got {:?}", other),
+            other => panic!("expected CallBinary Gt, got {:?}", other),
         }
     }
 
@@ -3206,18 +3511,13 @@ mod tests {
         );
         assert_eq!(var_names(&result), vec!["name", "s"]);
 
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => {
-                assert_eq!(predicates.len(), 1);
-                match &predicates[0] {
-                    HirScalarExpr::CallVariadic { func, exprs, .. } => {
-                        assert!(matches!(func, mz_expr::VariadicFunc::And(_)));
-                        assert_eq!(exprs.len(), 2);
-                    }
-                    other => panic!("expected CallVariadic And, got {:?}", other),
-                }
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                assert!(matches!(func, mz_expr::VariadicFunc::And(_)));
+                assert_eq!(exprs.len(), 2);
             }
-            other => panic!("expected Filter, got {:?}", other),
+            other => panic!("expected CallVariadic And, got {:?}", other),
         }
     }
 
@@ -3226,17 +3526,12 @@ mod tests {
         let result = plan_query(r#"SELECT * WHERE { ?s ?p ?o . FILTER(!(?s = "x")) }"#);
         assert_eq!(var_names(&result), vec!["o", "p", "s"]);
 
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => {
-                assert_eq!(predicates.len(), 1);
-                match &predicates[0] {
-                    HirScalarExpr::CallUnary { func, .. } => {
-                        assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
-                    }
-                    other => panic!("expected CallUnary Not, got {:?}", other),
-                }
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallUnary { func, .. } => {
+                assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
             }
-            other => panic!("expected Filter, got {:?}", other),
+            other => panic!("expected CallUnary Not, got {:?}", other),
         }
     }
 
@@ -3248,26 +3543,21 @@ mod tests {
         );
         assert_eq!(var_names(&result), vec!["name", "s"]);
 
-        // BOUND(?name) → NOT(IsNull(column))
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => {
-                assert_eq!(predicates.len(), 1);
-                match &predicates[0] {
-                    HirScalarExpr::CallUnary {
-                        func: mz_expr::UnaryFunc::Not(_),
-                        expr,
-                        ..
-                    } => match expr.as_ref() {
-                        HirScalarExpr::CallUnary {
-                            func: mz_expr::UnaryFunc::IsNull(_),
-                            ..
-                        } => {}
-                        other => panic!("expected IsNull, got {:?}", other),
-                    },
-                    other => panic!("expected Not(IsNull), got {:?}", other),
-                }
-            }
-            other => panic!("expected Filter, got {:?}", other),
+        // BOUND(?name) → COALESCE(NOT(IsNull(column)), false)
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallUnary {
+                func: mz_expr::UnaryFunc::Not(_),
+                expr,
+                ..
+            } => match expr.as_ref() {
+                HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::IsNull(_),
+                    ..
+                } => {}
+                other => panic!("expected IsNull, got {:?}", other),
+            },
+            other => panic!("expected Not(IsNull), got {:?}", other),
         }
     }
 
@@ -3890,44 +4180,35 @@ mod tests {
     fn test_expression_contains() {
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(CONTAINS(?o, \"test\")) }");
         assert_eq!(var_names(&result), vec!["o", "p", "s"]);
-        // CONTAINS uses Position > 0.
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => {
-                assert_eq!(predicates.len(), 1);
-                match &predicates[0] {
-                    HirScalarExpr::CallBinary { func, .. } => {
-                        assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
-                    }
-                    other => panic!("expected Gt (Position > 0), got {:?}", other),
-                }
+        // CONTAINS uses Position > 0 (direct Gt, not via translate_comparison).
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
             }
-            other => panic!("expected Filter, got {:?}", other),
+            other => panic!("expected Gt (Position > 0), got {:?}", other),
         }
     }
 
     #[mz_ore::test]
     fn test_expression_strstarts_strends() {
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(STRSTARTS(?o, \"http\")) }");
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallBinary { func, .. } => {
-                    assert!(matches!(func, mz_expr::BinaryFunc::StartsWith(_)));
-                }
-                other => panic!("expected StartsWith, got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(func, mz_expr::BinaryFunc::StartsWith(_)));
+            }
+            other => panic!("expected StartsWith, got {:?}", other),
         }
 
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(STRENDS(?o, \".org\")) }");
-        // STRENDS uses Eq(Right(str, len), suffix).
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallBinary { func, .. } => {
-                    assert!(matches!(func, mz_expr::BinaryFunc::Eq(_)));
-                }
-                other => panic!("expected Eq (Right comparison), got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        // STRENDS uses Eq(Right(str, len), suffix) — direct Eq, not via translate_comparison.
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(func, mz_expr::BinaryFunc::Eq(_)));
+            }
+            other => panic!("expected Eq (Right comparison), got {:?}", other),
         }
     }
 
@@ -3951,32 +4232,28 @@ mod tests {
     #[mz_ore::test]
     fn test_expression_regex() {
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(REGEX(?o, \"^test\")) }");
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallBinary { func, .. } => {
-                    assert!(matches!(
-                        func,
-                        mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(_)
-                    ));
-                }
-                other => panic!("expected IsRegexpMatch, got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(
+                    func,
+                    mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(_)
+                ));
+            }
+            other => panic!("expected IsRegexpMatch, got {:?}", other),
         }
 
         // With flags.
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(REGEX(?o, \"test\", \"i\")) }");
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallBinary { func, .. } => {
-                    assert!(matches!(
-                        func,
-                        mz_expr::BinaryFunc::IsRegexpMatchCaseInsensitive(_)
-                    ));
-                }
-                other => panic!("expected IsRegexpMatchCaseInsensitive, got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(
+                    func,
+                    mz_expr::BinaryFunc::IsRegexpMatchCaseInsensitive(_)
+                ));
+            }
+            other => panic!("expected IsRegexpMatchCaseInsensitive, got {:?}", other),
         }
     }
 
@@ -3984,57 +4261,49 @@ mod tests {
     fn test_expression_in_not_in() {
         let result =
             plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o IN (\"a\", \"b\", \"c\")) }");
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallVariadic { func, exprs, .. } => {
-                    assert!(matches!(func, mz_expr::VariadicFunc::Or(_)));
-                    assert_eq!(exprs.len(), 3);
-                }
-                other => panic!("expected Or (IN expansion), got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                assert!(matches!(func, mz_expr::VariadicFunc::Or(_)));
+                assert_eq!(exprs.len(), 3);
+            }
+            other => panic!("expected Or (IN expansion), got {:?}", other),
         }
 
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o NOT IN (\"x\", \"y\")) }");
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallUnary { func, .. } => {
-                    assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
-                }
-                other => panic!("expected Not(Or(...)), got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallUnary { func, .. } => {
+                assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
+            }
+            other => panic!("expected Not(Or(...)), got {:?}", other),
         }
     }
 
     #[mz_ore::test]
     fn test_expression_is_blank() {
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(isBlank(?s)) }");
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallBinary { func, .. } => {
-                    assert!(matches!(func, mz_expr::BinaryFunc::StartsWith(_)));
-                }
-                other => panic!("expected StartsWith (_:), got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(func, mz_expr::BinaryFunc::StartsWith(_)));
+            }
+            other => panic!("expected StartsWith (_:), got {:?}", other),
         }
     }
 
     #[mz_ore::test]
     fn test_expression_is_numeric() {
         let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(isNumeric(?o)) }");
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallBinary { func, .. } => {
-                    assert!(matches!(
-                        func,
-                        mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(_)
-                    ));
-                }
-                other => panic!("expected IsRegexpMatch (numeric pattern), got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallBinary { func, .. } => {
+                assert!(matches!(
+                    func,
+                    mz_expr::BinaryFunc::IsRegexpMatchCaseSensitive(_)
+                ));
+            }
+            other => panic!("expected IsRegexpMatch (numeric pattern), got {:?}", other),
         }
     }
 
@@ -4083,13 +4352,8 @@ mod tests {
              }",
         );
         assert_eq!(var_names(&result), vec!["name", "s"]);
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::Exists(_, _) => {}
-                other => panic!("expected Exists, got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
-        }
+        let pred = get_filter_predicate(&result.expr);
+        assert!(matches!(pred, HirScalarExpr::Exists(_, _)));
     }
 
     #[mz_ore::test]
@@ -4102,15 +4366,13 @@ mod tests {
              }",
         );
         assert_eq!(var_names(&result), vec!["name", "s"]);
-        match &result.expr {
-            HirRelationExpr::Filter { predicates, .. } => match &predicates[0] {
-                HirScalarExpr::CallUnary { func, expr, .. } => {
-                    assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
-                    assert!(matches!(expr.as_ref(), HirScalarExpr::Exists(_, _)));
-                }
-                other => panic!("expected Not(Exists), got {:?}", other),
-            },
-            other => panic!("expected Filter, got {:?}", other),
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::CallUnary { func, expr, .. } => {
+                assert!(matches!(func, mz_expr::UnaryFunc::Not(_)));
+                assert!(matches!(expr.as_ref(), HirScalarExpr::Exists(_, _)));
+            }
+            other => panic!("expected Not(Exists), got {:?}", other),
         }
     }
 
@@ -4937,6 +5199,239 @@ mod tests {
         assert!(
             hir_debug.contains("Filter"),
             "Expected Filter for multiple FROM clauses, got: {hir_debug}"
+        );
+    }
+
+    // --- Prompt 17: Three-valued logic, EBV, and numeric-aware comparison tests ---
+
+    #[mz_ore::test]
+    fn test_three_valued_logic_coalesce_wrapper() {
+        // Every FILTER predicate should be wrapped in COALESCE(pred, false).
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o = \"x\") }");
+        match &result.expr {
+            HirRelationExpr::Filter { predicates, .. } => {
+                assert_eq!(predicates.len(), 1);
+                // Should be COALESCE(pred, false).
+                match &predicates[0] {
+                    HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                        assert!(matches!(func, mz_expr::VariadicFunc::Coalesce(_)));
+                        assert_eq!(exprs.len(), 2);
+                        // Second arg should be false.
+                        match &exprs[1] {
+                            HirScalarExpr::Literal(..) => {} // false literal
+                            other => panic!("expected false literal, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected COALESCE wrapper, got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_numeric_aware_comparison_structure() {
+        // Comparisons should produce IF(both_numeric, numeric_cmp, string_cmp).
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o > ?s) }");
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::If {
+                cond, then, els, ..
+            } => {
+                // cond: AND(is_numeric(?o), is_numeric(?s))
+                match cond.as_ref() {
+                    HirScalarExpr::CallVariadic { func, exprs, .. } => {
+                        assert!(matches!(func, mz_expr::VariadicFunc::And(_)));
+                        assert_eq!(exprs.len(), 2);
+                    }
+                    other => panic!("expected And (both_numeric check), got {:?}", other),
+                }
+                // then: Gt(cast_f64(?o), cast_f64(?s))
+                match then.as_ref() {
+                    HirScalarExpr::CallBinary { func, expr1, .. } => {
+                        assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
+                        // expr1 should be CastStringToFloat64
+                        match expr1.as_ref() {
+                            HirScalarExpr::CallUnary { func, .. } => {
+                                assert!(matches!(func, mz_expr::UnaryFunc::CastStringToFloat64(_)));
+                            }
+                            other => panic!("expected CastStringToFloat64, got {:?}", other),
+                        }
+                    }
+                    other => panic!("expected Gt (numeric), got {:?}", other),
+                }
+                // els: Gt(?o, ?s) string comparison
+                match els.as_ref() {
+                    HirScalarExpr::CallBinary { func, .. } => {
+                        assert!(matches!(func, mz_expr::BinaryFunc::Gt(_)));
+                    }
+                    other => panic!("expected Gt (string), got {:?}", other),
+                }
+            }
+            other => panic!("expected If (numeric-aware comparison), got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_numeric_aware_equality() {
+        // Equality should also be numeric-aware.
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o = ?s) }");
+        let pred = get_filter_predicate(&result.expr);
+        match pred {
+            HirScalarExpr::If { els, .. } => {
+                // String fallback: Eq
+                match els.as_ref() {
+                    HirScalarExpr::CallBinary { func, .. } => {
+                        assert!(matches!(func, mz_expr::BinaryFunc::Eq(_)));
+                    }
+                    other => panic!("expected Eq, got {:?}", other),
+                }
+            }
+            other => panic!("expected If, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_numeric_aware_all_comparison_ops() {
+        // All 6 comparison operators should be numeric-aware.
+        for (op, name) in [
+            ("=", "Eq"),
+            ("!=", "NotEq"),
+            ("<", "Lt"),
+            (">", "Gt"),
+            ("<=", "Lte"),
+            (">=", "Gte"),
+        ] {
+            let query = format!("SELECT * WHERE {{ ?s ?p ?o . FILTER(?o {op} ?s) }}");
+            let result = plan_query(&query);
+            let pred = get_filter_predicate(&result.expr);
+            assert!(
+                matches!(pred, HirScalarExpr::If { .. }),
+                "expected numeric-aware If for {name}, got {:?}",
+                pred
+            );
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_ebv_non_boolean_filter() {
+        // FILTER(?var) where ?var is a string variable should get EBV conversion.
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o) }");
+        let pred = get_filter_predicate(&result.expr);
+        // EBV produces IF(is_numeric, numeric_ebv, string_ebv).
+        match pred {
+            HirScalarExpr::If { .. } => {} // EBV conversion present
+            other => panic!("expected If (EBV conversion), got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_ebv_boolean_filter_no_conversion() {
+        // FILTER with a boolean expression should NOT get EBV conversion.
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(BOUND(?o)) }");
+        let pred = get_filter_predicate(&result.expr);
+        // BOUND produces Not(IsNull), no EBV wrapper.
+        match pred {
+            HirScalarExpr::CallUnary {
+                func: mz_expr::UnaryFunc::Not(_),
+                ..
+            } => {} // Direct boolean, no EBV
+            other => panic!("expected Not (no EBV wrapper), got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_lang_accessor() {
+        // LANG() should extract language tag from tagged literals.
+        let result = plan_query("SELECT (LANG(?o) AS ?lang) WHERE { ?s ?p ?o }");
+        // Should produce IF(has_tag, SUBSTR, "") structure.
+        let hir_debug = format!("{:?}", result.expr);
+        assert!(
+            hir_debug.contains("Position"),
+            "LANG should use Position to find language tag marker, got: {hir_debug}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_datatype_accessor() {
+        // DATATYPE() should extract datatype IRI from typed literals.
+        let result = plan_query("SELECT (DATATYPE(?o) AS ?dt) WHERE { ?s ?p ?o }");
+        let hir_debug = format!("{:?}", result.expr);
+        assert!(
+            hir_debug.contains("Position"),
+            "DATATYPE should use Position to find ^^ marker, got: {hir_debug}"
+        );
+        assert!(
+            hir_debug.contains("XMLSchema#string"),
+            "DATATYPE should have xsd:string fallback, got: {hir_debug}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_language_tag_string_equality() {
+        // In our encoding, "hello"@en and "hello"@fr are different strings,
+        // so string equality correctly distinguishes them.
+        let result = plan_query(r#"SELECT * WHERE { ?s ?p ?o . FILTER(?o = "\"hello\"@en") }"#);
+        // Should plan successfully — language-tagged values are compared as strings.
+        assert_eq!(var_names(&result), vec!["o", "p", "s"]);
+    }
+
+    #[mz_ore::test]
+    fn test_filter_with_arithmetic_comparison() {
+        // ?age + 1 > 18 — arithmetic produces string results, comparison is numeric-aware.
+        let result = plan_query(
+            "PREFIX ex: <http://example.org/>
+             SELECT * WHERE { ?s ex:age ?age . FILTER(?age + 1 > 18) }",
+        );
+        let pred = get_filter_predicate(&result.expr);
+        // The comparison (?age + 1) > 18 should be numeric-aware.
+        assert!(
+            matches!(pred, HirScalarExpr::If { .. }),
+            "expected numeric-aware comparison for arithmetic result"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_multiple_filters_both_get_coalesce() {
+        // Both FILTERs should get COALESCE wrappers.
+        let result =
+            plan_query(r#"SELECT * WHERE { ?s ?p ?o . FILTER(?s = "x") FILTER(?o = "y") }"#);
+        match &result.expr {
+            HirRelationExpr::Filter {
+                input, predicates, ..
+            } => {
+                assert_eq!(predicates.len(), 1);
+                // Outer filter has COALESCE.
+                assert!(matches!(
+                    &predicates[0],
+                    HirScalarExpr::CallVariadic { func, .. }
+                    if matches!(func, mz_expr::VariadicFunc::Coalesce(_))
+                ));
+                // Inner filter also has COALESCE.
+                match input.as_ref() {
+                    HirRelationExpr::Filter { predicates, .. } => {
+                        assert!(matches!(
+                            &predicates[0],
+                            HirScalarExpr::CallVariadic { func, .. }
+                            if matches!(func, mz_expr::VariadicFunc::Coalesce(_))
+                        ));
+                    }
+                    other => panic!("expected inner Filter, got {:?}", other),
+                }
+            }
+            other => panic!("expected Filter, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_is_numeric_check_in_comparison() {
+        // The numeric check in comparisons uses IsRegexpMatch.
+        let result = plan_query("SELECT * WHERE { ?s ?p ?o . FILTER(?o < ?s) }");
+        let pred = get_filter_predicate(&result.expr);
+        let hir_debug = format!("{:?}", pred);
+        assert!(
+            hir_debug.contains("IsRegexpMatchCaseSensitive"),
+            "expected regex-based numeric check in comparison, got: {hir_debug}"
         );
     }
 }

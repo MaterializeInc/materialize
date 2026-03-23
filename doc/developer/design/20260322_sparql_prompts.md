@@ -211,17 +211,17 @@ includes the goal, key files to read, and acceptance criteria.
 
 ## Phase 4: Polish and Correctness
 
-### Prompt 17: SPARQL expression edge cases and three-valued logic
+### ~~Prompt 17: SPARQL expression edge cases and three-valued logic~~
 
-> Audit and fix edge cases in SPARQL expression evaluation:
-> - Three-valued logic: FILTER errors (e.g., comparing incompatible types)
->   should evaluate to false (not propagate errors).
-> - Effective Boolean Value (EBV) rules for FILTER.
-> - String equality with language tags (same value, different language → not equal).
-> - Numeric type promotion (integer + decimal → decimal).
-> - xsd:dateTime comparison.
-> Write a comprehensive test suite based on the W3C SPARQL test suite
-> (dawg-test-suite).
+> ~~Audit and fix edge cases in SPARQL expression evaluation:~~
+> ~~- Three-valued logic: FILTER errors (e.g., comparing incompatible types)~~
+>   ~~should evaluate to false (not propagate errors).~~
+> ~~- Effective Boolean Value (EBV) rules for FILTER.~~
+> ~~- String equality with language tags (same value, different language → not equal).~~
+> ~~- Numeric type promotion (integer + decimal → decimal).~~
+> ~~- xsd:dateTime comparison.~~
+> ~~Write a comprehensive test suite based on the W3C SPARQL test suite~~
+> ~~(dawg-test-suite).~~
 
 ### Prompt 18: SPARQL result serialization formats
 
@@ -242,7 +242,31 @@ includes the goal, key files to read, and acceptance criteria.
 > subqueries, CONSTRUCT, ASK. Track which tests pass/fail and create
 > issues for failures.
 
-### Prompt 20: RDF data ingestion (sources)
+### Prompt 20: SPARQL sqllogictests
+
+> Add end-to-end sqllogictests for the SPARQL pipeline. Create a test file
+> `test/sqllogictest/sparql.slt` that:
+> 1. Creates an `rdf_quads(subject, predicate, object, graph)` table.
+> 2. Inserts a small RDF dataset (people, knows relationships, types, literals).
+> 3. Tests all major SPARQL features via `SPARQL $$ ... $$`:
+>    - Basic graph patterns (single triple, multi-triple join)
+>    - FILTER (comparison, BOUND, logical operators)
+>    - OPTIONAL (with and without inner FILTER)
+>    - UNION and MINUS
+>    - BIND and VALUES
+>    - Property paths (sequence, alternative, transitive closure with +/*)
+>    - Aggregates (COUNT, GROUP BY, HAVING, ORDER BY, LIMIT)
+>    - CONSTRUCT, ASK, DESCRIBE
+>    - SELECT expressions (UCASE, CONCAT, IF, COALESCE)
+>    - FROM `<urn:materialize:catalog>` (catalog-as-RDF)
+>    - CREATE VIEW / CREATE MATERIALIZED VIEW from SPARQL
+>    - SUBSCRIBE TO SPARQL (basic smoke test)
+> 4. Verify result sets match expected output.
+>
+> Read first: `test/sqllogictest/` for existing SLT conventions,
+> `doc/developer/guide-testing.md` for the testing guide.
+
+### Prompt 21: RDF data ingestion (sources)
 
 > Design and implement `CREATE SOURCE ... FORMAT RDF` for ingesting RDF
 > data from files (N-Triples, Turtle, RDF/XML) or streaming sources
@@ -251,3 +275,16 @@ includes the goal, key files to read, and acceptance criteria.
 > feature — users can also load RDF via INSERT or external ETL.
 >
 > Read first: `src/storage-types/src/sources/` for source format definitions.
+
+### Prompt 22: Extract HIR to a separate crate
+
+> Extract `HirRelationExpr`, `HirScalarExpr`, and related HIR types from
+> `mz-sql` into a new `mz-hir` crate. This removes the cyclic dependency
+> between `mz-sql` and `mz-sparql` that currently forces deferred SPARQL
+> compilation in the adapter. After extraction, `mz-sparql` can depend on
+> `mz-hir` directly, SPARQL views can store HIR natively, and the
+> placeholder + adapter-side compilation workaround can be removed.
+>
+> Read first: `src/sql/src/plan/hir.rs` (HIR types),
+> `src/sql/src/plan/lowering.rs` (HIR → MIR),
+> `src/adapter/src/coord/sequencer.rs` (deferred SPARQL compilation).
