@@ -921,7 +921,9 @@ impl<E: EventSource> PersistLearner<E> {
                         }
                         None => {
                             warn!(batch_number, "proposal with no op, skipping");
-                            self.state.pending_retractions.insert(key.clone(), proposal_data);
+                            self.state
+                                .pending_retractions
+                                .insert(key.clone(), proposal_data);
                             while batch_results.len() <= key.position as usize {
                                 batch_results.push(None);
                             }
@@ -933,7 +935,9 @@ impl<E: EventSource> PersistLearner<E> {
                     },
                     Err(e) => {
                         warn!(batch_number, "failed to decode proposal: {}, skipping", e);
-                        self.state.pending_retractions.insert(key.clone(), proposal_data);
+                        self.state
+                            .pending_retractions
+                            .insert(key.clone(), proposal_data);
                         while batch_results.len() <= key.position as usize {
                             batch_results.push(None);
                         }

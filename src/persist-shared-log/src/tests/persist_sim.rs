@@ -53,14 +53,16 @@ use mz_persist_types::ShardId;
 
 use mz_ore::metrics::MetricsRegistry;
 
+use crate::Acceptor as _;
+use crate::AcceptorConfig;
 use crate::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
 use crate::persist_log::{OrderedKey, OrderedKeySchema, Proposal, ProposalSchema};
-use crate::Acceptor as _;
-use crate::AcceptorConfig;
 
-use super::scenario::{SharedLogObservation, SharedLogOp, SharedLogOracle, SystemEvent, VersionedData};
+use super::scenario::{
+    SharedLogObservation, SharedLogOp, SharedLogOracle, SystemEvent, VersionedData,
+};
 use super::trace::{SimThread, SimTrace};
 
 // ---------------------------------------------------------------------------
@@ -294,9 +296,7 @@ async fn spawn_persist_pair(
     // Advance upper past T=0 if this is a fresh shard, so that
     // subscribe's snapshot doesn't block waiting for data.
     if write.upper().as_option() == Some(&0) {
-        write
-            .advance_upper(&Antichain::from_elem(1))
-            .await;
+        write.advance_upper(&Antichain::from_elem(1)).await;
     }
 
     let since = read.since().clone();
@@ -493,9 +493,7 @@ impl PersistSimulator {
                     Ok(resp) => SharedLogObservation::Truncate(Ok(resp
                         .deleted
                         .expect("successful truncate has deleted count"))),
-                    Err(crate::LearnerError::Command(e)) => {
-                        SharedLogObservation::Truncate(Err(e))
-                    }
+                    Err(crate::LearnerError::Command(e)) => SharedLogObservation::Truncate(Err(e)),
                     Err(e) => panic!("unexpected learner error: {:?}", e),
                 }
             }
@@ -590,11 +588,7 @@ impl PersistSimulator {
         self.trace
             .record_system(step, &SystemEvent::RetractionSweep);
 
-        let count = self
-            .learner_handle
-            .force_retraction_sweep()
-            .await
-            .unwrap();
+        let count = self.learner_handle.force_retraction_sweep().await.unwrap();
 
         self.trace.record_note(
             step,
@@ -689,9 +683,7 @@ async fn persist_sim_multi_writer() {
             .expect("open learner handles");
 
         if upper_handle.upper().as_option() == Some(&0) {
-            upper_handle
-                .advance_upper(&Antichain::from_elem(1))
-                .await;
+            upper_handle.advance_upper(&Antichain::from_elem(1)).await;
         }
 
         let since = read.since().clone();
@@ -712,15 +704,13 @@ async fn persist_sim_multi_writer() {
 
         let (acceptor_a, write_a, handle_a) =
             PersistAcceptor::new(test_acceptor_config(), write_a, acceptor_metrics_a);
-        let _task_a =
-            mz_ore::task::spawn(|| "persist-sim-acceptor-a", acceptor_a.run(write_a))
-                .abort_on_drop();
+        let _task_a = mz_ore::task::spawn(|| "persist-sim-acceptor-a", acceptor_a.run(write_a))
+            .abort_on_drop();
 
         let (acceptor_b, write_b, handle_b) =
             PersistAcceptor::new(test_acceptor_config(), write_b, acceptor_metrics_b);
-        let _task_b =
-            mz_ore::task::spawn(|| "persist-sim-acceptor-b", acceptor_b.run(write_b))
-                .abort_on_drop();
+        let _task_b = mz_ore::task::spawn(|| "persist-sim-acceptor-b", acceptor_b.run(write_b))
+            .abort_on_drop();
 
         let learner_config = PersistLearnerConfig {
             retraction_interval: Duration::from_millis(100),
@@ -729,7 +719,8 @@ async fn persist_sim_multi_writer() {
         let (learner, learner_handle) =
             PersistLearner::new(learner_config, subscribe, retraction_write, learner_metrics);
         let _learner_task =
-            mz_ore::task::spawn(|| "persist-sim-learner", learner.run(upper_handle)).abort_on_drop();
+            mz_ore::task::spawn(|| "persist-sim-learner", learner.run(upper_handle))
+                .abort_on_drop();
 
         let mut oracle = SharedLogOracle::new();
         let mut trace = SimTrace::new(seed);
@@ -814,10 +805,7 @@ async fn persist_sim_multi_writer() {
                 from: 0,
                 limit: 10000,
             };
-            let resp = learner_handle
-                .scan(shard.clone(), 0, 10000)
-                .await
-                .unwrap();
+            let resp = learner_handle.scan(shard.clone(), 0, 10000).await.unwrap();
             let actual = scan_observation(&resp);
             let expected = oracle.apply(&scan_op);
             assert_eq!(

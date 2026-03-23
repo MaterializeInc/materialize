@@ -21,16 +21,16 @@
 
 use std::sync::Arc;
 
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::location::Blob;
 use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
-use mz_dyncfg::ConfigUpdates;
+use mz_persist_client::PersistClient;
 use mz_persist_client::cache::StateCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::Metrics;
 use mz_persist_client::rpc::PersistGrpcPubSubServer;
 use mz_persist_client::stats::STATS_COLLECTION_ENABLED;
-use mz_persist_client::PersistClient;
 
 use super::latency_blob::{LatencyBlob, LatencyProfile};
 
@@ -85,11 +85,10 @@ pub fn new_persist_client(config: PersistClientConfig) -> PersistClient {
     ));
 
     // Subscribe the state cache to pubsub diffs.
-    let _pubsub_receiver_task =
-        mz_persist_client::rpc::subscribe_state_cache_to_pubsub(
-            Arc::clone(&state_cache),
-            pubsub_conn.receiver,
-        );
+    let _pubsub_receiver_task = mz_persist_client::rpc::subscribe_state_cache_to_pubsub(
+        Arc::clone(&state_cache),
+        pubsub_conn.receiver,
+    );
     // Leak the task handle so it runs for the lifetime of the process.
     // In a real deployment this would be managed by the runtime.
     std::mem::forget(_pubsub_receiver_task);
@@ -106,12 +105,10 @@ pub fn new_persist_client(config: PersistClientConfig) -> PersistClient {
     // In-memory consensus.
     let consensus = Arc::new(MemConsensus::default());
 
-    let isolated_runtime = Arc::new(
-        mz_persist_client::async_runtime::IsolatedRuntime::new(
-            &MetricsRegistry::new(),
-            Some(persist_cfg.isolated_runtime_worker_threads),
-        ),
-    );
+    let isolated_runtime = Arc::new(mz_persist_client::async_runtime::IsolatedRuntime::new(
+        &MetricsRegistry::new(),
+        Some(persist_cfg.isolated_runtime_worker_threads),
+    ));
 
     PersistClient::new(
         persist_cfg,

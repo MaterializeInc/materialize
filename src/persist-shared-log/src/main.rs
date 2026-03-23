@@ -68,11 +68,7 @@ fn main() {
 }
 
 /// Start the gRPC server with the given acceptor and learner handles.
-async fn serve_grpc<A: Acceptor, L: Learner>(
-    acceptor: A,
-    learner: L,
-    listen_addr: SocketAddr,
-) {
+async fn serve_grpc<A: Acceptor, L: Learner>(acceptor: A, learner: L, listen_addr: SocketAddr) {
     let service = PersistSharedLogGrpcService { acceptor, learner };
 
     info!(addr = %listen_addr, "starting gRPC server");

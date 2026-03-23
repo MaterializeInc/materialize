@@ -386,8 +386,8 @@ pub fn extract_shard_name(encoded: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_persist_types::columnar::{ColumnEncoder, Schema};
     use mz_persist_types::Codec;
+    use mz_persist_types::columnar::{ColumnEncoder, Schema};
 
     #[test]
     fn ordered_key_codec_roundtrip() {
@@ -412,11 +412,31 @@ mod tests {
 
         // Keys deliberately inserted out of order.
         let keys = vec![
-            OrderedKey { batch_id: 3, position: 0, shard: "s0".into() },
-            OrderedKey { batch_id: 1, position: 1, shard: "s1".into() },
-            OrderedKey { batch_id: 1, position: 0, shard: "s0".into() },
-            OrderedKey { batch_id: 2, position: 0, shard: "s1".into() },
-            OrderedKey { batch_id: 1, position: 0, shard: "s1".into() },
+            OrderedKey {
+                batch_id: 3,
+                position: 0,
+                shard: "s0".into(),
+            },
+            OrderedKey {
+                batch_id: 1,
+                position: 1,
+                shard: "s1".into(),
+            },
+            OrderedKey {
+                batch_id: 1,
+                position: 0,
+                shard: "s0".into(),
+            },
+            OrderedKey {
+                batch_id: 2,
+                position: 0,
+                shard: "s1".into(),
+            },
+            OrderedKey {
+                batch_id: 1,
+                position: 0,
+                shard: "s1".into(),
+            },
         ];
 
         let mut encoder = OrderedKeySchema.encoder().unwrap();
@@ -446,11 +466,31 @@ mod tests {
         assert_eq!(
             sorted,
             vec![
-                OrderedKey { batch_id: 1, position: 0, shard: "s0".into() },
-                OrderedKey { batch_id: 1, position: 0, shard: "s1".into() },
-                OrderedKey { batch_id: 1, position: 1, shard: "s1".into() },
-                OrderedKey { batch_id: 2, position: 0, shard: "s1".into() },
-                OrderedKey { batch_id: 3, position: 0, shard: "s0".into() },
+                OrderedKey {
+                    batch_id: 1,
+                    position: 0,
+                    shard: "s0".into()
+                },
+                OrderedKey {
+                    batch_id: 1,
+                    position: 0,
+                    shard: "s1".into()
+                },
+                OrderedKey {
+                    batch_id: 1,
+                    position: 1,
+                    shard: "s1".into()
+                },
+                OrderedKey {
+                    batch_id: 2,
+                    position: 0,
+                    shard: "s1".into()
+                },
+                OrderedKey {
+                    batch_id: 3,
+                    position: 0,
+                    shard: "s0".into()
+                },
             ],
             "ArrayOrd must sort by (batch_id, position, shard)"
         );

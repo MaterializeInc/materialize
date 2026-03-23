@@ -30,6 +30,7 @@ from materialize.mzcompose.services.metadata_store import metadata_store_service
 from materialize.mzcompose.services.minio import Minio
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.persist_consensus import persist_consensus_services
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
@@ -53,6 +54,7 @@ SERVICES = [
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
     *metadata_store_services(),
+    *persist_consensus_services(),
 ]
 
 

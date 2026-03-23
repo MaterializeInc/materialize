@@ -318,9 +318,7 @@ mod tests {
         let mut oracle = SharedLogOracle::new();
 
         // Head on empty shard.
-        let obs = oracle.apply(&SharedLogOp::Head {
-            shard: "s0".into(),
-        });
+        let obs = oracle.apply(&SharedLogOp::Head { shard: "s0".into() });
         assert_eq!(obs, SharedLogObservation::Head { data: None });
 
         // Commit something.
@@ -332,9 +330,7 @@ mod tests {
         });
 
         // Head should return it.
-        let obs = oracle.apply(&SharedLogOp::Head {
-            shard: "s0".into(),
-        });
+        let obs = oracle.apply(&SharedLogOp::Head { shard: "s0".into() });
         assert_eq!(
             obs,
             SharedLogObservation::Head {
@@ -460,12 +456,8 @@ mod tests {
         });
 
         // Heads are independent.
-        let h0 = oracle.apply(&SharedLogOp::Head {
-            shard: "s0".into(),
-        });
-        let h1 = oracle.apply(&SharedLogOp::Head {
-            shard: "s1".into(),
-        });
+        let h0 = oracle.apply(&SharedLogOp::Head { shard: "s0".into() });
+        let h1 = oracle.apply(&SharedLogOp::Head { shard: "s1".into() });
         assert_ne!(h0, h1);
     }
 }

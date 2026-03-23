@@ -60,9 +60,7 @@ pub struct PersistSharedLogGrpcService<A: crate::Acceptor, L: crate::Learner> {
 }
 
 #[tonic::async_trait]
-impl<A: crate::Acceptor, L: crate::Learner> PersistSharedLog
-    for PersistSharedLogGrpcService<A, L>
-{
+impl<A: crate::Acceptor, L: crate::Learner> PersistSharedLog for PersistSharedLogGrpcService<A, L> {
     async fn head(
         &self,
         request: tonic::Request<ProtoHeadRequest>,

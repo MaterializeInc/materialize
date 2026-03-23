@@ -24,6 +24,7 @@ from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.services.persist_consensus import PERSIST_CONSENSUS_URL
 
 
 class Testdrive(Service):
@@ -194,7 +195,9 @@ class Testdrive(Service):
             else:
                 entrypoint.append("--persist-blob-url=file:///mzdata/persist/blob")
 
-            if external_metadata_store:
+            if PERSIST_CONSENSUS_URL:
+                entrypoint.append(f"--persist-consensus-url={PERSIST_CONSENSUS_URL}")
+            elif external_metadata_store:
                 if metadata_store == "foundationdb":
                     entrypoint.append(
                         "--persist-consensus-url=foundationdb:?prefix=consensus"

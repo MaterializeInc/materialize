@@ -20,12 +20,12 @@ use mz_persist_types::ShardId;
 
 use mz_ore::metrics::MetricsRegistry;
 
+use crate::Acceptor as _;
+use crate::AcceptorConfig;
 use crate::metrics::{AcceptorMetrics, LearnerMetrics};
 use crate::persist_log::acceptor::{PersistAcceptor, PersistAcceptorHandle};
 use crate::persist_log::learner::{PersistLearner, PersistLearnerConfig, PersistLearnerHandle};
 use crate::persist_log::{OrderedKey, OrderedKeySchema, Proposal, ProposalSchema};
-use crate::Acceptor as _;
-use crate::AcceptorConfig;
 
 // ---------------------------------------------------------------------------
 // Persist client helper
@@ -116,14 +116,17 @@ impl PersistTestHarness {
         let acceptor_metrics = AcceptorMetrics::register(&registry);
         let learner_metrics = LearnerMetrics::register(&registry);
 
-        let (acceptor, write, acceptor_handle) = PersistAcceptor::new(acceptor_config, write, acceptor_metrics);
+        let (acceptor, write, acceptor_handle) =
+            PersistAcceptor::new(acceptor_config, write, acceptor_metrics);
         let acceptor_task =
             mz_ore::task::spawn(|| "test-persist-acceptor", acceptor.run(write)).abort_on_drop();
 
         let learner_config = PersistLearnerConfig::default();
-        let (learner, learner_handle) = PersistLearner::new(learner_config, subscribe, retraction_write, learner_metrics);
+        let (learner, learner_handle) =
+            PersistLearner::new(learner_config, subscribe, retraction_write, learner_metrics);
         let learner_task =
-            mz_ore::task::spawn(|| "test-persist-learner", learner.run(upper_handle)).abort_on_drop();
+            mz_ore::task::spawn(|| "test-persist-learner", learner.run(upper_handle))
+                .abort_on_drop();
 
         PersistTestHarness {
             acceptor_handle,
@@ -523,15 +526,27 @@ async fn test_persist_ordering_through_compaction() {
 
         // Verify the learner recovered the correct state.
         let h0 = h.learner_handle.head("s0".into()).await.unwrap();
-        assert_eq!(h0.data.as_ref().unwrap().seqno, 2, "s0 head should be seqno 2");
+        assert_eq!(
+            h0.data.as_ref().unwrap().seqno,
+            2,
+            "s0 head should be seqno 2"
+        );
         assert_eq!(h0.data.as_ref().unwrap().data, b"c");
 
         let h1 = h.learner_handle.head("s1".into()).await.unwrap();
-        assert_eq!(h1.data.as_ref().unwrap().seqno, 1, "s1 head should be seqno 1");
+        assert_eq!(
+            h1.data.as_ref().unwrap().seqno,
+            1,
+            "s1 head should be seqno 1"
+        );
         assert_eq!(h1.data.as_ref().unwrap().data, b"b");
 
         let h2 = h.learner_handle.head("s2".into()).await.unwrap();
-        assert_eq!(h2.data.as_ref().unwrap().seqno, 1, "s2 head should be seqno 1");
+        assert_eq!(
+            h2.data.as_ref().unwrap().seqno,
+            1,
+            "s2 head should be seqno 1"
+        );
         assert_eq!(h2.data.as_ref().unwrap().data, b"d");
 
         // Also verify scan returns entries in the correct seqno order.
@@ -636,7 +651,10 @@ async fn test_persist_retraction_truncate() {
         // - 1 truncate proposal itself
         // = 3 total retractions
         let count = h.learner_handle.force_retraction_sweep().await.unwrap();
-        assert_eq!(count, 3, "expected 3 retractions (2 truncated entries + truncate op)");
+        assert_eq!(
+            count, 3,
+            "expected 3 retractions (2 truncated entries + truncate op)"
+        );
 
         // Verify scan still works.
         let scan = h.learner_handle.scan("s0".into(), 0, 100).await.unwrap();
@@ -654,7 +672,11 @@ async fn test_persist_retraction_truncate() {
         // Scan should return 3 entries (3, 4, 5) — the truncated entries
         // were retracted and should not appear.
         let scan = h.learner_handle.scan("s0".into(), 0, 100).await.unwrap();
-        assert_eq!(scan.data.len(), 3, "scan should return 3 entries post-retraction replay");
+        assert_eq!(
+            scan.data.len(),
+            3,
+            "scan should return 3 entries post-retraction replay"
+        );
         assert_eq!(scan.data[0].seqno, 3);
         assert_eq!(scan.data[1].seqno, 4);
         assert_eq!(scan.data[2].seqno, 5);

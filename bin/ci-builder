@@ -314,6 +314,8 @@ case "$cmd" in
                 --env DOCKERHUB_ACCESS_TOKEN
                 # For configuring the metadata store
                 --env EXTERNAL_METADATA_STORE
+                # For configuring the persist consensus backend
+                --env PERSIST_CONSENSUS_BACKEND
                 # For console
                 --env CONSOLE_E2E_TEST_STAGING_PASSWORD
                 --env CONSOLE_E2E_TEST_PRODUCTION_PASSWORD

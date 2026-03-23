@@ -55,10 +55,7 @@ pub struct TraceEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TraceEventKind {
     /// An operation was invoked against the real system.
-    Invoke {
-        thread: SimThread,
-        op: SharedLogOp,
-    },
+    Invoke { thread: SimThread, op: SharedLogOp },
     /// An operation returned from the real system.
     Return {
         thread: SimThread,
@@ -67,13 +64,9 @@ pub enum TraceEventKind {
         expected: SharedLogObservation,
     },
     /// A system event (not linearized).
-    System {
-        event: SystemEvent,
-    },
+    System { event: SystemEvent },
     /// A free-form annotation.
-    Note {
-        message: String,
-    },
+    Note { message: String },
 }
 
 // ---------------------------------------------------------------------------

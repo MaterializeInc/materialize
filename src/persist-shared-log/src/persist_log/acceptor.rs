@@ -161,7 +161,11 @@ impl PersistAcceptor {
         config: AcceptorConfig,
         write: WriteHandle<OrderedKey, Proposal, u64, i64>,
         metrics: AcceptorMetrics,
-    ) -> (Self, WriteHandle<OrderedKey, Proposal, u64, i64>, PersistAcceptorHandle) {
+    ) -> (
+        Self,
+        WriteHandle<OrderedKey, Proposal, u64, i64>,
+        PersistAcceptorHandle,
+    ) {
         let (tx, rx) = mpsc::channel(config.queue_depth);
 
         let acceptor = PersistAcceptor {
@@ -412,9 +416,8 @@ async fn flush_inner(
         }
     }
 
-    let msg =
-        "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
-            .to_string();
+    let msg = "persist acceptor flush failed: retries exhausted after repeated upper mismatch"
+        .to_string();
     error!("{}", msg);
     for reply in replies {
         let _ = reply.send(Err(msg.clone()));

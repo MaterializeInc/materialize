@@ -37,6 +37,7 @@ from materialize.mzcompose.services.metadata_store import (
     METADATA_STORE,
 )
 from materialize.mzcompose.services.minio import minio_blob_uri
+from materialize.mzcompose.services.persist_consensus import PERSIST_CONSENSUS_URL
 
 
 class MaterializeEmulator(Service):
@@ -74,6 +75,7 @@ class Materialized(Service):
         cpu: str | None = None,
         options: list[str] = [],
         persist_blob_url: str | None = None,
+        persist_consensus_url: str | None = PERSIST_CONSENSUS_URL,
         default_size: int | str = Size.DEFAULT_SIZE,
         environment_id: str | None = None,
         propagate_crashes: bool = True,
@@ -256,9 +258,10 @@ class Materialized(Service):
                 else external_metadata_store
             )
             if metadata_store in ("postgres-metadata", "cockroach", "alloydb"):
-                command += [
-                    f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
-                ]
+                if not persist_consensus_url:
+                    command += [
+                        f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
+                    ]
                 environment += [
                     f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
                     "MZ_NO_BUILTIN_POSTGRES=1",
@@ -278,6 +281,12 @@ class Materialized(Service):
                 min_version = MzVersion.parse_mz("v26.9.0")
                 if image_version is None or image_version >= min_version:
                     volumes += foundationdb.fdb_cluster_file(external_metadata_store)
+
+        if persist_consensus_url:
+            command += [f"--persist-consensus-url={persist_consensus_url}"]
+            # If the URL points at the persist-shared-log service, depend on it.
+            if "persist-shared-log" in persist_consensus_url:
+                depends_graph["persist-shared-log"] = {"condition": "service_healthy"}
 
         command += [
             "--orchestrator-process-tcp-proxy-listen-addr=0.0.0.0",

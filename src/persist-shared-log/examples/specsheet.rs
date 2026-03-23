@@ -28,20 +28,20 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use mz_ore::cast::{CastFrom, CastLossy};
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-use serde::Deserialize;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist::generated::consensus_service::{
     ProtoCasProposal, ProtoLogProposal, ProtoTruncateProposal, proto_log_proposal,
 };
 use mz_persist_client::ShardId;
-use mz_persist_shared_log::persist_log::latency_blob::LatencyProfile;
-use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
-use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
-use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
 use mz_persist_shared_log::Acceptor as _;
 use mz_persist_shared_log::AcceptorConfig;
+use mz_persist_shared_log::metrics::{AcceptorMetrics, LearnerMetrics};
+use mz_persist_shared_log::persist_log::acceptor::PersistAcceptor;
+use mz_persist_shared_log::persist_log::latency_blob::LatencyProfile;
+use mz_persist_shared_log::persist_log::learner::{PersistLearner, PersistLearnerConfig};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -718,10 +718,7 @@ fn print_report(
         format_count(u64::cast_lossy(target_writes_per_sec)),
     );
     println!("Blob latency: {}", cfg.blob_latency);
-    println!(
-        "Duration: {}s ({}s warmup)",
-        cfg.duration, cfg.warmup,
-    );
+    println!("Duration: {}s ({}s warmup)", cfg.duration, cfg.warmup,);
     println!(
         "Op mix: {}% CAS / {}% scan / {}% head / {}% truncate",
         cfg.cas_pct, cfg.scan_pct, cfg.head_pct, cfg.truncate_pct,
@@ -1180,15 +1177,25 @@ async fn main() {
     let shard_id = ShardId::new();
 
     let acceptor_config = AcceptorConfig { queue_depth };
-    let (acceptor_handle, _acceptor_task) =
-        PersistAcceptor::spawn(acceptor_config, &persist_client, shard_id, acceptor_metrics.clone()).await;
+    let (acceptor_handle, _acceptor_task) = PersistAcceptor::spawn(
+        acceptor_config,
+        &persist_client,
+        shard_id,
+        acceptor_metrics.clone(),
+    )
+    .await;
 
     let learner_config = PersistLearnerConfig {
         queue_depth,
         ..Default::default()
     };
-    let (learner_handle, _learner_task) =
-        PersistLearner::spawn(learner_config, &persist_client, shard_id, learner_metrics.clone()).await;
+    let (learner_handle, _learner_task) = PersistLearner::spawn(
+        learner_config,
+        &persist_client,
+        shard_id,
+        learner_metrics.clone(),
+    )
+    .await;
 
     let transports = vec![Transport::Direct {
         acceptor: acceptor_handle.clone(),
