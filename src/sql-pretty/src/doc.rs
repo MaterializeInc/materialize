@@ -629,6 +629,9 @@ impl Pretty {
         let doc = match &v.relation {
             SubscribeRelation::Name(name) => nest_title("SUBSCRIBE", self.doc_display_pass(name)),
             SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", self.doc_query(query), ")"),
+            SubscribeRelation::Sparql(stmt) => {
+                nest_title("SUBSCRIBE SPARQL", self.doc_display_pass(stmt))
+            }
         };
         let mut docs = vec![doc];
         if !v.options.is_empty() {

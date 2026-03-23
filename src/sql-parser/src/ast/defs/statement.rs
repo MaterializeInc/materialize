@@ -3951,6 +3951,7 @@ impl_display_t!(SubscribeStatement);
 pub enum SubscribeRelation<T: AstInfo> {
     Name(T::ItemName),
     Query(Query<T>),
+    Sparql(SparqlStatement),
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeRelation<T> {
@@ -3962,6 +3963,7 @@ impl<T: AstInfo> AstDisplay for SubscribeRelation<T> {
                 f.write_node(query);
                 f.write_str(")");
             }
+            SubscribeRelation::Sparql(stmt) => f.write_node(stmt),
         }
     }
 }

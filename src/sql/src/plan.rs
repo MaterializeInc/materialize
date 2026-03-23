@@ -948,6 +948,14 @@ pub enum SubscribeFrom {
         expr: MirRelationExpr,
         desc: RelationDesc,
     },
+    /// SPARQL query to subscribe to. The adapter compiles this to HIR/MIR
+    /// at sequencing time (to avoid a cyclic dependency between mz-sql and
+    /// mz-sparql).
+    Sparql {
+        query: mz_sparql_parser::ast::SparqlQuery,
+        quad_table_id: GlobalId,
+        desc: RelationDesc,
+    },
 }
 
 impl SubscribeFrom {
@@ -955,6 +963,7 @@ impl SubscribeFrom {
         match self {
             SubscribeFrom::Id(id) => BTreeSet::from([*id]),
             SubscribeFrom::Query { expr, .. } => expr.depends_on(),
+            SubscribeFrom::Sparql { quad_table_id, .. } => BTreeSet::from([*quad_table_id]),
         }
     }
 
@@ -962,6 +971,7 @@ impl SubscribeFrom {
         match self {
             SubscribeFrom::Id(_) => false,
             SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
+            SubscribeFrom::Sparql { .. } => false,
         }
     }
 }

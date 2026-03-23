@@ -8864,7 +8864,19 @@ impl<'a> Parser<'a> {
 
     fn parse_subscribe(&mut self) -> Result<Statement<Raw>, ParserError> {
         let _ = self.parse_keyword(TO);
-        let relation = if self.consume_token(&Token::LParen) {
+        let relation = if self.parse_keyword(SPARQL) {
+            let body = match self.next_token() {
+                Some(Token::String(s)) => s,
+                other => {
+                    return self.expected(
+                        self.peek_prev_pos(),
+                        "a dollar-quoted string containing a SPARQL query",
+                        other,
+                    );
+                }
+            };
+            SubscribeRelation::Sparql(SparqlStatement { body })
+        } else if self.consume_token(&Token::LParen) {
             let query = self.parse_query()?;
             self.expect_token(&Token::RParen)?;
             SubscribeRelation::Query(query)

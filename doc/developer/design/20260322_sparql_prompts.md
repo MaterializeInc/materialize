@@ -158,30 +158,30 @@ includes the goal, key files to read, and acceptance criteria.
 
 ## Phase 3: Integration
 
-### Prompt 13: Wire up `SPARQL $$ ... $$` syntax in the SQL parser
+### ~~Prompt 13: Wire up `SPARQL $$ ... $$` syntax in the SQL parser~~
 
-> Extend the SQL parser to recognize `SPARQL $body$` as a statement. Add
-> `Statement::Sparql(String)` to the SQL AST. In the SQL planner's
-> `plan()` dispatch, delegate to the SPARQL parser + planner. Return an
-> appropriate `Plan` variant. Test end-to-end: `SPARQL $$ SELECT ?s ?p ?o
-> WHERE { ?s ?p ?o } LIMIT 10 $$` should parse, plan, and produce a valid
-> `HirRelationExpr`.
+> ~~Extend the SQL parser to recognize `SPARQL $body$` as a statement. Add~~
+> ~~`Statement::Sparql(String)` to the SQL AST. In the SQL planner's~~
+> ~~`plan()` dispatch, delegate to the SPARQL parser + planner. Return an~~
+> ~~appropriate `Plan` variant. Test end-to-end: `SPARQL $$ SELECT ?s ?p ?o~~
+> ~~WHERE { ?s ?p ?o } LIMIT 10 $$` should parse, plan, and produce a valid~~
+> ~~`HirRelationExpr`.~~
 >
-> Read first: `src/sql-parser/src/parser.rs` (statement parsing),
-> `src/sql/src/plan/statement.rs` (plan dispatch),
-> `src/adapter/src/coord/sequencer/` (execution).
+> ~~Read first: `src/sql-parser/src/parser.rs` (statement parsing),~~
+> ~~`src/sql/src/plan/statement.rs` (plan dispatch),~~
+> ~~`src/adapter/src/coord/sequencer/` (execution).~~
 
-### Prompt 14: SUBSCRIBE integration for SPARQL queries
+### ~~Prompt 14: SUBSCRIBE integration for SPARQL queries~~
 
-> Make `SUBSCRIBE TO SPARQL $$ ... $$` work. Extend the SQL parser to
-> accept SPARQL in SUBSCRIBE context. The SPARQL plan (HirRelationExpr) is
-> wrapped in a `SubscribePlan` and routed through the existing subscribe
-> machinery. Test CONSTRUCT + SUBSCRIBE: verify that triple diffs
-> (mz_timestamp, mz_diff, subject, predicate, object) are emitted correctly
-> when the underlying triple table changes.
+> ~~Make `SUBSCRIBE TO SPARQL $$ ... $$` work. Extend the SQL parser to~~
+> ~~accept SPARQL in SUBSCRIBE context. The SPARQL plan (HirRelationExpr) is~~
+> ~~wrapped in a `SubscribePlan` and routed through the existing subscribe~~
+> ~~machinery. Test CONSTRUCT + SUBSCRIBE: verify that triple diffs~~
+> ~~(mz_timestamp, mz_diff, subject, predicate, object) are emitted correctly~~
+> ~~when the underlying triple table changes.~~
 >
-> Read first: `src/adapter/src/coord/sequencer/inner/subscribe.rs`,
-> `src/sql/src/plan/statement/dml.rs` (plan_subscribe).
+> ~~Read first: `src/adapter/src/coord/sequencer/inner/subscribe.rs`,~~
+> ~~`src/sql/src/plan/statement/dml.rs` (plan_subscribe).~~
 
 ### Prompt 15: CREATE [MATERIALIZED] VIEW from SPARQL
 

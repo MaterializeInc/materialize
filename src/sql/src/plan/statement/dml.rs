@@ -28,7 +28,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlRelationType, SqlScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainAnalyzeClusterStatement, ExplainAnalyzeComputationProperties,
     ExplainAnalyzeComputationProperty, ExplainAnalyzeObjectStatement, ExplainAnalyzeProperty,
@@ -46,8 +46,8 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
-    SelectStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement,
-    UpdateStatement,
+    SelectStatement, SparqlStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation,
+    SubscribeStatement, UpdateStatement,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
@@ -70,7 +70,6 @@ use crate::plan::{CopyFromSource, with_options};
 use crate::session::vars::{
     self, DISALLOW_UNMATERIALIZABLE_FUNCTIONS_AS_OF, ENABLE_COPY_FROM_REMOTE,
 };
-use mz_sql_parser::ast::SparqlStatement;
 
 // TODO(benesch): currently, describing a `SELECT` or `INSERT` query
 // plans the whole query to determine its shape and parameter types,
@@ -309,36 +308,17 @@ pub fn describe_sparql(
     _scx: &StatementContext,
     stmt: SparqlStatement,
 ) -> Result<StatementDesc, PlanError> {
-    // Parse the SPARQL query to determine the output schema.
-    let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
-        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
-
-    let desc = sparql_desc(&sparql_query);
+    let desc = sparql_desc(&stmt)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
 pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan, PlanError> {
-    use crate::names::PartialItemName;
-
     // Step 1: Parse SPARQL.
     let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
         .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
 
-    // Step 2: Resolve the quad table from the catalog.
-    let quad_table_name = PartialItemName {
-        database: None,
-        schema: None,
-        item: "rdf_quads".into(),
-    };
-    let quad_table_item = scx
-        .catalog
-        .resolve_item(&quad_table_name)
-        .map_err(|e| PlanError::Unstructured(format!("failed to resolve rdf_quads: {e}")))?;
-    let quad_table = quad_table_item.at_version(mz_repr::RelationVersionSelector::Latest);
-    let quad_table_id = quad_table.global_id();
-
-    // Step 3: Build the output relation description.
-    let desc = sparql_desc(&sparql_query);
+    let quad_table_id = resolve_quad_table(scx)?;
+    let desc = sparql_query_desc(&sparql_query);
 
     // Return a Plan::Sparql with the parsed query and quad table ID.
     // The adapter will call the SPARQL planner to produce HIR and sequence
@@ -351,7 +331,15 @@ pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan
 }
 
 /// Build a [`RelationDesc`] for the output of a SPARQL query.
-fn sparql_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc {
+/// Parse a SPARQL statement and return its output [`RelationDesc`].
+fn sparql_desc(stmt: &SparqlStatement) -> Result<RelationDesc, PlanError> {
+    let query = mz_sparql_parser::parser::parse(&stmt.body)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+    Ok(sparql_query_desc(&query))
+}
+
+/// Build a [`RelationDesc`] for the output of a parsed SPARQL query.
+fn sparql_query_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc {
     use mz_sparql_parser::ast::{QueryForm, SelectClause};
 
     let mut desc = RelationDesc::builder();
@@ -385,6 +373,48 @@ fn sparql_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc {
         }
     }
     desc.finish()
+}
+
+/// Resolve the `rdf_quads` table from the catalog and return its [`GlobalId`].
+fn resolve_quad_table(scx: &StatementContext) -> Result<GlobalId, PlanError> {
+    use crate::names::PartialItemName;
+    let quad_table_name = PartialItemName {
+        database: None,
+        schema: None,
+        item: "rdf_quads".into(),
+    };
+    let quad_table_item = scx
+        .catalog
+        .resolve_item(&quad_table_name)
+        .map_err(|e| PlanError::Unstructured(format!("failed to resolve rdf_quads: {e}")))?;
+    let quad_table = quad_table_item.at_version(mz_repr::RelationVersionSelector::Latest);
+    Ok(quad_table.global_id())
+}
+
+/// Plan a SPARQL subscribe. Returns a [`SubscribeFrom::Sparql`] that the
+/// adapter will compile to HIR/MIR at sequencing time.
+fn plan_sparql_subscribe(
+    scx: &StatementContext,
+    stmt: &SparqlStatement,
+) -> Result<(SubscribeFrom, RelationDesc, Scope), PlanError> {
+    let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+
+    let quad_table_id = resolve_quad_table(scx)?;
+    let desc = sparql_query_desc(&sparql_query);
+
+    // Build scope from the output column names.
+    let scope = Scope::from_source(
+        None::<crate::names::PartialItemName>,
+        (0..desc.arity()).map(|i| desc.get_name(i).clone()),
+    );
+
+    let from = SubscribeFrom::Sparql {
+        query: sparql_query,
+        quad_table_id,
+        desc: desc.clone(),
+    };
+    Ok((from, desc, scope))
 }
 
 pub fn describe_explain_plan(
@@ -1642,6 +1672,7 @@ pub fn describe_subscribe(
                 query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             desc
         }
+        SubscribeRelation::Sparql(sparql_stmt) => sparql_desc(&sparql_stmt)?,
     };
     let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
@@ -1770,6 +1801,7 @@ pub fn plan_subscribe(
                 query.scope,
             )
         }
+        SubscribeRelation::Sparql(sparql_stmt) => plan_sparql_subscribe(scx, &sparql_stmt)?,
     };
 
     let when = query::plan_as_of(scx, as_of)?;

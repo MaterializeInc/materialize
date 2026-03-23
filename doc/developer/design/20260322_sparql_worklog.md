@@ -1195,3 +1195,83 @@ New tests (14):
 - Inverse of sequence: `^(ex:a/ex:b)`
 - Property path joined with BGP: `?s ex:knows+ ?friend . ?friend ex:name ?name`
 - RDFS subClassOf+: `?x rdfs:subClassOf+ ?y`
+
+## 2026-03-23: Prompt 13 — Wire up `SPARQL $$ ... $$` syntax in the SQL parser
+
+### What was done
+
+Implemented end-to-end integration of `SPARQL $$ ... $$` as a SQL statement:
+
+**SQL parser** (`src/sql-parser/`):
+- Added `SPARQL` keyword to the SQL lexer (`keywords.txt`).
+- Added `Statement::Sparql(SparqlStatement)` to the SQL AST with `SparqlStatement { body: String }`.
+- `parse_sparql()` method reads a dollar-quoted `Token::String` after the `SPARQL` keyword.
+
+**SQL planner** (`src/sql/src/plan/`):
+- `plan_sparql()` in `dml.rs`: parses SPARQL body, resolves `rdf_quads` quad table from catalog,
+  builds output `RelationDesc` based on query form, returns `Plan::Sparql(SparqlPlan)`.
+- `describe_sparql()`: parses SPARQL to determine output schema for pgwire description.
+- `sparql_desc()` / `sparql_query_desc()`: helper functions to build `RelationDesc` from SPARQL
+  query forms (SELECT → variable names, CONSTRUCT/DESCRIBE → subject/predicate/object, ASK → result).
+- Added `Plan::Sparql(SparqlPlan)` variant with `SparqlPlan { query, quad_table_id, desc }`.
+
+**Adapter** (`src/adapter/`):
+- `sequence_sparql()` in `sequencer.rs`: calls `mz_sparql::plan::SparqlPlanner::new(quad_table_id)`
+  to compile SPARQL → HIR, wraps in `SelectPlan`, sequences as a peek.
+- Updated `command.rs`, `command_handler.rs`, `appends.rs`, `catalog_serving.rs`, `rbac.rs` for
+  the new statement/plan type.
+
+### Key decisions
+
+1. **Two-phase plan**: The SQL planner produces `Plan::Sparql` containing the parsed SPARQL AST
+   and quad table ID. The adapter coordinator then calls the SPARQL planner to produce HIR.
+   This avoids a cyclic dependency (mz-sparql depends on mz-sql for HIR types, so mz-sql
+   cannot depend on mz-sparql).
+
+2. **Quad table resolution**: The planner resolves `rdf_quads` from the catalog by name. Users
+   must create this table before running SPARQL queries. Future work (Prompt 16) will add
+   built-in catalog-as-RDF views.
+
+## 2026-03-23: Prompt 14 — SUBSCRIBE integration for SPARQL queries
+
+### What was done
+
+Extended `SUBSCRIBE` to accept SPARQL queries: `SUBSCRIBE TO SPARQL $$ ... $$`.
+
+**SQL parser**:
+- Added `Sparql(SparqlStatement)` variant to `SubscribeRelation<T>` enum.
+- Updated `parse_subscribe()` to detect the `SPARQL` keyword after `SUBSCRIBE [TO]` and
+  parse the dollar-quoted body.
+- Updated `AstDisplay` for `SubscribeRelation` and `sql-pretty` for the new variant.
+
+**SQL planner** (`plan_subscribe` in `dml.rs`):
+- Added `SubscribeRelation::Sparql` arm in both `describe_subscribe` and `plan_subscribe`.
+- `plan_sparql_subscribe()`: parses SPARQL, resolves quad table, builds desc and scope,
+  returns `SubscribeFrom::Sparql { query, quad_table_id, desc }`.
+- Factored out `resolve_quad_table()` helper shared with `plan_sparql()`.
+
+**Plan types** (`plan.rs`):
+- Added `SubscribeFrom::Sparql { query, quad_table_id, desc }` variant with appropriate
+  `depends_on()` and `contains_temporal()` implementations.
+
+**Adapter** (`subscribe.rs`):
+- In `subscribe_optimize_mir()`, SPARQL subscribes are compiled to HIR → MIR before the
+  optimizer runs. The conversion happens in the coordinator (which has access to `SystemVars`
+  for lowering config), then replaces `SubscribeFrom::Sparql` with `SubscribeFrom::Query`.
+  After that, the standard subscribe optimization pipeline handles it.
+- Updated `catalog_serving.rs` for the new `SubscribeFrom` variant in both match sites.
+- Updated `optimize/subscribe.rs` with an `unreachable!()` arm (SPARQL is always resolved
+  before reaching the optimizer).
+
+### Key decisions
+
+1. **Deferred compilation**: SPARQL → HIR → MIR compilation happens in `subscribe_optimize_mir()`
+   rather than in the SQL planner, to avoid the cyclic dependency between `mz-sql` and `mz-sparql`.
+   The `SubscribeFrom::Sparql` variant carries the parsed query through the plan layer.
+
+2. **Reuse of subscribe machinery**: After SPARQL is compiled to MIR, it becomes a standard
+   `SubscribeFrom::Query` and flows through the existing subscribe optimizer and sequencer
+   unchanged. No new subscribe-specific code paths needed.
+
+3. **All subscribe options supported**: AS OF, UP TO, WITH (SNAPSHOT, PROGRESS), and envelope
+   options all work with SPARQL subscribes since they operate on the `SubscribePlan` wrapper.

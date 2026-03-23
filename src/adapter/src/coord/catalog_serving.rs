@@ -46,7 +46,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         (
             plan.from.depends_on(),
             match &plan.from {
-                SubscribeFrom::Id(_) => false,
+                SubscribeFrom::Id(_) | SubscribeFrom::Sparql { .. } => false,
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
         )
@@ -240,6 +240,7 @@ pub fn check_cluster_restrictions(
         Plan::Subscribe(plan) => match plan.from {
             SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
             SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
+            SubscribeFrom::Sparql { quad_table_id, .. } => Box::new(std::iter::once(quad_table_id)),
         },
         Plan::Select(plan) => Box::new(plan.source.depends_on().into_iter()),
         _ => return Ok(()),
