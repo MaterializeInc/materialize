@@ -510,6 +510,38 @@ fn relation_desc_to_iceberg_schema(
     Ok((arrow_schema_with_ids, Arc::new(iceberg_schema)))
 }
 
+/// Resolve Materialize key column indexes to Iceberg top-level field IDs.
+///
+/// Iceberg field IDs are assigned recursively, so a top-level column's field ID
+/// is not necessarily `column_index + 1` once nested fields are present.
+fn equality_ids_for_indices(
+    current_schema: &Schema,
+    materialize_arrow_schema: &ArrowSchema,
+    equality_indices: &[usize],
+) -> anyhow::Result<Vec<i32>> {
+    let top_level_fields = current_schema.as_struct();
+
+    equality_indices
+        .iter()
+        .map(|index| {
+            let mz_field = materialize_arrow_schema
+                .fields()
+                .get(*index)
+                .with_context(|| format!("Equality delete key index {index} is out of bounds"))?;
+            let field_name = mz_field.name();
+            let iceberg_field = top_level_fields
+                .field_by_name(field_name)
+                .with_context(|| {
+                    format!(
+                        "Equality delete key column '{}' not found in Iceberg table schema",
+                        field_name
+                    )
+                })?;
+            Ok(iceberg_field.id)
+        })
+        .collect()
+}
+
 /// Build a new Arrow schema by adding an __op column to the existing schema.
 fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
     let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
@@ -1091,11 +1123,11 @@ where
                 ));
             };
 
-            let equality_ids: Vec<i32> = equality_indices
-                .iter()
-                .map(|u| i32::try_from(*u).map(|v| v + 1))
-                .collect::<Result<Vec<i32>, _>>()
-                .context("Failed to convert equality index to i32 (index too large)")?;
+            let equality_ids = equality_ids_for_indices(
+                current_schema.as_ref(),
+                materialize_arrow_schema.as_ref(),
+                &equality_indices,
+            )?;
 
             let writer_properties = WriterProperties::new();
 
@@ -1492,6 +1524,45 @@ where
         namespace: StatusNamespace::Iceberg,
     });
     (output_stream, statuses, button.press_on_drop())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn equality_ids_follow_iceberg_field_ids() {
+        let map_entries = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Utf8, true),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let materialize_arrow_schema = ArrowSchema::new(vec![
+            Field::new("attrs", DataType::Map(Arc::new(map_entries), false), true),
+            Field::new("key_col", DataType::Int32, false),
+        ]);
+        let materialize_arrow_schema = add_field_ids_to_arrow_schema(materialize_arrow_schema);
+        let iceberg_schema = arrow_schema_to_schema(&materialize_arrow_schema)
+            .expect("schema conversion should succeed");
+
+        let equality_ids =
+            equality_ids_for_indices(&iceberg_schema, &materialize_arrow_schema, &[1])
+                .expect("field lookup should succeed");
+
+        let expected_id = iceberg_schema
+            .as_struct()
+            .field_by_name("key_col")
+            .expect("top-level field should exist")
+            .id;
+        assert_eq!(equality_ids, vec![expected_id]);
+        assert_ne!(expected_id, 2);
+    }
 }
 
 /// Commit completed batches to Iceberg as snapshots.
