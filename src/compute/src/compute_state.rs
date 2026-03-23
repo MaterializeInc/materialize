@@ -773,7 +773,14 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             //  * reporting progress through times we have not yet written
             //  * reporting progress through times we have not yet fully processed, for
             //    collections that jump their write frontiers into the future
+            //
+            // As a special case, in read-only mode we don't take the write frontier into account.
+            // The dataflow doesn't have the ability to push it forward, so it can't be used as a
+            // measure of dataflow progress.
             if let Some(probe) = &collection.compute_probe {
+                if *collection.read_only_rx.borrow() {
+                    new_frontier.clear();
+                }
                 probe.with_frontier(|frontier| new_frontier.extend(frontier.iter().copied()));
             }
             let new_output_frontier = reported
