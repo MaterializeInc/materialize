@@ -12,6 +12,7 @@
 #![allow(dead_code, missing_docs)]
 
 use columnar::{Container, Ref};
+use differential_dataflow::Collection;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
@@ -20,6 +21,7 @@ use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::columnar::Column;
 use timely::dataflow::ScopeParent;
 
 use crate::row_spine::RowValBuilder;
@@ -121,6 +123,14 @@ pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
 pub type KeyValBatcher<K, V, T, D> =
     MergeBatcher<Vec<((K, V), T, D)>, ColumnationChunker<((K, V), T, D)>, ColMerger<(K, V), T, D>>;
+
+/// A collection backed by columnar containers instead of `Vec`.
+///
+/// This is the columnar equivalent of `VecCollection<S, D, R>`. Data is stored in
+/// `Column<(D, T, R)>` containers which provide better cache locality and enable
+/// future vectorized evaluation.
+pub type ColumnarCollection<S, D, R> =
+    Collection<S, Column<(D, <S as ScopeParent>::Timestamp, R)>>;
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
 pub trait MzTimestamp:
