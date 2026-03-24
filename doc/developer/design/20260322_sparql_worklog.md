@@ -2237,3 +2237,78 @@ namespace to `urn:materialize:catalog:ontology:` for predicates/types.
    The EXISTS subquery correlation may not be working correctly.
 6. **Graph filtering**: Queries without FROM return all graphs. May need
    a default graph filter.
+
+## 2026-03-24: Prompt 26 — Fix SPARQL view rehydration panic on catalog startup
+
+### What was done
+
+Fixed the coordinator panic when rehydrating persisted SPARQL views. The root
+cause was that `resolve_quad_table()` used a partial name (`rdf_quads`) during
+planning, which failed during catalog rehydration because the system session
+has an **empty search path** by design (to catch unnormalized names).
+
+**Root cause**: `for_system_session()` in `catalog/state.rs` sets
+`search_path: Vec::new()`. When `resolve_quad_table` tried
+`PartialItemName { database: None, schema: None, item: "rdf_quads" }`,
+the catalog couldn't find it without a search path.
+
+**Fix**: Made `SparqlStatement` generic over `AstInfo` so the quad table
+reference participates in name resolution using the standard `[id AS name]`
+bracket syntax.
+
+**Changes**:
+
+1. **`SparqlStatement<T: AstInfo>`** (`src/sql-parser/src/ast/defs/statement.rs`):
+   - Made generic over `AstInfo` with `quad_table: Option<T::ItemName>`.
+   - In `Raw` form: `Option<RawItemName>` (parsed from `[u1 AS db.schema.item]`).
+   - In `Aug` form: `Option<ResolvedItemName>` (carries CatalogItemId + GlobalId).
+   - `AstDisplay` renders `SPARQL ON [id AS db.schema.item] $$ body $$` when
+     `quad_table` is set.
+
+2. **Parser** (`src/sql-parser/src/parser.rs`):
+   - Added `parse_sparql_stmt()` helper that parses optional `ON <raw_name>`
+     before the dollar-quoted body. Uses `parse_raw_name()` which handles
+     the `[id AS name]` bracket syntax natively.
+   - Updated all 4 SPARQL parse sites (view, materialized view, subscribe,
+     standalone) to use the helper.
+
+3. **`resolve_quad_table`** (`src/sql/src/plan/statement/dml.rs`):
+   - Now accepts `Option<&ResolvedItemName>` and returns
+     `(GlobalId, ResolvedItemName)`.
+   - When a resolved name is provided (rehydration path), uses
+     `catalog.get_item(name.item_id())` directly — no search path needed.
+   - When `None` (first-time creation), resolves by partial name and constructs
+     a `ResolvedItemName::Item` with `print_id: true` for persistence.
+
+4. **`plan_view` / materialized view** (`src/sql/src/plan/statement/ddl.rs`):
+   - Resolves the quad table and sets `sparql_stmt.quad_table` BEFORE
+     `normalize::create_statement`, so the `[id AS name]` reference gets
+     persisted in `create_sql`.
+
+5. **Tests** (`test/sqllogictest/sparql.slt`):
+   - Re-enabled CREATE VIEW and CREATE MATERIALIZED VIEW tests that were
+     skipped due to this bug.
+
+### Key decisions
+
+1. **Generic SparqlStatement over AstInfo**: This follows the established
+   Materialize pattern where AST types are generic over `Raw`/`Aug`. The
+   auto-generated fold/visit code automatically resolves `quad_table` during
+   name resolution, and the `[id AS name]` bracket syntax handles persistence
+   and re-parsing.
+
+2. **Resolve before normalize**: The quad table must be resolved before
+   `normalize::create_statement` is called, so the resolved reference is
+   included in the persisted `create_sql`. This ensures the reference
+   survives catalog rehydration.
+
+3. **print_id: true**: Using `print_id: true` in the `ResolvedItemName`
+   ensures the `[id AS name]` syntax is used in the display output. This
+   is the standard pattern for table/source/view references in persisted SQL.
+
+### Build results
+
+- `cargo check -p mz-sql-parser -p mz-sql -p mz-adapter -p mz-environmentd -p mz-sqllogictest`: passes, 0 warnings
+- `cargo test -p mz-sql-parser`: 13 tests pass, 0 failures
+- `bin/fmt`: passes (except missing `buf` tool)
+- `bin/lint`: only pre-existing missing-tool failures

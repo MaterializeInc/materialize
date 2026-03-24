@@ -330,26 +330,24 @@ includes the goal, key files to read, and acceptance criteria.
 > Read first: `test/sqllogictest/sparql.slt`,
 > `doc/developer/guide-testing.md`.~~
 
-### Prompt 26: Fix SPARQL view rehydration panic on catalog startup
+### ~~Prompt 26: Fix SPARQL view rehydration panic on catalog startup~~
 
-> The coordinator panics when rehydrating a persisted SPARQL view:
-> ```
-> PlanError(Unstructured("failed to resolve rdf_quads: unknown catalog
-> item 'rdf_quads'")): invalid persisted SQL: CREATE VIEW
-> "materialize"."public"."sparql_people" AS SPARQL $$ ... $$
-> ```
-> The SPARQL planner resolves `rdf_quads` by name at plan time, but during
-> catalog rehydration the table may not yet exist or the name resolution
-> context differs from normal planning. Fix the SPARQL planner to resolve
-> table references through the catalog properly (using fully-qualified names
-> and dependency tracking), matching how SQL views handle table references.
-> Ensure SPARQL views survive restarts by testing: create a SPARQL view,
-> restart environmentd, verify the view is still queryable.
+> ~~The coordinator panics when rehydrating a persisted SPARQL view:~~
+> ~~`PlanError(Unstructured("failed to resolve rdf_quads: unknown catalog~~
+> ~~item 'rdf_quads'")): invalid persisted SQL: CREATE VIEW~~
+> ~~"materialize"."public"."sparql_people" AS SPARQL $$ ... $$`~~
+> ~~The SPARQL planner resolves `rdf_quads` by name at plan time, but during~~
+> ~~catalog rehydration the table may not yet exist or the name resolution~~
+> ~~context differs from normal planning. Fix the SPARQL planner to resolve~~
+> ~~table references through the catalog properly (using fully-qualified names~~
+> ~~and dependency tracking), matching how SQL views handle table references.~~
+> ~~Ensure SPARQL views survive restarts by testing: create a SPARQL view,~~
+> ~~restart environmentd, verify the view is still queryable.~~
 >
-> Read first: `src/adapter/src/catalog/apply.rs:1189` (panic site),
-> `src/sparql/src/plan.rs` (rdf_quads resolution),
-> `src/sql/src/plan/statement/ddl.rs` (how SQL views track dependencies),
-> `src/adapter/src/catalog/open.rs` (catalog rehydration order).
+> ~~Read first: `src/adapter/src/catalog/apply.rs:1189` (panic site),~~
+> ~~`src/sparql/src/plan.rs` (rdf_quads resolution),~~
+> ~~`src/sql/src/plan/statement/ddl.rs` (how SQL views track dependencies),~~
+> ~~`src/adapter/src/catalog/open.rs` (catalog rehydration order).~~
 
 ### Prompt 27: Fix all clippy warnings in SPARQL crates
 
