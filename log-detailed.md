@@ -86,3 +86,23 @@
 
 ### Issues
 - `Columnar::into_owned(r)` required explicit type annotation (`: Diff`) because the compiler couldn't infer the type through the `-` negation operator.
+
+## Prompt 2.2: Union operator propagates columnar collections
+
+### What was done
+- Modified the `Union` match arm in `render.rs` to check if all inputs have columnar collections. If so, uses `differential_dataflow::collection::concatenate` on the columnar collections directly.
+- When `consolidate_output` is true and inputs are columnar, converts to Vec for consolidation (which requires Vec-based batchers), then converts back to columnar.
+- Falls back to the existing Vec path when any input lacks a columnar collection.
+- Added unit test `union_columnar_concatenates` that verifies columnar concatenation preserves all rows from two input streams, including duplicate rows with different diffs.
+
+### Key decisions
+- Used an "all or nothing" strategy: if all inputs have columnar, use columnar; otherwise fall back to Vec for all. This avoids the overhead of converting individual inputs.
+- For `consolidate_output`, the consolidation uses `KeyBatcher` which requires Vec-based collections. Rather than implementing a columnar-native consolidation, we round-trip through Vec→consolidate→columnar. This is acceptable because consolidation is already expensive and the conversion overhead is small relative to the sort/merge.
+- `concatenate` from `differential_dataflow` is generic over container types and works with `Column<...>` containers directly.
+
+### Files changed
+- `src/compute/src/render.rs` — Modified Union match arm to support columnar path.
+- `src/compute/src/render/columnar.rs` — Added `union_columnar_concatenates` test.
+
+### Issues
+- None. `concatenate` worked out of the box with columnar collections since `Column` implements the required `Container` trait.

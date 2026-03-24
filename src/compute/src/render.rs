@@ -1353,23 +1353,58 @@ where
                 inputs,
                 consolidate_output,
             } => {
-                let mut oks = Vec::new();
-                let mut errs = Vec::new();
-                for input in inputs.into_iter() {
-                    let (os, es) =
-                        expect_input(input).as_specific_collection(None, &self.config_set);
-                    oks.push(os);
-                    errs.push(es);
+                let bundles: Vec<_> = inputs.into_iter().map(expect_input).collect();
+                let all_columnar = bundles.iter().all(|b| b.columnar_collection().is_some());
+
+                if all_columnar {
+                    let mut col_oks = Vec::new();
+                    let mut col_errs = Vec::new();
+                    for bundle in &bundles {
+                        let (oks, errs) = bundle.columnar_collection().unwrap();
+                        col_oks.push(oks.clone());
+                        col_errs.push(errs.clone());
+                    }
+                    let col_oks = differential_dataflow::collection::concatenate(
+                        &mut self.scope,
+                        col_oks,
+                    );
+                    let col_errs = differential_dataflow::collection::concatenate(
+                        &mut self.scope,
+                        col_errs,
+                    );
+                    if consolidate_output {
+                        // Consolidation requires Vec-based collections; convert, consolidate, convert back.
+                        let vec_oks = crate::render::columnar::columnar_to_vec(col_oks);
+                        let vec_oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                            vec_oks,
+                            "UnionConsolidation",
+                        );
+                        let col_oks = crate::render::columnar::vec_to_columnar(vec_oks);
+                        CollectionBundle::from_columnar_collections(col_oks, col_errs)
+                    } else {
+                        CollectionBundle::from_columnar_collections(col_oks, col_errs)
+                    }
+                } else {
+                    let mut oks = Vec::new();
+                    let mut errs = Vec::new();
+                    for bundle in bundles {
+                        let (os, es) =
+                            bundle.as_specific_collection(None, &self.config_set);
+                        oks.push(os);
+                        errs.push(es);
+                    }
+                    let mut oks =
+                        differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                    if consolidate_output {
+                        oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                            oks,
+                            "UnionConsolidation",
+                        )
+                    }
+                    let errs =
+                        differential_dataflow::collection::concatenate(&mut self.scope, errs);
+                    CollectionBundle::from_collections(oks, errs)
                 }
-                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
-                if consolidate_output {
-                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                        oks,
-                        "UnionConsolidation",
-                    )
-                }
-                let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
-                CollectionBundle::from_collections(oks, errs)
             }
             ArrangeBy {
                 input_key,

@@ -115,10 +115,10 @@ fall back to the existing Vec path.
 
 ### Prompt 2.2: Union
 
-[ ] Convert the `Union` operator to propagate columnar collections. Union concatenates streams,
+[*] Convert the `Union` operator to propagate columnar collections. Union concatenates streams,
 which works identically for columnar containers.
 
-[ ] If all inputs have columnar collections, produce a columnar output. If some inputs are Vec,
+[*] If all inputs have columnar collections, produce a columnar output. If some inputs are Vec,
 either convert them or fall back to Vec for all.
 
 **Files**: `src/compute/src/render.rs` (the Union match arm)
