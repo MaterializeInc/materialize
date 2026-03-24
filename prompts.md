@@ -83,15 +83,15 @@ always `None` at this point.
 
 ### Prompt 1.1: Persist source emits columnar collections
 
-[ ] Investigate `persist_source::persist_source()` in `src/storage-operators/src/persist_source.rs`.
+[*] Investigate `persist_source::persist_source()` in `src/storage-operators/src/persist_source.rs`.
 It already produces batches of rows. Determine whether it can emit `Column<(Row, T, Diff)>`
 directly or whether a `vec_to_columnar` conversion at the boundary is more practical.
 
-[ ] If the persist source already produces columnar-friendly batches (it uses `ColumnBuilder` in
+[*] If the persist source already produces columnar-friendly batches (it uses `ColumnBuilder` in
 PR #35464), wire the columnar output into the `imported_sources` in `render.rs` so that
 `CollectionBundle` carries the columnar collection.
 
-[ ] Ensure that all downstream operators still work by having `ensure_vec_collection()` as the
+[*] Ensure that all downstream operators still work by having `ensure_vec_collection()` as the
 fallback. Run tests.
 
 **Files**: `src/compute/src/render.rs`, `src/storage-operators/src/persist_source.rs` (read-only

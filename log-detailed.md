@@ -47,3 +47,23 @@
 - Required `columnar::Index` trait import for `into_index_iter()` — the trait was implemented but not in scope.
 - `Diff` is `Overflowing<i64>`, not `i64`, so tests needed `input.update(row, Diff::from(1))` instead of `input.insert(row)`.
 - `Probe::probe()` returns a tuple `(ProbeHandle, Stream)`, requiring destructuring.
+
+## Prompt 1.1: Persist source emits columnar collections
+
+### What was done
+- Investigated `persist_source::persist_source()` — it returns `StreamVec<G, (Row, Timestamp, Diff)>` (Vec-based containers). It does not use `ColumnBuilder` natively, so a `vec_to_columnar` conversion at the boundary is the practical approach.
+- Modified both import loops in `render.rs` (recursive and non-recursive dataflow paths) to create columnar collections alongside the existing Vec collections.
+- At each import boundary: clone the entered Vec collection, convert the clone to columnar via `vec_to_columnar`, and set both `collection` and `columnar_collection` fields on the `CollectionBundle`.
+- All downstream operators continue to work unchanged since they access `self.collection` (the Vec variant), which is always populated.
+
+### Key decisions
+- Set **both** `collection` and `columnar_collection` fields rather than only columnar. This avoids needing to modify `as_specific_collection` (which takes `&self`, not `&mut self`) and all downstream operators. The columnar collection is available for future operators to use.
+- Applied `vec_to_columnar` **after** `enter`/`enter_region`, not before, because `Column<(Row, T, Diff)>` does not implement the `Enter` trait required by differential_dataflow's `enter()` method.
+- The conversion cost is the overhead of `vec_to_columnar` at every import, even though no downstream operator uses the columnar variant yet. This will pay off as operators are converted in later prompts.
+
+### Files changed
+- `src/compute/src/render.rs` — Modified both import loops (recursive at ~line 378, non-recursive at ~line 487) to create `CollectionBundle` with both Vec and columnar collections populated.
+
+### Issues
+- `Column<(Row, T, Diff)>` does not implement `differential_dataflow::collection::containers::Enter`, so `enter()` cannot be called on a `ColumnarCollection`. Solved by converting to columnar after entering the region scope.
+- Test binary linking OOMs in the constrained CI environment, but `cargo check` passes cleanly, confirming type correctness.

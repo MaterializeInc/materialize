@@ -376,10 +376,21 @@ pub fn build_compute_dataflow<A: Allocate>(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter(region),
-                        errs.enter(region),
-                    );
+                    let oks_entered = oks.enter(region);
+                    let errs_entered = errs.enter(region);
+                    let columnar_oks =
+                        crate::render::columnar::vec_to_columnar(oks_entered.clone());
+                    let bundle = crate::render::CollectionBundle {
+                        collection: Some((
+                            oks_entered,
+                            errs_entered.clone(),
+                        )),
+                        columnar_collection: Some((
+                            columnar_oks,
+                            errs_entered,
+                        )),
+                        arranged: BTreeMap::default(),
+                    };
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
                 }
@@ -486,10 +497,21 @@ pub fn build_compute_dataflow<A: Allocate>(
                     } else {
                         oks
                     };
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter_region(region),
-                        errs.enter_region(region),
-                    );
+                    let oks_entered = oks.enter_region(region);
+                    let errs_entered = errs.enter_region(region);
+                    let columnar_oks =
+                        crate::render::columnar::vec_to_columnar(oks_entered.clone());
+                    let bundle = crate::render::CollectionBundle {
+                        collection: Some((
+                            oks_entered,
+                            errs_entered.clone(),
+                        )),
+                        columnar_collection: Some((
+                            columnar_oks,
+                            errs_entered,
+                        )),
+                        arranged: BTreeMap::default(),
+                    };
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
                 }
