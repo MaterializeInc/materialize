@@ -103,10 +103,10 @@ if possible)
 
 ### Prompt 2.1: Negate
 
-[ ] Convert the `Negate` operator to propagate columnar collections. Negation flips the sign of
+[*] Convert the `Negate` operator to propagate columnar collections. Negation flips the sign of
 `Diff`, which can be done in-place on a columnar container without unpacking rows.
 
-[ ] If the input `CollectionBundle` has a columnar collection, produce a columnar output. Otherwise
+[*] If the input `CollectionBundle` has a columnar collection, produce a columnar output. Otherwise
 fall back to the existing Vec path.
 
 **Files**: `src/compute/src/render.rs` (the Negate match arm in `render_plan_expr`)

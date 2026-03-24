@@ -67,3 +67,22 @@
 ### Issues
 - `Column<(Row, T, Diff)>` does not implement `differential_dataflow::collection::containers::Enter`, so `enter()` cannot be called on a `ColumnarCollection`. Solved by converting to columnar after entering the region scope.
 - Test binary linking OOMs in the constrained CI environment, but `cargo check` passes cleanly, confirming type correctness.
+
+## Prompt 2.1: Negate operator propagates columnar collections
+
+### What was done
+- Added `negate_columnar` function in `render/columnar.rs` that takes a `ColumnarCollection<S, Row, Diff>` and produces a new one with all diffs negated.
+- Modified the `Negate` match arm in `render.rs` to check for a columnar collection first. If present, uses `negate_columnar` to produce a columnar output bundle. Otherwise falls back to the existing Vec path.
+- Added unit test `negate_columnar_flips_diffs` that verifies diffs are correctly negated through Vec→Columnar→Negate→Columnar→Vec round-trip.
+
+### Key decisions
+- Used a `unary` operator with `ColumnBuilder` output (same pattern as `vec_to_columnar`) rather than trying to call `Collection::negate()` directly, since the columnar `Collection` type may not support `negate()` out of the box.
+- When columnar is available, produces only a columnar output (no Vec). Downstream operators that need Vec will use `ensure_vec_collection()`.
+- The `into_owned` conversion for the diff is necessary to apply `Neg`, but row and timestamp refs are passed directly to the `ColumnBuilder` session without conversion.
+
+### Files changed
+- `src/compute/src/render/columnar.rs` — Added `negate_columnar` function and test.
+- `src/compute/src/render.rs` — Modified Negate match arm to use columnar path when available.
+
+### Issues
+- `Columnar::into_owned(r)` required explicit type annotation (`: Diff`) because the compiler couldn't infer the type through the `-` negation operator.

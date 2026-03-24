@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Conversion utilities between Vec-based and columnar collections.
+//! Conversion and transformation utilities for columnar collections.
 
 use columnar::{Columnar, Index};
 use differential_dataflow::{AsCollection, VecCollection};
@@ -77,6 +77,38 @@ where
                                 Columnar::into_owned(t),
                                 Columnar::into_owned(r),
                             ));
+                        }
+                    });
+                }
+            },
+        )
+        .as_collection()
+}
+
+/// Negate the diffs of a columnar collection, producing a new columnar collection.
+///
+/// This is the columnar equivalent of `Collection::negate()`. It iterates the columnar
+/// container and produces a new one with each diff negated.
+pub fn negate_columnar<S>(
+    collection: ColumnarCollection<S, Row, Diff>,
+) -> ColumnarCollection<S, Row, Diff>
+where
+    S: Scope,
+    S::Timestamp: MzTimestamp,
+{
+    collection
+        .inner
+        .unary::<ColumnBuilder<(Row, S::Timestamp, Diff)>, _, _, _>(
+            Pipeline,
+            "NegateColumnar",
+            |_cap, _info| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session_with_builder(&time);
+                        for (d, t, r) in data.borrow().into_index_iter() {
+                            let owned_r: Diff = Columnar::into_owned(r);
+                            let neg_r = -owned_r;
+                            session.give((d, t, &neg_r));
                         }
                     });
                 }
@@ -202,6 +234,61 @@ mod tests {
             assert_eq!(actual.len(), 2);
             assert!(actual.iter().any(|(r, t, _)| *r == row1 && *t == 0));
             assert!(actual.iter().any(|(r, t, _)| *r == row2 && *t == 1));
+        });
+    }
+
+    /// Verify that negate_columnar flips the sign of all diffs.
+    #[mz_ore::test]
+    fn negate_columnar_flips_diffs() {
+        timely::execute_directly(|worker| {
+            let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> =
+                Rc::new(RefCell::new(Vec::new()));
+            let results_capture = results.clone();
+
+            let (mut input, probe) = worker.dataflow::<u64, _, _>(|scope| {
+                let (input, collection) = scope.new_collection::<Row, Diff>();
+
+                // Convert to columnar, negate, convert back to Vec for inspection
+                let columnar = vec_to_columnar(collection);
+                let negated = negate_columnar(columnar);
+                let result = columnar_to_vec(negated);
+
+                let (probe, _stream) = result
+                    .inner
+                    .inspect(move |item: &(Row, u64, Diff)| {
+                        results_capture
+                            .borrow_mut()
+                            .push((item.0.clone(), item.1, item.2));
+                    })
+                    .probe();
+
+                (input, probe)
+            });
+
+            let row1 = Row::pack_slice(&[Datum::Int32(42)]);
+            let row2 = Row::pack_slice(&[Datum::String("hello")]);
+
+            input.update(row1.clone(), Diff::from(1));
+            input.update(row2.clone(), Diff::from(3));
+            input.advance_to(1);
+            input.flush();
+
+            worker.step_while(|| probe.less_than(&1));
+
+            let mut actual = results.borrow().clone();
+            actual.sort_by(|a, b| a.0.cmp(&b.0));
+
+            // Diffs should be negated
+            assert_eq!(actual.len(), 2);
+            for (row, _t, diff) in &actual {
+                if *row == row1 {
+                    assert_eq!(*diff, Diff::from(-1), "row1 diff should be negated");
+                } else if *row == row2 {
+                    assert_eq!(*diff, Diff::from(-3), "row2 diff should be negated");
+                } else {
+                    panic!("Unexpected row");
+                }
+            }
         });
     }
 }
