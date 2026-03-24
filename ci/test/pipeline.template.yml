@@ -312,7 +312,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/sqllogictest]
-    parallelism: 4
+    parallelism: 5
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest

@@ -556,7 +556,7 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
                     "limit": 2,
                 },
                 {
-                    "exit_status": 128,  # Temporary Github connection issue
+                    "exit_status": 128,  # Temporary Github/GHCR/DockerHub connection issue
                     "limit": 2,
                 },
                 {
