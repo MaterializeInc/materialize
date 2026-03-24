@@ -169,12 +169,32 @@ class PgConnInfo:
             dbname=self.database,
             sslmode="require" if self.ssl else None,
         )
+        # Set SO_LINGER(1, 0) so close() sends RST instead of FIN, bypassing
+        # TIME_WAIT. Prevents exhausting the ~28k ephemeral port range under
+        # high connection churn (e.g. benchmarks doing rapid connect/disconnect).
+        self._set_linger(conn)
         if self.autocommit:
             conn.autocommit = True
         if self.cluster:
             with conn.cursor() as cur:
                 cur.execute(f"SET cluster = {self.cluster}".encode())
         return conn
+
+    @staticmethod
+    def _set_linger(conn: psycopg.Connection) -> None:
+        import socket
+        import struct
+
+        fd = conn.pgconn.socket
+        if fd < 0:
+            return
+        sock = socket.socket(fileno=fd)
+        try:
+            sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+        finally:
+            sock.detach()
 
     def to_conn_string(self) -> str:
         return (
