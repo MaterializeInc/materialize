@@ -435,7 +435,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         config: ClusterConfig,
         temporary_oids: &HashSet<u32>,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<ClusterId, CatalogError> {
         let cluster_id = self.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
         let cluster_id = ClusterId::system(cluster_id).ok_or(SqlCatalogError::IdExhaustion)?;
         self.insert_cluster(
@@ -446,7 +446,8 @@ impl<'a> Transaction<'a> {
             privileges,
             config,
             temporary_oids,
-        )
+        )?;
+        Ok(cluster_id)
     }
 
     fn insert_cluster(
