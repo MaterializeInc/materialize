@@ -5554,6 +5554,56 @@ def workflow_test_pending_replica_audit_events(
     )
 
 
+def workflow_test_system_cluster_audit_events(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that system cluster and replica create events appear in
+    mz_audit_events after a fresh startup.
+    """
+    c.up("materialized")
+
+    # Verify that create events exist for the builtin system clusters.
+    system_cluster_creates = c.sql_query(
+        """
+        SELECT event_type, object_type, details->>'name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster'
+          AND details->>'id' LIKE 's%'
+        ORDER BY details->>'name';
+        """
+    )
+    system_cluster_names = [row[2] for row in system_cluster_creates]
+    for expected in [
+        "mz_analytics",
+        "mz_catalog_server",
+        "mz_probe",
+        "mz_support",
+        "mz_system",
+    ]:
+        assert (
+            expected in system_cluster_names
+        ), f"Expected create audit event for system cluster '{expected}', found: {system_cluster_names}"
+
+    # Verify that create events exist for the builtin system cluster replicas.
+    system_replica_creates = c.sql_query(
+        """
+        SELECT event_type, object_type, details->>'cluster_name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster-replica'
+          AND details->>'cluster_id' LIKE 's%'
+        ORDER BY details->>'cluster_name';
+        """
+    )
+    system_replica_cluster_names = [row[2] for row in system_replica_creates]
+    for expected in ["mz_catalog_server", "mz_probe", "mz_system"]:
+        assert (
+            expected in system_replica_cluster_names
+        ), f"Expected create audit event for replica on '{expected}', found: {system_replica_cluster_names}"
+
+
 def workflow_crash_on_replica_expiration_mv(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
