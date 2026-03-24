@@ -13,6 +13,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use aws_sdk_s3::error::DisplayErrorContext;
 use derivative::Derivative;
 use futures::StreamExt;
 use futures::stream::{BoxStream, TryStreamExt};
@@ -210,10 +211,9 @@ impl OneshotSource for AwsS3Source {
                 request = request.range(value);
             }
 
-            let object = request
-                .send()
-                .await
-                .map_err(|err| StorageErrorXKind::AwsS3Request(err.to_string()))?;
+            let object = request.send().await.map_err(|err| {
+                StorageErrorXKind::AwsS3Request(DisplayErrorContext(err).to_string())
+            })?;
             // AWS's ByteStream doesn't implement the Stream trait.
             let stream = mz_aws_util::s3::ByteStreamAdapter::new(object.body)
                 .err_into()
