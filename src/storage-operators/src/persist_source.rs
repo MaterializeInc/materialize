@@ -56,7 +56,7 @@ use timely::dataflow::ScopeParent;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
-use timely::dataflow::operators::{Capability, Leave, OkErr};
+use timely::dataflow::operators::{Capability, Enter, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream, StreamVec};
@@ -130,10 +130,101 @@ impl TimelyTimestamp for Subtime {
     }
 }
 
+impl Lattice for Subtime {
+    fn join(&self, other: &Self) -> Self {
+        Subtime(std::cmp::max(self.0, other.0))
+    }
+    fn meet(&self, other: &Self) -> Self {
+        Subtime(std::cmp::min(self.0, other.0))
+    }
+}
+
+impl differential_dataflow::lattice::Maximum for Subtime {
+    fn maximum() -> Self {
+        Subtime(u64::MAX)
+    }
+}
+
 impl Subtime {
     /// The smallest non-zero summary for the opaque timestamp type.
     pub const fn least_summary() -> Self {
         Subtime(1)
+    }
+}
+
+/// Tracks progress through the keyspace within a batch. Used as the innermost
+/// timestamp in the consolidation scope to enable smooth frontier advancement
+/// during snapshot consolidation.
+///
+/// Derived from the first 8 bytes of the row's internal representation,
+/// interpreted as a big-endian u64. Since `Row::Ord` compares by
+/// (length, then bytes) and rows within a shard share a schema (same length),
+/// this is monotonically non-decreasing in `Row::Ord` order.
+///
+/// For `SourceData(Err(_))`, we use `u64::MAX` since errors sort after
+/// valid rows in `Result::Ord`.
+#[derive(
+    Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
+)]
+pub struct KeyProgress(u64);
+
+impl PartialOrder for KeyProgress {
+    fn less_equal(&self, other: &Self) -> bool {
+        self.0.less_equal(&other.0)
+    }
+}
+
+impl TotalOrder for KeyProgress {}
+
+impl PathSummary<KeyProgress> for KeyProgress {
+    fn results_in(&self, src: &KeyProgress) -> Option<KeyProgress> {
+        self.0.results_in(&src.0).map(KeyProgress)
+    }
+    fn followed_by(&self, other: &Self) -> Option<Self> {
+        self.0.followed_by(&other.0).map(KeyProgress)
+    }
+}
+
+impl TimelyTimestamp for KeyProgress {
+    type Summary = KeyProgress;
+    fn minimum() -> Self {
+        KeyProgress(0)
+    }
+}
+
+impl Lattice for KeyProgress {
+    fn join(&self, other: &Self) -> Self {
+        KeyProgress(std::cmp::max(self.0, other.0))
+    }
+    fn meet(&self, other: &Self) -> Self {
+        KeyProgress(std::cmp::min(self.0, other.0))
+    }
+}
+
+impl differential_dataflow::lattice::Maximum for KeyProgress {
+    fn maximum() -> Self {
+        KeyProgress(u64::MAX)
+    }
+}
+
+impl KeyProgress {
+    /// Derive a `KeyProgress` value from a `SourceData` key.
+    ///
+    /// Takes the first 8 bytes of the row's internal byte representation and
+    /// interprets them as a big-endian u64. For rows shorter than 8 bytes, the
+    /// value is zero-padded on the right. For errors, returns `u64::MAX` since
+    /// `Err` sorts after `Ok` in `Result::Ord`.
+    fn from_source_data(key: &SourceData) -> Self {
+        match &key.0 {
+            Ok(row) => {
+                let data = row.data();
+                let mut buf = [0u8; 8];
+                let len = std::cmp::min(data.len(), 8);
+                buf[..len].copy_from_slice(&data[..len]);
+                KeyProgress(u64::from_be_bytes(buf))
+            }
+            Err(_) => KeyProgress(u64::MAX),
+        }
     }
 }
 
@@ -853,8 +944,12 @@ impl SourcePartMerger {
 
 /// A variant of [`decode_and_mfp`] that performs a streaming merge across all
 /// fetched parts at the same timestamp, consolidating updates with identical
-/// key-value-time before applying MFP. This produces fewer downstream updates
-/// than the sequential approach when parts contain overlapping key ranges.
+/// key-value-time before applying MFP.
+///
+/// Opens a nested scope with [`KeyProgress`] timestamps derived from key
+/// prefixes. This allows a `consolidate` operator to make incremental progress
+/// as the merge moves through the keyspace, enabling smooth "time-to-first-byte"
+/// for queries like `SELECT ... LIMIT k`.
 ///
 /// Used when [`SourceConsolidation::Full`] is requested.
 pub fn decode_and_mfp_consolidating<G>(
@@ -867,9 +962,72 @@ pub fn decode_and_mfp_consolidating<G>(
 where
     G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
 {
+    use differential_dataflow::AsCollection;
+
+    let name_owned = name.to_owned();
+    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    fetched
+        .scope()
+        .scoped::<((mz_repr::Timestamp, Subtime), KeyProgress), _, _>(
+            &format!("persist_source::consolidation({})", name),
+            move |inner| {
+                // Move the fetched stream into the inner scope. Data arrives at
+                // ((T, S), KeyProgress::minimum()).
+                let fetched_inner = fetched.enter(inner);
+
+                // Build the streaming merge decode operator in the inner scope.
+                // It manages KeyProgress capabilities based on the key prefix.
+                let decoded = streaming_merge_decode(
+                    cfg,
+                    fetched_inner,
+                    &name_owned,
+                    until,
+                    map_filter_project,
+                );
+
+                // Consolidate across workers in the inner scope. Because
+                // KeyProgress advances smoothly, the consolidation processes
+                // data in keyspace chunks rather than buffering the entire batch.
+                let consolidated = decoded.as_collection().consolidate().inner;
+
+                // Leave the inner scope, stripping KeyProgress from data
+                // timestamps. Use a simple unary to map the tuples.
+                use timely::dataflow::operators::Operator;
+                consolidated
+                    .unary(Pipeline, "StripKeyProgress", |_, _| {
+                        move |input, output| {
+                            input.for_each(|time, data| {
+                                let mut session = output.session(&time);
+                                for (d, t, r) in data.drain(..) {
+                                    session.give((d, t.0, r));
+                                }
+                            });
+                        }
+                    })
+                    .leave()
+            },
+        )
+}
+
+/// The streaming merge decode operator for the consolidation inner scope.
+///
+/// Receives fetched blobs, merges them using [`SourcePartMerger`], applies MFP,
+/// and emits rows with [`KeyProgress`] timestamps derived from key prefixes.
+/// Periodically downgrades capabilities to allow the downstream `consolidate`
+/// to make incremental progress.
+fn streaming_merge_decode<G>(
+    cfg: PersistConfig,
+    fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    name: &str,
+    until: Antichain<Timestamp>,
+    map_filter_project: Option<MfpPlan>,
+) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+where
+    G: Scope<Timestamp = ((mz_repr::Timestamp, Subtime), KeyProgress)>,
+{
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
-        format!("persist_source::decode_and_mfp_consolidating({})", name),
+        format!("persist_source::streaming_merge_decode({})", name),
         scope.clone(),
     );
     let operator_info = builder.operator_info();
@@ -881,7 +1039,7 @@ where
         ConsolidatingContainerBuilder<
             Vec<(
                 Result<Row, DataflowError>,
-                (mz_repr::Timestamp, Subtime),
+                ((mz_repr::Timestamp, Subtime), KeyProgress),
                 Diff,
             )>,
         >,
@@ -891,35 +1049,35 @@ where
     let mut datum_vec = mz_repr::DatumVec::new();
     let mut row_builder = Row::default();
 
-    // Extract the MFP if it exists; leave behind an identity MFP in that case.
-    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
     let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
+
+    type InnerTime = ((mz_repr::Timestamp, Subtime), KeyProgress);
 
     builder.build(move |_caps| {
         let name = name.to_owned();
-        // Acquire an activator to reschedule the operator when it has unfinished work.
         let activations = scope.activations();
         let activator = Activator::new(operator_info.address, activations);
 
-        // Groups of pending parts by their capability. We merge all parts at the
-        // same time together to maximize consolidation.
+        // Each entry: a capability (for creating delayed caps / dropped when
+        // done), the merger, and the current max KeyProgress for downgrading.
         let mut pending_mergers: std::collections::VecDeque<(
-            Capability<(mz_repr::Timestamp, Subtime)>,
+            Capability<InnerTime>,
             SourcePartMerger,
         )> = std::collections::VecDeque::new();
 
         move |_frontier| {
-            // Collect newly arrived blobs, grouping by time.
             fetched_input.for_each(|time, data| {
                 let capability = time.retain(0);
 
                 // Find or create a merger for this time.
-                let merger = if let Some((_, m)) =
-                    pending_mergers.iter_mut().find(|(c, _)| c.time() == capability.time())
+                let merger = if let Some((_, m)) = pending_mergers
+                    .iter_mut()
+                    .find(|(c, _)| c.time() == capability.time())
                 {
                     m
                 } else {
-                    pending_mergers.push_back((capability.clone(), SourcePartMerger::new()));
+                    pending_mergers
+                        .push_back((capability, SourcePartMerger::new()));
                     &mut pending_mergers.back_mut().unwrap().1
                 };
 
@@ -939,12 +1097,23 @@ where
             while !pending_mergers.is_empty() && !yield_fn(start_time, work) {
                 let exhausted = {
                     let (cap, merger) = pending_mergers.front_mut().unwrap();
-                    let mut session = output.session_with_builder(cap);
 
                     while let Some(((key, _val), time, diff, is_audit)) = merger.next() {
                         if until.less_equal(&time) {
                             continue;
                         }
+
+                        // Derive KeyProgress from the key prefix and downgrade
+                        // our capability so the consolidate frontier advances.
+                        let key_progress = KeyProgress::from_source_data(&key);
+                        let emit_time: InnerTime = (
+                            (time, cap.time().0 .1),
+                            key_progress,
+                        );
+                        // Downgrade to signal we won't emit earlier key positions.
+                        cap.downgrade(&emit_time);
+                        let mut session = output.session_with_builder(cap);
+
                         match key {
                             SourceData(Ok(row)) => {
                                 if let Some(mfp) = map_filter_project.as_ref() {
@@ -960,44 +1129,37 @@ where
                                         &mut row_builder,
                                     ) {
                                         if is_audit {
-                                            report_pushdown_audit(
-                                                &name,
-                                                panic_on_audit,
-                                            );
+                                            report_pushdown_audit(&name, panic_on_audit);
                                         }
                                         match result {
                                             Ok((row, time, diff)) => {
                                                 if !until.less_equal(&time) {
-                                                    let mut emit_time = *cap.time();
-                                                    emit_time.0 = time;
-                                                    session.give((Ok(row), emit_time, diff));
+                                                    let et = ((time, emit_time.0 .1), key_progress);
+                                                    session.give((Ok(row), et, diff));
                                                     work += 1;
                                                 }
                                             }
                                             Err((err, time, diff)) => {
                                                 if !until.less_equal(&time) {
-                                                    let mut emit_time = *cap.time();
-                                                    emit_time.0 = time;
-                                                    session.give((Err(err), emit_time, diff));
+                                                    let et = ((time, emit_time.0 .1), key_progress);
+                                                    session.give((Err(err), et, diff));
                                                     work += 1;
                                                 }
                                             }
                                         }
                                     }
                                 } else {
-                                    let mut emit_time = *cap.time();
-                                    emit_time.0 = time;
                                     session.give((Ok(row.clone()), emit_time, diff.into()));
                                     work += 1;
                                 }
                             }
                             SourceData(Err(err)) => {
-                                let mut emit_time = *cap.time();
-                                emit_time.0 = time;
                                 session.give((Err(err), emit_time, diff.into()));
                                 work += 1;
                             }
                         }
+                        // Drop session before next iteration to avoid borrow conflict.
+                        drop(session);
                         if yield_fn(start_time, work) {
                             break;
                         }
@@ -1005,12 +1167,9 @@ where
 
                     merger.is_empty()
                 };
-                // The session is dropped here (end of the block above), releasing
-                // the borrow on pending_mergers.
                 if exhausted {
                     pending_mergers.pop_front();
                 } else {
-                    // Merger still has data — we yielded.
                     break;
                 }
             }
