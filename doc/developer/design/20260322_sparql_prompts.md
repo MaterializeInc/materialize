@@ -276,15 +276,15 @@ includes the goal, key files to read, and acceptance criteria.
 >
 > ~~Read first: `src/storage-types/src/sources/` for source format definitions.~~
 
-### Prompt 22: Extract HIR to a separate crate
+### ~~Prompt 22: Extract HIR to a separate crate~~
 
-> Extract `HirRelationExpr`, `HirScalarExpr`, and related HIR types from
+> ~~Extract `HirRelationExpr`, `HirScalarExpr`, and related HIR types from
 > `mz-sql` into a new `mz-hir` crate. This removes the cyclic dependency
 > between `mz-sql` and `mz-sparql` that currently forces deferred SPARQL
 > compilation in the adapter. After extraction, `mz-sparql` can depend on
 > `mz-hir` directly, SPARQL views can store HIR natively, and the
-> placeholder + adapter-side compilation workaround can be removed.
+> placeholder + adapter-side compilation workaround can be removed.~~
 >
-> Read first: `src/sql/src/plan/hir.rs` (HIR types),
+> ~~Read first: `src/sql/src/plan/hir.rs` (HIR types),
 > `src/sql/src/plan/lowering.rs` (HIR → MIR),
-> `src/adapter/src/coord/sequencer.rs` (deferred SPARQL compilation).
+> `src/adapter/src/coord/sequencer.rs` (deferred SPARQL compilation).~~

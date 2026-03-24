@@ -1941,3 +1941,107 @@ supported at the parser/planner level: N-Triples, Turtle, and RDF/XML.
   invalid input, full decoder integration).
 - `bin/fmt`: passes (except missing `buf` tool)
 - `bin/lint`: only pre-existing missing-tool failures
+
+---
+
+## Prompt 22 — Extract HIR to a separate crate (2026-03-24)
+
+### Goal
+
+Extract `HirRelationExpr`, `HirScalarExpr`, and related HIR types from
+`mz-sql` into a new `mz-hir` crate, breaking `mz-sparql`'s dependency on
+`mz-sql` so that `mz-sql` can eventually depend on `mz-sparql` for direct
+SPARQL-to-HIR compilation.
+
+### What was done
+
+**New crate `mz-hir`** (`src/hir/`):
+- Contains all HIR type definitions (~3700 lines): `HirRelationExpr`,
+  `HirScalarExpr`, `AggregateExpr`, `AggregateFunc`, `JoinKind`, `ColumnRef`,
+  `WindowExpr`, `WindowExprType`, `ScalarWindowExpr`, `ScalarWindowFunc`,
+  `ValueWindowExpr`, `ValueWindowFunc`, `AggregateWindowExpr`,
+  `CoercibleScalarExpr`, `CoercibleColumnType`, `CoercibleScalarType`,
+  `AbstractExpr`, `AbstractColumnType`, `Hir` (IR marker), `NameMetadata`.
+- All pure builder methods (map, filter, project, join, etc.), visitor impls
+  (`VisitChildren`), `CollectionPlan` impl, type computation (`typ`, `arity`).
+- `fmt::Display` for `HirScalarExpr` and `AggregateExpr`.
+- `ScalarOps` impl for `HirScalarExpr`.
+- `Explain<'a>` impl for `HirRelationExpr` (with `normalize_subqueries`).
+- `DisplayText<PlanRenderingContext>` impl for explain text formatting.
+- Dependencies: `mz-expr`, `mz-repr`, `mz-ore`, `serde`, `itertools`, `tracing`.
+
+**`mz-sql` changes** (`src/sql/`):
+- `plan/hir.rs`: replaced 4054-line file with `pub use mz_hir::*` re-export +
+  3 extension traits (~350 lines):
+  - `CoercibleScalarExprExt`: `type_as`, `type_as_any`, `cast_to` (depend on
+    `typeconv`).
+  - `HirRelationExprExt`: `bind_parameters`, `contains_parameters`,
+    `finish_maintained`, `trivial_row_set_finishing_hir`,
+    `is_trivial_row_set_finishing_hir`.
+  - `HirScalarExprExt`: `bind_parameters`, `literal_1d_array`,
+    `into_literal_int64`, `into_literal_string`, `into_literal_mz_timestamp`,
+    `try_into_literal_int64` (depend on lowering/PlanError).
+- `plan/lowering.rs`: converted inherent `impl` blocks to extension traits
+  (`HirRelationExprLowering`, `HirScalarExprLowering`, `AggregateExprLowering`).
+- `plan/transform_hir.rs`: converted to `HirScalarExprTransform` trait.
+- `plan/explain/text.rs`: removed Display/DisplayText impls (moved to mz-hir),
+  kept `HirRelationExprTextExplain` trait (now dead code, can be removed).
+- `plan/explain.rs`: removed Explain/ScalarOps impls (moved to mz-hir),
+  re-exports `normalize_subqueries` for backward compat.
+- Added extension trait imports to 10+ call sites across `func.rs`, `query.rs`,
+  `statement/dml.rs`, `statement/ddl.rs`, `side_effecting_func.rs`, etc.
+
+**`mz-sparql` changes**:
+- Replaced `mz-sql` dependency with `mz-hir` in `Cargo.toml`.
+- Changed `use mz_sql::plan::{...}` to `use mz_hir::{...}` in `plan.rs`.
+
+**`mz-adapter` changes**:
+- Added `HirRelationExprLowering`/`HirScalarExprLowering` trait imports to 8
+  files that call `.lower()` or `.lower_uncorrelated()`.
+
+**Other**:
+- `src/sqllogictest/src/runner.rs`: fixed pre-existing missing `sparql` field.
+- Workspace `Cargo.toml`: added `src/hir` to members and default-members.
+
+### Key decisions
+
+1. **Extension traits over newtypes**: Rust's orphan rule prevents adding
+   inherent `impl` blocks to types defined in another crate. Extension traits
+   are the standard Rust pattern; they require `use` imports at call sites but
+   preserve the method-call syntax.
+
+2. **Explain module in mz-hir**: The `Explain`, `DisplayText`, `Display`, and
+   `ScalarOps` trait impls must live in the crate that defines the type (orphan
+   rule). Since these are all pure HIR manipulation with no mz-sql dependencies,
+   they moved to mz-hir's `explain` module.
+
+3. **Lowering stays in mz-sql**: HIR-to-MIR lowering (`applied_to`,
+   `lower_uncorrelated`, `lower`) depends on MIR types and plan configuration
+   that are deeply coupled to mz-sql. These remain as extension traits.
+
+4. **Re-export for backward compat**: `mz-sql` re-exports all mz-hir types via
+   `pub use mz_hir::*` and publishes the lowering traits via
+   `pub use lowering::{HirRelationExprLowering, ...}`. Existing code that
+   imports from `mz_sql::plan` continues to work with just a trait import.
+
+### Future work
+
+- **Direct SPARQL compilation**: Now that `mz-sparql` depends on `mz-hir` (not
+  `mz-sql`), `mz-sql` can add `mz-sparql` as a dependency. The SQL planner
+  could then compile SPARQL directly to HIR at plan time, eliminating the
+  deferred `sequence_sparql` workaround in the adapter.
+- **Clean up dead code**: `HirRelationExprTextExplain` trait in mz-sql's
+  `explain/text.rs` is now shadowed by inherent methods in mz-hir; remove it.
+- **Warn audit**: Address the ~26 warnings (unused imports, dead code) in
+  mz-sql that resulted from the extraction.
+
+### Test results
+
+- `cargo check -p mz-hir`: passes
+- `cargo check -p mz-sparql`: passes (1 pre-existing warning)
+- `cargo check -p mz-sql`: passes (26 warnings, all pre-existing or minor)
+- `cargo check -p mz-adapter`: passes
+- `cargo check -p mz-environmentd`: passes
+- `cargo check -p mz-sqllogictest`: passes
+- `bin/fmt`: passes (except missing `buf` tool)
+- `bin/lint`: only pre-existing missing-tool failures
