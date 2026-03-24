@@ -68,17 +68,20 @@ type FronteggAuthMode = "Frontegg";
 type PasswordAuthMode = "Password";
 type NoneAuthMode = "None";
 type SaslAuthMode = "Sasl";
+type OidcAuthMode = "Oidc";
 type CloudAuthMode = FronteggAuthMode;
 export type SelfManagedAuthMode =
   | PasswordAuthMode
   | NoneAuthMode
-  | SaslAuthMode;
+  | SaslAuthMode
+  | OidcAuthMode;
 
 type AuthMode =
   | FronteggAuthMode
   | PasswordAuthMode
   | NoneAuthMode
-  | SaslAuthMode;
+  | SaslAuthMode
+  | OidcAuthMode;
 
 interface IBaseAppConfig {
   // Discriminant for the type of app config.

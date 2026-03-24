@@ -31,8 +31,9 @@ debugHandlers.log = console.log.bind(console);
 
 // Mocks
 
-// Mock the facade for the frontegg library
+// Mock the facades for the frontegg and oidc libraries
 vi.mock("~/external-library-wrappers/frontegg");
+vi.mock("~/external-library-wrappers/oidc");
 vi.mock("~/hooks/useFlags", () => {
   return { useFlags: () => ({}) };
 });

@@ -15,7 +15,9 @@ import {
   Input,
   InputGroup,
   InputRightElement,
+  Link,
   Spinner,
+  useTheme,
   VStack,
 } from "@chakra-ui/react";
 import { useMutation } from "@tanstack/react-query";
@@ -27,9 +29,12 @@ import { loginOrThrow } from "~/api/materialize/auth";
 import Alert from "~/components/Alert";
 import { LabeledInput } from "~/components/formComponentsV2";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
+import { useAppConfig } from "~/config/useAppConfig";
+import { useAuth } from "~/external-library-wrappers/oidc";
 import { AuthContentContainer, AuthLayout } from "~/layouts/AuthLayout";
 import EyeClosedIcon from "~/svg/EyeClosedIcon";
 import EyeOpenIcon from "~/svg/EyeOpenIcon";
+import { MaterializeTheme } from "~/theme";
 
 type LoginFormState = {
   username: string;
@@ -37,7 +42,7 @@ type LoginFormState = {
   password: string;
 };
 
-export const Login = () => {
+const PasswordLoginForm = () => {
   const { formState, handleSubmit, register, setError } =
     useForm<LoginFormState>({
       defaultValues: {
@@ -77,85 +82,119 @@ export const Login = () => {
   };
 
   return (
+    <form onSubmit={handleSubmit(handleValidSubmit)}>
+      <VStack spacing="6" alignItems="start">
+        {generalFormError && (
+          <Alert variant="error" minWidth="100%" message={generalFormError} />
+        )}
+        <FormControl isInvalid={!!formState.errors.username}>
+          <LabeledInput
+            label="Username"
+            error={formState.errors.username?.message}
+            variant="stretch"
+          >
+            <Input
+              {...register("username", {
+                required: "Username is required.",
+              })}
+              autoCorrect="off"
+              placeholder="Enter your username"
+              size="lg"
+              variant={formState.errors.username ? "error" : "default"}
+            />
+          </LabeledInput>
+        </FormControl>
+
+        <FormControl isInvalid={!!formState.errors.password}>
+          <LabeledInput
+            label="Password"
+            error={formState.errors.password?.message}
+            variant="stretch"
+          >
+            <InputGroup>
+              <Input
+                {...register("password", {
+                  required: "Password is required.",
+                })}
+                autoCorrect="off"
+                placeholder="Enter your password"
+                size="lg"
+                type={showPassword ? "text" : "password"}
+                variant={formState.errors.password ? "error" : "default"}
+              />
+              <InputRightElement h="full">
+                <IconButton
+                  variant="unstyled"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  icon={showPassword ? <EyeOpenIcon /> : <EyeClosedIcon />}
+                  onClick={() => setShowPassword(!showPassword)}
+                  size="lg"
+                />
+              </InputRightElement>
+            </InputGroup>
+          </LabeledInput>
+        </FormControl>
+
+        <Button
+          variant="primary"
+          size="lg"
+          type="submit"
+          isLoading={false}
+          spinner={<Spinner />}
+          width="100%"
+        >
+          Sign in
+        </Button>
+      </VStack>
+    </form>
+  );
+};
+
+const SsoLoginLink = () => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const auth = useAuth();
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSsoLogin = () => {
+    setError(null);
+    auth.signinRedirect().catch((err: unknown) => {
+      setError(
+        err instanceof Error ? err.message : "Failed to initiate SSO login",
+      );
+    });
+  };
+
+  return (
+    <VStack spacing="2" alignItems="center">
+      {error && <Alert variant="error" minWidth="100%" message={error} />}
+      <Link
+        color={colors.accent.brightPurple}
+        fontSize="sm"
+        onClick={handleSsoLogin}
+        cursor="pointer"
+        textDecoration="none"
+        _hover={{ textDecoration: "underline" }}
+      >
+        Use single sign-on
+      </Link>
+    </VStack>
+  );
+};
+
+export const Login = () => {
+  const appConfig = useAppConfig();
+  const isOidc =
+    appConfig.mode === "self-managed" && appConfig.authMode === "Oidc";
+
+  return (
     <AuthLayout>
       <AuthContentContainer>
         <VStack alignItems="stretch" width="100%" mx="12">
           <HStack my={{ base: "8", lg: "0" }} paddingBottom="8">
             <MaterializeLogo height="12" />
           </HStack>
-          <form onSubmit={handleSubmit(handleValidSubmit)}>
-            <VStack spacing="6" alignItems="start">
-              {generalFormError && (
-                <Alert
-                  variant="error"
-                  minWidth="100%"
-                  message={generalFormError}
-                />
-              )}
-              <FormControl isInvalid={!!formState.errors.username}>
-                <LabeledInput
-                  label="Username"
-                  error={formState.errors.username?.message}
-                  variant="stretch"
-                >
-                  <Input
-                    {...register("username", {
-                      required: "Username is required.",
-                    })}
-                    autoCorrect="off"
-                    placeholder="Enter your username"
-                    size="lg"
-                    variant={formState.errors.username ? "error" : "default"}
-                  />
-                </LabeledInput>
-              </FormControl>
-
-              <FormControl isInvalid={!!formState.errors.password}>
-                <LabeledInput
-                  label="Password"
-                  error={formState.errors.password?.message}
-                  variant="stretch"
-                >
-                  <InputGroup>
-                    <Input
-                      {...register("password", {
-                        required: "Password is required.",
-                      })}
-                      autoCorrect="off"
-                      placeholder="Enter your password"
-                      size="lg"
-                      type={showPassword ? "text" : "password"}
-                      variant={formState.errors.password ? "error" : "default"}
-                    />
-                    <InputRightElement h="full">
-                      <IconButton
-                        variant="unstyled"
-                        aria-label={
-                          showPassword ? "Hide password" : "Show password"
-                        }
-                        icon={
-                          showPassword ? <EyeOpenIcon /> : <EyeClosedIcon />
-                        }
-                        onClick={() => setShowPassword(!showPassword)}
-                        size="lg"
-                      />
-                    </InputRightElement>
-                  </InputGroup>
-                </LabeledInput>
-              </FormControl>
-
-              <Button
-                variant="primary"
-                size="lg"
-                type="submit"
-                isLoading={false}
-                spinner={<Spinner />}
-                width="100%"
-              >
-                Sign in
-              </Button>
-            </VStack>
-          </form>
+          <PasswordLoginForm />
+          {isOidc && <SsoLoginLink />}
         </VStack>
       </AuthContentContainer>
     </AuthLayout>
