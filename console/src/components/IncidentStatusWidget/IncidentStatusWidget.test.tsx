@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { ErrorBoundary } from "@sentry/react";
-import { screen } from "@testing-library/dom";
+import { screen, waitFor } from "@testing-library/dom";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import React from "react";
@@ -62,7 +62,9 @@ describe("IncidentStatusWidget", () => {
     const incident = getIncident();
     server.use(buildStatusResponse({ incidents: [incident] }));
     renderComponent(<IncidentStatusWidget />);
-    expect(await screen.findByText(incident.name)).toBeVisible();
+    await waitFor(async () =>
+      expect(await screen.findByText(incident.name)).toBeVisible(),
+    );
   });
 
   it("displays multiple toasts", async () => {
@@ -78,8 +80,12 @@ describe("IncidentStatusWidget", () => {
     };
     server.use(buildStatusResponse({ incidents: [incident1, incident2] }));
     renderComponent(<IncidentStatusWidget />);
-    expect(await screen.findByText(incident1.name)).toBeVisible();
-    expect(await screen.findByText(incident2.name)).toBeVisible();
+    await waitFor(async () =>
+      expect(await screen.findByText(incident1.name)).toBeVisible(),
+    );
+    await waitFor(async () =>
+      expect(await screen.findByText(incident2.name)).toBeVisible(),
+    );
   });
 
   it("closing a toast dismisses it", async () => {
@@ -87,7 +93,9 @@ describe("IncidentStatusWidget", () => {
     const incident = getIncident();
     server.use(buildStatusResponse({ incidents: [incident] }));
     renderComponent(<IncidentStatusWidget />);
-    expect(await screen.findByText(incident.name)).toBeVisible();
+    await waitFor(async () =>
+      expect(await screen.findByText(incident.name)).toBeVisible(),
+    );
     const closeButton = screen.getByLabelText("Close");
     await user.click(closeButton);
     expect(screen.queryByText(incident.name)).not.toBeInTheDocument();
