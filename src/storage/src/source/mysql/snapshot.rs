@@ -100,7 +100,7 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{CapabilitySet, Concat, ConnectLoop, Feedback};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Timestamp;
-use tracing::{error, trace};
+use tracing::trace;
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
@@ -157,21 +157,25 @@ struct PkRange {
 }
 
 /// Compute this worker's PK range. Returns None if this worker has no work.
+///
+/// Uses `i128` intermediate arithmetic to avoid overflow when the PK range
+/// spans a large portion of the `i64` domain (e.g. `min_val = 0, max_val = 2^62`).
 fn worker_pk_range(bounds: &PkBounds, worker_id: usize, worker_count: usize) -> Option<PkRange> {
-    let range_size = bounds
-        .max_val
-        .checked_sub(bounds.min_val)
-        .and_then(|v| v.checked_add(1))
-        .unwrap_or(1);
-    let range_size_usize = usize::try_from(range_size).unwrap_or(usize::MAX);
-    let effective = std::cmp::min(worker_count, range_size_usize);
-    if worker_id >= effective {
+    // Use i128 throughout to avoid overflow on large Int64 PK ranges.
+    let min = i128::from(bounds.min_val);
+    let max = i128::from(bounds.max_val);
+    let range_size = max - min + 1;
+    if range_size <= 0 {
         return None;
     }
-    let worker_id_i64 = i64::try_from(worker_id).expect("worker_id fits in i64");
-    let effective_i64 = i64::try_from(effective).expect("effective fits in i64");
-    let start = bounds.min_val + worker_id_i64 * range_size / effective_i64;
-    let is_last = worker_id == effective - 1;
+    let effective = std::cmp::min(i128::cast_from(worker_count), range_size);
+    if i128::cast_from(worker_id) >= effective {
+        return None;
+    }
+    let wid = i128::cast_from(worker_id);
+    let start_128 = min + wid * range_size / effective;
+    let start = i64::try_from(start_128).expect("PK range start fits in i64");
+    let is_last = wid == effective - 1;
     if is_last {
         Some(PkRange {
             pk_col: bounds.pk_col.clone(),
@@ -179,13 +183,41 @@ fn worker_pk_range(bounds: &PkBounds, worker_id: usize, worker_count: usize) -> 
             upper: None,
         })
     } else {
-        let next_worker_i64 = i64::try_from(worker_id + 1).expect("worker_id+1 fits in i64");
-        let end = bounds.min_val + next_worker_i64 * range_size / effective_i64;
+        let end_128 = min + (wid + 1) * range_size / effective;
+        let end = i64::try_from(end_128).expect("PK range end fits in i64");
         Some(PkRange {
             pk_col: bounds.pk_col.clone(),
             lower: start,
             upper: Some(end),
         })
+    }
+}
+
+/// Error from the snapshot leader's lock-acquisition / GTID-reading phase.
+/// Allows the leader to broadcast a failure sentinel before returning, so
+/// that non-leader workers do not deadlock waiting for `SnapshotInfo`.
+enum LeaderError {
+    /// A definite error (e.g. table dropped) — emitted for every output.
+    Definite(DefiniteError),
+    /// A transient error — causes the source to restart.
+    Transient(TransientError),
+}
+
+impl From<mysql_async::Error> for LeaderError {
+    fn from(e: mysql_async::Error) -> Self {
+        LeaderError::Transient(e.into())
+    }
+}
+
+impl From<MySqlError> for LeaderError {
+    fn from(e: MySqlError) -> Self {
+        LeaderError::Transient(e.into())
+    }
+}
+
+impl From<anyhow::Error> for LeaderError {
+    fn from(e: anyhow::Error) -> Self {
+        LeaderError::Transient(e.into())
     }
 }
 
@@ -228,7 +260,8 @@ pub(crate) fn render<'scope>(
     let mut all_outputs = vec![];
     // ALL workers get ALL tables that need snapshotting (for parallel PK-range reads).
     let mut tables_to_snapshot: BTreeMap<MySqlTableName, Vec<SourceOutputInfo>> = BTreeMap::new();
-    // Maps MySQL table name to export `SourceStatistics`. Only populated for the responsible worker.
+    // Maps MySQL table name to export `SourceStatistics`.
+    // Every worker keeps handles so `snapshot_records_staged` can sum local contributions.
     let mut export_statistics: BTreeMap<MySqlTableName, Vec<SourceStatistics>> = BTreeMap::new();
     for output in source_outputs.into_iter() {
         // Determine which outputs need to be snapshot and which already have been.
@@ -237,18 +270,15 @@ pub(crate) fn render<'scope>(
             continue;
         }
         all_outputs.push(output.output_index);
-        // Statistics only for the responsible worker to avoid double-counting
-        if config.responsible_for(&output.table_name) {
-            let export_stats = config
-                .statistics
-                .get(&output.export_id)
-                .expect("statistics have been intialized")
-                .clone();
-            export_statistics
-                .entry(output.table_name.clone())
-                .or_insert_with(Vec::new)
-                .push(export_stats);
-        }
+        let export_stats = config
+            .statistics
+            .get(&output.export_id)
+            .expect("statistics have been intialized")
+            .clone();
+        export_statistics
+            .entry(output.table_name.clone())
+            .or_insert_with(Vec::new)
+            .push(export_stats);
         tables_to_snapshot
             .entry(output.table_name.clone())
             .or_insert_with(Vec::new)
@@ -296,129 +326,170 @@ pub(crate) fn render<'scope>(
                     .await?;
                 let task_name = format!("timely-{worker_id} MySQL snapshotter");
 
-                // Phase B: Leader acquires locks, reads GTID, queries PK bounds, broadcasts
+                // Phase B: Leader acquires locks, reads GTID, queries PK bounds, broadcasts.
+                //
+                // All fallible leader work is wrapped in an inner async block so that
+                // we ALWAYS broadcast a result (success or failure) before returning.
+                // Without this, a leader error would drop `snapshot_cap_set` without
+                // broadcasting, causing non-leader workers to deadlock waiting for
+                // `SnapshotInfo` on the feedback loop.
                 let mut lock_conn = if is_snapshot_leader {
-                    let lock_clauses = tables_to_snapshot
-                        .keys()
-                        .map(|t| format!("{} READ", t))
-                        .collect::<Vec<String>>()
-                        .join(", ");
-                    let mut lock_conn = connection_config
-                        .connect(
-                            &task_name,
-                            &config.config.connection_context.ssh_tunnel_manager,
-                        )
-                        .await?;
-                    if let Some(timeout) = config
-                        .config
-                        .parameters
-                        .mysql_source_timeouts
-                        .snapshot_lock_wait_timeout
-                    {
-                        lock_conn
-                            .query_drop(format!(
-                                "SET @@session.lock_wait_timeout = {}",
-                                timeout.as_secs()
-                            ))
-                            .await?;
-                    }
-
-                    trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
-                    match lock_conn
-                        .query_drop(format!("LOCK TABLES {lock_clauses}"))
-                        .await
-                    {
-                        // Handle the case where a table we are snapshotting has been dropped or renamed.
-                        Err(mysql_async::Error::Server(mysql_async::ServerError {
-                            code,
-                            message,
-                            ..
-                        })) if code == ER_NO_SUCH_TABLE => {
-                            trace!(%id, "timely-{worker_id} received unknown table error from \
-                                         lock query");
-                            let err = DefiniteError::TableDropped(message);
-                            return Ok(return_definite_error(
-                                err,
-                                &all_outputs,
-                                &raw_handle,
-                                data_cap_set,
-                                &definite_error_handle,
-                                definite_error_cap_set,
+                    let leader_result: Result<_, LeaderError> = async {
+                        let lock_clauses = tables_to_snapshot
+                            .keys()
+                            .map(|t| format!("{} READ", t))
+                            .collect::<Vec<String>>()
+                            .join(", ");
+                        let mut lock_conn = connection_config
+                            .connect(
+                                &task_name,
+                                &config.config.connection_context.ssh_tunnel_manager,
                             )
-                            .await);
+                            .await?;
+                        if let Some(timeout) = config
+                            .config
+                            .parameters
+                            .mysql_source_timeouts
+                            .snapshot_lock_wait_timeout
+                        {
+                            lock_conn
+                                .query_drop(format!(
+                                    "SET @@session.lock_wait_timeout = {}",
+                                    timeout.as_secs()
+                                ))
+                                .await?;
                         }
-                        e => e?,
-                    };
 
-                    // Record the frontier of future GTIDs based on the executed GTID set at the
-                    // start of the snapshot
-                    let snapshot_gtid_set =
-                        query_sys_var(&mut lock_conn, "global.gtid_executed").await?;
+                        trace!(%id, "timely-{worker_id} acquiring table locks: {lock_clauses}");
+                        match lock_conn
+                            .query_drop(format!("LOCK TABLES {lock_clauses}"))
+                            .await
+                        {
+                            Err(mysql_async::Error::Server(mysql_async::ServerError {
+                                code,
+                                message,
+                                ..
+                            })) if code == ER_NO_SUCH_TABLE => {
+                                trace!(%id, "timely-{worker_id} received unknown table error from \
+                                             lock query");
+                                return Err(LeaderError::Definite(DefiniteError::TableDropped(
+                                    message,
+                                )));
+                            }
+                            e => e?,
+                        };
 
-                    trace!(%id, "timely-{worker_id} acquired table locks");
+                        // Record the frontier of future GTIDs based on the executed GTID set
+                        // at the start of the snapshot
+                        let snapshot_gtid_set =
+                            query_sys_var(&mut lock_conn, "global.gtid_executed").await?;
 
-                    // Query PK bounds for each table
-                    let mut pk_bounds_map = BTreeMap::new();
-                    for (table, outputs) in &tables_to_snapshot {
-                        let desc = &outputs[0].desc;
-                        if let Some(pk_col_name) = integer_pk_col(desc) {
-                            let quoted = quote_identifier(pk_col_name);
-                            let query = format!(
-                                "SELECT MIN({}) AS pk_min, MAX({}) AS pk_max FROM {}",
-                                quoted, quoted, table
-                            );
-                            let row: Option<(Option<i64>, Option<i64>)> =
-                                lock_conn.query_first(query).await?;
-                            match row {
-                                Some((Some(min_val), Some(max_val)))
-                                    if max_val - min_val + 1
-                                        >= i64::try_from(config.worker_count)
-                                            .unwrap_or(i64::MAX) =>
-                                {
-                                    pk_bounds_map.insert(
-                                        table.clone(),
-                                        Some(PkBounds {
-                                            pk_col: quoted,
-                                            min_val,
-                                            max_val,
-                                        }),
-                                    );
+                        trace!(%id, "timely-{worker_id} acquired table locks");
+
+                        // Query PK bounds for each table
+                        let mut pk_bounds_map = BTreeMap::new();
+                        for (table, outputs) in &tables_to_snapshot {
+                            let desc = &outputs[0].desc;
+                            if let Some(pk_col_name) = integer_pk_col(desc) {
+                                let quoted = quote_identifier(pk_col_name);
+                                let query = format!(
+                                    "SELECT MIN({}) AS pk_min, MAX({}) AS pk_max FROM {}",
+                                    quoted, quoted, table
+                                );
+                                let row: Option<(Option<i64>, Option<i64>)> =
+                                    lock_conn.query_first(query).await?;
+                                match row {
+                                    Some((Some(min_val), Some(max_val)))
+                                        if i128::from(max_val) - i128::from(min_val) + 1
+                                            >= i128::cast_from(config.worker_count) =>
+                                    {
+                                        pk_bounds_map.insert(
+                                            table.clone(),
+                                            Some(PkBounds {
+                                                pk_col: quoted,
+                                                min_val,
+                                                max_val,
+                                            }),
+                                        );
+                                    }
+                                    _ => {
+                                        // Table is empty, too small to
+                                        // parallelize, or has NULL PKs.
+                                        pk_bounds_map.insert(table.clone(), None);
+                                    }
                                 }
-                                _ => {
-                                    // Table is empty, too small to
-                                    // parallelize, or has NULL PKs.
-                                    pk_bounds_map.insert(table.clone(), None);
+                            } else {
+                                pk_bounds_map.insert(table.clone(), None);
+                            }
+                        }
+
+                        let snapshot_info = SnapshotInfo {
+                            gtid_set: snapshot_gtid_set,
+                            pk_bounds: pk_bounds_map,
+                        };
+                        Ok((snapshot_info, lock_conn))
+                    }
+                    .await;
+
+                    match leader_result {
+                        Ok((info, conn)) => {
+                            trace!(%id, "timely-{worker_id} broadcasting snapshot info: {info:?}");
+                            snapshot_handle.give(&snapshot_cap_set[0], Some(info));
+                            Some(conn)
+                        }
+                        Err(err) => {
+                            // CRITICAL: broadcast None so non-leaders exit cleanly
+                            // instead of deadlocking on the feedback loop.
+                            trace!(%id, "timely-{worker_id} leader failed, broadcasting \
+                                         error sentinel");
+                            snapshot_handle.give(&snapshot_cap_set[0], None);
+                            match err {
+                                LeaderError::Definite(e) => {
+                                    return Ok(return_definite_error(
+                                        e,
+                                        &all_outputs,
+                                        &raw_handle,
+                                        data_cap_set,
+                                        &definite_error_handle,
+                                        definite_error_cap_set,
+                                    )
+                                    .await);
+                                }
+                                LeaderError::Transient(e) => {
+                                    return Err(e);
                                 }
                             }
-                        } else {
-                            pk_bounds_map.insert(table.clone(), None);
                         }
                     }
-
-                    let snapshot_info = SnapshotInfo {
-                        gtid_set: snapshot_gtid_set,
-                        pk_bounds: pk_bounds_map,
-                    };
-                    trace!(%id, "timely-{worker_id} broadcasting snapshot info: {snapshot_info:?}");
-                    snapshot_handle.give(&snapshot_cap_set[0], snapshot_info);
-
-                    // Also start leader's own CONSISTENT SNAPSHOT transaction
-                    // (done after broadcasting so other workers can start connecting)
-                    Some(lock_conn)
                 } else {
                     None
                 };
 
-                // Phase C: All workers receive broadcast
-                let snapshot_info: SnapshotInfo = 'recv: loop {
+                // Phase C: All workers receive broadcast.
+                // The payload is `Option<SnapshotInfo>`: `Some` on success,
+                // `None` if the leader encountered an error.
+                let snapshot_info: Option<SnapshotInfo> = 'recv: loop {
                     match snapshot_input.next().await {
                         Some(AsyncEvent::Data(_, mut data)) => {
-                            if let Some(info) = data.pop() {
-                                break 'recv info;
+                            if let Some(msg) = data.pop() {
+                                break 'recv msg;
                             }
                         }
                         Some(AsyncEvent::Progress(_)) => continue,
-                        None => panic!("feedback closed before snapshot info"),
+                        None => {
+                            // Feedback stream closed without data — the leader
+                            // must have failed. Return cleanly; the leader's
+                            // operator instance handles error propagation.
+                            break 'recv None;
+                        }
+                    }
+                };
+                let snapshot_info = match snapshot_info {
+                    Some(info) => info,
+                    None => {
+                        // Leader signaled failure. Bail out — errors are
+                        // already propagated by the leader's worker.
+                        return Ok(());
                     }
                 };
 
@@ -470,23 +541,21 @@ pub(crate) fn render<'scope>(
                             &config.config.connection_context.ssh_tunnel_manager,
                         )
                         .await?;
-                    if !is_snapshot_leader {
-                        match validate_mysql_repl_settings(&mut c).await {
-                            Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
-                                return Ok(return_definite_error(
-                                    DefiniteError::ServerConfigurationError(err.to_string()),
-                                    &all_outputs,
-                                    &raw_handle,
-                                    data_cap_set,
-                                    &definite_error_handle,
-                                    definite_error_cap_set,
-                                )
-                                .await);
-                            }
-                            Err(err) => Err(err)?,
-                            Ok(()) => (),
-                        };
-                    }
+                    match validate_mysql_repl_settings(&mut c).await {
+                        Err(err @ MySqlError::InvalidSystemSetting { .. }) => {
+                            return Ok(return_definite_error(
+                                DefiniteError::ServerConfigurationError(err.to_string()),
+                                &all_outputs,
+                                &raw_handle,
+                                data_cap_set,
+                                &definite_error_handle,
+                                definite_error_cap_set,
+                            )
+                            .await);
+                        }
+                        Err(err) => Err(err)?,
+                        Ok(()) => (),
+                    };
                     Some(c)
                 } else {
                     trace!(%id, "timely-{worker_id} has no tables to read, \
@@ -539,11 +608,13 @@ pub(crate) fn render<'scope>(
                     return Ok(());
                 };
 
-                // Phase F: Verify schemas
+                // Phase F: Verify schemas — only for tables this worker reads,
+                // to avoid redundant queries across workers.
                 let errored_outputs = verify_schemas(
                     tx,
                     tables_to_snapshot
                         .iter()
+                        .filter(|(t, _)| table_ranges.contains_key(t))
                         .map(|(k, v)| (k, v.as_slice()))
                         .collect(),
                 )
@@ -569,24 +640,24 @@ pub(crate) fn render<'scope>(
                 }
                 tables_to_snapshot.retain(|_, outputs| !outputs.is_empty());
 
-                // Phase G: Fetch snapshot size (responsible worker only)
-                let snapshot_total = if !export_statistics.is_empty() {
+                // Phase G: The leader publishes the full snapshot size so the summed
+                // worker-local gauges reflect the upstream total without double-counting.
+                if is_snapshot_leader {
                     fetch_snapshot_size(
                         tx,
                         tables_to_snapshot
                             .iter()
-                            .filter_map(|(name, outputs)| {
-                                export_statistics
+                            .map(|(name, outputs)| {
+                                let stats = export_statistics
                                     .get(name)
-                                    .map(|stats| (name.clone(), outputs.len(), stats))
+                                    .expect("statistics are initialized for each output");
+                                (name.clone(), outputs.len(), stats)
                             })
                             .collect(),
                         metrics,
                     )
-                    .await?
-                } else {
-                    0
-                };
+                    .await?;
+                }
 
                 if tables_to_snapshot.is_empty() {
                     return Ok(());
@@ -685,12 +756,6 @@ pub(crate) fn render<'scope>(
                     }
                 }
                 *rewind_cap_set = CapabilitySet::new();
-
-                // TODO (maz): Should we remove this to match Postgres?
-                if !export_statistics.is_empty() && snapshot_staged_total < snapshot_total {
-                    error!(%id, "timely-{worker_id} snapshot size {snapshot_total} is somehow \
-                                 bigger than records staged {snapshot_staged_total}");
-                }
 
                 Ok(())
             }))
@@ -928,6 +993,24 @@ mod tests {
         assert!(r1.upper.is_none());
         // Workers beyond effective count get nothing
         assert!(worker_pk_range(&small_bounds, 2, 10).is_none());
+
+        // Large Int64 range — would overflow with i64 arithmetic
+        let large_bounds = PkBounds {
+            pk_col: "`id`".to_string(),
+            min_val: 0,
+            max_val: i64::MAX,
+        };
+        // With 4 workers this should not panic or wrap
+        let r0 = worker_pk_range(&large_bounds, 0, 4).expect("worker 0");
+        assert_eq!(r0.lower, 0);
+        let r3 = worker_pk_range(&large_bounds, 3, 4).expect("worker 3");
+        assert!(r3.upper.is_none()); // last worker, open-ended
+        // Ranges should be contiguous: each worker's start == previous worker's end
+        let r1 = worker_pk_range(&large_bounds, 1, 4).expect("worker 1");
+        let r2 = worker_pk_range(&large_bounds, 2, 4).expect("worker 2");
+        assert_eq!(r0.upper, Some(r1.lower));
+        assert_eq!(r1.upper, Some(r2.lower));
+        assert_eq!(r2.upper, Some(r3.lower));
     }
 
     #[mz_ore::test]
