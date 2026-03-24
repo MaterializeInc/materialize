@@ -430,7 +430,7 @@ impl DatabaseObject {
         cluster_set
     }
 
-    /// Convert the statement to a Query<Raw> for type checking purposes.
+    /// Convert the statement to a `Query<Raw>` for type checking purposes.
     pub fn to_query(&self) -> Option<Query<Raw>> {
         match &self.stmt {
             Statement::CreateView(stmt) => Some(stmt.definition.query.clone()),

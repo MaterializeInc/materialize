@@ -400,7 +400,7 @@ pub fn generate_random_env_name() -> String {
 /// instead of executed.
 ///
 /// In dry-run mode, statements are always recorded in an internal log
-/// that can be drained per-object via [`take_statements()`].
+/// that can be drained per-object via `take_statements()`.
 pub struct DeploymentExecutor<'a> {
     client: &'a Client,
     dry_run: bool,

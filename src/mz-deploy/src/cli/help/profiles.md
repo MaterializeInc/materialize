@@ -16,7 +16,7 @@ Each profile contains:
 
 - **host** — Hostname or IP address of the Materialize instance.
 - **port** — Port number (default: 6875).
-- **username** — Database user (optional).
+- **username** — Database user.
 - **password** — Database password (optional, supports variable substitution).
 
 ## Where profiles are stored

@@ -141,7 +141,7 @@ pub struct Profile {
     pub name: String,
     pub host: String,
     pub port: u16,
-    pub username: Option<String>,
+    pub username: String,
     pub password: Option<String>,
 }
 
@@ -150,8 +150,7 @@ struct ProfileData {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    #[serde(alias = "user")]
-    pub username: Option<String>,
+    pub username: String,
     pub password: Option<String>,
 }
 

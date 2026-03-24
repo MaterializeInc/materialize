@@ -67,7 +67,7 @@ impl TypeInfoClient<'_> {
                 .await?;
 
             let mut columns = BTreeMap::new();
-            for row in rows {
+            for (position, row) in rows.iter().enumerate() {
                 let name: String = row.get("name");
                 let type_str: String = row.get("type");
                 let nullable: bool = row.get("nullable");
@@ -77,6 +77,7 @@ impl TypeInfoClient<'_> {
                     ColumnType {
                         r#type: type_str,
                         nullable,
+                        position,
                     },
                 );
             }
@@ -152,7 +153,7 @@ impl TypeInfoClient<'_> {
             .await?;
 
         let mut columns = BTreeMap::new();
-        for row in rows {
+        for (position, row) in rows.iter().enumerate() {
             let name: String = row.get("name");
             let type_str: String = row.get("type");
             let nullable: bool = row.get("nullable");
@@ -162,6 +163,7 @@ impl TypeInfoClient<'_> {
                 ColumnType {
                     r#type: type_str,
                     nullable,
+                    position,
                 },
             );
         }

@@ -410,7 +410,7 @@ fn get_columns_for_stub(
     // Try deriving from CREATE TABLE AST
     if let Some(Statement::CreateTable(table)) = stmt {
         let mut columns = BTreeMap::new();
-        for col in &table.columns {
+        for (position, col) in table.columns.iter().enumerate() {
             let nullable = !col
                 .options
                 .iter()
@@ -420,6 +420,7 @@ fn get_columns_for_stub(
                 ColumnType {
                     r#type: col.data_type.to_string(),
                     nullable,
+                    position,
                 },
             );
         }

@@ -58,8 +58,8 @@ def create_profiles(c: Composition) -> None:
     mz_port = c.default_port("materialized")
     with open(PROJECTS_DIR / "profiles.toml", "w") as f:
         f.write(
-            f'[default]\nhost = "127.0.0.1"\nport = {mz_port}\nuser = "materialize"\n\n'
-            f'[staging]\nhost = "127.0.0.1"\nport = {mz_port}\nuser = "materialize"\n'
+            f'[default]\nhost = "127.0.0.1"\nport = {mz_port}\nusername = "materialize"\n\n'
+            f'[staging]\nhost = "127.0.0.1"\nport = {mz_port}\nusername = "materialize"\n'
         )
 
 

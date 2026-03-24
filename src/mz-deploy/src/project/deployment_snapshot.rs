@@ -309,7 +309,7 @@ pub async fn load_from_database(
 /// # Arguments
 /// * `client` - Database client connection
 /// * `snapshot` - The deployment snapshot to write (includes per-schema deployment kind)
-/// * `deploy_id` - Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged)
+/// * `deploy_id` - Deploy ID (e.g., `"<init>"` for direct deploy, `"staging"` for staged)
 /// * `metadata` - Deployment metadata (user, git commit, etc.)
 /// * `promoted_at` - Optional promoted_at timestamp (Some(now) for direct apply, None for stage)
 pub async fn write_to_database(

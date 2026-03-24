@@ -1034,6 +1034,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         users_cols.insert(
@@ -1041,6 +1042,7 @@ mod tests {
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 1,
             },
         );
         users_cols.insert(
@@ -1048,6 +1050,7 @@ mod tests {
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 2,
             },
         );
         objects.insert("materialize.public.users".to_string(), users_cols);
@@ -1059,6 +1062,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         orders_cols.insert(
@@ -1066,6 +1070,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 1,
             },
         );
         orders_cols.insert(
@@ -1073,6 +1078,7 @@ mod tests {
             ColumnType {
                 r#type: "numeric".to_string(),
                 nullable: true,
+                position: 2,
             },
         );
         objects.insert("materialize.public.orders".to_string(), orders_cols);
@@ -1084,6 +1090,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         summary_cols.insert(
@@ -1091,6 +1098,7 @@ mod tests {
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 1,
             },
         );
         summary_cols.insert(
@@ -1098,6 +1106,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: true,
+                position: 2,
             },
         );
         objects.insert(
@@ -1747,6 +1756,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         actual_columns.insert(
@@ -1754,6 +1764,7 @@ mod tests {
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 0,
             },
         );
 
@@ -1776,6 +1787,7 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         actual_columns.insert(
@@ -1783,6 +1795,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
 
@@ -1805,6 +1818,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
 
@@ -1823,6 +1837,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         actual_columns.insert(
@@ -1830,6 +1845,7 @@ mod tests {
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 0,
             },
         );
 
@@ -1848,6 +1864,7 @@ mod tests {
             ColumnType {
                 r#type: "bigint".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
 
@@ -2012,6 +2029,7 @@ mod tests {
             ColumnType {
                 r#type: "list".to_string(),
                 nullable: true,
+                position: 0,
             },
         );
 
@@ -2035,6 +2053,7 @@ mod tests {
             ColumnType {
                 r#type: "map".to_string(),
                 nullable: true,
+                position: 0,
             },
         );
 

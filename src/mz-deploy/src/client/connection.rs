@@ -92,9 +92,10 @@ impl Client {
         // and single quotes/backslashes within values need to be escaped
         let mut conn_str = format!("host={} port={}", profile.host, profile.port);
 
-        if let Some(ref username) = profile.username {
-            conn_str.push_str(&format!(" user='{}'", escape_conn_string_value(username)));
-        }
+        conn_str.push_str(&format!(
+            " user='{}'",
+            escape_conn_string_value(&profile.username)
+        ));
 
         if let Some(ref password) = profile.password {
             conn_str.push_str(&format!(

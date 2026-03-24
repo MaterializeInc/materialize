@@ -73,9 +73,19 @@
       },
       {
         "command": "mz-deploy.openWorksheet",
-        "title": "mz-deploy: Open Worksheet"
+        "title": "New Worksheet",
+        "icon": "$(new-file)"
       }
     ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "mz-deploy.openWorksheet",
+          "when": "view == mz-deploy-catalog",
+          "group": "navigation"
+        }
+      ]
+    },
     "colors": [
       {
         "id": "mzDeploy.keywordForeground",

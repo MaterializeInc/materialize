@@ -10,9 +10,9 @@
 //!
 //! Each provider is a submodule that implements [`SecretProvider`]:
 //!
-//! - [`env_var::EnvVarProvider`] — reads from environment variables
-//! - [`aws_secret::AwsSecretProvider`] — reads from AWS Secrets Manager
-//! - [`aws_secret::UnconfiguredAwsProvider`] — placeholder when `aws_profile` is not set
+//! - `env_var::EnvVarProvider` — reads from environment variables
+//! - `aws_secret::AwsSecretProvider` — reads from AWS Secrets Manager
+//! - `aws_secret::UnconfiguredAwsProvider` — placeholder when `aws_profile` is not set
 
 mod aws_secret;
 mod env_var;

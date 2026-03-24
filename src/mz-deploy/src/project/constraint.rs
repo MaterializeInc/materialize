@@ -29,7 +29,7 @@
 //! # Pipeline integration
 //!
 //! Lowering happens during the `typed → planned` conversion in
-//! [`super::planned::dependency`]. The companion MVs are injected as first-class
+//! `planned::dependency`. The companion MVs are injected as first-class
 //! objects in the planned project, so they automatically participate in
 //! dependency tracking, topological sorting, change detection, staging
 //! normalization, and blue/green deployment — no special-casing required

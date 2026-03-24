@@ -362,12 +362,14 @@ mod tests {
     fn columns(pairs: &[(&str, &str, bool)]) -> BTreeMap<String, ColumnType> {
         pairs
             .iter()
-            .map(|(name, typ, nullable)| {
+            .enumerate()
+            .map(|(position, (name, typ, nullable))| {
                 (
                     name.to_string(),
                     ColumnType {
                         r#type: typ.to_string(),
                         nullable: *nullable,
+                        position,
                     },
                 )
             })

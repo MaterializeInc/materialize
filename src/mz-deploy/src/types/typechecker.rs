@@ -943,12 +943,14 @@ mod plan_dep_creation_tests {
         for (oid, cols) in entries {
             let columns = cols
                 .iter()
-                .map(|(name, typ)| {
+                .enumerate()
+                .map(|(position, (name, typ))| {
                     (
                         name.to_string(),
                         ColumnType {
                             r#type: typ.to_string(),
                             nullable: true,
+                            position,
                         },
                     )
                 })

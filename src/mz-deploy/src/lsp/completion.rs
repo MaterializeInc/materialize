@@ -252,7 +252,7 @@ fn gather_objects<'a>(
     for id in &project.external_dependencies {
         let kind = types_cache
             .map(|tc| tc.get_kind(&id.to_string()))
-            .unwrap_or_default();
+            .unwrap_or(ObjectKind::Table);
         if let Some((label, sort_key)) =
             qualify_and_filter(id, &ctx.default_db, &ctx.default_schema, ctx.prefix)
         {

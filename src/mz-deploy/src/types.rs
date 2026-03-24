@@ -7,7 +7,7 @@
 //!
 //! ## Lock File Flow
 //!
-//! 1. `gen-data-contracts` queries the live region via [`client::type_info`] and
+//! 1. `gen-data-contracts` queries the live region via `client::type_info` and
 //!    writes `types.lock`.
 //! 2. During `compile`, the lock file is loaded and its schemas are used to
 //!    resolve external dependency columns.
@@ -21,7 +21,7 @@
 //! To avoid re-validating every view on each compile, mz-deploy supports
 //! incremental type checking via a `typecheck.snapshot` file stored in the
 //! build directory alongside `types.cache`. The incremental logic is
-//! encapsulated in the [`incremental`] submodule with a minimal public API:
+//! encapsulated in the `incremental` submodule with a minimal public API:
 //!
 //! - **[`plan_typecheck`]** — Compares current AST hashes against the snapshot
 //!   and returns a [`TypecheckPlan`] that is either up-to-date (skip Docker)
@@ -45,9 +45,9 @@
 //!
 //! ## Submodules
 //!
-//! - **[`incremental`]** — Plan computation, dirty propagation, and snapshot
+//! - **`incremental`** — Plan computation, dirty propagation, and snapshot
 //!   management for incremental type checking.
-//! - **[`typechecker`]** — [`TypeChecker`] trait definition, the
+//! - **`typechecker`** — [`TypeChecker`] trait definition, the
 //!   [`typecheck_with_client`] helper, and structured error types for
 //!   per-object type-check failures.
 //! - **Build artifacts** — The `target/` directory holds `types.cache` (column
@@ -85,12 +85,6 @@ pub enum ObjectKind {
     Sink,
     Secret,
     Connection,
-}
-
-impl Default for ObjectKind {
-    fn default() -> Self {
-        ObjectKind::Table
-    }
 }
 
 impl ObjectKind {
@@ -168,6 +162,9 @@ pub enum TypesError {
 pub struct ColumnType {
     pub r#type: String,
     pub nullable: bool,
+    /// Original column position (0-based) from the database schema.
+    #[serde(default)]
+    pub position: usize,
 }
 
 /// In-memory representation of a `types.lock` or `types.cache` file.
@@ -178,8 +175,7 @@ pub struct ColumnType {
 pub struct Types {
     pub version: u8,
     pub tables: BTreeMap<String, BTreeMap<String, ColumnType>>,
-    /// Object kind for each fully-qualified name. Missing entries default to `Table`.
-    #[serde(default, skip_serializing)]
+    /// Object kind for each fully-qualified name.
     pub kinds: BTreeMap<String, ObjectKind>,
 }
 
@@ -206,9 +202,7 @@ struct TableLock {
     database: String,
     schema: String,
     name: String,
-    #[serde(default)]
     kind: ObjectKind,
-    #[serde(default, alias = "column")]
     columns: Vec<ColumnLock>,
 }
 
@@ -233,17 +227,18 @@ impl From<&Types> for TypesLock {
                     parts[2].to_string(),
                 );
 
-                let mut cols: Vec<ColumnLock> = columns
-                    .iter()
+                let mut cols: Vec<_> = columns.iter().collect();
+                cols.sort_by_key(|(_, ct)| ct.position);
+                let cols: Vec<ColumnLock> = cols
+                    .into_iter()
                     .map(|(col_name, col_type)| ColumnLock {
                         name: col_name.clone(),
                         r#type: col_type.r#type.clone(),
                         nullable: col_type.nullable,
                     })
                     .collect();
-                cols.sort_by(|a, b| a.name.cmp(&b.name));
 
-                let kind = types.kinds.get(fqn).copied().unwrap_or(ObjectKind::Table);
+                let kind = types.kinds[fqn];
 
                 TableLock {
                     database,
@@ -272,12 +267,13 @@ impl From<TypesLock> for Types {
         for obj in lock.table {
             let fqn = format!("{}.{}.{}", obj.database, obj.schema, obj.name);
             let mut columns = BTreeMap::new();
-            for col in obj.columns {
+            for (position, col) in obj.columns.into_iter().enumerate() {
                 columns.insert(
                     col.name,
                     ColumnType {
                         r#type: col.r#type,
                         nullable: col.nullable,
+                        position,
                     },
                 );
             }
@@ -330,9 +326,7 @@ fn write_toml(lock: &TypesLock) -> String {
             escape_toml_string(&obj.schema)
         ));
         out.push_str(&format!("name = \"{}\"\n", escape_toml_string(&obj.name)));
-        if obj.kind != ObjectKind::Table {
-            out.push_str(&format!("kind = \"{}\"\n", obj.kind.as_str()));
-        }
+        out.push_str(&format!("kind = \"{}\"\n", obj.kind.as_str()));
         out.push_str("columns = [\n");
         for col in &obj.columns {
             out.push_str(&format!(
@@ -418,7 +412,10 @@ impl Types {
         self.tables.get(fqn)
     }
 
-    /// Get the object kind for a fully-qualified name, defaulting to `Table`.
+    /// Get the object kind for a fully-qualified name.
+    ///
+    /// Returns `Table` if the name is not in the kinds map, which can happen
+    /// when `Types` is constructed programmatically (e.g., from `type_info`).
     pub fn get_kind(&self, fqn: &str) -> ObjectKind {
         self.kinds.get(fqn).copied().unwrap_or(ObjectKind::Table)
     }
@@ -448,11 +445,9 @@ const TYPECHECK_SNAPSHOT_BIN_FILE: &str = "typecheck.snapshot.bin";
 
 /// Bincode-friendly representation of [`Types`] for the types.cache.
 ///
-/// The main [`Types`] struct uses `#[serde(skip_serializing)]` on its `kinds`
-/// field, which works for self-describing formats (TOML/JSON) but breaks
-/// bincode's positional deserialization. This wrapper carries only the fields
-/// that the cache actually needs (version + tables), making bincode
-/// round-trips safe. The `kinds` map is always empty in cache files.
+/// The cache only stores column schemas (version + tables), not object kinds.
+/// This wrapper avoids serializing the `kinds` map into bincode, keeping the
+/// cache format compact. The `kinds` map is always empty in cache files.
 #[derive(Serialize, Deserialize)]
 struct TypesCacheBin {
     version: u8,
@@ -614,10 +609,19 @@ mod tests {
 
         let mut order_cols = BTreeMap::new();
         order_cols.insert(
+            "amount".to_string(),
+            ColumnType {
+                r#type: "numeric".to_string(),
+                nullable: true,
+                position: 0,
+            },
+        );
+        order_cols.insert(
             "id".to_string(),
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: false,
+                position: 1,
             },
         );
         order_cols.insert(
@@ -625,30 +629,26 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: true,
-            },
-        );
-        order_cols.insert(
-            "amount".to_string(),
-            ColumnType {
-                r#type: "numeric".to_string(),
-                nullable: true,
+                position: 2,
             },
         );
         tables.insert("app.ingest.orders".to_string(), order_cols);
 
         let mut user_cols = BTreeMap::new();
         user_cols.insert(
-            "user_id".to_string(),
-            ColumnType {
-                r#type: "integer".to_string(),
-                nullable: false,
-            },
-        );
-        user_cols.insert(
             "name".to_string(),
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 0,
+            },
+        );
+        user_cols.insert(
+            "user_id".to_string(),
+            ColumnType {
+                r#type: "integer".to_string(),
+                nullable: false,
+                position: 1,
             },
         );
         tables.insert("app.ingest.users".to_string(), user_cols);
@@ -681,6 +681,7 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         tables.insert("app.ingest.orders".to_string(), cols.clone());
@@ -706,23 +707,5 @@ mod tests {
 
         let loaded = load_types_lock(dir.path()).expect("failed to load types.lock");
         assert_eq!(types, loaded);
-    }
-
-    #[test]
-    fn test_old_lock_without_kind_defaults_to_table() {
-        let toml = r#"
-version = 1
-
-[[table]]
-database = "app"
-schema = "ingest"
-name = "orders"
-columns = [
-    { name = "id", type = "integer", nullable = false },
-]
-"#;
-        let lock: TypesLock = toml::from_str(toml).expect("parse TOML");
-        let types: Types = lock.into();
-        assert_eq!(types.get_kind("app.ingest.orders"), ObjectKind::Table);
     }
 }

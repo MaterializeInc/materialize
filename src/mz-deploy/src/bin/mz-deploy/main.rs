@@ -41,10 +41,9 @@ Getting started:
   debug                Test database connection and display environment information
 
 Develop:
-  compile              Compile and validate SQL without connecting to database [aliases: build]
+  compile              Compile and validate SQL without connecting to database
   test                 Run SQL unit tests defined in test files
   explain              Show the EXPLAIN plan for a materialized view or index
-  explore              Generate interactive project documentation
   lsp                  Start Language Server Protocol server for editor integration
 
 Infrastructure:
@@ -55,11 +54,11 @@ Infrastructure:
 Deploy:
   stage                Create a staging deployment for testing changes
   wait                 Wait for staging deployment clusters to be hydrated and ready
-  promote              Promote a staging deployment to production [aliases: deploy]
+  promote              Promote a staging deployment to production
   abort                Clean up a staging deployment by dropping all resources
-  describe             Show detailed information about a specific deployment [aliases: show]
-  list                 List all active staging deployments [aliases: deployments]
-  log                  Show history of promoted deployments [aliases: history]
+  describe             Show detailed information about a specific deployment
+  list                 List all active staging deployments
+  log                  Show history of promoted deployments
 
 See 'mz-deploy help <command>' for detailed usage guides.";
 
@@ -129,36 +128,12 @@ enum Command {
     /// and CI/CD pipelines to catch errors before deployment.
     #[command(
         hide = true,
-        visible_alias = "build",
         after_help = "Run 'mz-deploy help compile' for a detailed usage guide."
     )]
     Compile {
         /// Skip SQL type checking (faster but less thorough validation)
         #[arg(long)]
         skip_typecheck: bool,
-    },
-
-    /// Generate interactive project documentation
-    ///
-    /// Compiles the project and generates a self-contained HTML file with an
-    /// interactive DAG visualization, object detail pages, and search.
-    /// No database connection is required.
-    ///
-    /// Examples:
-    ///   mz-deploy explore                    # Generate and open in browser
-    ///   mz-deploy explore --no-open          # Generate without opening
-    #[command(
-        hide = true,
-        after_help = "Run 'mz-deploy help explore' for a detailed usage guide."
-    )]
-    Explore {
-        /// Do not open the generated documentation in your browser
-        #[arg(long)]
-        no_open: bool,
-
-        /// Output directory for generated documentation (default: target/docs/)
-        #[arg(long, value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
-        output_dir: Option<PathBuf>,
     },
 
     /// Show the EXPLAIN plan for a materialized view or index
@@ -234,7 +209,6 @@ enum Command {
     #[command(
         hide = true,
         name = "promote",
-        visible_alias = "deploy",
         after_help = "Run 'mz-deploy help promote' for a detailed usage guide."
     )]
     Promote {
@@ -333,7 +307,6 @@ enum Command {
     ///   mz-deploy describe abc123
     #[command(
         hide = true,
-        visible_alias = "show",
         after_help = "Run 'mz-deploy help describe' for a detailed usage guide."
     )]
     Describe {
@@ -403,8 +376,6 @@ enum Command {
     #[command(
         hide = true,
         name = "list",
-        visible_alias = "deployments",
-        alias = "branches",
         after_help = "Run 'mz-deploy help list' for a detailed usage guide."
     )]
     List {
@@ -428,7 +399,6 @@ enum Command {
     #[command(
         hide = true,
         name = "log",
-        visible_alias = "history",
         after_help = "Run 'mz-deploy help log' for a detailed usage guide."
     )]
     Log {
@@ -844,7 +814,7 @@ async fn run(args: Args) -> Result<(), CliError> {
 
     let needs_connection = !matches!(
         &args.command,
-        Some(Command::Compile { .. }) | Some(Command::Test { .. }) | Some(Command::Explore { .. })
+        Some(Command::Compile { .. }) | Some(Command::Test { .. })
     );
     let settings = Settings::load(
         args.directory,
@@ -865,17 +835,6 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::compile::run(&settings, skip_typecheck, true)
                 .await
                 .map(|_| ())
-        }
-        Some(Command::Explore {
-            no_open,
-            output_dir,
-        }) => {
-            if log::json_output_enabled() {
-                return Err(CliError::Message(
-                    "--output json is not supported for the 'explore' command".to_string(),
-                ));
-            }
-            cli::commands::explore::run(&settings, output_dir, !no_open).await
         }
         Some(Command::Explain { target }) => cli::commands::explain::run(&settings, &target).await,
         Some(Command::Apply {

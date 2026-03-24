@@ -57,6 +57,7 @@ import { LanguageClient, ServerOptions, LanguageClientOptions } from "vscode-lan
 import * as vscode from "vscode";
 import * as path from "path";
 import * as os from "os";
+import * as fs from "fs";
 import { CatalogProvider } from "./sidebar/catalog-provider";
 import { DAGPanel } from "./panels/dag-panel";
 import { DagData, CatalogData, CatalogOutboundMessage, DagOutboundMessage } from "./types";
@@ -544,8 +545,16 @@ function registerNotificationHandlers(): void {
   });
 }
 
+function resolveBinaryPath(): string {
+  const localPath = path.join(os.homedir(), "materialize", "target", "release", "mz-deploy");
+  if (fs.existsSync(localPath)) {
+    return localPath;
+  }
+  return "mz-deploy";
+}
+
 export function activate(context: vscode.ExtensionContext): void {
-  const command = `${os.homedir()}/materialize/target/release/mz-deploy`;
+  const command = resolveBinaryPath();
   const workspaceFolder = getWorkspacePath();
 
   const serverOptions: ServerOptions = {
@@ -555,6 +564,9 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: "file", language: "sql" }],
+    synchronize: {
+      fileEvents: vscode.workspace.createFileSystemWatcher("**/{project,profiles}.toml"),
+    },
   };
 
   client = new LanguageClient(

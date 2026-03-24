@@ -1,28 +1,28 @@
 //! Database client layer for communicating with a Materialize region.
 //!
 //! All interaction with the live database flows through this module. The
-//! [`Client`] type (defined in [`connection`]) holds a `tokio_postgres`
+//! `Client` type (defined in `connection`) holds a `tokio_postgres`
 //! connection and exposes scoped sub-clients that group related operations:
 //!
-//! - **[`introspection`]** — Read-only catalog queries: schema/cluster/object
+//! - **`introspection`** — Read-only catalog queries: schema/cluster/object
 //!   existence checks, dependency lookups, and batch metadata retrieval.
-//! - **[`provisioning`]** — DDL operations that create or alter databases,
+//! - **`provisioning`** — DDL operations that create or alter databases,
 //!   schemas, and clusters to match the project definition.
-//! - **[`deployment_ops`]** — Blue/green deployment lifecycle: staging,
+//! - **`deployment_ops`** — Blue/green deployment lifecycle: staging,
 //!   hydration monitoring, cutover, and abort.
-//! - **[`validation`]** — Pre-deployment validation: checks that the target
+//! - **`validation`** — Pre-deployment validation: checks that the target
 //!   environment matches expected state before applying changes.
-//! - **[`type_info`]** — `SHOW COLUMNS` queries used to generate and refresh
+//! - **`type_info`** — `SHOW COLUMNS` queries used to generate and refresh
 //!   the `types.lock` data-contract file.
 //!
 //! ## Supporting Submodules
 //!
-//! - **[`config`]** — Profile and project settings loading (`profiles.toml`,
+//! - **`config`** — Profile and project settings loading (`profiles.toml`,
 //!   `project.toml`).
-//! - **[`models`]** — Data structures shared across sub-clients (deployment
+//! - **`models`** — Data structures shared across sub-clients (deployment
 //!   records, cluster configs, conflict records, etc.).
-//! - **[`errors`]** — Error types: [`ConnectionError`] for transport/query
-//!   failures, [`DatabaseValidationError`] for semantic mismatches.
+//! - **`errors`** — Error types: `ConnectionError` for transport/query
+//!   failures, `DatabaseValidationError` for semantic mismatches.
 //!
 //! Most sub-client types are internal; this module re-exports the key public
 //! types so that consumers only need `use crate::client::*`.

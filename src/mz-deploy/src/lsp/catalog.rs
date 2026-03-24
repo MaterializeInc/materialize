@@ -28,14 +28,6 @@
 //! and descriptions — but omits SQL text and edges (which are only needed for
 //! graph rendering).
 //!
-//! ## Differences from `DocsManifest`
-//!
-//! The explore manifest (`manifest.rs`) includes SQL text, test results, cluster
-//! definitions, stats, and companion SQL for constraints. This endpoint omits
-//! all of those since they are not needed in the VS Code catalog view. It also
-//! adds `file_path` (relative to project root) which the manifest does not
-//! include. Both endpoints extract infrastructure properties from the AST using
-//! independent but structurally equivalent helpers.
 
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -55,6 +47,17 @@ pub struct CatalogResponse {
     pub databases: Vec<CatalogDatabase>,
     /// All objects with full metadata for the detail panel.
     pub objects: Vec<CatalogObject>,
+    /// Build errors when the project failed to compile.
+    /// Empty on success; populated when `plan_sync()` fails.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<CatalogError>,
+}
+
+/// A project build error surfaced in the catalog sidebar.
+#[derive(Debug, Serialize)]
+pub struct CatalogError {
+    /// Error message describing the build failure.
+    pub message: String,
 }
 
 /// A database in the catalog sidebar tree.
@@ -216,19 +219,7 @@ pub struct CatalogProperty {
     pub object_ref: Option<String>,
 }
 
-/// Map an AST statement to its display type name.
-fn object_type_name(stmt: &crate::project::ast::Statement) -> &'static str {
-    match stmt {
-        crate::project::ast::Statement::CreateView(_) => "view",
-        crate::project::ast::Statement::CreateMaterializedView(_) => "materialized-view",
-        crate::project::ast::Statement::CreateTable(_) => "table",
-        crate::project::ast::Statement::CreateTableFromSource(_) => "table-from-source",
-        crate::project::ast::Statement::CreateSource(_) => "source",
-        crate::project::ast::Statement::CreateSink(_) => "sink",
-        crate::project::ast::Statement::CreateSecret(_) => "secret",
-        crate::project::ast::Statement::CreateConnection(_) => "connection",
-    }
-}
+use super::helpers::object_type_name;
 
 /// Extract the main statement's IN CLUSTER value, if any.
 ///
@@ -257,20 +248,7 @@ fn statement_cluster(stmt: &crate::project::ast::Statement) -> Option<String> {
     }
 }
 
-/// Extract the COMMENT ON object-level description (not column comments).
-fn extract_description(
-    comments: &[mz_sql_parser::ast::CommentStatement<mz_sql_parser::ast::Raw>],
-) -> Option<String> {
-    for c in comments {
-        if !matches!(
-            c.object,
-            mz_sql_parser::ast::CommentObjectType::Column { .. }
-        ) {
-            return c.comment.clone();
-        }
-    }
-    None
-}
+use super::helpers::extract_description;
 
 /// Extract index metadata from a CREATE INDEX statement.
 fn index_to_catalog(
@@ -533,7 +511,10 @@ fn build_columns(
 ) -> Option<Vec<CatalogColumn>> {
     types.and_then(|t| {
         t.get_table(id_str).map(|cols| {
-            cols.iter()
+            let mut sorted: Vec<_> = cols.iter().collect();
+            sorted.sort_by_key(|(_, ct)| ct.position);
+            sorted
+                .into_iter()
                 .map(|(name, ct)| CatalogColumn {
                     name: name.clone(),
                     type_name: ct.r#type.clone(),
@@ -719,5 +700,27 @@ pub fn build_catalog_response(
         ));
     }
 
-    CatalogResponse { databases, objects }
+    CatalogResponse {
+        databases,
+        objects,
+        errors: Vec::new(),
+    }
+}
+
+/// Build a catalog response for a failed project build.
+///
+/// Returns an empty catalog with the build error message so the sidebar
+/// can show what went wrong instead of spinning on "Waiting for project data..."
+pub fn build_error_response(error: Option<&str>) -> CatalogResponse {
+    let errors = match error {
+        Some(msg) => vec![CatalogError {
+            message: msg.to_string(),
+        }],
+        None => Vec::new(),
+    };
+    CatalogResponse {
+        databases: Vec::new(),
+        objects: Vec::new(),
+        errors,
+    }
 }

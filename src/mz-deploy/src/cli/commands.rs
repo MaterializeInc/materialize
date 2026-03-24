@@ -27,7 +27,7 @@
 //! - **[`clusters`]** — List or inspect cluster definitions.
 //! - **[`roles`]** — List or inspect role definitions.
 //! - **[`apply_network_policies`]** — Apply network policy definitions.
-//! - **[`test`]** — Run SQL unit tests against cached type information.
+//! - **`test`** — Run SQL unit tests against cached type information.
 //!
 //! ## Shared Types
 //!
@@ -59,7 +59,6 @@ pub mod debug;
 pub mod delete;
 pub mod describe;
 pub mod explain;
-pub mod explore;
 pub mod grants;
 pub mod list;
 pub mod lock;

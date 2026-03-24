@@ -736,6 +736,32 @@ body {
   text-align: center;
 }
 
+/* Build error state */
+.build-errors {
+  padding: 14px;
+}
+
+.build-errors-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--vscode-errorForeground);
+  margin-bottom: 8px;
+}
+
+.build-error-card {
+  margin-bottom: 8px;
+}
+
+.build-error-message {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--vscode-descriptionForeground);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  font-family: var(--vscode-editor-font-family);
+}
+
 .empty-deps {
   padding: 3px 14px 6px;
   font-size: 10.5px;

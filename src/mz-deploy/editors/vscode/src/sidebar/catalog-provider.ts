@@ -44,6 +44,17 @@ export class CatalogProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this._getHtml(webviewView.webview);
 
+    // When the sidebar becomes visible again, push any cached data that
+    // arrived while it was hidden (setCatalogData skips hidden views).
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible && this._catalogData) {
+        void webviewView.webview.postMessage({
+          type: "catalog-data",
+          data: this._catalogData,
+        });
+      }
+    });
+
     // Forward messages from webview to extension host
     webviewView.webview.onDidReceiveMessage((msg: CatalogOutboundMessage) => {
       // When the webview script loads, it signals ready — send cached data

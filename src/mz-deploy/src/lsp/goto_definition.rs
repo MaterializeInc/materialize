@@ -17,9 +17,9 @@
 //! ## Phase B — Resolve to file location
 //!
 //! [`resolve_reference()`] takes the identifier parts and the project model,
-//! constructs an [`ObjectId`] using the same 1/2/3-part resolution as
-//! [`ObjectId::from_item_name()`], looks up the object in the project, and
-//! returns the file path from [`typed::DatabaseObject::path`].
+//! constructs an `ObjectId` using the same 1/2/3-part resolution as
+//! `ObjectId::from_item_name()`, looks up the object in the project, and
+//! returns the file path from `typed::DatabaseObject::path`.
 //!
 //! ## Examples
 //!

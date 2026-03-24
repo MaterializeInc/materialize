@@ -5,21 +5,21 @@
       "object_id": "app.core.order_summary",
       "file_path": "models/app/core/order_summary.sql",
       "status": "passed",
-      "elapsed_ms": 224
+      "elapsed_ms": 65
     },
     {
       "name": "test_user_activity_counts",
       "object_id": "app.core.user_activity",
       "file_path": "models/app/core/user_activity.sql",
       "status": "passed",
-      "elapsed_ms": 198
+      "elapsed_ms": 50
     },
     {
       "name": "test_user_activity_wrong_expectation",
       "object_id": "app.core.user_activity",
       "file_path": "models/app/core/user_activity.sql",
       "status": "failed",
-      "elapsed_ms": 201,
+      "elapsed_ms": 49,
       "failure": {
         "type": "assertion",
         "columns": [
@@ -48,7 +48,7 @@
       "object_id": "app.ops.order_stats",
       "file_path": "models/app/ops/order_stats.sql",
       "status": "failed",
-      "elapsed_ms": 162,
+      "elapsed_ms": 37,
       "failure": {
         "type": "assertion",
         "columns": [
@@ -74,7 +74,7 @@
       "object_id": "app.ops.top_spenders",
       "file_path": "models/app/ops/top_spenders.sql",
       "status": "passed",
-      "elapsed_ms": 159
+      "elapsed_ms": 38
     }
   ],
   "summary": {

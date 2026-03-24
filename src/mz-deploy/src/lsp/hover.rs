@@ -22,7 +22,7 @@
 //!
 //! ### Resolution
 //!
-//! 1. Identifier parts are resolved to an [`ObjectId`] using the same
+//! 1. Identifier parts are resolved to an `ObjectId` using the same
 //!    1/2/3-part convention as [`goto_definition::resolve_reference()`].
 //! 2. The object is looked up in the project model to confirm existence and
 //!    determine its kind (view, materialized view, table, etc.).
@@ -211,17 +211,7 @@ fn format_constraints(
     Some(md)
 }
 
-/// Extract the object-level description from comment statements.
-///
-/// Returns the text of the first non-column `COMMENT ON` statement, if any.
-fn extract_description(comments: &[CommentStatement<Raw>]) -> Option<String> {
-    for c in comments {
-        if !matches!(c.object, CommentObjectType::Column { .. }) {
-            return c.comment.clone();
-        }
-    }
-    None
-}
+use super::helpers::extract_description;
 
 /// Resolve hover for a SQL function name.
 ///
@@ -592,6 +582,7 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         columns.insert(
@@ -599,6 +590,7 @@ mod tests {
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 1,
             },
         );
         types_cache
@@ -635,6 +627,7 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: true,
+                position: 0,
             },
         );
         types_cache
@@ -668,6 +661,7 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         columns.insert(
@@ -675,6 +669,7 @@ mod tests {
             ColumnType {
                 r#type: "text".to_string(),
                 nullable: true,
+                position: 1,
             },
         );
         types_cache
@@ -712,6 +707,7 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: false,
+                position: 0,
             },
         );
         columns.insert(
@@ -719,6 +715,7 @@ mod tests {
             ColumnType {
                 r#type: "integer".to_string(),
                 nullable: true,
+                position: 1,
             },
         );
         types_cache

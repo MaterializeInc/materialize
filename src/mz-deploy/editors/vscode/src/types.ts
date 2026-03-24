@@ -98,9 +98,14 @@ export interface DatabaseEntry {
   schemas: SchemaEntry[];
 }
 
+export interface CatalogError {
+  message: string;
+}
+
 export interface CatalogData {
   databases: DatabaseEntry[];
   objects: CatalogObject[];
+  errors?: CatalogError[];
 }
 
 // ---------------------------------------------------------------------------

@@ -92,13 +92,20 @@ pub fn code_lenses(
     file_uri: &Url,
     file_text: &str,
     root: &Path,
-    project: &planned::Project,
+    project: Option<&planned::Project>,
     worksheet_cluster: Option<&str>,
 ) -> Vec<CodeLens> {
     // Worksheet files get "Execute" lenses instead of project lenses.
+    // This works even when the project fails to build.
     if is_worksheet_file(file_uri, root) {
         return worksheet_code_lenses(file_text, worksheet_cluster);
     }
+
+    // Non-worksheet lenses require a successfully built project.
+    let project = match project {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
 
     let (default_db, default_schema) = match ObjectId::default_db_schema_from_uri(file_uri, root) {
         Some(pair) => pair,
@@ -270,7 +277,7 @@ mod tests {
         let uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
         let file_text =
             std::fs::read_to_string(root.path().join("models/mydb/public/foo.sql")).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
+        let lenses = code_lenses(&uri, &file_text, root.path(), Some(&project), None);
 
         assert_eq!(lenses.len(), 1);
         let lens = &lenses[0];
@@ -298,7 +305,7 @@ mod tests {
         let uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
         let file_text =
             std::fs::read_to_string(root.path().join("models/mydb/public/foo.sql")).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
+        let lenses = code_lenses(&uri, &file_text, root.path(), Some(&project), None);
 
         assert_eq!(lenses.len(), 2);
 
@@ -329,7 +336,7 @@ mod tests {
         let uri = Url::from_file_path(root.path().join("models/mydb/public/foo.sql")).unwrap();
         let file_text =
             std::fs::read_to_string(root.path().join("models/mydb/public/foo.sql")).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
+        let lenses = code_lenses(&uri, &file_text, root.path(), Some(&project), None);
 
         assert!(lenses.is_empty());
     }
@@ -348,7 +355,7 @@ mod tests {
         std::fs::write(&outside, "SELECT 1;").unwrap();
         let uri = Url::from_file_path(&outside).unwrap();
         let file_text = std::fs::read_to_string(&outside).unwrap();
-        let lenses = code_lenses(&uri, &file_text, root.path(), &project, None);
+        let lenses = code_lenses(&uri, &file_text, root.path(), Some(&project), None);
 
         assert!(lenses.is_empty());
     }

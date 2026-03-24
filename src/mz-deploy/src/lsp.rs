@@ -13,14 +13,14 @@
 //!    to tokenize the file and find the identifier (possibly dot-qualified) at the
 //!    cursor position.
 //! 2. **Project model lookup** — Resolves the identifier against the planned
-//!    project model using [`ObjectId::from_item_name()`] conventions (1-part uses
+//!    project model using `ObjectId::from_item_name()` conventions (1-part uses
 //!    default db+schema from file path, 2-part uses default db, 3-part as-is).
 //!
 //! ## Find References
 //!
 //! Finds all project objects that depend on a given identifier. This is the
 //! inverse of go-to-definition: it answers "who uses this table/view/source?"
-//! by building the reverse dependency graph from [`planned::Project`].
+//! by building the reverse dependency graph from `planned::Project`.
 //!
 //! ## Hover
 //!
@@ -73,15 +73,15 @@
 //! ## Custom Endpoints
 //!
 //! - **`mz-deploy/dag`** — Returns the project's dependency graph as JSON
-//!   ([`dag::DagResponse`]) for rendering in the VS Code workspace webview.
+//!   (`dag::DagResponse`) for rendering in the VS Code workspace webview.
 //!   The response contains lightweight node metadata and edges; see the
-//!   [`dag`] module for the data model.
+//!   `dag` module for the data model.
 //!
 //! - **`mz-deploy/catalog`** — Returns the project's data catalog as JSON
-//!   ([`catalog::CatalogResponse`]) for the VS Code workspace catalog view.
+//!   (`catalog::CatalogResponse`) for the VS Code workspace catalog view.
 //!   The response contains a database/schema tree for sidebar navigation and
 //!   full object metadata (columns, constraints, grants, indexes) for the
-//!   detail panel. See the [`catalog`] module for the data model.
+//!   detail panel. See the `catalog` module for the data model.
 //!
 //! - **`mz-deploy/keywords`** — Returns the full list of Materialize SQL
 //!   keywords as a JSON array of uppercase strings. Used by the VS Code
@@ -94,7 +94,7 @@
 //! - **`mz-deploy/execute-query`** — Executes a SQL statement against the
 //!   configured Materialize instance. For SELECTs, injects LIMIT and returns
 //!   columnar results. For EXPLAIN, returns raw text. For DML/DDL, returns
-//!   an affected row count. See the [`worksheet`] module.
+//!   an affected row count. See the `worksheet` module.
 //!
 //! - **`mz-deploy/cancel-query`** — Cancels the in-flight worksheet
 //!   query or active SUBSCRIBE using the PostgreSQL cancel protocol.
@@ -103,7 +103,7 @@
 //!   connection. Returns immediately with a `subscribe_id`. Results stream
 //!   to the client via `mz-deploy/subscribeBatch` notifications (one per
 //!   timestamp group). Ends with a `mz-deploy/subscribeComplete` notification.
-//!   See the [`worksheet`] module for the full data flow.
+//!   See the `worksheet` module for the full data flow.
 //!
 //! - **`mz-deploy/worksheet-context`** — Returns available databases (with
 //!   their schemas), clusters, and current session values for the worksheet
@@ -130,7 +130,7 @@
 //!                                          └─ root: project root directory
 //! ```
 //!
-//! The project model rebuilds fully on `did_save` via [`project::plan_sync()`].
+//! The project model rebuilds fully on `did_save` via `project::plan_sync()`.
 //! Parse diagnostics run per-file on every keystroke. Incremental updates may
 //! come later; the pipeline is fast enough for typical project sizes.
 
@@ -142,10 +142,12 @@ pub mod diagnostics;
 mod document_symbol;
 pub mod functions;
 pub mod goto_definition;
+mod helpers;
 pub mod hover;
 mod references;
 mod run;
 mod server;
+mod subscribe;
 mod symbol_kind;
 mod worksheet;
 mod workspace_symbol;

@@ -25,7 +25,6 @@ const COMMANDS: &[(&str, &str)] = &[
     ("apply-tables", include_str!("help/apply-tables.md")),
     ("compile", include_str!("help/compile.md")),
     ("explain", include_str!("help/explain.md")),
-    ("explore", include_str!("help/explore.md")),
     ("init", include_str!("help/init.md")),
     ("debug", include_str!("help/debug.md")),
     ("delete", include_str!("help/delete.md")),

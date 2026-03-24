@@ -111,9 +111,14 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
     schemas: SchemaEntry[];
   }
 
+  interface CatalogError {
+    message: string;
+  }
+
   interface CatalogData {
     databases: DatabaseEntry[];
     objects: CatalogObject[];
+    errors?: CatalogError[];
   }
 
   type CatalogInboundMessage =
@@ -254,6 +259,11 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
       return;
     }
 
+    if (catalogData.errors && catalogData.errors.length > 0) {
+      renderBuildErrors(root);
+      return;
+    }
+
     if (navStack.length > 0) {
       renderDetailMode(root);
     } else {
@@ -268,6 +278,18 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
         input.setSelectionRange(search.length, search.length);
       }
     }
+  }
+
+  /** Renders build errors when the project failed to compile. */
+  function renderBuildErrors(root: HTMLElement): void {
+    const container = h("div", { className: "build-errors" });
+    container.appendChild(h("div", { className: "build-errors-title" }, "Project build failed"));
+    for (const err of catalogData!.errors!) {
+      const card = h("div", { className: "build-error-card" });
+      card.appendChild(h("pre", { className: "build-error-message" }, err.message));
+      container.appendChild(card);
+    }
+    root.appendChild(container);
   }
 
   /**
@@ -363,7 +385,13 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
     const isExpanded = expandedObjects.has(obj.id);
     const hasColumns = obj.columns && obj.columns.length > 0;
 
-    return h("div", { className: "object-row" },
+    // Objects without columns navigate directly to detail on name click.
+    // Objects with columns toggle the inline column preview instead.
+    const nameClick = hasColumns
+      ? () => toggleExpand(obj.id)
+      : () => drillInto(obj.id);
+
+    const row = h("div", { className: "object-row" },
       h("span", {
         className: "chevron",
         innerHTML: hasColumns ? (isExpanded ? ICONS.chevDown : ICONS.chevRight) : "",
@@ -371,18 +399,25 @@ declare function acquireVsCodeApi(): { postMessage(msg: unknown): void };
       }),
       h("span", {
         className: "object-name",
-        onClick: () => toggleExpand(obj.id),
+        onClick: nameClick,
       },
         h("span", { className: "object-icon", innerHTML: objectIcon(obj.object_type) }),
         h("span", { className: "name-text" + (obj.is_external ? " external" : "") }, obj.name)
       ),
-      h("span", {
+    );
+
+    // Only show the inspect icon for objects with columns (tables, views, etc.).
+    // Column-less objects (connections, secrets, sinks) navigate via name click.
+    if (hasColumns) {
+      row.appendChild(h("span", {
         className: "inspect-btn",
         innerHTML: ICONS.inspect,
         title: "Inspect " + obj.name,
         onClick: (e: Event) => { e.stopPropagation(); drillInto(obj.id); },
-      })
-    );
+      }));
+    }
+
+    return row;
   }
 
   /**

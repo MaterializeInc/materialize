@@ -31,35 +31,11 @@
 //!   catalog introspection (`worksheet-context`). Created on first use,
 //!   cached across requests, reconnected if the profile changes.
 //!
-//! - **SUBSCRIBE connection** (inside [`SubscribeHandle`]) — A dedicated
-//!   short-lived connection opened for each SUBSCRIBE. Required because
-//!   SUBSCRIBE holds a transaction open for its entire lifetime, blocking
-//!   the connection for other use. Dropped when the SUBSCRIBE ends.
-//!
-//! ## SUBSCRIBE Lifecycle
-//!
-//! ```text
-//! mz-deploy/subscribe request
-//!   │
-//!   ├─ Cancel any existing subscribe (abort task + cancel token)
-//!   ├─ Open dedicated connection, apply session settings
-//!   ├─ BEGIN → DECLARE CURSOR FOR SUBSCRIBE ... WITH (PROGRESS)
-//!   ├─ Spawn background task: run_subscribe_loop()
-//!   │    │
-//!   │    └─ loop { FETCH ALL cursor }
-//!   │         │
-//!   │         ├─ group_subscribe_rows() → Vec<SubscribeBatch>
-//!   │         └─ send_notification::<SubscribeBatchNotification> per batch
-//!   │
-//!   └─ Return SubscribeStarted { subscribe_id } immediately
-//!
-//! mz-deploy/cancel-query request
-//!   │
-//!   ├─ Cancel one-shot query (if any) via worksheet_cancel token
-//!   └─ Cancel subscribe (if any):
-//!        ├─ Send cancel to dedicated connection via cancel_subscribe()
-//!        └─ Drop SubscribeHandle (task detects cancellation, sends SubscribeComplete)
-//! ```
+//! - **SUBSCRIBE connection** — A dedicated short-lived connection opened
+//!   for each SUBSCRIBE. Required because SUBSCRIBE holds a transaction
+//!   open for its entire lifetime, blocking the connection for other use.
+//!   Managed by [`subscribe::SubscribeManager`]; see the [`subscribe`]
+//!   module for the full lifecycle.
 //!
 //! ## Typecheck on Save
 //!
@@ -83,7 +59,7 @@
 use crate::config::{DEFAULT_DOCKER_IMAGE, ProfilesConfig, ProjectSettings};
 use crate::lsp::{
     catalog, code_lens, completion, dag, diagnostics, document_symbol, goto_definition, hover,
-    references, worksheet, workspace_symbol,
+    references, subscribe, worksheet, workspace_symbol,
 };
 use crate::project;
 use crate::project::error::{ProjectError, ValidationErrors};
@@ -178,30 +154,6 @@ fn load_merged_types(root: &Path) -> Option<Types> {
     }
 }
 
-/// Custom notification for SUBSCRIBE batch delivery.
-struct SubscribeBatchNotification;
-
-impl tower_lsp::lsp_types::notification::Notification for SubscribeBatchNotification {
-    type Params = worksheet::SubscribeBatch;
-    const METHOD: &'static str = "mz-deploy/subscribeBatch";
-}
-
-/// Custom notification for SUBSCRIBE completion.
-struct SubscribeCompleteNotification;
-
-impl tower_lsp::lsp_types::notification::Notification for SubscribeCompleteNotification {
-    type Params = worksheet::SubscribeComplete;
-    const METHOD: &'static str = "mz-deploy/subscribeComplete";
-}
-
-/// Handle for a running SUBSCRIBE background task.
-struct SubscribeHandle {
-    task: mz_ore::task::JoinHandle<()>,
-    cancel_token: tokio_postgres::CancelToken,
-    /// Host of the subscribe connection (for TLS policy on cancel).
-    host: String,
-}
-
 /// Cached worksheet database connection.
 ///
 /// Wraps the raw `tokio_postgres::Client` plus the profile name that was
@@ -245,8 +197,11 @@ pub struct Backend {
     worksheet_connection: tokio::sync::Mutex<Option<WorksheetConnection>>,
     /// Cancel token for the in-flight worksheet query.
     worksheet_cancel: tokio::sync::Mutex<Option<tokio_postgres::CancelToken>>,
-    /// Handle for the active SUBSCRIBE background task.
-    subscribe_task: tokio::sync::Mutex<Option<SubscribeHandle>>,
+    /// Manages the active SUBSCRIBE background task lifecycle.
+    subscribe: subscribe::SubscribeManager,
+    /// Last project build error, if the most recent build failed.
+    /// Used by the catalog endpoint to report errors to the sidebar.
+    last_build_error: RwLock<Option<String>>,
 }
 
 impl Backend {
@@ -264,7 +219,8 @@ impl Backend {
             profile_name: RwLock::new("default".to_string()),
             worksheet_connection: tokio::sync::Mutex::new(None),
             worksheet_cancel: tokio::sync::Mutex::new(None),
-            subscribe_task: tokio::sync::Mutex::new(None),
+            subscribe: subscribe::SubscribeManager::new(),
+            last_build_error: RwLock::new(None),
         }
     }
 
@@ -379,7 +335,13 @@ impl Backend {
                 ))
                 .unwrap_or(serde_json::Value::Null))
             }
-            None => Ok(serde_json::Value::Null),
+            None => {
+                let error = self.last_build_error.read().unwrap().clone();
+                Ok(serde_json::to_value(catalog::build_error_response(
+                    error.as_deref(),
+                ))
+                .unwrap_or(serde_json::Value::Null))
+            }
         }
     }
 
@@ -400,7 +362,7 @@ impl Backend {
                 connected: true,
                 host: Some(profile.host),
                 port: Some(profile.port),
-                user: profile.username,
+                user: Some(profile.username),
                 profile: Some(profile.name),
                 message: None,
             },
@@ -516,22 +478,6 @@ impl Backend {
         Ok(())
     }
 
-    /// Cancel any active SUBSCRIBE by sending a cancel request and dropping
-    /// the task handle. Returns `true` if a subscribe was cancelled.
-    async fn cancel_active_subscribe(&self) -> bool {
-        let handle = {
-            let mut guard = self.subscribe_task.lock().await;
-            guard.take()
-        };
-        if let Some(handle) = handle {
-            let _ = cancel_subscribe(&handle).await;
-            drop(handle.task);
-            true
-        } else {
-            false
-        }
-    }
-
     /// Handle the `mz-deploy/cancel-query` custom request.
     ///
     /// Cancels both the in-flight one-shot worksheet query (via the stored
@@ -555,7 +501,7 @@ impl Backend {
         }
 
         // Cancel any active SUBSCRIBE.
-        if self.cancel_active_subscribe().await {
+        if self.subscribe.cancel().await {
             cancelled = true;
         }
 
@@ -569,10 +515,9 @@ impl Backend {
 
     /// Handle the `mz-deploy/subscribe` custom request.
     ///
-    /// Validates the SQL, opens a dedicated connection, declares a cursor
-    /// with `SUBSCRIBE ... WITH (PROGRESS)`, and spawns a background task
-    /// that fetches batches and pushes them to the client via notifications.
-    /// Returns immediately with a `subscribe_id`.
+    /// Validates the SQL, opens a dedicated connection, and delegates to
+    /// [`subscribe::SubscribeManager::start`] which spawns the background
+    /// FETCH loop and returns immediately with a `subscribe_id`.
     pub async fn subscribe(
         &self,
         params: serde_json::Value,
@@ -589,9 +534,6 @@ impl Backend {
             worksheet_error_to_jsonrpc(&e, tower_lsp::jsonrpc::ErrorCode::InvalidRequest)
         })?;
 
-        // Cancel any existing subscribe.
-        self.cancel_active_subscribe().await;
-
         // Open a dedicated connection for the subscribe.
         let current_profile = self.profile_name.read().unwrap().clone();
         let sub_conn = self
@@ -601,62 +543,38 @@ impl Backend {
                 worksheet_error_to_jsonrpc(&e, tower_lsp::jsonrpc::ErrorCode::InternalError)
             })?;
 
-        // Apply current session settings from the main worksheet connection.
-        {
-            let main_conn = self.worksheet_connection.lock().await;
-            if let Some(ref wc) = *main_conn {
-                let session_params = worksheet::SetSessionParams {
+        // Snapshot session from the main worksheet connection.
+        let session = {
+            let conn = self.worksheet_connection.lock().await;
+            match conn.as_ref() {
+                Some(wc) => subscribe::SessionSnapshot {
                     database: wc.database.clone(),
                     schema: wc.schema.clone(),
                     cluster: wc.cluster.clone(),
-                };
-                let set_sql = worksheet::build_set_commands(&session_params);
-                if !set_sql.is_empty() {
-                    let _ = sub_conn.pg_client.simple_query(&set_sql).await;
-                }
+                },
+                None => subscribe::SessionSnapshot {
+                    database: None,
+                    schema: None,
+                    cluster: None,
+                },
             }
-        }
+        };
 
-        let subscribe_id = format!(
-            "sub-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        );
+        let started = self
+            .subscribe
+            .start(
+                subscribe_sql,
+                session,
+                sub_conn.pg_client,
+                sub_conn.host,
+                self.client.clone(),
+            )
+            .await
+            .map_err(|e| {
+                worksheet_error_to_jsonrpc(&e, tower_lsp::jsonrpc::ErrorCode::InternalError)
+            })?;
 
-        let cancel_token = sub_conn.pg_client.cancel_token();
-        let host = sub_conn.host.clone();
-
-        // Spawn the background FETCH loop.
-        let client = self.client.clone();
-        let sub_id = subscribe_id.clone();
-        let task = mz_ore::task::spawn(|| "mz-deploy-subscribe", async move {
-            let result =
-                run_subscribe_loop(&sub_conn.pg_client, &subscribe_sql, &sub_id, &client).await;
-
-            // Send completion notification.
-            let complete = worksheet::SubscribeComplete {
-                subscribe_id: sub_id,
-                error: result.err().map(|e| e.to_string()),
-            };
-            client
-                .send_notification::<SubscribeCompleteNotification>(complete)
-                .await;
-        });
-
-        // Store the handle.
-        {
-            let mut guard = self.subscribe_task.lock().await;
-            *guard = Some(SubscribeHandle {
-                task,
-                cancel_token,
-                host,
-            });
-        }
-
-        let resp = worksheet::SubscribeStarted { subscribe_id };
-        Ok(serde_json::to_value(resp).unwrap_or(serde_json::Value::Null))
+        Ok(serde_json::to_value(started).unwrap_or(serde_json::Value::Null))
     }
 
     /// Handle the `mz-deploy/worksheet-context` custom request.
@@ -789,7 +707,7 @@ impl Backend {
         *self.worksheet_connection.lock().await = None;
 
         // Cancel any active subscribe.
-        self.cancel_active_subscribe().await;
+        self.subscribe.cancel().await;
 
         // Return a fresh context (triggers lazy reconnect).
         // Delegate to worksheet_context which handles the connect + query.
@@ -810,12 +728,10 @@ impl Backend {
         })?;
 
         let mut conn_str = format!("host={} port={}", profile.host, profile.port);
-        if let Some(ref username) = profile.username {
-            conn_str.push_str(&format!(
-                " user='{}'",
-                username.replace('\\', "\\\\").replace('\'', "\\'")
-            ));
-        }
+        conn_str.push_str(&format!(
+            " user='{}'",
+            profile.username.replace('\\', "\\\\").replace('\'', "\\'")
+        ));
         if let Some(ref password) = profile.password {
             conn_str.push_str(&format!(
                 " password='{}'",
@@ -909,9 +825,21 @@ impl Backend {
         let old_uris = self.project_diagnostic_uris.lock().unwrap().clone();
         let actions = compute_diagnostic_actions(new_diagnostics, &old_uris);
 
-        // Store the new project on success.
-        if let Ok(p) = build_result {
-            *self.project.write().unwrap() = Some(Arc::new(p));
+        // Store the new project on success, log and record error on failure.
+        match build_result {
+            Ok(p) => {
+                *self.project.write().unwrap() = Some(Arc::new(p));
+                *self.last_build_error.write().unwrap() = None;
+            }
+            Err(ref e) => {
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("Project build failed: {e}"),
+                    )
+                    .await;
+                *self.last_build_error.write().unwrap() = Some(format!("{e}"));
+            }
         }
 
         // Apply diagnostic actions (I/O).
@@ -1135,7 +1063,7 @@ fn is_local_host(host: &str) -> bool {
 }
 
 /// Send a cancel request, choosing TLS policy based on the host.
-async fn cancel_query_with_tls_policy(
+pub(super) async fn cancel_query_with_tls_policy(
     cancel_token: &tokio_postgres::CancelToken,
     host: &str,
 ) -> std::result::Result<(), String> {
@@ -1240,101 +1168,6 @@ fn worksheet_error_to_jsonrpc(
     }
 }
 
-/// Extract column names and row data from `FETCH ALL` results.
-fn extract_subscribe_rows(
-    messages: Vec<tokio_postgres::SimpleQueryMessage>,
-) -> (Vec<String>, Vec<Vec<Option<String>>>) {
-    let mut column_names = Vec::new();
-    let mut rows = Vec::new();
-    for msg in messages {
-        if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
-            if column_names.is_empty() {
-                column_names = row.columns().iter().map(|c| c.name().to_string()).collect();
-            }
-            let values: Vec<Option<String>> = (0..row.columns().len())
-                .map(|i| row.get(i).map(|s: &str| s.to_string()))
-                .collect();
-            rows.push(values);
-        }
-    }
-    (column_names, rows)
-}
-
-/// Run the SUBSCRIBE cursor FETCH loop, sending batches via notifications.
-///
-/// Opens a transaction, declares a cursor for the subscribe query, and
-/// polls with `FETCH ALL` in a loop. Each batch of rows is grouped by
-/// `mz_timestamp` and pushed to the client as [`SubscribeBatchNotification`].
-///
-/// Returns `Ok(())` if the query was cancelled normally, or `Err` on failure.
-async fn run_subscribe_loop(
-    pg_client: &tokio_postgres::Client,
-    subscribe_sql: &str,
-    subscribe_id: &str,
-    lsp_client: &Client,
-) -> std::result::Result<(), String> {
-    // Begin transaction and declare cursor.
-    pg_client
-        .simple_query("BEGIN")
-        .await
-        .map_err(|e| format!("BEGIN failed: {e}"))?;
-
-    let declare_sql = format!("DECLARE subscribe_cursor CURSOR FOR {subscribe_sql}");
-    pg_client
-        .simple_query(&declare_sql)
-        .await
-        .map_err(|e| format!("DECLARE CURSOR failed: {e}"))?;
-
-    let mut columns_sent = false;
-
-    loop {
-        let messages = match pg_client.simple_query("FETCH ALL subscribe_cursor").await {
-            Ok(msgs) => msgs,
-            Err(_) => {
-                // Any FETCH error is treated as normal shutdown — the most
-                // common cause is query cancellation, but connection drops
-                // and transaction aborts also land here. There's no reliable
-                // way to distinguish "user cancelled" from other errors via
-                // the error message text alone.
-                let _ = pg_client.simple_query("ROLLBACK").await;
-                return Ok(());
-            }
-        };
-
-        // Extract column names and row data.
-        let (column_names, rows) = extract_subscribe_rows(messages);
-
-        if rows.is_empty() {
-            continue;
-        }
-
-        // Data column names (skip mz_timestamp, mz_progressed, mz_diff).
-        let data_columns: Vec<String> = if column_names.len() > 3 {
-            column_names[3..].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        let include_columns = !columns_sent;
-        let batches =
-            worksheet::group_subscribe_rows(&rows, subscribe_id, include_columns, &data_columns);
-
-        for batch in batches {
-            if !columns_sent && batch.columns.is_some() {
-                columns_sent = true;
-            }
-            lsp_client
-                .send_notification::<SubscribeBatchNotification>(batch)
-                .await;
-        }
-    }
-}
-
-/// Cancel an active SUBSCRIBE by sending a cancel message.
-async fn cancel_subscribe(handle: &SubscribeHandle) -> std::result::Result<(), String> {
-    cancel_query_with_tls_policy(&handle.cancel_token, &handle.host).await
-}
-
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
@@ -1395,6 +1228,11 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, _params: DidSaveTextDocumentParams) {
+        self.rebuild_project().await;
+        self.run_typecheck().await;
+    }
+
+    async fn did_change_watched_files(&self, _params: DidChangeWatchedFilesParams) {
         self.rebuild_project().await;
         self.run_typecheck().await;
     }
@@ -1582,19 +1420,21 @@ impl LanguageServer for Backend {
             None => return Ok(None),
         };
 
-        let project_guard = self.project.read().unwrap();
-        let project = match project_guard.as_ref() {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-
         // Get current cluster name for worksheet code lenses.
         let cluster = self
             .worksheet_connection
             .try_lock()
             .ok()
             .and_then(|guard| guard.as_ref().and_then(|wc| wc.cluster.clone()));
-        let lenses = code_lens::code_lenses(&file_uri, text, &root, project, cluster.as_deref());
+
+        let project_guard = self.project.read().unwrap();
+        let lenses = code_lens::code_lenses(
+            &file_uri,
+            text,
+            &root,
+            project_guard.as_deref(),
+            cluster.as_deref(),
+        );
         Ok(Some(lenses))
     }
 }

@@ -23,8 +23,8 @@
 //!
 //! # Module Structure
 //!
-//! - [`transformers`]: Name transformation strategies (FullyQualifying, Flattening, Staging)
-//! - [`visitor`]: The NormalizingVisitor that traverses SQL AST and applies transformations
+//! - `transformers`: Name transformation strategies (FullyQualifying, Flattening, Staging)
+//! - `visitor`: The NormalizingVisitor that traverses SQL AST and applies transformations
 
 mod transformers;
 mod visitor;

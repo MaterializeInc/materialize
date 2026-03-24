@@ -81,7 +81,7 @@ let lastResult: ExecuteQueryResponse | null = null;
 let lastError: WorksheetError | null = null;
 
 // Subscribe state
-const MAX_DIFF_TIMESTAMPS = 300;
+const MAX_DIFF_RETENTION_MS = 5 * 60 * 1000;
 let subscribeId: string | null = null;
 let subscribeColumns: string[] | null = null;
 let liveRows: (string | number | boolean | null)[][] = [];
@@ -373,7 +373,7 @@ function handleSubscribeBatch(batch: SubscribeBatch): void {
   lastTimestamp = batch.timestamp;
 
   // Evict diff entries older than the timestamp window.
-  const cutoff = BigInt(batch.timestamp) - BigInt(MAX_DIFF_TIMESTAMPS);
+  const cutoff = BigInt(batch.timestamp) - BigInt(MAX_DIFF_RETENTION_MS);
   diffLog = diffLog.filter((entry) => BigInt(entry.timestamp) >= cutoff);
 
   if (batch.columns) {

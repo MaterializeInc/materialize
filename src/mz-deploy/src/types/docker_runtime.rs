@@ -142,7 +142,7 @@ impl DockerRuntime {
             name: "docker-typecheck".to_string(),
             host: "localhost".to_string(),
             port: CONTAINER_PORT,
-            username: Some("materialize".to_string()),
+            username: "materialize".to_string(),
             password: None,
         }
     }

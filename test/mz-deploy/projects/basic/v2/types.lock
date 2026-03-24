@@ -6,29 +6,32 @@ version = 1
 database = "app"
 schema = "ingest"
 name = "orders"
+kind = "table"
 columns = [
-    { name = "amount", type = "numeric", nullable = true },
     { name = "order_id", type = "integer", nullable = false },
-    { name = "status", type = "text", nullable = true },
     { name = "user_id", type = "integer", nullable = true },
+    { name = "amount", type = "numeric", nullable = true },
+    { name = "status", type = "text", nullable = true },
 ]
 
 [[table]]
 database = "app"
 schema = "ingest"
 name = "products"
+kind = "table"
 columns = [
+    { name = "product_id", type = "integer", nullable = false },
     { name = "name", type = "text", nullable = true },
     { name = "price", type = "numeric", nullable = true },
-    { name = "product_id", type = "integer", nullable = false },
 ]
 
 [[table]]
 database = "app"
 schema = "ingest"
 name = "users"
+kind = "table"
 columns = [
-    { name = "email", type = "text", nullable = true },
-    { name = "name", type = "text", nullable = true },
     { name = "user_id", type = "integer", nullable = false },
+    { name = "name", type = "text", nullable = true },
+    { name = "email", type = "text", nullable = true },
 ]

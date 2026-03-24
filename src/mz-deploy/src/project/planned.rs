@@ -34,9 +34,9 @@
 //!
 //! # Module Structure
 //!
-//! - [`types`]: Type definitions (DatabaseObject, ModStatement, Schema, Database, Project)
-//! - [`project`]: Project implementation methods (topological_sort, iter_objects, etc.)
-//! - [`dependency`]: Dependency extraction from typed representation
+//! - `types`: Type definitions (DatabaseObject, ModStatement, Schema, Database, Project)
+//! - `project`: Project implementation methods (topological_sort, iter_objects, etc.)
+//! - `dependency`: Dependency extraction from typed representation
 
 mod dependency;
 mod project;

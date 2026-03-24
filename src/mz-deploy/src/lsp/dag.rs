@@ -10,14 +10,7 @@
 //!   the payload small.
 //!
 //! - **`edges`** — One [`DagEdge`] per dependency relationship. Edge kinds are
-//!   inferred from the target object's type using the same heuristic as the
-//!   explore manifest ([`infer_edge_kind`]).
-//!
-//! ## Differences from `DocsManifest`
-//!
-//! The explore manifest (`manifest.rs`) includes columns, SQL text, grants,
-//! constraints, cluster info, and test results. This endpoint returns only the
-//! graph topology and minimal node metadata needed for DAG visualization.
+//!   inferred from the target object's type using [`infer_edge_kind`].
 
 use crate::project::planned;
 use serde::Serialize;
@@ -63,8 +56,7 @@ pub struct DagEdge {
 
 /// The semantic kind of a dependency edge.
 ///
-/// Mirrors `EdgeKind` from `manifest.rs` but lives here to avoid coupling the
-/// LSP module to the CLI explore command.
+/// The semantic kind of a dependency edge.
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
@@ -90,19 +82,7 @@ fn infer_edge_kind(target_type: &str) -> EdgeKind {
     }
 }
 
-/// Map an AST statement to its display type name.
-fn object_type_name(stmt: &crate::project::ast::Statement) -> &'static str {
-    match stmt {
-        crate::project::ast::Statement::CreateView(_) => "view",
-        crate::project::ast::Statement::CreateMaterializedView(_) => "materialized-view",
-        crate::project::ast::Statement::CreateTable(_) => "table",
-        crate::project::ast::Statement::CreateTableFromSource(_) => "table-from-source",
-        crate::project::ast::Statement::CreateSource(_) => "source",
-        crate::project::ast::Statement::CreateSink(_) => "sink",
-        crate::project::ast::Statement::CreateSecret(_) => "secret",
-        crate::project::ast::Statement::CreateConnection(_) => "connection",
-    }
-}
+use super::helpers::object_type_name;
 
 /// Build the DAG response from a planned project.
 ///

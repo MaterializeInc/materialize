@@ -6,6 +6,7 @@ version = 1
 database = "app__staging"
 schema = "public"
 name = "my_table"
+kind = "table"
 columns = [
     { name = "id", type = "integer", nullable = true },
     { name = "label", type = "text", nullable = true },
@@ -15,6 +16,7 @@ columns = [
 database = "app__staging"
 schema = "public"
 name = "staging_config"
+kind = "table"
 columns = [
     { name = "key", type = "text", nullable = true },
     { name = "value", type = "text", nullable = true },

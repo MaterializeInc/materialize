@@ -156,7 +156,7 @@ impl ClusterConfig {
 /// atomically - all objects in a dirty schema are redeployed together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaDeploymentRecord {
-    /// Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged deploy)
+    /// Deploy ID (e.g., `"<init>"` for direct deploy, `"staging"` for staged deploy)
     pub deploy_id: String,
     /// Database name (e.g., "materialize")
     pub database: String,
@@ -181,7 +181,7 @@ pub struct SchemaDeploymentRecord {
 /// to a deployment at a point in time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentObjectRecord {
-    /// Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged deploy)
+    /// Deploy ID (e.g., `"<init>"` for direct deploy, `"staging"` for staged deploy)
     pub deploy_id: String,
     /// Database name (e.g., "materialize")
     pub database: String,

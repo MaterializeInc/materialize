@@ -34,9 +34,9 @@
 //!
 //! # Module Structure
 //!
-//! - [`types`]: Core type definitions (FullyQualifiedName, DatabaseObject, Schema, Database, Project)
-//! - [`validation`]: Validation helper functions used during conversion
-//! - [`conversion`]: TryFrom implementations for raw to typed conversion
+//! - `types`: Core type definitions (FullyQualifiedName, DatabaseObject, Schema, Database, Project)
+//! - `validation`: Validation helper functions used during conversion
+//! - `conversion`: TryFrom implementations for raw to typed conversion
 
 mod conversion;
 mod types;
