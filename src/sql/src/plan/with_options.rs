@@ -16,7 +16,7 @@ use mz_repr::adt::interval::Interval;
 use mz_repr::bytes::ByteSize;
 use mz_repr::{CatalogItemId, RelationVersionSelector, strconv};
 use mz_sql_parser::ast::{
-    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionAwsPrivatelinkRule,
+    ClusterAlterOptionValue, ClusterScheduleOptionValue, ConnectionAwsPrivatelinkPattern,
     ConnectionDefaultAwsPrivatelink, Expr, Ident, KafkaBroker, NetworkPolicyRuleDefinition,
     RefreshOptionValue, ReplicaDefinition,
 };
@@ -861,7 +861,7 @@ impl TryFromValue<WithOptionValue<Aug>> for ConnectionDefaultAwsPrivatelink<Aug>
     }
 }
 
-impl TryFromValue<WithOptionValue<Aug>> for ConnectionAwsPrivatelinkRule<Aug> {
+impl TryFromValue<WithOptionValue<Aug>> for ConnectionAwsPrivatelinkPattern<Aug> {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         if let WithOptionValue::ConnectionAwsPrivatelinkRule(r) = v {
             Ok(r)
@@ -885,7 +885,7 @@ impl ImpliedValue for ConnectionDefaultAwsPrivatelink<Aug> {
     }
 }
 
-impl ImpliedValue for ConnectionAwsPrivatelinkRule<Aug> {
+impl ImpliedValue for ConnectionAwsPrivatelinkPattern<Aug> {
     fn implied_value() -> Result<Self, PlanError> {
         sql_bail!("must provide a value")
     }

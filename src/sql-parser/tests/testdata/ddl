@@ -608,41 +608,52 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 
 # AWS PRIVATELINKS for Kafka connections
 
+# Every entry requires a pattern string.
 parse-statement
 CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS (privatelink_svc))
 ----
-CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS = (privatelink_svc))
-=>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(AwsPrivatelinkRuleDefault(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), port: None }))])) }], with_options: [] })
+error: Expected literal string, found identifier "privatelink_svc"
+CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS (privatelink_svc))
+                                                               ^
 
+# Wildcard patterns with availability zones.
 parse-statement
-CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE 'use1-az1'), '*.use1-az4.*' TO privatelink_svc (AVAILABILITY ZONE 'use1-az4'), privatelink_svc))
+CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE 'use1-az1'), '*.use1-az4.*' TO privatelink_svc (AVAILABILITY ZONE 'use1-az4')))
 ----
-CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS = ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az1'), '*.use1-az4.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az4'), privatelink_svc))
+CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS = ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az1'), '*.use1-az4.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az4')))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] } })), ConnectionAwsPrivatelinkRule(AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az4.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az4"))) }] } })), ConnectionAwsPrivatelinkRule(AwsPrivatelinkRuleDefault(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), port: None }))])) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] } }), ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az4.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az4"))) }] } })])) }], with_options: [] })
 
+# Wildcard pattern with availability zone and port.
 parse-statement
-CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE 'use1-az1', PORT 9092), privatelink_svc))
+CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE 'use1-az1', PORT 9092)))
 ----
-CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS = ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az1', PORT = 9092), privatelink_svc))
+CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS = ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az1', PORT = 9092)))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }, KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] } })), ConnectionAwsPrivatelinkRule(AwsPrivatelinkRuleDefault(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), port: None }))])) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }, KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] } })])) }], with_options: [] })
 
 parse-statement
 CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ())
 ----
-error: Expected identifier, found right parenthesis
+error: Expected literal string, found right parenthesis
 CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ())
                                                                ^
 
-# This expression is not valid, since there's no default rule, but we don't check that in the parser.
+# Single wildcard pattern.
 parse-statement
 CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
 ----
 CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS = ('*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az1')))
 =>
-CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] } }))])) }], with_options: [] })
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] } })])) }], with_options: [] })
+
+# Exact-match pattern (no wildcards) — used as a bootstrap broker address.
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS ('broker1:9092' TO privatelink_svc (PORT 9092)))
+----
+CREATE CONNECTION kafka_connection TO KAFKA (AWS PRIVATELINKS = ('broker1:9092' TO privatelink_svc (PORT = 9092)))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelinks, value: Some(Sequence([ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern { pattern: ConnectionRulePattern { prefix_wildcard: false, literal_match: "broker1:9092", suffix_wildcard: false }, to: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] } })])) }], with_options: [] })
 
 parse-statement
 CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES (foo, bar as qux, baz into zop);

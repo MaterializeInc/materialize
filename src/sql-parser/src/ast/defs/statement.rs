@@ -604,14 +604,6 @@ impl<T: AstInfo> AstDisplay for ConnectionDefaultAwsPrivatelink<T> {
 impl_display_t!(ConnectionDefaultAwsPrivatelink);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ConnectionAwsPrivatelinkRule<T: AstInfo> {
-    /// Route to brokers through PrivateLink connections according to these rules.
-    AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern<T>),
-    /// Bootstrap through this PrivateLink connection.
-    AwsPrivatelinkRuleDefault(ConnectionDefaultAwsPrivatelink<T>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 /// Match this pattern against some brokers' host:port.
 pub struct ConnectionAwsPrivatelinkPattern<T: AstInfo> {
     /// Given a broker's host:port, should we use this route?
@@ -641,18 +633,12 @@ pub struct ConnectionRulePattern {
     pub suffix_wildcard: bool,
 }
 
-impl<T: AstInfo> AstDisplay for ConnectionAwsPrivatelinkRule<T> {
-    fn fmt<W>(&self, f: &mut AstFormatter<W>)
-    where
-        W: fmt::Write,
-    {
-        match self {
-            ConnectionAwsPrivatelinkRule::AwsPrivatelinkRule(x) => f.write_node(x),
-            ConnectionAwsPrivatelinkRule::AwsPrivatelinkRuleDefault(x) => f.write_node(x),
-        }
+impl ConnectionRulePattern {
+    /// True when the pattern has no wildcards — it matches a single exact broker address.
+    pub fn is_exact(&self) -> bool {
+        !self.prefix_wildcard && !self.suffix_wildcard
     }
 }
-impl_display_t!(ConnectionAwsPrivatelinkRule);
 
 impl<T: AstInfo> AstDisplay for ConnectionAwsPrivatelinkPattern<T> {
     fn fmt<W>(&self, f: &mut AstFormatter<W>)
@@ -4478,7 +4464,7 @@ pub enum WithOptionValue<T: AstInfo> {
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
     ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
-    ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkRule<T>),
+    ConnectionAwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern<T>),
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),

@@ -21,7 +21,7 @@ use mz_repr::CatalogItemId;
 use mz_sql_parser::ast::ConnectionOptionName::*;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    ConnectionAwsPrivatelinkRule, ConnectionDefaultAwsPrivatelink, ConnectionOption,
+    ConnectionAwsPrivatelinkPattern, ConnectionDefaultAwsPrivatelink, ConnectionOption,
     ConnectionOptionName, CreateConnectionType, KafkaBroker, KafkaBrokerAwsPrivatelinkOption,
     KafkaBrokerAwsPrivatelinkOptionName, KafkaBrokerTunnel,
 };
@@ -53,7 +53,7 @@ generate_extracted_config!(
     (AvailabilityZones, Vec<String>),
     (AwsConnection, with_options::Object),
     (AwsPrivatelink, ConnectionDefaultAwsPrivatelink<Aug>),
-    (AwsPrivatelinks, Vec<ConnectionAwsPrivatelinkRule<Aug>>),
+    (AwsPrivatelinks, Vec<ConnectionAwsPrivatelinkPattern<Aug>>),
     // (AwsPrivatelink, with_options::Object),
     (Broker, Vec<KafkaBroker<Aug>>),
     (Brokers, Vec<KafkaBroker<Aug>>),
@@ -986,7 +986,7 @@ pub(crate) fn build_tunnel_definition(
     scx: &StatementContext,
     ssh_tunnel: Option<with_options::Object>,
     aws_privatelink: Option<ConnectionDefaultAwsPrivatelink<Aug>>,
-    aws_privatelinks: Option<Vec<ConnectionAwsPrivatelinkRule<Aug>>>,
+    aws_privatelinks: Option<Vec<ConnectionAwsPrivatelinkPattern<Aug>>>,
 ) -> Result<Tunnel<ReferencedConnection>, PlanError> {
     Ok(match (ssh_tunnel, aws_privatelink, aws_privatelinks) {
         (None, None, None) => Tunnel::Direct,
@@ -1005,30 +1005,20 @@ pub(crate) fn build_tunnel_definition(
             Tunnel::AwsPrivatelink(plan_default_privatelink(scx, &aws_privatelink)?)
         }
         (None, None, Some(rules)) => {
-            let Some((default, patterns)) = rules.split_last() else {
+            if rules.is_empty() {
                 sql_bail!("AWS PRIVATELINKS cannot be empty");
-            };
+            }
 
-            let patterns = patterns.iter().map(|pattern| {
-                    let ConnectionAwsPrivatelinkRule::AwsPrivatelinkRule(pattern) = pattern else {
-                        sql_bail!("Only the last AWS PRIVATELINKS entry can be a default PrivateLink connection.");
-                    };
-
-                    Ok(AwsPrivatelinkRule{
-                        pattern: pattern.pattern.clone(),
-                        to: plan_privatelink(scx, &pattern.to)?,
+            let rules = rules
+                .iter()
+                .map(|rule| {
+                    Ok(AwsPrivatelinkRule {
+                        pattern: rule.pattern.clone(),
+                        to: plan_privatelink(scx, &rule.to)?,
                     })
-                }).collect::<Result<Vec<_>, _>>()?;
-            let ConnectionAwsPrivatelinkRule::AwsPrivatelinkRuleDefault(default) = default else {
-                sql_bail!(
-                    "The last AWS PRIVATELINKS entry must be a default PrivateLink connection."
-                );
-            };
-            let default = plan_default_privatelink(scx, default)?;
-            Tunnel::AwsPrivatelinks(mz_storage_types::connections::AwsPrivatelinks {
-                rules: patterns,
-                default,
-            })
+                })
+                .collect::<Result<Vec<_>, PlanError>>()?;
+            Tunnel::AwsPrivatelinks(mz_storage_types::connections::AwsPrivatelinks { rules })
         }
         _ => {
             sql_bail!(

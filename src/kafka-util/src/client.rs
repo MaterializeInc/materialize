@@ -363,21 +363,20 @@ impl ConnectionRulePattern {
 pub struct HostMappingRules {
     /// Map matching hosts to a different host. First applicable rule wins.
     pub rules: Vec<(ConnectionRulePattern, BrokerRewrite)>,
-    /// If no rules match, use this host.
-    pub default: BrokerRewrite,
 }
 
 impl HostMappingRules {
-    /// Rewrite this broker address according to the rules.
-    pub fn rewrite(&self, src: &BrokerAddr) -> BrokerAddr {
+    /// Rewrite this broker address according to the rules. Returns `None` when
+    /// no rule matches.
+    pub fn rewrite(&self, src: &BrokerAddr) -> Option<BrokerAddr> {
         let address = format!("{}:{}", src.host, src.port);
         for (pattern, dst) in &self.rules {
             if pattern.matches(&address) {
-                return dst.rewrite(src);
+                return Some(dst.rewrite(src));
             }
         }
 
-        self.default.rewrite(src)
+        None
     }
 }
 
@@ -672,7 +671,10 @@ where
                         .to_socket_addrs()
                         .map(|addrs| addrs.collect()),
                     // Rewrite according to the routing rules.
-                    TunnelConfig::Rules(rules) => rules.rewrite(&addr).to_socket_addrs(),
+                    TunnelConfig::Rules(rules) => {
+                        // If no rules match, just use the address as-is.
+                        rules.rewrite(&addr).unwrap_or(addr).to_socket_addrs()
+                    }
                     // We leave the broker's address as it is.
                     TunnelConfig::None => {
                         (host, port).to_socket_addrs().map(|addrs| addrs.collect())

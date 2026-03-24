@@ -327,8 +327,9 @@ or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. R
 ##### Dynamic broker discovery {#kafka-privatelinks}
 
 Confluent Cloud does not require listing every broker individually.
-Instead, you should specify a PrivateLink connection and bootstrap server port
-along with rules for matching brokers to the correct availability-zone-specific PrivateLink endpoint.
+Instead, specify wildcard patterns for routing dynamically discovered brokers
+to the correct availability-zone-specific PrivateLink endpoint.
+For bootstrap brokers, use exact-match patterns without wildcards.
 
 {{% include-syntax file="examples/create_connection" example="syntax-kafka-aws-privatelinks" %}}
 
@@ -340,9 +341,9 @@ CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
 
 CREATE CONNECTION kafka_connection TO KAFKA (
     AWS PRIVATELINKS (
+        'lkc-xxx.domyyy.us-east-1.aws.confluent.cloud:9092' TO privatelink_svc (PORT 9092),
         '*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az1'),
-        '*.use1-az4.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az4'),
-        privatelink_svc
+        '*.use1-az4.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az4')
     )
 );
 ```
