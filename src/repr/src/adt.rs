@@ -27,6 +27,7 @@ pub mod mz_acl_item;
 pub mod numeric;
 pub mod pg_legacy_name;
 pub mod range;
+pub mod rdf;
 pub mod regex;
 pub mod system;
 pub mod timestamp;

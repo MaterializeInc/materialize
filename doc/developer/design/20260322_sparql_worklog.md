@@ -2610,3 +2610,47 @@ logic that handles:
    implementations. Update the SPARQL expression translator to emit these.
 4. **Phase 4**: Add RDF-aware indexing (index on the native payload for
    known types, enabling efficient range scans on numeric/date values).
+
+## 2026-03-24: Prompt 28 — Implement RDF wrapper types (partial)
+
+### What was done
+
+Created `src/repr/src/adt/rdf.rs` following the Jsonb pattern — wrapper
+types over existing `Datum` variants, no new Datum variants needed.
+
+**Types implemented:**
+
+- `Rdf` — owned RDF term backed by a `Row` (analogous to `Jsonb`)
+- `RdfRef<'a>` — borrowed view wrapping `Datum<'a>` (analogous to `JsonbRef`)
+- `RdfKind<'a>` — enum dispatched by `RdfRef::kind()`, with variants for:
+  - Native types: `Integer(i64)`, `Double(f64)`, `Float(f32)`,
+    `Decimal(Numeric)`, `Boolean(bool)`, `Date`, `DateTime`, `Time`,
+    `Duration`, `XsdString(&str)`
+  - List-tagged types: `Iri(&str)` [tag 0], `BlankNode(&str)` [tag 1],
+    `LangString { value, lang }` [tag 2], `OtherTyped { value, datatype }` [tag 3]
+  - Special: `Null`, `Invalid`
+- `RdfPacker<'a, 'row>` — packs RDF terms into `RowPacker` with methods:
+  `pack_iri`, `pack_blank_node`, `pack_string`, `pack_lang_string`,
+  `pack_integer`, `pack_double`, `pack_float`, `pack_boolean`,
+  `pack_other_typed`, `pack_term` (N-Triples parser)
+- `FromStr` for `Rdf` — parses N-Triples term syntax
+- `fmt::Display` for `RdfRef` — outputs N-Triples syntax
+
+**Tests:** 24 unit tests covering all RdfKind variants, N-Triples parsing,
+edge cases (NaN, negative zero, empty string, long IRIs, multi-byte lang
+tags).
+
+### Deferred: ScalarType::Iri and ScalarType::Rdf
+
+Adding new `ScalarType` variants requires updating 15+ exhaustive match
+sites in `scalar.rs` alone (SqlScalarType, ReprScalarType, into/from_proto,
+is_instance_of, Arbitrary, arb_datum_for_scalar, iter_test_cases,
+enumerate, Display, union, PartialEq, Hash, Ord, From conversions), plus
+the proto file, pgwire type mapping, SQL planner integration, and more.
+This is deferred to Prompt 29.
+
+### Build results
+
+- `cargo check -p mz-repr`: passes, 0 warnings
+- `cargo test -p mz-repr -- adt::rdf`: 24/24 pass
+- `bin/fmt`: passes (except missing `buf` tool)

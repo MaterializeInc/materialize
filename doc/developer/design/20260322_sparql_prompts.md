@@ -365,7 +365,7 @@ includes the goal, key files to read, and acceptance criteria.
 
 ## Phase 6: Native RDF Encoding
 
-### Prompt 28: Implement `ScalarType::Iri`, `ScalarType::Rdf`, and Jsonb-style wrappers
+### ~~Prompt 28: Implement `ScalarType::Iri`, `ScalarType::Rdf`, and Jsonb-style wrappers~~
 
 > Implement native RDF term encoding following the Jsonb pattern described
 > in the "Future Work: Native RDF Datum Encoding" section of the worklog.
@@ -424,3 +424,37 @@ includes the goal, key files to read, and acceptance criteria.
 > Read first: `src/repr/src/adt/jsonb.rs` (the pattern to follow),
 > `src/repr/src/scalar.rs` (ScalarType), the worklog section
 > "Future Work: Native RDF Datum Encoding" for the full design.
+>
+> **Status**: `src/repr/src/adt/rdf.rs` is complete with 24 passing tests.
+> `ScalarType::Iri` and `ScalarType::Rdf` are deferred to Prompt 29.
+
+### Prompt 29: Add `ScalarType::Iri` and `ScalarType::Rdf` variants
+
+> Add `Iri` and `Rdf` variants to the scalar type system. This is a
+> mechanical but wide-reaching change — every exhaustive match on
+> `ScalarType` must be updated. The `Rdf`/`RdfRef` wrapper types from
+> Prompt 28 (`src/repr/src/adt/rdf.rs`) are already implemented.
+>
+> **ScalarType::Iri**: Stored as `Datum::String` under the hood. For
+> `is_instance_of`, accept `Datum::String`. Map to TEXT in pgwire.
+> Follows the same pattern as `PgLegacyName` (a string with extra type
+> semantics).
+>
+> **ScalarType::Rdf**: The polymorphic RDF object type. For
+> `is_instance_of`, accept any datum variant that `RdfRef::kind()`
+> handles (String, Int64, Float32, Float64, Numeric, True, False, Date,
+> TimestampTz, Time, Interval, List, Null). Map to TEXT in pgwire (for
+> now; N-Triples serialization). Follows the `Jsonb` pattern.
+>
+> **Files to update (at minimum):**
+> - `src/repr/src/scalar.rs`: `SqlScalarType` enum, `ReprScalarType`
+>   enum, `is_instance_of_scalar` (both impls), `From` conversions,
+>   `Display`, `PartialEq`/`Hash`/`Ord` for `ReprScalarType`,
+>   `union()`, `Arbitrary` impls, `arb_datum_for_scalar`,
+>   `iter_test_cases`, `enumerate`
+> - `src/repr/src/relation_and_scalar.proto`: `ProtoScalarType` message
+> - `src/repr/src/scalar.rs`: `into_proto()`/`from_proto()` impls
+> - `src/pgrepr/src/`: pgwire type mapping
+> - Any other crates with exhaustive matches on ScalarType
+>
+> Run: `cargo check -p mz-repr -p mz-pgrepr -p mz-sql -p mz-adapter 2>&1`
