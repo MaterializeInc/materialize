@@ -48,8 +48,8 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
-    RowRowSpine,
+    ColumnarCollection, ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp,
+    RowRowAgent, RowRowEnter, RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -177,6 +177,9 @@ where
                 .expect("Binding verified to exist");
             if collection.collection.is_some() {
                 binding.collection = collection.collection;
+            }
+            if collection.columnar_collection.is_some() {
+                binding.columnar_collection = collection.columnar_collection;
             }
             for (key, flavor) in collection.arranged.into_iter() {
                 binding.arranged.insert(key, flavor);
@@ -404,6 +407,13 @@ where
         VecCollection<S, Row, Diff>,
         VecCollection<S, DataflowError, Diff>,
     )>,
+    /// Columnar variant of the unarranged collection. Initially always `None`;
+    /// populated as operators are converted to columnar representation.
+    /// Error streams remain Vec-based since `DataflowError` is not suited for columnar layout.
+    pub columnar_collection: Option<(
+        ColumnarCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
 
@@ -419,7 +429,53 @@ where
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
+            columnar_collection: None,
             arranged: BTreeMap::default(),
+        }
+    }
+
+    /// Construct a new collection bundle from columnar update streams.
+    pub fn from_columnar_collections(
+        oks: ColumnarCollection<S, Row, Diff>,
+        errs: VecCollection<S, DataflowError, Diff>,
+    ) -> Self {
+        Self {
+            collection: None,
+            columnar_collection: Some((oks, errs)),
+            arranged: BTreeMap::default(),
+        }
+    }
+
+    /// Returns the columnar collection if present.
+    pub fn columnar_collection(
+        &self,
+    ) -> Option<&(
+        ColumnarCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    )> {
+        self.columnar_collection.as_ref()
+    }
+
+    /// Ensures the Vec-based collection is populated, converting from the
+    /// columnar collection if necessary. This is the "escape hatch" for
+    /// operators not yet converted to columnar.
+    pub fn ensure_vec_collection(&mut self) {
+        if self.collection.is_some() {
+            return;
+        }
+        if let Some((col_oks, col_errs)) = self.columnar_collection.take() {
+            use differential_dataflow::AsCollection;
+            use timely::dataflow::operators::core::Map;
+
+            let vec_oks = col_oks.inner.map(|item| {
+                let (d, t, r) = item;
+                (
+                    columnar::Columnar::into_owned(d),
+                    columnar::Columnar::into_owned(t),
+                    columnar::Columnar::into_owned(r),
+                )
+            });
+            self.collection = Some((vec_oks.as_collection(), col_errs));
         }
     }
 
@@ -432,6 +488,7 @@ where
         arranged.insert(exprs, arrangements);
         Self {
             collection: None,
+            columnar_collection: None,
             arranged,
         }
     }
@@ -452,6 +509,8 @@ where
     pub fn scope(&self) -> S {
         if let Some((oks, _errs)) = &self.collection {
             oks.inner.scope()
+        } else if let Some((oks, _errs)) = &self.columnar_collection {
+            oks.inner.scope()
         } else {
             self.arranged
                 .values()
@@ -468,6 +527,12 @@ where
     ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
+                (
+                    oks.clone().enter_region(region),
+                    errs.clone().enter_region(region),
+                )
+            }),
+            columnar_collection: self.columnar_collection.as_ref().map(|(oks, errs)| {
                 (
                     oks.clone().enter_region(region),
                     errs.clone().enter_region(region),
@@ -492,6 +557,10 @@ where
         CollectionBundle {
             collection: self
                 .collection
+                .as_ref()
+                .map(|(oks, errs)| (oks.clone().leave_region(), errs.clone().leave_region())),
+            columnar_collection: self
+                .columnar_collection
                 .as_ref()
                 .map(|(oks, errs)| (oks.clone().leave_region(), errs.clone().leave_region())),
             arranged: self

@@ -43,19 +43,19 @@ evaluation when data is in columnar form.
 
 ### Prompt 0.1: Introduce `ColumnarCollection` type alias and `ColumnarBundle`
 
-[ ] Introduce a type alias `ColumnarCollection<S, D, R>` for a collection backed by columnar
+[*] Introduce a type alias `ColumnarCollection<S, D, R>` for a collection backed by columnar
 containers (`StreamCore<S, Column<(D, S::Timestamp, R)>>` or equivalent).
 
-[ ] Add a `columnar_collection` field to `CollectionBundle<S, T>` alongside the existing
+[*] Add a `columnar_collection` field to `CollectionBundle<S, T>` alongside the existing
 `collection` field. Initially always `None`.
 
-[ ] Add helper methods: `from_columnar_collections(oks, errs)` and `columnar_collection()` that
+[*] Add helper methods: `from_columnar_collections(oks, errs)` and `columnar_collection()` that
 return the columnar variant if present, falling back to converting the Vec variant.
 
-[ ] Add a method `ensure_vec_collection()` that materializes the `VecCollection` from the columnar
+[*] Add a method `ensure_vec_collection()` that materializes the `VecCollection` from the columnar
 collection if needed (the "escape hatch" for operators not yet converted).
 
-[ ] Ensure all existing code continues to compile and pass tests unchanged. The new field is
+[*] Ensure all existing code continues to compile and pass tests unchanged. The new field is
 always `None` at this point.
 
 **Files**: `src/compute/src/render/context.rs`, `src/compute/src/typedefs.rs`
