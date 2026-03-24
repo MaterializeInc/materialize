@@ -2407,130 +2407,159 @@ Types that have **no** natural Datum equivalent:
 | `rdf:langString` | Needs new representation (see below) |
 | Custom/unknown datatypes | Needs new representation (see below) |
 
-### Proposed Data Model: `Datum::Rdf`
+### Proposed Data Model: `ScalarType::Rdf` with Jsonb-style wrapper
 
 The key insight is that an RDF term is really **two values**: a type tag
-and a payload. This is analogous to `Datum::Jsonb`, which is not a single
-type but a family of types (null, bool, number, string, array, object) all
-stored under one SQL column type.
+and a payload. This is analogous to Jsonb, which is not a single type but
+a family of types (null, bool, number, string, array, object) all stored
+under one SQL column type.
 
-We propose a new composite `Datum` representation for RDF terms. Two main
-design options:
+#### How Jsonb works (the precedent)
 
-#### Option A: Tagged composite datum (like Jsonb)
+`JsonbRef<'a>` in `src/repr/src/adt/jsonb.rs` is a zero-cost wrapper around
+`Datum<'a>`. It doesn't add a new Datum variant — it **reinterprets** existing
+ones:
 
-Add a new `ScalarType::Rdf` that maps to a `Datum::List` encoding:
+- `Datum::JsonNull` → JSON null
+- `Datum::True` / `Datum::False` → JSON boolean
+- `Datum::Numeric` → JSON number
+- `Datum::String` → JSON string
+- `Datum::List` → JSON array
+- `Datum::Map` → JSON object
 
-```
-RDF term = DatumList [ tag: Int32, payload: <varies> ]
-```
+The `ScalarType::Jsonb` column type tells the system "this column contains
+one of these datum variants, interpreted as JSON." Parsing, serialization,
+and comparison functions live on `Jsonb`/`JsonbRef`, not on Datum.
 
-Where `tag` discriminates:
+#### Applying the Jsonb pattern to RDF
 
-| Tag | Meaning | Payload |
-|-----|---------|---------|
-| 0 | IRI | `String` (the IRI) |
-| 1 | Blank node | `String` (the bnode label) |
-| 2 | xsd:string | `String` (the value) |
-| 3 | rdf:langString | `List[String, String]` (value, lang tag) |
-| 4 | xsd:boolean | `True` / `False` |
-| 5 | xsd:integer | `Int64` |
-| 6 | xsd:decimal | `Numeric` |
-| 7 | xsd:float | `Float32` |
-| 8 | xsd:double | `Float64` |
-| 9 | xsd:dateTime | `TimestampTz` |
-| 10 | xsd:date | `Date` |
-| 11 | xsd:time | `Time` |
-| 12 | xsd:duration | `Interval` |
-| 13 | Other typed literal | `List[String, String]` (value, datatype IRI) |
+We can do exactly the same thing. Add `ScalarType::Rdf` and define
+`Rdf` (owned) / `RdfRef<'a>` (borrowed) wrapper types that sit on a
+`Datum<'a>`. The key design choice: **use native Datum variants directly
+for the common path, and `Datum::List` only for the cases that need
+compound representation.**
 
-**Pros**: No new Datum variants needed. Reuses existing List encoding.
-Extensible — new XSD types just get new tag numbers.
+**Common path — bare Datum, no wrapping overhead:**
 
-**Cons**: Every access requires unpacking a List. More bytes per datum
-(tag overhead). Can't use native comparison operators directly — need
-RDF-aware comparison functions.
+| RDF kind | Datum variant | Notes |
+|----------|---------------|-------|
+| xsd:integer | `Datum::Int64` | All integer subtypes (long/int/short/byte/unsigned*) collapse to i64 |
+| xsd:decimal | `Datum::Numeric` | Exact decimal |
+| xsd:float | `Datum::Float32` | IEEE 754 single |
+| xsd:double | `Datum::Float64` | IEEE 754 double |
+| xsd:boolean | `Datum::True` / `Datum::False` | Direct |
+| xsd:dateTime | `Datum::TimestampTz` or `Datum::Timestamp` | Depending on timezone |
+| xsd:date | `Datum::Date` | Direct |
+| xsd:time | `Datum::Time` | Direct |
+| xsd:duration | `Datum::Interval` | Close enough |
 
-#### Option B: Dedicated `Datum::Rdf*` variants
+For these types, `RdfRef` can directly read the Datum and knows the XSD
+type from the Datum variant. No tag overhead, no list unpacking.
 
-Add a small number of new Datum variants:
+**Compound path — `Datum::List` for types that need annotation:**
+
+| RDF kind | Datum encoding | Tag value |
+|----------|----------------|-----------|
+| IRI | `List[Int32(0), String(iri)]` | 0 |
+| Blank node | `List[Int32(1), String(label)]` | 1 |
+| xsd:string | `Datum::String` directly (no list!) | — |
+| rdf:langString | `List[Int32(3), String(value), String(lang)]` | 3 |
+| Other typed literal | `List[Int32(13), String(value), String(type_iri)]` | 13 |
+
+The tag is only needed to distinguish term kinds that would otherwise be
+ambiguous — specifically IRIs and blank nodes vs plain strings. xsd:string
+gets the zero-overhead `Datum::String` path since it's the most common
+literal type.
+
+#### Why this works
+
+`RdfRef::from_datum(d)` can dispatch on the Datum variant:
 
 ```rust
-Datum::RdfIri(&'a str),
-Datum::RdfBlankNode(&'a str),
-Datum::RdfLangString { value: &'a str, lang: &'a str },
-Datum::RdfTypedLiteral { value: &'a str, datatype: &'a str },
+impl<'a> RdfRef<'a> {
+    fn kind(&self) -> RdfKind<'a> {
+        match self.datum {
+            // Numeric types — XSD type is implicit from the Datum variant
+            Datum::Int64(v)   => RdfKind::Integer(v),
+            Datum::Float32(v) => RdfKind::Float(v),
+            Datum::Float64(v) => RdfKind::Double(v),
+            Datum::Numeric(v) => RdfKind::Decimal(v),
+            Datum::True       => RdfKind::Boolean(true),
+            Datum::False      => RdfKind::Boolean(false),
+            Datum::Date(v)    => RdfKind::Date(v),
+            // ...other native types...
+
+            // Plain string — xsd:string (most common literal type)
+            Datum::String(s)  => RdfKind::XsdString(s),
+
+            // Tagged compound types — read the discriminant
+            Datum::List(list) => {
+                let mut iter = list.iter();
+                let tag = iter.next().unwrap().unwrap_int32();
+                match tag {
+                    0  => RdfKind::Iri(iter.next().unwrap().unwrap_str()),
+                    1  => RdfKind::BlankNode(iter.next().unwrap().unwrap_str()),
+                    3  => RdfKind::LangString {
+                        value: iter.next().unwrap().unwrap_str(),
+                        lang: iter.next().unwrap().unwrap_str(),
+                    },
+                    13 => RdfKind::OtherTyped {
+                        value: iter.next().unwrap().unwrap_str(),
+                        datatype: iter.next().unwrap().unwrap_str(),
+                    },
+                    _  => unreachable!(),
+                }
+            }
+            _ => unreachable!("invalid datum in Rdf column"),
+        }
+    }
+}
 ```
 
-Known XSD types would be stored in their native Datum forms (Int64,
-Float64, etc.) with a **separate column** for the type tag:
+#### Column type considerations
+
+Subjects are always IRIs or blank nodes. Predicates are always IRIs. Only
+the **object** position can be any RDF term. This suggests a refined quad
+table schema:
 
 ```sql
 CREATE TABLE rdf_quads (
-    subject_tag  INT2,     -- 0=IRI, 1=bnode
-    subject      TEXT,     -- IRI string or bnode label
-    predicate    TEXT,     -- always an IRI
-    object_tag   INT2,     -- discriminant for the value column
-    object_value ANY,      -- native Datum (Int64, Float64, String, etc.)
-    object_type  TEXT,     -- XSD type IRI (NULL for IRIs/bnodes/xsd:string)
-    object_lang  TEXT,     -- language tag (NULL unless rdf:langString)
-    graph        TEXT
+    subject   TEXT NOT NULL,  -- IRI or bnode label (always a string)
+    predicate TEXT NOT NULL,  -- always an IRI (always a string)
+    object    RDF  NOT NULL,  -- the polymorphic position
+    graph     TEXT             -- IRI of the named graph
 );
 ```
 
-**Pros**: Native comparison/sorting/arithmetic on the `object_value` column
-without any decoding. Can leverage existing indexes and operators.
+Only the `object` column uses `ScalarType::Rdf`. Subject/predicate/graph
+remain `TEXT` since they're always strings (IRIs or bnode labels). This
+eliminates the IRI-vs-string ambiguity for those positions and avoids
+List overhead on every subject/predicate.
 
-**Cons**: More columns → wider rows. Subjects and predicates are always
-strings anyway (IRIs/bnodes), so the benefit is mainly for the object
-position. Requires the SPARQL planner to generate different plans depending
-on the object type.
+If we wanted to distinguish IRIs from blank nodes in the subject position
+(e.g., for `isIRI(?s)` or `isBlank(?s)` functions), we could either:
+- Use `ScalarType::Rdf` for subject too (pays the List overhead)
+- Add a `subject_is_bnode BOOL` column (rare case, cheap)
+- Convention: bnode labels start with `_:` (parser-level, zero overhead)
 
-#### Option C: Hybrid — Rdf column type with native payloads (recommended)
+#### Advantages over alternatives
 
-Add a new `ScalarType::Rdf` column type with a custom Row encoding that
-packs the tag and native value together efficiently:
+**No new Datum variants needed.** The Jsonb pattern proves that a rich
+composite type can live entirely within existing Datum variants + a wrapper
+type. This avoids changes to Row encoding, Tag enum, columnar encoders,
+and the 6+ files that a new Datum variant touches.
 
-```
-Row encoding for an Rdf datum:
-  [Tag::Rdf] [rdf_kind: u8] [payload: ...]
-```
+**Zero overhead for the common path.** Numeric literals, booleans, dates,
+and plain strings use native Datums with no wrapping. Only IRIs, blank
+nodes, language-tagged strings, and exotic typed literals pay the List
+overhead — and even that is just a tag int + the string payload.
 
-Where `rdf_kind` determines how `payload` is decoded:
+**SPARQL comparison functions work naturally.** `rdf_eq(a, b)` dispatches
+on `RdfRef::kind()` for both operands, applies numeric promotion if
+needed, and returns the result. No string parsing at query time.
 
-- `0` (IRI): payload is a string (length-prefixed bytes)
-- `1` (Blank node): payload is a string
-- `2` (xsd:string): payload is a string
-- `3` (rdf:langString): payload is [lang_len: u8][lang: bytes][value: string]
-- `4` (xsd:boolean): payload is 1 byte (0 or 1)
-- `5` (xsd:integer): payload is i64 (8 bytes)
-- `6` (xsd:decimal): payload is Numeric encoding
-- `7` (xsd:float): payload is f32 (4 bytes)
-- `8` (xsd:double): payload is f64 (8 bytes)
-- `9` (xsd:dateTime): payload is TimestampTz encoding
-- `10` (xsd:date): payload is Date encoding
-- `11` (xsd:time): payload is Time encoding
-- `12` (xsd:duration): payload is Interval encoding
-- `13` (other typed): payload is [type_iri: string][value: string]
-
-This is essentially the same as Option A but with a dedicated Row-level
-tag instead of encoding as a `DatumList`. The Datum variant would be:
-
-```rust
-/// An RDF term with embedded type tag.
-Datum::Rdf(RdfDatum<'a>)
-```
-
-Where `RdfDatum<'a>` is an enum matching the `rdf_kind` values above.
-
-**Pros**: Single column per position (like today). Native payloads for
-known types (efficient comparison/arithmetic). Custom comparison function
-can dispatch on `rdf_kind` for SPARQL semantics (numeric promotion, EBV,
-three-valued logic). Compact encoding.
-
-**Cons**: Requires a new Datum variant + Row tag + columnar encoder.
-More upfront work. Comparison between Rdf datums requires a custom
-operator (can't use the built-in `<`/`>` on the column directly).
+**Extensible.** New XSD types just get new tag numbers in the List path,
+or new Datum variant mappings if they happen to match an existing type.
 
 ### SPARQL Comparison Semantics
 
@@ -2558,24 +2587,14 @@ logic that handles:
    comparison function needs access to both the native value AND the
    original type tag.
 
-### Recommendation
-
-**Option C (hybrid Rdf column type)** is the best path forward because:
-
-- It preserves the current 4-column quad table shape (no schema explosion)
-- It encodes known XSD types natively (fast comparison, compact storage)
-- It's extensible to new types via new `rdf_kind` values
-- The custom `Datum::Rdf` variant gives us a place to implement SPARQL's
-  non-standard comparison semantics (promotion, EBV, three-valued logic)
-  as scalar functions over the Rdf type
-- It follows the Jsonb precedent: one SQL type, many internal representations
-
 ### Migration Path
 
 1. **Phase 1 (current)**: All-string encoding. Works, just slow.
-2. **Phase 2**: Add `ScalarType::Rdf` + `Datum::Rdf`. Update the SPARQL
-   planner to produce Rdf datums. The quad table schema becomes
-   `(subject RDF, predicate RDF, object RDF, graph RDF)`.
+2. **Phase 2**: Add `ScalarType::Rdf`, `Rdf`/`RdfRef` wrapper types in a
+   new `src/repr/src/adt/rdf.rs` module (following the Jsonb pattern).
+   Update the quad table schema to `(subject TEXT, predicate TEXT,
+   object RDF, graph TEXT)`. Update the SPARQL planner to produce Rdf
+   datums via `RdfPacker` (analogous to `JsonbPacker`).
 3. **Phase 3**: Add RDF-aware comparison functions (`rdf_eq`, `rdf_lt`,
    `rdf_ebv`, `rdf_numeric_add`, etc.) as `UnaryFunc`/`BinaryFunc`
    implementations. Update the SPARQL expression translator to emit these.
