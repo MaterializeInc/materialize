@@ -10,6 +10,8 @@
 //! A source that reads from an a persist shard.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -17,6 +19,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Instant;
 
+use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
@@ -399,7 +402,14 @@ where
         error_handler,
         matches!(consolidation, SourceConsolidation::Full),
     );
-    let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
+    let rows = match consolidation {
+        SourceConsolidation::BestEffort => {
+            decode_and_mfp(cfg, fetched, &name, until, map_filter_project)
+        }
+        SourceConsolidation::Full => {
+            decode_and_mfp_consolidating(cfg, fetched, &name, until, map_filter_project)
+        }
+    };
     (rows, token)
 }
 
@@ -702,6 +712,336 @@ impl PendingWork {
         }
         true
     }
+}
+
+// ============================================================================
+// Consolidating decode path
+// ============================================================================
+
+/// A cursor over a single `FetchedPart`, with a peeked next value for use in a
+/// merge heap. Parts are sorted by `RunOrder::Structured`, so calling
+/// `next_with_storage` yields rows in key-value-time order within the part.
+struct MergeCursor {
+    part: FetchedPart<SourceData, (), Timestamp, StorageDiff>,
+    /// The next KVT from this part (peeked ahead for comparison in the heap).
+    peeked: ((SourceData, ()), Timestamp, StorageDiff),
+    /// Re-usable allocation for decoded `SourceData`.
+    row_buf: Option<SourceData>,
+    /// Stats for filter pushdown audit, if this part is being audited.
+    filter_pushdown_audit: Option<Box<dyn Debug>>,
+}
+
+impl MergeCursor {
+    /// Create a cursor from a parsed part, returning `None` if the part is empty.
+    fn new(mut part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>) -> Option<Self> {
+        let filter_pushdown_audit = part
+            .part
+            .is_filter_pushdown_audit()
+            .map(|s| Box::new(s) as Box<dyn Debug>);
+        let mut row_buf = None;
+        let peeked = part.part.next_with_storage(&mut row_buf, &mut None)?;
+        Some(MergeCursor {
+            part: part.part,
+            peeked,
+            row_buf,
+            filter_pushdown_audit,
+        })
+    }
+
+    /// Advance to the next row. Returns `Some(self)` if there is a next row,
+    /// `None` if the part is exhausted.
+    fn advance(mut self) -> Option<Self> {
+        match self.part.next_with_storage(&mut self.row_buf, &mut None) {
+            Some(next) => {
+                self.peeked = next;
+                Some(self)
+            }
+            None => None,
+        }
+    }
+}
+
+/// Order `MergeCursor`s by their peeked (key, time), so the `BinaryHeap` with
+/// `Reverse` gives us the minimum.
+impl PartialEq for MergeCursor {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for MergeCursor {}
+
+impl PartialOrd for MergeCursor {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MergeCursor {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let ((ref kv_a, _), ref t_a, _) = self.peeked;
+        let ((ref kv_b, _), ref t_b, _) = other.peeked;
+        (kv_a, t_a).cmp(&(kv_b, t_b))
+    }
+}
+
+/// A streaming merge across multiple sorted `FetchedPart`s. Iterates through
+/// all parts in key-value-time order, consolidating updates with identical KVT.
+struct SourcePartMerger {
+    heap: BinaryHeap<Reverse<MergeCursor>>,
+}
+
+impl SourcePartMerger {
+    fn new() -> Self {
+        SourcePartMerger {
+            heap: BinaryHeap::new(),
+        }
+    }
+
+    /// Add a parsed part to the merge.
+    fn push(&mut self, part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>) {
+        if let Some(cursor) = MergeCursor::new(part) {
+            self.heap.push(Reverse(cursor));
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.heap.is_empty()
+    }
+
+    /// Returns the next consolidated (key, val, time, diff) from the merge,
+    /// along with whether this row is part of a filter pushdown audit.
+    ///
+    /// Consecutive updates with identical (key, val, time) are consolidated
+    /// into a single update. Zero diffs are suppressed.
+    fn next(&mut self) -> Option<((SourceData, ()), Timestamp, StorageDiff, bool)> {
+        loop {
+            let Reverse(cursor) = self.heap.pop()?;
+            let ((key, val), time, diff) = cursor.peeked.clone();
+            let is_audit = cursor.filter_pushdown_audit.is_some();
+
+            // Re-insert the cursor after advancing.
+            if let Some(advanced) = cursor.advance() {
+                self.heap.push(Reverse(advanced));
+            }
+
+            // Consolidate: absorb any subsequent entries with the same KVT.
+            let mut consolidated_diff = diff;
+            while let Some(Reverse(top)) = self.heap.peek() {
+                let ((ref next_key, _), ref next_time, _) = top.peeked;
+                if next_key == &key && next_time == &time {
+                    let Reverse(next_cursor) = self.heap.pop().unwrap();
+                    let (_, _, next_diff) = next_cursor.peeked.clone();
+                    consolidated_diff.plus_equals(&next_diff);
+                    if let Some(advanced) = next_cursor.advance() {
+                        self.heap.push(Reverse(advanced));
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            // Suppress zero diffs.
+            if consolidated_diff.is_zero() {
+                continue;
+            }
+
+            return Some(((key, val), time, consolidated_diff, is_audit));
+        }
+    }
+}
+
+/// A variant of [`decode_and_mfp`] that performs a streaming merge across all
+/// fetched parts at the same timestamp, consolidating updates with identical
+/// key-value-time before applying MFP. This produces fewer downstream updates
+/// than the sequential approach when parts contain overlapping key ranges.
+///
+/// Used when [`SourceConsolidation::Full`] is requested.
+pub fn decode_and_mfp_consolidating<G>(
+    cfg: PersistConfig,
+    fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    name: &str,
+    until: Antichain<Timestamp>,
+    mut map_filter_project: Option<&mut MfpPlan>,
+) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+where
+    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
+{
+    let scope = fetched.scope();
+    let mut builder = OperatorBuilder::new(
+        format!("persist_source::decode_and_mfp_consolidating({})", name),
+        scope.clone(),
+    );
+    let operator_info = builder.operator_info();
+
+    let mut fetched_input = builder.new_input(fetched, Pipeline);
+    let (updates_output, updates_stream) = builder.new_output();
+    let mut updates_output: OutputBuilder<
+        _,
+        ConsolidatingContainerBuilder<
+            Vec<(
+                Result<Row, DataflowError>,
+                (mz_repr::Timestamp, Subtime),
+                Diff,
+            )>,
+        >,
+    > = OutputBuilder::from(updates_output);
+
+    // Re-used state for processing and building rows.
+    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut row_builder = Row::default();
+
+    // Extract the MFP if it exists; leave behind an identity MFP in that case.
+    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
+
+    builder.build(move |_caps| {
+        let name = name.to_owned();
+        // Acquire an activator to reschedule the operator when it has unfinished work.
+        let activations = scope.activations();
+        let activator = Activator::new(operator_info.address, activations);
+
+        // Groups of pending parts by their capability. We merge all parts at the
+        // same time together to maximize consolidation.
+        let mut pending_mergers: std::collections::VecDeque<(
+            Capability<(mz_repr::Timestamp, Subtime)>,
+            SourcePartMerger,
+        )> = std::collections::VecDeque::new();
+
+        move |_frontier| {
+            // Collect newly arrived blobs, grouping by time.
+            fetched_input.for_each(|time, data| {
+                let capability = time.retain(0);
+
+                // Find or create a merger for this time.
+                let merger = if let Some((_, m)) =
+                    pending_mergers.iter_mut().find(|(c, _)| c.time() == capability.time())
+                {
+                    m
+                } else {
+                    pending_mergers.push_back((capability.clone(), SourcePartMerger::new()));
+                    &mut pending_mergers.back_mut().unwrap().1
+                };
+
+                for fetched_blob in data.drain(..) {
+                    merger.push(fetched_blob.parse());
+                }
+            });
+
+            let yield_fuel = cfg.storage_source_decode_fuel();
+            let yield_fn = |_, work| work >= yield_fuel;
+            let panic_on_audit = panic_on_audit_failure.get();
+
+            let mut work = 0;
+            let start_time = Instant::now();
+            let mut output = updates_output.activate();
+
+            while !pending_mergers.is_empty() && !yield_fn(start_time, work) {
+                let exhausted = {
+                    let (cap, merger) = pending_mergers.front_mut().unwrap();
+                    let mut session = output.session_with_builder(cap);
+
+                    while let Some(((key, _val), time, diff, is_audit)) = merger.next() {
+                        if until.less_equal(&time) {
+                            continue;
+                        }
+                        match key {
+                            SourceData(Ok(row)) => {
+                                if let Some(mfp) = map_filter_project.as_ref() {
+                                    work += 1;
+                                    let arena = RowArena::new();
+                                    let mut datums_local = datum_vec.borrow_with(&row);
+                                    for result in mfp.evaluate(
+                                        &mut datums_local,
+                                        &arena,
+                                        time,
+                                        diff.into(),
+                                        |time| !until.less_equal(time),
+                                        &mut row_builder,
+                                    ) {
+                                        if is_audit {
+                                            report_pushdown_audit(
+                                                &name,
+                                                panic_on_audit,
+                                            );
+                                        }
+                                        match result {
+                                            Ok((row, time, diff)) => {
+                                                if !until.less_equal(&time) {
+                                                    let mut emit_time = *cap.time();
+                                                    emit_time.0 = time;
+                                                    session.give((Ok(row), emit_time, diff));
+                                                    work += 1;
+                                                }
+                                            }
+                                            Err((err, time, diff)) => {
+                                                if !until.less_equal(&time) {
+                                                    let mut emit_time = *cap.time();
+                                                    emit_time.0 = time;
+                                                    session.give((Err(err), emit_time, diff));
+                                                    work += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    let mut emit_time = *cap.time();
+                                    emit_time.0 = time;
+                                    session.give((Ok(row.clone()), emit_time, diff.into()));
+                                    work += 1;
+                                }
+                            }
+                            SourceData(Err(err)) => {
+                                let mut emit_time = *cap.time();
+                                emit_time.0 = time;
+                                session.give((Err(err), emit_time, diff.into()));
+                                work += 1;
+                            }
+                        }
+                        if yield_fn(start_time, work) {
+                            break;
+                        }
+                    }
+
+                    merger.is_empty()
+                };
+                // The session is dropped here (end of the block above), releasing
+                // the borrow on pending_mergers.
+                if exhausted {
+                    pending_mergers.pop_front();
+                } else {
+                    // Merger still has data — we yielded.
+                    break;
+                }
+            }
+
+            if !pending_mergers.is_empty() {
+                activator.activate();
+            }
+        }
+    });
+
+    updates_stream
+}
+
+/// Reports a filter pushdown audit violation. Extracted to keep the main
+/// decode loops readable.
+fn report_pushdown_audit(name: &str, panic_on_failure: bool) {
+    sentry::with_scope(
+        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+        || {
+            error!(
+                name,
+                "persist filter pushdown correctness violation (consolidating path)!"
+            );
+            if panic_on_failure {
+                panic!(
+                    "persist filter pushdown correctness violation! {}",
+                    name
+                );
+            }
+        },
+    );
 }
 
 /// A trait representing a type that can be used in `backpressure`.
