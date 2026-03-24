@@ -686,6 +686,22 @@ async fn read_data_product(
 ) -> Result<McpResult, McpRequestError> {
     debug!(name = %name, limit = limit, cluster_override = ?cluster_override, "Executing read_data_product");
 
+    // Lightweight existence check: verify the data product is visible in the
+    // catalog before running the read query. This gives a clean DataProductNotFound
+    // error for missing or inaccessible products (including RBAC revocations)
+    // without relying on fragile error code matching.
+    // TODO: Remove this extra round-trip once catalog errors get specific SQL
+    // error codes (see TODO in src/adapter/src/error.rs `fn code()`), then we
+    // can translate the query error directly.
+    let lookup_query = format!(
+        "SELECT 1 FROM mz_internal.mz_mcp_data_products WHERE object_name = {}",
+        escaped_string_literal(name)
+    );
+    let lookup_rows = execute_sql(client, &lookup_query).await?;
+    if lookup_rows.is_empty() {
+        return Err(McpRequestError::DataProductNotFound(name.to_string()));
+    }
+
     let clamped_limit = limit.min(MAX_READ_LIMIT);
 
     let read_query = match cluster_override {
