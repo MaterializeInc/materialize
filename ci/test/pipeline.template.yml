@@ -667,6 +667,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: mcp
+    label: MCP e2e
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/mcp]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: mcp
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: chbench-demo
     label: chbench smoke
     depends_on: build-aarch64
