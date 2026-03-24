@@ -215,7 +215,6 @@ pub enum Plan {
     ValidateConnection(ValidateConnectionPlan),
     AlterRetainHistory(AlterRetainHistoryPlan),
     AlterSourceTimestampInterval(AlterSourceTimestampIntervalPlan),
-    Sparql(SparqlPlan),
 }
 
 impl Plan {
@@ -317,7 +316,7 @@ impl Plan {
             StatementKind::RevokeRole => &[PlanKind::RevokeRole],
             StatementKind::Rollback => &[PlanKind::AbortTransaction],
             StatementKind::Select => &[PlanKind::Select, PlanKind::SideEffectingFunc],
-            StatementKind::Sparql => &[PlanKind::Sparql],
+            StatementKind::Sparql => &[PlanKind::Select],
             StatementKind::SetTransaction => &[PlanKind::SetTransaction],
             StatementKind::SetVariable => &[PlanKind::SetVariable],
             StatementKind::Show => &[
@@ -481,7 +480,6 @@ impl Plan {
             Plan::ValidateConnection(_) => "validate connection",
             Plan::AlterRetainHistory(_) => "alter retain history",
             Plan::AlterSourceTimestampInterval(_) => "alter source timestamp interval",
-            Plan::Sparql(_) => "sparql",
         }
     }
 
@@ -755,9 +753,6 @@ pub struct CreateViewPlan {
     /// True if the view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
     pub ambiguous_columns: bool,
-    /// If set, this view is defined by a SPARQL query. The adapter compiles the
-    /// SPARQL to HIR before optimizing, replacing the placeholder `view.expr`.
-    pub sparql_info: Option<SparqlViewInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -772,22 +767,6 @@ pub struct CreateMaterializedViewPlan {
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
     pub ambiguous_columns: bool,
-    /// If set, this materialized view is defined by a SPARQL query.
-    pub sparql_info: Option<SparqlViewInfo>,
-}
-
-/// Information needed to compile a SPARQL query into HIR at sequencing time.
-/// Used by `CreateViewPlan` and `CreateMaterializedViewPlan` to defer SPARQL
-/// compilation to the adapter (avoiding a cyclic dependency between mz-sql
-/// and mz-sparql).
-#[derive(Debug, Clone)]
-pub struct SparqlViewInfo {
-    /// The parsed SPARQL query.
-    pub query: mz_sparql_parser::ast::SparqlQuery,
-    /// The GlobalId of the quad table to query against.
-    pub quad_table_id: GlobalId,
-    /// The GlobalId of the catalog triples view, if resolved.
-    pub catalog_triples_id: Option<GlobalId>,
 }
 
 #[derive(Debug, Clone)]
@@ -888,23 +867,6 @@ pub struct SetTransactionPlan {
     pub modes: Vec<TransactionMode>,
 }
 
-/// A plan for SPARQL queries.
-///
-/// The SPARQL query has been parsed but not yet compiled to HIR. The adapter
-/// calls the SPARQL planner to produce HIR, then sequences it as a peek (like
-/// `SelectPlan`).
-#[derive(Clone, Debug)]
-pub struct SparqlPlan {
-    /// The parsed SPARQL query.
-    pub query: mz_sparql_parser::ast::SparqlQuery,
-    /// The GlobalId of the quad table to query against.
-    pub quad_table_id: GlobalId,
-    /// The GlobalId of the catalog triples view, if resolved.
-    pub catalog_triples_id: Option<GlobalId>,
-    /// The output column names and types.
-    pub desc: RelationDesc,
-}
-
 /// A plan for select statements.
 #[derive(Clone, Debug)]
 pub struct SelectPlan {
@@ -971,15 +933,6 @@ pub enum SubscribeFrom {
         expr: MirRelationExpr,
         desc: RelationDesc,
     },
-    /// SPARQL query to subscribe to. The adapter compiles this to HIR/MIR
-    /// at sequencing time (to avoid a cyclic dependency between mz-sql and
-    /// mz-sparql).
-    Sparql {
-        query: mz_sparql_parser::ast::SparqlQuery,
-        quad_table_id: GlobalId,
-        catalog_triples_id: Option<GlobalId>,
-        desc: RelationDesc,
-    },
 }
 
 impl SubscribeFrom {
@@ -987,17 +940,6 @@ impl SubscribeFrom {
         match self {
             SubscribeFrom::Id(id) => BTreeSet::from([*id]),
             SubscribeFrom::Query { expr, .. } => expr.depends_on(),
-            SubscribeFrom::Sparql {
-                quad_table_id,
-                catalog_triples_id,
-                ..
-            } => {
-                let mut deps = BTreeSet::from([*quad_table_id]);
-                if let Some(id) = catalog_triples_id {
-                    deps.insert(*id);
-                }
-                deps
-            }
         }
     }
 
@@ -1005,7 +947,6 @@ impl SubscribeFrom {
         match self {
             SubscribeFrom::Id(_) => false,
             SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
-            SubscribeFrom::Sparql { .. } => false,
         }
     }
 }

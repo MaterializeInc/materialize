@@ -119,9 +119,7 @@ impl Coordinator {
 
         let desc = match &plan.from {
             SubscribeFrom::Id(_) => None,
-            SubscribeFrom::Query { desc, .. } | SubscribeFrom::Sparql { desc, .. } => {
-                Some(desc.clone())
-            }
+            SubscribeFrom::Query { desc, .. } => Some(desc.clone()),
         };
 
         // Create an OptimizerTrace instance to collect plans emitted when
@@ -246,33 +244,6 @@ impl Coordinator {
             explain_ctx,
         }: SubscribeOptimizeMir,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        // If this is a SPARQL subscribe, compile SPARQL → HIR → MIR now, while
-        // we still have access to the coordinator (and hence SystemVars for
-        // lowering config). Replace the plan's `from` with a `Query` variant.
-        let plan = match plan.from {
-            SubscribeFrom::Sparql {
-                query,
-                quad_table_id,
-                catalog_triples_id,
-                desc,
-            } => {
-                let planner =
-                    mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
-                let planned = planner.plan(&query).map_err(|e| {
-                    AdapterError::Unstructured(anyhow::anyhow!("SPARQL: {}", e.message))
-                })?;
-                let mir = planned
-                    .expr
-                    .lower(self.catalog().system_config(), None)
-                    .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{}", e)))?;
-                plan::SubscribePlan {
-                    from: SubscribeFrom::Query { expr: mir, desc },
-                    ..plan
-                }
-            }
-            _ => plan,
-        };
-
         let plan::SubscribePlan {
             with_snapshot,
             up_to,

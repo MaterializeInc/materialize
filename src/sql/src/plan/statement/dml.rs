@@ -315,22 +315,32 @@ pub fn describe_sparql(
 }
 
 pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan, PlanError> {
-    // Step 1: Parse SPARQL.
     let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
         .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
 
     let quad_table_id = resolve_quad_table(scx)?;
     let catalog_triples_id = resolve_catalog_triples(scx);
-    let desc = sparql_query_desc(&sparql_query);
 
-    // Return a Plan::Sparql with the parsed query and quad table ID.
-    // The adapter will call the SPARQL planner to produce HIR and sequence
-    // the result as a peek.
-    Ok(Plan::Sparql(plan::SparqlPlan {
-        query: sparql_query,
-        quad_table_id,
-        catalog_triples_id,
-        desc,
+    // Compile SPARQL directly to HIR at plan time.
+    let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+    let planned = planner
+        .plan(&sparql_query)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
+
+    let arity = planned.var_map.len();
+    let finishing = RowSetFinishing {
+        limit: None,
+        offset: 0,
+        project: (0..arity).collect(),
+        order_by: vec![],
+    };
+
+    Ok(Plan::Select(plan::SelectPlan {
+        select: None,
+        source: planned.expr,
+        when: plan::QueryWhen::Immediately,
+        finishing,
+        copy_to: None,
     }))
 }
 
@@ -410,8 +420,8 @@ pub(crate) fn resolve_catalog_triples(scx: &StatementContext) -> Option<GlobalId
     })
 }
 
-/// Plan a SPARQL subscribe. Returns a [`SubscribeFrom::Sparql`] that the
-/// adapter will compile to HIR/MIR at sequencing time.
+/// Plan a SPARQL subscribe. Compiles SPARQL to HIR, lowers to MIR, and
+/// returns a [`SubscribeFrom::Query`].
 fn plan_sparql_subscribe(
     scx: &StatementContext,
     stmt: &SparqlStatement,
@@ -423,16 +433,24 @@ fn plan_sparql_subscribe(
     let catalog_triples_id = resolve_catalog_triples(scx);
     let desc = sparql_query_desc(&sparql_query);
 
+    // Compile SPARQL to HIR and lower to MIR.
+    let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+    let planned = planner
+        .plan(&sparql_query)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
+    let mir = planned
+        .expr
+        .lower(scx.catalog.system_vars(), None)
+        .map_err(|e| PlanError::Unstructured(format!("{e}")))?;
+
     // Build scope from the output column names.
     let scope = Scope::from_source(
         None::<crate::names::PartialItemName>,
         (0..desc.arity()).map(|i| desc.get_name(i).clone()),
     );
 
-    let from = SubscribeFrom::Sparql {
-        query: sparql_query,
-        quad_table_id,
-        catalog_triples_id,
+    let from = SubscribeFrom::Query {
+        expr: mir,
         desc: desc.clone(),
     };
     Ok((from, desc, scope))

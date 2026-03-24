@@ -578,7 +578,6 @@ fn generate_rbac_requirements(
             drop_ids: _,
             if_not_exists: _,
             ambiguous_columns: _,
-            sparql_info: _,
         }) => RbacRequirements {
             ownership: replace
                 .map(|id| vec![ObjectId::Item(id)])
@@ -598,7 +597,6 @@ fn generate_rbac_requirements(
             drop_ids: _,
             if_not_exists: _,
             ambiguous_columns: _,
-            sparql_info: _,
         }) => RbacRequirements {
             ownership: replace
                 .map(|id| vec![ObjectId::Item(id)])
@@ -1555,8 +1553,7 @@ fn generate_rbac_requirements(
         })
         | Plan::Execute(plan::ExecutePlan { name: _, params: _ })
         | Plan::Deallocate(plan::DeallocatePlan { name: _ })
-        | Plan::Raise(plan::RaisePlan { severity: _ })
-        | Plan::Sparql(_) => Default::default(),
+        | Plan::Raise(plan::RaisePlan { severity: _ }) => Default::default(),
     }
 }
 

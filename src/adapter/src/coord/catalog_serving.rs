@@ -46,7 +46,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         (
             plan.from.depends_on(),
             match &plan.from {
-                SubscribeFrom::Id(_) | SubscribeFrom::Sparql { .. } => false,
+                SubscribeFrom::Id(_) => false,
                 SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
             },
         )
@@ -165,8 +165,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterDefaultPrivileges(_)
         | Plan::ReassignOwned(_)
         | Plan::ValidateConnection(_)
-        | Plan::SideEffectingFunc(_)
-        | Plan::Sparql(_) => return TargetCluster::Active,
+        | Plan::SideEffectingFunc(_) => return TargetCluster::Active,
     };
 
     // Bail if the user has disabled it via the SessionVar.
@@ -240,17 +239,6 @@ pub fn check_cluster_restrictions(
         Plan::Subscribe(plan) => match plan.from {
             SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
             SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
-            SubscribeFrom::Sparql {
-                quad_table_id,
-                catalog_triples_id,
-                ..
-            } => {
-                let mut ids = vec![quad_table_id];
-                if let Some(id) = catalog_triples_id {
-                    ids.push(id);
-                }
-                Box::new(ids.into_iter())
-            }
         },
         Plan::Select(plan) => Box::new(plan.source.depends_on().into_iter()),
         _ => return Ok(()),

@@ -2045,3 +2045,74 @@ SPARQL-to-HIR compilation.
 - `cargo check -p mz-sqllogictest`: passes
 - `bin/fmt`: passes (except missing `buf` tool)
 - `bin/lint`: only pre-existing missing-tool failures
+
+## 2026-03-24: Prompt 23 — Direct SPARQL compilation (remove deferred compilation workaround)
+
+### What was done
+
+Now that `mz-hir` exists as a standalone crate, the cyclic dependency between
+`mz-sql` and `mz-sparql` is broken. Added `mz-sparql` as a direct dependency
+of `mz-sql`, enabling SPARQL queries to be compiled to HIR at plan time (just
+like SQL queries) instead of being deferred to the adapter's sequencing phase.
+
+**Changes to `mz-sql`:**
+
+- **`Cargo.toml`**: Added `mz-sparql` dependency.
+- **`plan/statement/dml.rs`**: `plan_sparql()` now calls `SparqlPlanner::plan()`
+  directly and returns `Plan::Select(SelectPlan { ... })` instead of
+  `Plan::Sparql(SparqlPlan { ... })`. `plan_sparql_subscribe()` now compiles
+  SPARQL to HIR, lowers to MIR via `expr.lower()`, and returns
+  `SubscribeFrom::Query` instead of `SubscribeFrom::Sparql`.
+- **`plan/statement/ddl.rs`**: `plan_view()` and the materialized view planning
+  now compile SPARQL directly to HIR at plan time. Removed `SparqlViewInfo`
+  from return types and plan structs. No more placeholder `Get(quad_table)` +
+  deferred compilation pattern.
+- **`plan.rs`**: Removed `Plan::Sparql`, `SparqlPlan`, `SparqlViewInfo`, and
+  `SubscribeFrom::Sparql`. Removed `sparql_info` fields from `CreateViewPlan`
+  and `CreateMaterializedViewPlan`. Updated `generated_from()` to map
+  `StatementKind::Sparql` to `PlanKind::Select`.
+- **`rbac.rs`**: Removed `Plan::Sparql` match arm and `sparql_info` field
+  patterns.
+
+**Changes to `mz-adapter`:**
+
+- **`coord/sequencer.rs`**: Removed `sequence_sparql()` method and its
+  `Plan::Sparql` dispatch arm.
+- **`coord/sequencer/inner/create_view.rs`**: Removed deferred SPARQL
+  compilation block (the `if let Some(sparql_info)` that replaced placeholder
+  HIR with compiled HIR).
+- **`coord/sequencer/inner/create_materialized_view.rs`**: Same removal.
+- **`coord/sequencer/inner/subscribe.rs`**: Removed `SubscribeFrom::Sparql`
+  match arm that compiled SPARQL at optimization time.
+- **`coord/catalog_serving.rs`**: Removed `SubscribeFrom::Sparql` match arms.
+- **`coord/appends.rs`**: Removed `Plan::Sparql` match arm.
+- **`optimize/subscribe.rs`**: Removed `SubscribeFrom::Sparql` unreachable arm.
+- **`command.rs`**: Removed `Sparql` from `PlanKind` match.
+- **`Cargo.toml`**: Removed `mz-sparql` dependency (no longer needed by adapter).
+
+### Key decisions
+
+1. **Dependency direction**: `mz-sql → mz-sparql → mz-hir` (no cycle). The old
+   workaround existed because `mz-sparql` depended on `mz-sql` for HIR types.
+   After prompt 22 extracted HIR to `mz-hir`, both `mz-sql` and `mz-sparql`
+   depend on `mz-hir` independently, allowing `mz-sql` to depend on `mz-sparql`.
+
+2. **SPARQL views store HIR natively**: SPARQL views now go through the same
+   path as SQL views — HIR is computed at plan time and stored directly. No more
+   placeholder expressions or re-compilation at sequencing time.
+
+3. **Subscribe lowering at plan time**: SPARQL subscribes now lower HIR to MIR
+   in `plan_sparql_subscribe()` using `scx.catalog.system_vars()`, matching the
+   existing SQL subscribe path that calls `plan_query()` → `expr.lower()`.
+
+4. **Adapter simplified**: The adapter no longer needs any SPARQL-specific code.
+   It treats SPARQL queries identically to SQL queries — they arrive as
+   `Plan::Select`, `CreateViewPlan`, `CreateMaterializedViewPlan`, or
+   `SubscribePlan` with `SubscribeFrom::Query`, all containing pre-compiled
+   HIR/MIR.
+
+### Build results
+
+- `cargo check -p mz-sql`: passes
+- `cargo check -p mz-adapter`: passes
+- `cargo clippy -p mz-sql -p mz-adapter`: no errors

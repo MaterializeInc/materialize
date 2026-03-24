@@ -222,9 +222,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
             }
-            SubscribeFrom::Sparql { .. } => {
-                unreachable!("SPARQL subscribes are resolved to Query before optimization")
-            }
             SubscribeFrom::Query { expr, desc } => {
                 // TODO: Change the `expr` type to be `HirRelationExpr` and run
                 // HIR ⇒ MIR lowering and decorrelation here. This would allow

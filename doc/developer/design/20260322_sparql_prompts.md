@@ -293,19 +293,19 @@ includes the goal, key files to read, and acceptance criteria.
 
 ## Phase 5: Follow-up
 
-### Prompt 23: Direct SPARQL compilation (remove deferred compilation workaround)
+### ~~Prompt 23: Direct SPARQL compilation (remove deferred compilation workaround)~~
 
-> Now that `mz-sparql` depends on `mz-hir` instead of `mz-sql`, add
+> ~~Now that `mz-sparql` depends on `mz-hir` instead of `mz-sql`, add
 > `mz-sparql` as a dependency of `mz-sql` so the SQL planner can compile
 > SPARQL directly to HIR at plan time. Remove the deferred `sequence_sparql`
 > workaround in the adapter that currently re-parses and re-plans SPARQL
 > queries at sequencing time. SPARQL views should store HIR natively like
 > SQL views. Update tests to verify that `EXPLAIN` on SPARQL queries shows
-> the HIR plan directly.
+> the HIR plan directly.~~
 >
-> Read first: `src/adapter/src/coord/sequencer.rs` (deferred SPARQL
+> ~~Read first: `src/adapter/src/coord/sequencer.rs` (deferred SPARQL
 > compilation), `src/sql/src/plan/statement.rs` (plan dispatch),
-> `src/sparql/Cargo.toml`, `src/sql/Cargo.toml`.
+> `src/sparql/Cargo.toml`, `src/sql/Cargo.toml`.~~
 
 ### Prompt 24: Clean up dead code and warnings from HIR extraction
 

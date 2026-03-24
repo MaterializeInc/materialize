@@ -411,16 +411,6 @@ impl Coordinator {
                     let max = Some(ctx.session().vars().max_query_result_size());
                     self.sequence_peek(ctx, plan, target_cluster, max).await;
                 }
-                Plan::Sparql(sparql_plan) => match self.sequence_sparql(sparql_plan) {
-                    Ok(select_plan) => {
-                        let max = Some(ctx.session().vars().max_query_result_size());
-                        self.sequence_peek(ctx, select_plan, target_cluster, max)
-                            .await;
-                    }
-                    Err(e) => {
-                        ctx.retire(Err(e.into()));
-                    }
-                },
                 Plan::Subscribe(plan) => {
                     self.sequence_subscribe(ctx, plan, target_cluster).await;
                 }
@@ -1305,38 +1295,6 @@ impl CachedStatisticsOracle {
         }
 
         Ok(Self { cache })
-    }
-}
-
-impl Coordinator {
-    /// Sequence a SPARQL query by compiling it to HIR and then running it as a peek.
-    fn sequence_sparql(
-        &self,
-        sparql_plan: plan::SparqlPlan,
-    ) -> Result<plan::SelectPlan, AdapterError> {
-        let planner = mz_sparql::plan::SparqlPlanner::new(
-            sparql_plan.quad_table_id,
-            sparql_plan.catalog_triples_id,
-        );
-        let planned = planner
-            .plan(&sparql_plan.query)
-            .map_err(|e| AdapterError::Unstructured(anyhow::anyhow!("{}", e.message)))?;
-
-        let arity = planned.var_map.len();
-        let finishing = RowSetFinishing {
-            limit: None,
-            offset: 0,
-            project: (0..arity).collect(),
-            order_by: vec![],
-        };
-
-        Ok(plan::SelectPlan {
-            source: planned.expr,
-            when: mz_sql::plan::QueryWhen::Immediately,
-            finishing,
-            copy_to: None,
-            select: None,
-        })
     }
 }
 

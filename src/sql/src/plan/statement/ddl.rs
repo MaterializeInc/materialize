@@ -163,7 +163,7 @@ use crate::plan::{
     CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
     MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
     PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
-    Source, SparqlViewInfo, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
+    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
     WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
     transform_ast,
 };
@@ -2571,7 +2571,7 @@ pub fn plan_view(
     scx: &StatementContext,
     def: &mut ViewDefinition<Aug>,
     temporary: bool,
-) -> Result<(QualifiedItemName, View, Option<SparqlViewInfo>), PlanError> {
+) -> Result<(QualifiedItemName, View), PlanError> {
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -2588,36 +2588,20 @@ pub fn plan_view(
         sparql,
     } = def;
 
-    let (expr, mut desc, sparql_info) = if let Some(sparql_stmt) = sparql {
-        // SPARQL view: resolve the quad table and build a placeholder HIR.
-        // The adapter will compile the real SPARQL → HIR at sequencing time.
+    let (expr, mut desc) = if let Some(sparql_stmt) = sparql {
+        // Compile SPARQL directly to HIR at plan time.
         let quad_table_id = dml::resolve_quad_table(scx)?;
         let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
             .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
         let desc = dml::sparql_query_desc(&sparql_query);
 
-        // Placeholder: Get on the quad table. This ensures depends_on() returns
-        // the correct dependency set for timeline validation.
-        let quad_type = SqlRelationType::new(vec![
-            SqlColumnType {
-                scalar_type: SqlScalarType::String,
-                nullable: true,
-            };
-            4
-        ]);
-        let placeholder_expr = HirRelationExpr::Get {
-            id: mz_expr::Id::Global(quad_table_id),
-            typ: quad_type,
-        };
-
         let catalog_triples_id = dml::resolve_catalog_triples(scx);
-        let info = SparqlViewInfo {
-            query: sparql_query,
-            quad_table_id,
-            catalog_triples_id,
-        };
+        let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+        let planned = planner
+            .plan(&sparql_query)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
 
-        (placeholder_expr, desc, Some(info))
+        (planned.expr, desc)
     } else {
         let query::PlannedRootQuery {
             expr,
@@ -2633,7 +2617,7 @@ pub fn plan_view(
         if expr.contains_parameters()? {
             return Err(PlanError::ParameterNotAllowed("views".to_string()));
         }
-        (expr, desc, None)
+        (expr, desc)
     };
 
     let dependencies = expr
@@ -2667,7 +2651,7 @@ pub fn plan_view(
         temporary,
     };
 
-    Ok((name, view, sparql_info))
+    Ok((name, view))
 }
 
 pub fn plan_create_view(
@@ -2679,7 +2663,7 @@ pub fn plan_create_view(
         if_exists,
         definition,
     } = &mut stmt;
-    let (name, view, sparql_info) = plan_view(scx, definition, *temporary)?;
+    let (name, view) = plan_view(scx, definition, *temporary)?;
 
     // Override the statement-level IfExistsBehavior with Skip if this is
     // explicitly requested in the PlanContext (the default is `false`).
@@ -2753,7 +2737,6 @@ pub fn plan_create_view(
         drop_ids,
         if_not_exists: *if_exists == IfExistsBehavior::Skip,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
-        sparql_info,
     }))
 }
 
@@ -2838,33 +2821,20 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
-    let (expr, mut desc, sparql_info) = if let Some(sparql_stmt) = &stmt.sparql {
-        // SPARQL materialized view: resolve quad table and build placeholder HIR.
+    let (expr, mut desc) = if let Some(sparql_stmt) = &stmt.sparql {
+        // Compile SPARQL directly to HIR at plan time.
         let quad_table_id = dml::resolve_quad_table(scx)?;
         let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
             .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
         let desc = dml::sparql_query_desc(&sparql_query);
 
-        let quad_type = SqlRelationType::new(vec![
-            SqlColumnType {
-                scalar_type: SqlScalarType::String,
-                nullable: true,
-            };
-            4
-        ]);
-        let placeholder_expr = HirRelationExpr::Get {
-            id: mz_expr::Id::Global(quad_table_id),
-            typ: quad_type,
-        };
-
         let catalog_triples_id = dml::resolve_catalog_triples(scx);
-        let info = SparqlViewInfo {
-            query: sparql_query,
-            quad_table_id,
-            catalog_triples_id,
-        };
+        let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+        let planned = planner
+            .plan(&sparql_query)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
 
-        (placeholder_expr, desc, Some(info))
+        (planned.expr, desc)
     } else {
         let query::PlannedRootQuery {
             expr,
@@ -2882,7 +2852,7 @@ pub fn plan_create_materialized_view(
                 "materialized views".to_string(),
             ));
         }
-        (expr, desc, None)
+        (expr, desc)
     };
 
     plan_utils::maybe_rename_columns(
@@ -3187,7 +3157,6 @@ pub fn plan_create_materialized_view(
         drop_ids,
         if_not_exists,
         ambiguous_columns: *scx.ambiguous_columns.borrow(),
-        sparql_info,
     }))
 }
 

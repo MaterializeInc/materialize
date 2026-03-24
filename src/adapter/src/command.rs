@@ -889,9 +889,8 @@ impl ExecuteResponse {
             DropObjects => &[DroppedObject],
             DropOwned => &[DroppedOwned],
             PlanKind::EmptyQuery => &[ExecuteResponseKind::EmptyQuery],
-            ExplainPlan | ExplainPushdown | ExplainTimestamp | Select | Sparql
-            | ShowAllVariables | ShowCreate | ShowColumns | ShowVariable | InspectShard
-            | ExplainSinkSchema => &[
+            ExplainPlan | ExplainPushdown | ExplainTimestamp | Select | ShowAllVariables
+            | ShowCreate | ShowColumns | ShowVariable | InspectShard | ExplainSinkSchema => &[
                 ExecuteResponseKind::CopyTo,
                 SendingRowsStreaming,
                 SendingRowsImmediate,
