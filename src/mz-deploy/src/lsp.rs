@@ -64,9 +64,11 @@
 //!
 //! ## Code Lens
 //!
-//! Adds a clickable "Run Test" link above each `EXECUTE UNIT TEST` statement.
-//! When clicked, the editor dispatches a `mz-deploy.runTest` command with the
-//! test filter string (e.g., `database.schema.object#test_name`) as argument.
+//! - **"Run Test"** above each `EXECUTE UNIT TEST` statement.
+//! - **"Explain"** above `CREATE MATERIALIZED VIEW` and named `CREATE INDEX`.
+//! - **"Execute" / "Run"** above each statement in `worksheets/` files.
+//!   Queries get "Execute"; DML/DDL get "Run". Both include the cluster
+//!   name when available (e.g., "▶ Execute on quickstart").
 //!
 //! ## Custom Endpoints
 //!
@@ -89,10 +91,10 @@
 //!   connection details (host, port, user, profile name) without making
 //!   a connection. Used by the worksheet panel to show connection status.
 //!
-//! - **`mz-deploy/execute-query`** — Executes a read-only SQL query
-//!   (SELECT, SHOW, EXPLAIN) against the configured Materialize instance.
-//!   Enforces read-only access, injects LIMIT for unbounded SELECTs, and
-//!   returns columnar or raw-text results. See the [`worksheet`] module.
+//! - **`mz-deploy/execute-query`** — Executes a SQL statement against the
+//!   configured Materialize instance. For SELECTs, injects LIMIT and returns
+//!   columnar results. For EXPLAIN, returns raw text. For DML/DDL, returns
+//!   an affected row count. See the [`worksheet`] module.
 //!
 //! - **`mz-deploy/cancel-query`** — Cancels the in-flight worksheet
 //!   query or active SUBSCRIBE using the PostgreSQL cancel protocol.
@@ -111,6 +113,10 @@
 //!   on the worksheet connection. Returns refreshed context so schema
 //!   dropdowns update after a database change.
 //!
+//! - **`mz-deploy/set-profile`** — Switches the active connection profile.
+//!   Drops the current worksheet connection, cancels any active SUBSCRIBE,
+//!   and stores the new profile name for the next lazy connect.
+//!
 //! ## Architecture
 //!
 //! ```text
@@ -120,6 +126,7 @@
 //!                                          ├─ types_cache: Types (rebuilt on save)
 //!                                          ├─ worksheet_connection: lazy DB connection
 //!                                          ├─ subscribe_task: background SUBSCRIBE loop
+//!                                          ├─ profile_name: active connection profile
 //!                                          └─ root: project root directory
 //! ```
 //!

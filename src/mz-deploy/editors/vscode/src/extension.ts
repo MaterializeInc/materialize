@@ -70,6 +70,15 @@ let keywordDecorationType: vscode.TextEditorDecorationType | null = null;
 let keywordRegex: RegExp | null = null;
 let worksheetProvider: WorksheetProvider | null = null;
 
+/** Extracts a structured WorksheetError from an RPC error, falling back to a generic internal error. */
+function extractRpcError(err: unknown): WorksheetError {
+  const rpcErr = err as { data?: WorksheetError; message?: string };
+  return rpcErr.data || {
+    code: "internal_error",
+    message: rpcErr.message || "Unknown error",
+  };
+}
+
 /** Returns the filesystem path of the first open workspace folder, or undefined. */
 function getWorkspacePath(): string | undefined {
   return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -183,49 +192,70 @@ const IDENTIFIER_CONTEXT_WORDS: readonly string[] = [
  * The returned ranges are sorted by start offset, which allows
  * {@link isInsideRange} to short-circuit with an early break.
  */
+/** Scans a single-quoted string literal starting at `start`, handling `''` escapes. */
+function scanSingleQuoted(text: string, start: number): [number, [number, number]] {
+  let i = start + 1;
+  while (i < text.length) {
+    if (text[i] === "'" && text[i + 1] === "'") {
+      i += 2;
+    } else if (text[i] === "'") {
+      i++;
+      break;
+    } else {
+      i++;
+    }
+  }
+  return [i, [start, i]];
+}
+
+/** Scans a double-quoted identifier starting at `start`. */
+function scanDoubleQuoted(text: string, start: number): [number, [number, number]] {
+  let i = start + 1;
+  while (i < text.length && text[i] !== '"') i++;
+  if (i < text.length) i++;
+  return [i, [start, i]];
+}
+
+/** Scans a `--` line comment starting at `start`. */
+function scanLineComment(text: string, start: number): [number, [number, number]] {
+  let i = start + 2;
+  while (i < text.length && text[i] !== "\n") i++;
+  return [i, [start, i]];
+}
+
+/** Scans a parenthesized column list starting at `start`, returning null range if not a column list paren. */
+function scanColumnListParen(text: string, start: number): [number, [number, number] | null] {
+  if (isColumnListParen(text, start)) {
+    let depth = 1;
+    let i = start + 1;
+    while (i < text.length && depth > 0) {
+      if (text[i] === "(") depth++;
+      else if (text[i] === ")") depth--;
+      i++;
+    }
+    return [i, [start, i]];
+  } else {
+    return [start + 1, null];
+  }
+}
+
 function buildExcludedRanges(text: string): [number, number][] {
   const ranges: [number, number][] = [];
   let i = 0;
   while (i < text.length) {
     if (text[i] === "'") {
-      const start = i;
-      i++;
-      while (i < text.length) {
-        if (text[i] === "'" && text[i + 1] === "'") {
-          i += 2;
-        } else if (text[i] === "'") {
-          i++;
-          break;
-        } else {
-          i++;
-        }
-      }
-      ranges.push([start, i]);
+      const [next, range] = scanSingleQuoted(text, i);
+      ranges.push(range); i = next;
     } else if (text[i] === '"') {
-      const start = i;
-      i++;
-      while (i < text.length && text[i] !== '"') i++;
-      if (i < text.length) i++;
-      ranges.push([start, i]);
+      const [next, range] = scanDoubleQuoted(text, i);
+      ranges.push(range); i = next;
     } else if (text[i] === "-" && text[i + 1] === "-") {
-      const start = i;
-      i += 2;
-      while (i < text.length && text[i] !== "\n") i++;
-      ranges.push([start, i]);
+      const [next, range] = scanLineComment(text, i);
+      ranges.push(range); i = next;
     } else if (text[i] === "(") {
-      if (isColumnListParen(text, i)) {
-        const start = i;
-        let depth = 1;
-        i++;
-        while (i < text.length && depth > 0) {
-          if (text[i] === "(") depth++;
-          else if (text[i] === ")") depth--;
-          i++;
-        }
-        ranges.push([start, i]);
-      } else {
-        i++;
-      }
+      const [next, range] = scanColumnListParen(text, i);
+      if (range) ranges.push(range);
+      i = next;
     } else {
       i++;
     }
@@ -321,6 +351,199 @@ function applyKeywordDecorations(editor: vscode.TextEditor): void {
  * 5. The `mz-deploy/projectRebuilt` notification handler for live refresh
  * 6. Keyword highlighting listeners on editor/document changes
  */
+/** Handles messages from the worksheet webview, routing them to the LSP server. */
+async function handleWorksheetMessage(msg: WorksheetOutboundMessage): Promise<void> {
+  console.log("[mz-deploy] worksheet message:", msg.type);
+  if (!client || !client.isRunning()) {
+    console.warn("[mz-deploy] worksheet: LSP client not running, dropping message:", msg.type);
+    return;
+  }
+
+  switch (msg.type) {
+    case "ready":
+      void requestConnectionInfo();
+      void requestWorksheetContext();
+      break;
+
+    case "execute":
+      try {
+        console.log("[mz-deploy] worksheet: sending execute-query for:", msg.query);
+        const data = await client.sendRequest<ExecuteQueryResponse>(
+          "mz-deploy/execute-query",
+          { query: msg.query, timeout_ms: msg.timeout_ms }
+        );
+        console.log("[mz-deploy] worksheet: got result, rows:", data?.rows?.length);
+        worksheetProvider!.postMessage({ type: "query-result", data });
+      } catch (err: unknown) {
+        console.error("[mz-deploy] worksheet: execute-query error:", err);
+        worksheetProvider!.postMessage({ type: "query-error", error: extractRpcError(err) });
+      }
+      break;
+
+    case "cancel":
+      try {
+        await client.sendRequest("mz-deploy/cancel-query");
+      } catch (err) {
+        console.error("[mz-deploy] cancel-query failed:", err);
+      }
+      break;
+
+    case "request-connection-info":
+      void requestConnectionInfo();
+      break;
+
+    case "request-worksheet-context":
+      void requestWorksheetContext();
+      break;
+
+    case "set-session":
+      try {
+        const ctx = await client.sendRequest<WorksheetContextResponse>(
+          "mz-deploy/set-session",
+          { database: msg.database, schema: msg.schema, cluster: msg.cluster }
+        );
+        worksheetProvider!.postMessage({ type: "worksheet-context", data: ctx });
+      } catch (err) {
+        console.error("[mz-deploy] set-session failed:", err);
+      }
+      break;
+
+    case "set-profile":
+      try {
+        const ctx = await client.sendRequest<WorksheetContextResponse>(
+          "mz-deploy/set-profile",
+          { profile: msg.profile }
+        );
+        worksheetProvider!.postMessage({ type: "worksheet-context", data: ctx });
+        void requestConnectionInfo();
+      } catch (err) {
+        console.error("[mz-deploy] set-profile failed:", err);
+      }
+      break;
+  }
+}
+
+/** Registers all VS Code commands and pushes their disposables to the extension context. */
+function registerCommands(context: vscode.ExtensionContext): void {
+  context.subscriptions.push(
+    vscode.commands.registerCommand("mz-deploy.openDAG", () => {
+      dagPanel!.open(null);
+      void requestDagData();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("mz-deploy.runTest", async (filter: string) => {
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        await activeEditor.document.save();
+      }
+      const terminal = vscode.window.createTerminal("mz-deploy test");
+      terminal.show();
+      terminal.sendText(
+        `~/materialize/target/release/mz-deploy test '${filter}'`
+      );
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("mz-deploy.runExplain", async (target: string) => {
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        await activeEditor.document.save();
+      }
+      const terminal = vscode.window.createTerminal("mz-deploy explain");
+      terminal.show();
+      terminal.sendText(
+        `~/materialize/target/release/mz-deploy explain '${target}'`
+      );
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("mz-deploy.executeStatement", async (sql: string) => {
+      if (!client || !client.isRunning()) return;
+      // Ensure the worksheet results panel is visible.
+      await vscode.commands.executeCommand("mz-deploy-worksheet.focus");
+
+      // Route SUBSCRIBE to the streaming endpoint.
+      const isSubscribe = sql.trim().toUpperCase().startsWith("SUBSCRIBE");
+      if (isSubscribe) {
+        try {
+          const data = await client.sendRequest<SubscribeStarted>(
+            "mz-deploy/subscribe",
+            { query: sql }
+          );
+          worksheetProvider!.postMessage({ type: "subscribe-started", data });
+        } catch (err: unknown) {
+          worksheetProvider!.postMessage({ type: "query-error", error: extractRpcError(err) });
+        }
+        return;
+      }
+
+      // Regular one-shot query (SELECT, SHOW, EXPLAIN, or DML).
+      try {
+        const data = await client.sendRequest<ExecuteQueryResponse>(
+          "mz-deploy/execute-query",
+          { query: sql, timeout_ms: 30000 }
+        );
+        // DML response — show notification, don't touch results panel.
+        if (data.affected_rows !== undefined) {
+          const n = data.affected_rows;
+          void vscode.window.showInformationMessage(
+            `${n} row${n !== 1 ? "s" : ""} affected (${data.elapsed_ms}ms)`
+          );
+          return;
+        }
+        worksheetProvider!.postMessage({ type: "query-result", data });
+      } catch (err: unknown) {
+        worksheetProvider!.postMessage({ type: "query-error", error: extractRpcError(err) });
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("mz-deploy.openWorksheet", async () => {
+      const workspace = getWorkspacePath();
+      if (!workspace) return;
+      const dir = path.join(workspace, "worksheets");
+      await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
+      const name = `worksheet-${Date.now()}.sql`;
+      const filePath = path.join(dir, name);
+      await vscode.workspace.fs.writeFile(
+        vscode.Uri.file(filePath),
+        Buffer.from("-- Materialize Worksheet\n\n")
+      );
+      const doc = await vscode.workspace.openTextDocument(filePath);
+      await vscode.window.showTextDocument(doc);
+    })
+  );
+}
+
+/** Registers LSP notification handlers for project rebuilds and SUBSCRIBE streaming. */
+function registerNotificationHandlers(): void {
+  // Refresh catalog and DAG data when the LSP server finishes rebuilding
+  // the project (triggered by file saves). Registered before start() so the
+  // handler is in place when the first notification arrives.
+  client.onNotification("mz-deploy/projectRebuilt", () => {
+    void requestCatalogData();
+    void requestDagData();
+    void requestConnectionInfo();
+  });
+
+  // --- SUBSCRIBE notifications ---
+  client.onNotification("mz-deploy/subscribeBatch", (batch: SubscribeBatch) => {
+    if (worksheetProvider) {
+      worksheetProvider.postMessage({ type: "subscribe-batch", data: batch });
+    }
+  });
+  client.onNotification("mz-deploy/subscribeComplete", (data: SubscribeComplete) => {
+    if (worksheetProvider) {
+      worksheetProvider.postMessage({ type: "subscribe-complete", data });
+    }
+  });
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const command = `${os.homedir()}/materialize/target/release/mz-deploy`;
   const workspaceFolder = getWorkspacePath();
@@ -381,209 +604,13 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("mz-deploy-worksheet", worksheetProvider)
   );
-
-  worksheetProvider.onMessage(async (msg: WorksheetOutboundMessage) => {
-    console.log("[mz-deploy] worksheet message:", msg.type);
-    if (!client || !client.isRunning()) {
-      console.warn("[mz-deploy] worksheet: LSP client not running, dropping message:", msg.type);
-      return;
-    }
-
-    switch (msg.type) {
-      case "ready":
-        void requestConnectionInfo();
-        void requestWorksheetContext();
-        break;
-
-      case "execute":
-        try {
-          console.log("[mz-deploy] worksheet: sending execute-query for:", msg.query);
-          const data = await client.sendRequest<ExecuteQueryResponse>(
-            "mz-deploy/execute-query",
-            { query: msg.query, timeout_ms: msg.timeout_ms }
-          );
-          console.log("[mz-deploy] worksheet: got result, rows:", data?.rows?.length);
-          worksheetProvider!.postMessage({ type: "query-result", data });
-        } catch (err: unknown) {
-          console.error("[mz-deploy] worksheet: execute-query error:", err);
-          const rpcErr = err as { data?: WorksheetError; message?: string };
-          const wsErr: WorksheetError = rpcErr.data || {
-            code: "internal_error",
-            message: rpcErr.message || "Unknown error",
-          };
-          worksheetProvider!.postMessage({ type: "query-error", error: wsErr });
-        }
-        break;
-
-      case "cancel":
-        try {
-          await client.sendRequest("mz-deploy/cancel-query");
-        } catch (err) {
-          console.error("[mz-deploy] cancel-query failed:", err);
-        }
-        break;
-
-      case "request-connection-info":
-        void requestConnectionInfo();
-        break;
-
-      case "request-worksheet-context":
-        void requestWorksheetContext();
-        break;
-
-      case "set-session":
-        try {
-          const ctx = await client.sendRequest<WorksheetContextResponse>(
-            "mz-deploy/set-session",
-            { database: msg.database, schema: msg.schema, cluster: msg.cluster }
-          );
-          worksheetProvider!.postMessage({ type: "worksheet-context", data: ctx });
-        } catch (err) {
-          console.error("[mz-deploy] set-session failed:", err);
-        }
-        break;
-
-      case "set-profile":
-        try {
-          const ctx = await client.sendRequest<WorksheetContextResponse>(
-            "mz-deploy/set-profile",
-            { profile: msg.profile }
-          );
-          worksheetProvider!.postMessage({ type: "worksheet-context", data: ctx });
-          void requestConnectionInfo();
-        } catch (err) {
-          console.error("[mz-deploy] set-profile failed:", err);
-        }
-        break;
-    }
-  });
+  worksheetProvider.onMessage(handleWorksheetMessage);
 
   // --- Commands ---
-  context.subscriptions.push(
-    vscode.commands.registerCommand("mz-deploy.openDAG", () => {
-      dagPanel!.open(null);
-      void requestDagData();
-    })
-  );
+  registerCommands(context);
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand("mz-deploy.runTest", async (filter: string) => {
-      const activeEditor = vscode.window.activeTextEditor;
-      if (activeEditor) {
-        await activeEditor.document.save();
-      }
-      const terminal = vscode.window.createTerminal("mz-deploy test");
-      terminal.show();
-      terminal.sendText(
-        `~/materialize/target/release/mz-deploy test '${filter}'`
-      );
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("mz-deploy.runExplain", async (target: string) => {
-      const activeEditor = vscode.window.activeTextEditor;
-      if (activeEditor) {
-        await activeEditor.document.save();
-      }
-      const terminal = vscode.window.createTerminal("mz-deploy explain");
-      terminal.show();
-      terminal.sendText(
-        `~/materialize/target/release/mz-deploy explain '${target}'`
-      );
-    })
-  );
-
-  // --- Worksheet commands ---
-  context.subscriptions.push(
-    vscode.commands.registerCommand("mz-deploy.executeStatement", async (sql: string) => {
-      if (!client || !client.isRunning()) return;
-      // Ensure the worksheet results panel is visible.
-      await vscode.commands.executeCommand("mz-deploy-worksheet.focus");
-
-      // Route SUBSCRIBE to the streaming endpoint.
-      const isSubscribe = sql.trim().toUpperCase().startsWith("SUBSCRIBE");
-      if (isSubscribe) {
-        try {
-          const data = await client.sendRequest<SubscribeStarted>(
-            "mz-deploy/subscribe",
-            { query: sql }
-          );
-          worksheetProvider!.postMessage({ type: "subscribe-started", data });
-        } catch (err: unknown) {
-          const rpcErr = err as { data?: WorksheetError; message?: string };
-          const wsErr: WorksheetError = rpcErr.data || {
-            code: "internal_error",
-            message: rpcErr.message || "Unknown error",
-          };
-          worksheetProvider!.postMessage({ type: "query-error", error: wsErr });
-        }
-        return;
-      }
-
-      // Regular one-shot query (SELECT, SHOW, EXPLAIN, or DML).
-      try {
-        const data = await client.sendRequest<ExecuteQueryResponse>(
-          "mz-deploy/execute-query",
-          { query: sql, timeout_ms: 30000 }
-        );
-        // DML response — show notification, don't touch results panel.
-        if (data.affected_rows !== undefined) {
-          const n = data.affected_rows;
-          void vscode.window.showInformationMessage(
-            `${n} row${n !== 1 ? "s" : ""} affected (${data.elapsed_ms}ms)`
-          );
-          return;
-        }
-        worksheetProvider!.postMessage({ type: "query-result", data });
-      } catch (err: unknown) {
-        const rpcErr = err as { data?: WorksheetError; message?: string };
-        const wsErr: WorksheetError = rpcErr.data || {
-          code: "internal_error",
-          message: rpcErr.message || "Unknown error",
-        };
-        worksheetProvider!.postMessage({ type: "query-error", error: wsErr });
-      }
-    })
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("mz-deploy.openWorksheet", async () => {
-      const workspace = getWorkspacePath();
-      if (!workspace) return;
-      const dir = path.join(workspace, "worksheets");
-      await vscode.workspace.fs.createDirectory(vscode.Uri.file(dir));
-      const name = `worksheet-${Date.now()}.sql`;
-      const filePath = path.join(dir, name);
-      await vscode.workspace.fs.writeFile(
-        vscode.Uri.file(filePath),
-        Buffer.from("-- Materialize Worksheet\n\n")
-      );
-      const doc = await vscode.workspace.openTextDocument(filePath);
-      await vscode.window.showTextDocument(doc);
-    })
-  );
-
-  // Refresh catalog and DAG data when the LSP server finishes rebuilding
-  // the project (triggered by file saves). Registered before start() so the
-  // handler is in place when the first notification arrives.
-  client.onNotification("mz-deploy/projectRebuilt", () => {
-    void requestCatalogData();
-    void requestDagData();
-    void requestConnectionInfo();
-  });
-
-  // --- SUBSCRIBE notifications ---
-  client.onNotification("mz-deploy/subscribeBatch", (batch: SubscribeBatch) => {
-    if (worksheetProvider) {
-      worksheetProvider.postMessage({ type: "subscribe-batch", data: batch });
-    }
-  });
-  client.onNotification("mz-deploy/subscribeComplete", (data: SubscribeComplete) => {
-    if (worksheetProvider) {
-      worksheetProvider.postMessage({ type: "subscribe-complete", data });
-    }
-  });
+  // --- Notification handlers ---
+  registerNotificationHandlers();
 
   // --- LSP startup ---
   void client.start().then(async () => {
@@ -594,6 +621,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void requestWorksheetContext();
   });
 
+  // --- Editor listeners for keyword highlighting ---
   vscode.window.onDidChangeActiveTextEditor(
     (editor: vscode.TextEditor | undefined) => {
       if (editor) applyKeywordDecorations(editor);

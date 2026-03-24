@@ -9,10 +9,13 @@
 //! ## Worksheet Overview
 //!
 //! Worksheets are `.sql` files inside the `worksheets/` directory. The LSP
-//! provides "Execute" code lenses above each statement, and a results panel
-//! in VS Code displays the output. Two execution modes are supported:
+//! provides "Execute" (for queries) and "Run" (for DML/DDL) code lenses
+//! above each statement, and a results panel in VS Code displays the output.
+//! Three execution modes are supported:
 //!
 //! ### One-Shot Queries (SELECT, SHOW, EXPLAIN)
+//!
+//! Returns columnar or raw-text results.
 //!
 //! ```text
 //! User clicks "Execute" code lens
@@ -20,6 +23,16 @@
 //!   → Backend validates SQL, injects LIMIT, runs via simple_query
 //!   → Returns ExecuteQueryResponse (columns + rows or raw text)
 //!   → VS Code renders as table or <pre> block
+//! ```
+//!
+//! ### DML / DDL (INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, ...)
+//!
+//! ```text
+//! User clicks "Run" code lens
+//!   → VS Code sends `mz-deploy/execute-query` LSP request
+//!   → Backend validates SQL, runs via simple_query
+//!   → Returns ExecuteQueryResponse (affected_rows count)
+//!   → VS Code renders as status message
 //! ```
 //!
 //! ### SUBSCRIBE (Streaming)
@@ -54,15 +67,17 @@
 //!
 //! ## Statement Validation
 //!
-//! Only read-only statements are allowed in worksheets:
+//! [`validate_worksheet_query`] classifies statements sent via `execute-query`:
 //!
 //! | Statement kind | Result type |
 //! |----------------|-------------|
 //! | `SELECT` | Tabular (columns + rows) |
 //! | `SHOW` | Tabular |
 //! | `EXPLAIN *` | Raw text |
-//! | `SUBSCRIBE` | Streaming diffs via notifications |
-//! | Everything else | Rejected with `ReadOnlyViolation` |
+//! | Everything else (DML/DDL) | Executes, returns affected row count |
+//!
+//! SUBSCRIBE is handled separately by [`validate_subscribe_query`] and the
+//! `mz-deploy/subscribe` endpoint — it does not go through `execute-query`.
 //!
 //! Multi-statement inputs are rejected — exactly one statement is required.
 //!
@@ -132,7 +147,9 @@ pub enum ValidatedQuery {
     },
     /// An `EXPLAIN` variant whose output is a single block of text.
     RawText { sql: String },
-    /// An INSERT, UPDATE, or DELETE statement. Returns affected row count.
+    /// A non-query statement (INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, etc.).
+    /// The caller executes this and reports the affected row count via
+    /// [`ExecuteQueryResponse::affected_rows`].
     DML { sql: String },
 }
 
@@ -366,6 +383,34 @@ pub fn validate_subscribe_query(sql: &str) -> Result<String, WorksheetError> {
     }
 }
 
+/// Returns `true` if this row is a progress-only marker (`mz_progressed = "t"`).
+fn is_progress_row(row: &[Option<String>]) -> bool {
+    row.get(1)
+        .and_then(|v| v.as_deref())
+        .map(|v| v == "t")
+        .unwrap_or(false)
+}
+
+/// Parse a SUBSCRIBE data row into a [`SubscribeDiffRow`].
+///
+/// Extracts the `mz_diff` value from column index 2 and converts the
+/// remaining columns (index 3+) to JSON values via [`parse_text_value`].
+fn parse_diff_row(row: &[Option<String>]) -> SubscribeDiffRow {
+    let diff: i64 = row
+        .get(2)
+        .and_then(|v| v.as_deref())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let values: Vec<serde_json::Value> = row[3..]
+        .iter()
+        .map(|v| match v {
+            Some(t) => parse_text_value(t),
+            None => serde_json::Value::Null,
+        })
+        .collect();
+    SubscribeDiffRow { diff, values }
+}
+
 /// Group SUBSCRIBE rows by timestamp and classify as data or progress batches.
 ///
 /// Each row from `FETCH ALL` on a SUBSCRIBE WITH (PROGRESS) cursor has:
@@ -403,12 +448,7 @@ pub fn group_subscribe_rows(
 
     for (ts, ts_rows) in groups {
         // Check if all rows are progress-only.
-        let all_progress = ts_rows.iter().all(|r| {
-            r.get(1)
-                .and_then(|v| v.as_deref())
-                .map(|v| v == "t")
-                .unwrap_or(false)
-        });
+        let all_progress = ts_rows.iter().all(|r| is_progress_row(r));
 
         if all_progress {
             batches.push(SubscribeBatch {
@@ -421,28 +461,8 @@ pub fn group_subscribe_rows(
         } else {
             let diffs: Vec<SubscribeDiffRow> = ts_rows
                 .iter()
-                .filter(|r| {
-                    // Skip progress rows within a data batch.
-                    r.get(1)
-                        .and_then(|v| v.as_deref())
-                        .map(|v| v != "t")
-                        .unwrap_or(true)
-                })
-                .map(|r| {
-                    let diff: i64 = r
-                        .get(2)
-                        .and_then(|v| v.as_deref())
-                        .and_then(|v| v.parse().ok())
-                        .unwrap_or(1);
-                    let values: Vec<serde_json::Value> = r[3..]
-                        .iter()
-                        .map(|v| match v {
-                            Some(t) => parse_text_value(t),
-                            None => serde_json::Value::Null,
-                        })
-                        .collect();
-                    SubscribeDiffRow { diff, values }
-                })
+                .filter(|r| !is_progress_row(r))
+                .map(|r| parse_diff_row(r))
                 .collect();
 
             let columns = if first_data_batch {
@@ -526,18 +546,18 @@ pub fn validate_worksheet_query(sql: &str) -> Result<ValidatedQuery, WorksheetEr
             sql: stmt.sql.to_string(),
         }),
         // All other statements (INSERT, UPDATE, DELETE, CREATE, DROP, ALTER, etc.)
-        // are treated as DML — they execute but results go to a notification, not the panel.
+        // are treated as DML — they execute and return an affected row count.
         _ => Ok(ValidatedQuery::DML {
             sql: stmt.sql.to_string(),
         }),
     }
 }
 
-/// Returns true if the statement is read-only (allowed in worksheets).
+/// Returns true if the statement is a non-query operation.
 ///
-/// Returns true if the statement is a DML operation (INSERT, UPDATE, DELETE)
-/// or other non-query statement. Used by the code lens module to show "Run"
-/// instead of "Execute" for statements that don't produce result sets.
+/// Matches DML (INSERT, UPDATE, DELETE), DDL (CREATE, DROP, ALTER), and
+/// any other statement that doesn't produce a result set. Used by the
+/// code lens module to show "Run" instead of "Execute".
 pub fn is_dml_statement(stmt: &mz_sql_parser::ast::Statement<Raw>) -> bool {
     !matches!(
         stmt,

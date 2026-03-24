@@ -198,7 +198,6 @@ impl tower_lsp::lsp_types::notification::Notification for SubscribeCompleteNotif
 struct SubscribeHandle {
     task: mz_ore::task::JoinHandle<()>,
     cancel_token: tokio_postgres::CancelToken,
-    subscribe_id: String,
     /// Host of the subscribe connection (for TLS policy on cancel).
     host: String,
 }
@@ -209,7 +208,7 @@ struct SubscribeHandle {
 /// used to establish it, so the handler can detect when the active profile
 /// has changed and reconnect.
 struct WorksheetConnection {
-    pg_client: tokio_postgres::Client,
+    pg_client: Arc<tokio_postgres::Client>,
     profile_name: String,
     host: String,
     /// Current database (from `SHOW database` or last `SET database`).
@@ -310,7 +309,7 @@ impl Backend {
     /// Snapshot document text and cursor context for a given position.
     ///
     /// Acquires the documents lock once and returns the full document text,
-    /// byte offset, and optional dot-qualified identifier parts at the cursor.
+    /// char offset, and optional dot-qualified identifier parts at the cursor.
     /// Returns `None` if the document is not open.
     fn snapshot_at_position(
         &self,
@@ -419,7 +418,7 @@ impl Backend {
 
     /// Handle the `mz-deploy/execute-query` custom request.
     ///
-    /// Validates the SQL is read-only, injects LIMIT if needed, connects
+    /// Validates and classifies the SQL, injects LIMIT if needed, connects
     /// lazily to Materialize, executes the query with a timeout, and
     /// returns the result as JSON.
     pub async fn execute_query(&self, params: serde_json::Value) -> Result<serde_json::Value> {
@@ -430,61 +429,44 @@ impl Backend {
                     message: e.to_string(),
                     hint: None,
                 };
-                tower_lsp::jsonrpc::Error {
-                    code: tower_lsp::jsonrpc::ErrorCode::InvalidParams,
-                    message: e.to_string().into(),
-                    data: serde_json::to_value(ws_err).ok(),
-                }
+                worksheet_error_to_jsonrpc(&ws_err, tower_lsp::jsonrpc::ErrorCode::InvalidParams)
             })?;
 
-        // 1. Validate the query (pure).
+        // Validate the query (pure).
         let validated = worksheet::validate_worksheet_query(&params.query).map_err(|e| {
-            tower_lsp::jsonrpc::Error {
-                code: tower_lsp::jsonrpc::ErrorCode::InvalidRequest,
-                message: e.message.clone().into(),
-                data: serde_json::to_value(&e).ok(),
-            }
+            worksheet_error_to_jsonrpc(&e, tower_lsp::jsonrpc::ErrorCode::InvalidRequest)
         })?;
 
-        // 2. Ensure connection (lazy connect / reconnect).
-        let mut conn_guard = self.worksheet_connection.lock().await;
-        let current_profile = self.profile_name.read().unwrap().clone();
+        // Ensure connection, extract client, release mutex.
+        let pg_client = {
+            let mut conn_guard = self.worksheet_connection.lock().await;
+            let current_profile = self.profile_name.read().unwrap().clone();
 
-        let needs_connect = match conn_guard.as_ref() {
-            None => true,
-            Some(wc) => wc.profile_name != current_profile || wc.pg_client.is_closed(),
+            if let Err(e) = self
+                .ensure_worksheet_connection(&mut conn_guard, &current_profile)
+                .await
+            {
+                return Err(worksheet_error_to_jsonrpc(
+                    &e,
+                    tower_lsp::jsonrpc::ErrorCode::InternalError,
+                ));
+            }
+
+            let wc = conn_guard.as_ref().unwrap();
+
+            // Store cancel token while we have the guard.
+            {
+                let mut cancel_guard = self.worksheet_cancel.lock().await;
+                *cancel_guard = Some(wc.pg_client.cancel_token());
+            }
+
+            Arc::clone(&wc.pg_client)
+            // conn_guard dropped here — mutex released before query execution.
         };
 
-        if needs_connect {
-            match self.connect_worksheet(&current_profile).await {
-                Ok(wc) => *conn_guard = Some(wc),
-                Err(e) => {
-                    return Err(tower_lsp::jsonrpc::Error {
-                        code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-                        message: e.message.clone().into(),
-                        data: serde_json::to_value(&e).ok(),
-                    });
-                }
-            }
-        }
-
-        let wc = conn_guard.as_ref().unwrap();
-
-        // 3. Store cancel token.
-        {
-            let mut cancel_guard = self.worksheet_cancel.lock().await;
-            *cancel_guard = Some(wc.pg_client.cancel_token());
-        }
-
-        // 4. Execute with timeout.
+        // Execute with timeout (mutex NOT held).
         let timeout = std::time::Duration::from_millis(params.timeout_ms);
         let start = std::time::Instant::now();
-
-        enum QueryKind {
-            Tabular { limit_injected: bool },
-            RawText,
-            DML,
-        }
 
         let (sql, kind) = match &validated {
             worksheet::ValidatedQuery::Tabular {
@@ -500,63 +482,62 @@ impl Backend {
             worksheet::ValidatedQuery::DML { sql } => (sql.as_str(), QueryKind::DML),
         };
 
-        let query_result = tokio::time::timeout(timeout, wc.pg_client.simple_query(sql)).await;
+        let query_result = tokio::time::timeout(timeout, pg_client.simple_query(sql)).await;
         let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-        // 5. Clear cancel token.
+        // Clear cancel token.
         {
             let mut cancel_guard = self.worksheet_cancel.lock().await;
             *cancel_guard = None;
         }
 
-        // 6. Format response.
-        match query_result {
-            Ok(Ok(messages)) => {
-                let resp = match kind {
-                    QueryKind::Tabular { limit_injected } => {
-                        let extracted = worksheet::extract_rows_from_messages(messages);
-                        worksheet::build_tabular_response(extracted, limit_injected, elapsed_ms)
-                    }
-                    QueryKind::RawText => {
-                        let lines = worksheet::extract_text_from_messages(messages);
-                        worksheet::build_raw_text_response(lines, elapsed_ms)
-                    }
-                    QueryKind::DML => worksheet::build_dml_response(messages, elapsed_ms),
-                };
-                Ok(serde_json::to_value(resp).unwrap_or(serde_json::Value::Null))
-            }
-            Ok(Err(e)) => {
-                let ws_err = worksheet::WorksheetError {
-                    code: "query_error",
-                    message: e.to_string(),
-                    hint: None,
-                };
-                Err(tower_lsp::jsonrpc::Error {
-                    code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-                    message: e.to_string().into(),
-                    data: serde_json::to_value(&ws_err).ok(),
-                })
-            }
-            Err(_) => {
-                let ws_err = worksheet::WorksheetError {
-                    code: "timeout",
-                    message: format!("query timed out after {}ms", params.timeout_ms),
-                    hint: Some("Try a simpler query or increase the timeout.".to_string()),
-                };
-                Err(tower_lsp::jsonrpc::Error {
-                    code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-                    message: ws_err.message.clone().into(),
-                    data: serde_json::to_value(&ws_err).ok(),
-                })
-            }
+        // Format response.
+        format_query_response(query_result, kind, elapsed_ms, params.timeout_ms)
+    }
+
+    /// Ensure the worksheet connection is live and matches the current profile.
+    ///
+    /// If the connection is missing, stale (wrong profile), or closed, opens
+    /// a new one and stores it in the guard. Returns `Ok(())` on success or
+    /// the worksheet error on failure.
+    async fn ensure_worksheet_connection(
+        &self,
+        conn_guard: &mut Option<WorksheetConnection>,
+        profile_name: &str,
+    ) -> std::result::Result<(), worksheet::WorksheetError> {
+        let needs_connect = match conn_guard.as_ref() {
+            None => true,
+            Some(wc) => wc.profile_name != profile_name || wc.pg_client.is_closed(),
+        };
+        if needs_connect {
+            let wc = self.connect_worksheet(profile_name).await?;
+            *conn_guard = Some(wc);
+        }
+        Ok(())
+    }
+
+    /// Cancel any active SUBSCRIBE by sending a cancel request and dropping
+    /// the task handle. Returns `true` if a subscribe was cancelled.
+    async fn cancel_active_subscribe(&self) -> bool {
+        let handle = {
+            let mut guard = self.subscribe_task.lock().await;
+            guard.take()
+        };
+        if let Some(handle) = handle {
+            let _ = cancel_subscribe(&handle).await;
+            drop(handle.task);
+            true
+        } else {
+            false
         }
     }
 
     /// Handle the `mz-deploy/cancel-query` custom request.
     ///
-    /// Cancels the in-flight worksheet query using the stored cancel token.
-    /// Returns `{ "cancelled": true }` on success or `{ "cancelled": false }`
-    /// if no query is in flight.
+    /// Cancels both the in-flight one-shot worksheet query (via the stored
+    /// cancel token) and any active SUBSCRIBE (via its dedicated cancel token
+    /// and task handle). Returns `{ "cancelled": true }` if either was
+    /// cancelled, or `{ "cancelled": false }` if nothing was in flight.
     pub async fn cancel_query(&self) -> tower_lsp::jsonrpc::Result<serde_json::Value> {
         // Cancel any in-flight one-shot query.
         let token = {
@@ -574,17 +555,7 @@ impl Backend {
         }
 
         // Cancel any active SUBSCRIBE.
-        let subscribe_handle = {
-            let mut guard = self.subscribe_task.lock().await;
-            guard.take()
-        };
-
-        if let Some(handle) = subscribe_handle {
-            // Cancel the postgres query.
-            let _ = cancel_subscribe(&handle).await;
-            // Abort the background task.
-            // Drop the handle — the spawned task will be cancelled by the cancel token.
-            drop(handle.task);
+        if self.cancel_active_subscribe().await {
             cancelled = true;
         }
 
@@ -613,37 +584,24 @@ impl Backend {
                 data: None,
             })?;
 
-        // 1. Validate and inject WITH (PROGRESS).
+        // Validate and inject WITH (PROGRESS).
         let subscribe_sql = worksheet::validate_subscribe_query(&params.query).map_err(|e| {
-            tower_lsp::jsonrpc::Error {
-                code: tower_lsp::jsonrpc::ErrorCode::InvalidRequest,
-                message: e.message.clone().into(),
-                data: serde_json::to_value(&e).ok(),
-            }
+            worksheet_error_to_jsonrpc(&e, tower_lsp::jsonrpc::ErrorCode::InvalidRequest)
         })?;
 
-        // 2. Cancel any existing subscribe.
-        {
-            let mut guard = self.subscribe_task.lock().await;
-            if let Some(handle) = guard.take() {
-                let _ = cancel_subscribe(&handle).await;
-                // Drop the handle — the spawned task will be cancelled by the cancel token.
-                drop(handle.task);
-            }
-        }
+        // Cancel any existing subscribe.
+        self.cancel_active_subscribe().await;
 
-        // 3. Open a dedicated connection for the subscribe.
+        // Open a dedicated connection for the subscribe.
         let current_profile = self.profile_name.read().unwrap().clone();
         let sub_conn = self
             .connect_worksheet(&current_profile)
             .await
-            .map_err(|e| tower_lsp::jsonrpc::Error {
-                code: tower_lsp::jsonrpc::ErrorCode::InternalError,
-                message: e.message.clone().into(),
-                data: serde_json::to_value(&e).ok(),
+            .map_err(|e| {
+                worksheet_error_to_jsonrpc(&e, tower_lsp::jsonrpc::ErrorCode::InternalError)
             })?;
 
-        // 4. Apply current session settings from the main worksheet connection.
+        // Apply current session settings from the main worksheet connection.
         {
             let main_conn = self.worksheet_connection.lock().await;
             if let Some(ref wc) = *main_conn {
@@ -670,7 +628,7 @@ impl Backend {
         let cancel_token = sub_conn.pg_client.cancel_token();
         let host = sub_conn.host.clone();
 
-        // 5. Spawn the background FETCH loop.
+        // Spawn the background FETCH loop.
         let client = self.client.clone();
         let sub_id = subscribe_id.clone();
         let task = mz_ore::task::spawn(|| "mz-deploy-subscribe", async move {
@@ -687,13 +645,12 @@ impl Backend {
                 .await;
         });
 
-        // 6. Store the handle.
+        // Store the handle.
         {
             let mut guard = self.subscribe_task.lock().await;
             *guard = Some(SubscribeHandle {
                 task,
                 cancel_token,
-                subscribe_id: subscribe_id.clone(),
                 host,
             });
         }
@@ -712,29 +669,22 @@ impl Backend {
         let current_profile = self.profile_name.read().unwrap().clone();
 
         // Lazily establish connection if needed (same as execute_query).
-        let needs_connect = match conn_guard.as_ref() {
-            None => true,
-            Some(wc) => wc.profile_name != current_profile || wc.pg_client.is_closed(),
-        };
-
-        if needs_connect {
-            match self.connect_worksheet(&current_profile).await {
-                Ok(wc) => *conn_guard = Some(wc),
-                Err(_) => {
-                    // Can't connect — return context with profiles only.
-                    let profiles = load_profile_names();
-                    return Ok(serde_json::to_value(worksheet::WorksheetContextResponse {
-                        profiles,
-                        current_profile: Some(current_profile),
-                        database_schemas: std::collections::BTreeMap::new(),
-                        clusters: Vec::new(),
-                        current_database: None,
-                        current_schema: None,
-                        current_cluster: None,
-                    })
-                    .unwrap_or(serde_json::Value::Null));
-                }
-            }
+        if let Err(_) = self
+            .ensure_worksheet_connection(&mut conn_guard, &current_profile)
+            .await
+        {
+            // Can't connect — return context with profiles only.
+            let profiles = load_profile_names();
+            return Ok(serde_json::to_value(worksheet::WorksheetContextResponse {
+                profiles,
+                current_profile: Some(current_profile),
+                database_schemas: std::collections::BTreeMap::new(),
+                clusters: Vec::new(),
+                current_database: None,
+                current_schema: None,
+                current_cluster: None,
+            })
+            .unwrap_or(serde_json::Value::Null));
         }
 
         let profiles = load_profile_names();
@@ -839,14 +789,7 @@ impl Backend {
         *self.worksheet_connection.lock().await = None;
 
         // Cancel any active subscribe.
-        let subscribe_handle = {
-            let mut guard = self.subscribe_task.lock().await;
-            guard.take()
-        };
-        if let Some(handle) = subscribe_handle {
-            let _ = cancel_subscribe(&handle).await;
-            drop(handle.task);
-        }
+        self.cancel_active_subscribe().await;
 
         // Return a fresh context (triggers lazy reconnect).
         // Delegate to worksheet_context which handles the connect + query.
@@ -880,24 +823,19 @@ impl Backend {
             ));
         }
 
-        let is_local = profile.host == "localhost"
-            || profile.host == "127.0.0.1"
-            || profile.host.starts_with("192.168.")
-            || profile.host.starts_with("10.")
-            || profile.host.starts_with("172.");
+        let connect_err = |e: tokio_postgres::Error| worksheet::WorksheetError {
+            code: "connection_failed",
+            message: e.to_string(),
+            hint: Some(format!(
+                "Could not connect to {}:{}",
+                profile.host, profile.port
+            )),
+        };
 
-        let pg_client = if is_local {
-            let (client, connection) =
-                tokio_postgres::connect(&conn_str, NoTls)
-                    .await
-                    .map_err(|e| worksheet::WorksheetError {
-                        code: "connection_failed",
-                        message: e.to_string(),
-                        hint: Some(format!(
-                            "Could not connect to {}:{}",
-                            profile.host, profile.port
-                        )),
-                    })?;
+        let pg_client = if is_local_host(&profile.host) {
+            let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
+                .await
+                .map_err(connect_err)?;
             mz_ore::task::spawn(|| "mz-deploy-worksheet-connection", async move {
                 let _ = connection.await;
             });
@@ -910,14 +848,7 @@ impl Backend {
             })?;
             let (client, connection) = tokio_postgres::connect(&conn_str, connector)
                 .await
-                .map_err(|e| worksheet::WorksheetError {
-                    code: "connection_failed",
-                    message: e.to_string(),
-                    hint: Some(format!(
-                        "Could not connect to {}:{}",
-                        profile.host, profile.port
-                    )),
-                })?;
+                .map_err(connect_err)?;
             mz_ore::task::spawn(|| "mz-deploy-worksheet-connection", async move {
                 let _ = connection.await;
             });
@@ -930,7 +861,7 @@ impl Backend {
         let cluster = query_show_value(&pg_client, "SHOW cluster").await;
 
         Ok(WorksheetConnection {
-            pg_client,
+            pg_client: Arc::new(pg_client),
             profile_name: profile.name,
             host: profile.host,
             database,
@@ -1191,26 +1122,24 @@ fn build_tls_connector() -> std::result::Result<MakeTlsConnector, String> {
     Ok(MakeTlsConnector::new(builder.build()))
 }
 
-/// Send a cancel message using the appropriate TLS policy for the connection.
-async fn cancel_with_tls(
-    conn: &tokio::sync::Mutex<Option<WorksheetConnection>>,
-    cancel_token: tokio_postgres::CancelToken,
-) -> std::result::Result<(), String> {
-    let is_local = {
-        let guard = conn.lock().await;
-        match guard.as_ref() {
-            Some(wc) => {
-                wc.host == "localhost"
-                    || wc.host == "127.0.0.1"
-                    || wc.host.starts_with("192.168.")
-                    || wc.host.starts_with("10.")
-                    || wc.host.starts_with("172.")
-            }
-            None => return Err("no active connection".to_string()),
-        }
-    };
+/// Returns `true` if the host looks like a local or private-network address.
+///
+/// Used to decide TLS policy: local connections use `NoTls`, remote ones
+/// use OpenSSL. The heuristic covers loopback and RFC 1918 prefixes.
+fn is_local_host(host: &str) -> bool {
+    host == "localhost"
+        || host == "127.0.0.1"
+        || host.starts_with("192.168.")
+        || host.starts_with("10.")
+        || host.starts_with("172.")
+}
 
-    if is_local {
+/// Send a cancel request, choosing TLS policy based on the host.
+async fn cancel_query_with_tls_policy(
+    cancel_token: &tokio_postgres::CancelToken,
+    host: &str,
+) -> std::result::Result<(), String> {
+    if is_local_host(host) {
         cancel_token
             .cancel_query(NoTls)
             .await
@@ -1222,6 +1151,113 @@ async fn cancel_with_tls(
             .await
             .map_err(|e| e.to_string())
     }
+}
+
+/// Send a cancel message for a one-shot query using the worksheet connection's host.
+async fn cancel_with_tls(
+    conn: &tokio::sync::Mutex<Option<WorksheetConnection>>,
+    cancel_token: tokio_postgres::CancelToken,
+) -> std::result::Result<(), String> {
+    let host = {
+        let guard = conn.lock().await;
+        match guard.as_ref() {
+            Some(wc) => wc.host.clone(),
+            None => return Err("no active connection".to_string()),
+        }
+    };
+    cancel_query_with_tls_policy(&cancel_token, &host).await
+}
+
+/// Classification of a validated worksheet query for response formatting.
+enum QueryKind {
+    Tabular { limit_injected: bool },
+    RawText,
+    DML,
+}
+
+/// Format the result of a worksheet query execution into a JSON-RPC response.
+///
+/// Handles success, query error, and timeout cases. On success, delegates
+/// to the appropriate worksheet response builder based on the [`QueryKind`].
+fn format_query_response(
+    query_result: std::result::Result<
+        std::result::Result<Vec<tokio_postgres::SimpleQueryMessage>, tokio_postgres::Error>,
+        tokio::time::error::Elapsed,
+    >,
+    kind: QueryKind,
+    elapsed_ms: u64,
+    timeout_ms: u64,
+) -> Result<serde_json::Value> {
+    match query_result {
+        Ok(Ok(messages)) => {
+            let resp = match kind {
+                QueryKind::Tabular { limit_injected } => {
+                    let extracted = worksheet::extract_rows_from_messages(messages);
+                    worksheet::build_tabular_response(extracted, limit_injected, elapsed_ms)
+                }
+                QueryKind::RawText => {
+                    let lines = worksheet::extract_text_from_messages(messages);
+                    worksheet::build_raw_text_response(lines, elapsed_ms)
+                }
+                QueryKind::DML => worksheet::build_dml_response(messages, elapsed_ms),
+            };
+            Ok(serde_json::to_value(resp).unwrap_or(serde_json::Value::Null))
+        }
+        Ok(Err(e)) => {
+            let ws_err = worksheet::WorksheetError {
+                code: "query_error",
+                message: e.to_string(),
+                hint: None,
+            };
+            Err(worksheet_error_to_jsonrpc(
+                &ws_err,
+                tower_lsp::jsonrpc::ErrorCode::InternalError,
+            ))
+        }
+        Err(_) => {
+            let ws_err = worksheet::WorksheetError {
+                code: "timeout",
+                message: format!("query timed out after {}ms", timeout_ms),
+                hint: Some("Try a simpler query or increase the timeout.".to_string()),
+            };
+            Err(worksheet_error_to_jsonrpc(
+                &ws_err,
+                tower_lsp::jsonrpc::ErrorCode::InternalError,
+            ))
+        }
+    }
+}
+
+/// Convert a [`WorksheetError`] into a JSON-RPC error response.
+fn worksheet_error_to_jsonrpc(
+    e: &worksheet::WorksheetError,
+    code: tower_lsp::jsonrpc::ErrorCode,
+) -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error {
+        code,
+        message: e.message.clone().into(),
+        data: serde_json::to_value(e).ok(),
+    }
+}
+
+/// Extract column names and row data from `FETCH ALL` results.
+fn extract_subscribe_rows(
+    messages: Vec<tokio_postgres::SimpleQueryMessage>,
+) -> (Vec<String>, Vec<Vec<Option<String>>>) {
+    let mut column_names = Vec::new();
+    let mut rows = Vec::new();
+    for msg in messages {
+        if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
+            if column_names.is_empty() {
+                column_names = row.columns().iter().map(|c| c.name().to_string()).collect();
+            }
+            let values: Vec<Option<String>> = (0..row.columns().len())
+                .map(|i| row.get(i).map(|s: &str| s.to_string()))
+                .collect();
+            rows.push(values);
+        }
+    }
+    (column_names, rows)
 }
 
 /// Run the SUBSCRIBE cursor FETCH loop, sending batches via notifications.
@@ -1266,23 +1302,7 @@ async fn run_subscribe_loop(
         };
 
         // Extract column names and row data.
-        let mut column_names: Vec<String> = Vec::new();
-        let mut rows: Vec<Vec<Option<String>>> = Vec::new();
-
-        for msg in messages {
-            match msg {
-                tokio_postgres::SimpleQueryMessage::Row(row) => {
-                    if column_names.is_empty() {
-                        column_names = row.columns().iter().map(|c| c.name().to_string()).collect();
-                    }
-                    let values: Vec<Option<String>> = (0..row.columns().len())
-                        .map(|i| row.get(i).map(|s: &str| s.to_string()))
-                        .collect();
-                    rows.push(values);
-                }
-                _ => {}
-            }
-        }
+        let (column_names, rows) = extract_subscribe_rows(messages);
 
         if rows.is_empty() {
             continue;
@@ -1312,26 +1332,7 @@ async fn run_subscribe_loop(
 
 /// Cancel an active SUBSCRIBE by sending a cancel message.
 async fn cancel_subscribe(handle: &SubscribeHandle) -> std::result::Result<(), String> {
-    let is_local = handle.host == "localhost"
-        || handle.host == "127.0.0.1"
-        || handle.host.starts_with("192.168.")
-        || handle.host.starts_with("10.")
-        || handle.host.starts_with("172.");
-
-    if is_local {
-        handle
-            .cancel_token
-            .cancel_query(NoTls)
-            .await
-            .map_err(|e| e.to_string())
-    } else {
-        let connector = build_tls_connector()?;
-        handle
-            .cancel_token
-            .cancel_query(connector)
-            .await
-            .map_err(|e| e.to_string())
-    }
+    cancel_query_with_tls_policy(&handle.cancel_token, &handle.host).await
 }
 
 #[tower_lsp::async_trait]

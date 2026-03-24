@@ -8,14 +8,19 @@
 //!   `CREATE INDEX` statements — dispatches `mz-deploy.runExplain` with the
 //!   fully qualified target (`database.schema.object` or
 //!   `database.schema.object#index_name`).
-//! - **"Execute"** above each statement in `worksheets/` files — dispatches
-//!   `mz-deploy.executeStatement` with the statement SQL text.
+//! - **"Execute"** or **"Run"** above each statement in `worksheets/`
+//!   files — "Execute" for queries (SELECT, SHOW, EXPLAIN) and SUBSCRIBE,
+//!   "Run" for DML/DDL. Both include the cluster name when available
+//!   (e.g., "▶ Execute on quickstart"). Dispatches
+//!   `mz-deploy.executeStatement` with the statement SQL text. The
+//!   extension routes SUBSCRIBE to the `mz-deploy/subscribe` endpoint;
+//!   all other statements go through `mz-deploy/execute-query`.
 //!
 //! ## Worksheet Detection
 //!
 //! Files inside `<project_root>/worksheets/` are treated as worksheet files.
-//! They get "Execute" code lenses instead of the project-based "Run Test" /
-//! "Explain" lenses.
+//! They get "Execute" / "Run" code lenses instead of the project-based
+//! "Run Test" / "Explain" lenses.
 
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
@@ -31,11 +36,13 @@ pub fn is_worksheet_file(file_uri: &Url, root: &Path) -> bool {
     }
 }
 
-/// Build "Execute" code lenses for each statement in a worksheet file.
+/// Build code lenses for each statement in a worksheet file.
 ///
 /// Parses the SQL and emits one lens per statement at its starting line.
-/// The statement's SQL text is passed as the command argument so the
-/// extension can send it to the `mz-deploy/execute-query` endpoint.
+/// Queries (SELECT, SHOW, EXPLAIN, SUBSCRIBE) get "Execute"; DML/DDL
+/// statements get "Run". The statement's SQL text is passed as the
+/// command argument so the extension can send it to the
+/// `mz-deploy/execute-query` endpoint.
 fn worksheet_code_lenses(file_text: &str, cluster: Option<&str>) -> Vec<CodeLens> {
     let stmts = match mz_sql_parser::parser::parse_statements(file_text) {
         Ok(stmts) => stmts,

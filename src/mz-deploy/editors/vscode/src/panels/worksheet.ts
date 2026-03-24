@@ -81,6 +81,7 @@ let lastResult: ExecuteQueryResponse | null = null;
 let lastError: WorksheetError | null = null;
 
 // Subscribe state
+const MAX_DIFF_TIMESTAMPS = 300;
 let subscribeId: string | null = null;
 let subscribeColumns: string[] | null = null;
 let liveRows: (string | number | boolean | null)[][] = [];
@@ -371,6 +372,10 @@ function handleSubscribeBatch(batch: SubscribeBatch): void {
 
   lastTimestamp = batch.timestamp;
 
+  // Evict diff entries older than the timestamp window.
+  const cutoff = BigInt(batch.timestamp) - BigInt(MAX_DIFF_TIMESTAMPS);
+  diffLog = diffLog.filter((entry) => BigInt(entry.timestamp) >= cutoff);
+
   if (batch.columns) {
     subscribeColumns = batch.columns;
   }
@@ -458,11 +463,7 @@ function updateTabStyles(): void {
   diffsTab.className = activeTab === "diffs" ? "tab active" : "tab";
 }
 
-function updateUI(): void {
-  const isSubscribe = mode === "subscribing" || mode === "subscribe-done";
-
-  // Show/hide subscribe controls
-  tabBar.style.display = isSubscribe ? "flex" : "none";
+function updateStopButton(): void {
   if (mode === "subscribing") {
     stopBtn.style.display = "inline-block";
     stopBtn.disabled = false;
@@ -474,9 +475,9 @@ function updateUI(): void {
   } else {
     stopBtn.style.display = "none";
   }
-  updateTabStyles();
+}
 
-  // Action info
+function updateActionInfo(): void {
   if (mode === "subscribing" || mode === "subscribe-done") {
     const label = mode === "subscribing" ? "Subscribing" : "Stopped";
     const rowCount = liveRows.length;
@@ -499,80 +500,85 @@ function updateUI(): void {
     actionInfo.textContent = "";
     actionInfo.className = "action-info";
   }
+}
 
+function updateUI(): void {
+  const isSubscribe = mode === "subscribing" || mode === "subscribe-done";
+  tabBar.style.display = isSubscribe ? "flex" : "none";
+  updateStopButton();
+  updateTabStyles();
+  updateActionInfo();
   renderResults();
+}
+
+function renderError(): void {
+  const err = lastError;
+  if (err) {
+    const card = h("div", { className: "error-card" });
+    card.appendChild(h("div", { className: "error-code", textContent: err.code }));
+    card.appendChild(h("div", { className: "error-message", textContent: err.message }));
+    if (err.hint) {
+      card.appendChild(h("div", { className: "error-hint", textContent: err.hint }));
+    }
+    resultsArea.appendChild(card);
+  }
+}
+
+function renderQueryResult(): void {
+  if (lastResult!.raw_text !== undefined && lastResult!.raw_text !== null) {
+    resultsArea.appendChild(
+      h("pre", { className: "raw-text", textContent: lastResult!.raw_text })
+    );
+    return;
+  }
+  if (lastResult!.columns && lastResult!.rows) {
+    resultsArea.appendChild(buildTable(lastResult!.columns, lastResult!.rows));
+    return;
+  }
+  resultsArea.appendChild(
+    h("div", { className: "placeholder", textContent: "Query returned no rows" })
+  );
+}
+
+function renderSubscribeLive(): void {
+  if (!subscribeColumns || liveRows.length === 0) {
+    resultsArea.appendChild(
+      h("div", { className: "placeholder", textContent: mode === "subscribing" ? "Waiting for data..." : "No rows" })
+    );
+    return;
+  }
+  resultsArea.appendChild(buildTable(subscribeColumns, liveRows));
+}
+
+function renderSubscribeDiffs(): void {
+  if (diffLog.length === 0) {
+    resultsArea.appendChild(
+      h("div", { className: "placeholder", textContent: mode === "subscribing" ? "Waiting for data..." : "No diffs" })
+    );
+    return;
+  }
+  const cols = ["timestamp", "diff", ...(subscribeColumns || [])];
+  const rows = diffLog.map((d) => [
+    d.timestamp,
+    d.diff > 0 ? `+${d.diff}` : `${d.diff}`,
+    ...d.values,
+  ]);
+  resultsArea.appendChild(buildTable(cols, rows));
+}
+
+function renderIdle(): void {
+  resultsArea.appendChild(
+    h("div", { className: "placeholder", textContent: "Execute a statement from a worksheet to see results" })
+  );
 }
 
 function renderResults(): void {
   resultsArea.innerHTML = "";
-
-  // Error
-  if (mode === "error" || (mode === "subscribe-done" && lastError)) {
-    const err = lastError;
-    if (err) {
-      const card = h("div", { className: "error-card" });
-      card.appendChild(h("div", { className: "error-code", textContent: err.code }));
-      card.appendChild(h("div", { className: "error-message", textContent: err.message }));
-      if (err.hint) {
-        card.appendChild(h("div", { className: "error-hint", textContent: err.hint }));
-      }
-      resultsArea.appendChild(card);
-      return;
-    }
-  }
-
-  // One-shot result
-  if (mode === "query-result" && lastResult) {
-    if (lastResult.raw_text !== undefined && lastResult.raw_text !== null) {
-      resultsArea.appendChild(
-        h("pre", { className: "raw-text", textContent: lastResult.raw_text })
-      );
-      return;
-    }
-    if (lastResult.columns && lastResult.rows) {
-      resultsArea.appendChild(buildTable(lastResult.columns, lastResult.rows));
-      return;
-    }
-    resultsArea.appendChild(
-      h("div", { className: "placeholder", textContent: "Query returned no rows" })
-    );
-    return;
-  }
-
-  // Subscribe — Live tab
-  if ((mode === "subscribing" || mode === "subscribe-done") && activeTab === "live") {
-    if (!subscribeColumns || liveRows.length === 0) {
-      resultsArea.appendChild(
-        h("div", { className: "placeholder", textContent: mode === "subscribing" ? "Waiting for data..." : "No rows" })
-      );
-      return;
-    }
-    resultsArea.appendChild(buildTable(subscribeColumns, liveRows));
-    return;
-  }
-
-  // Subscribe — Diffs tab
-  if ((mode === "subscribing" || mode === "subscribe-done") && activeTab === "diffs") {
-    if (diffLog.length === 0) {
-      resultsArea.appendChild(
-        h("div", { className: "placeholder", textContent: mode === "subscribing" ? "Waiting for data..." : "No diffs" })
-      );
-      return;
-    }
-    const cols = ["timestamp", "diff", ...(subscribeColumns || [])];
-    const rows = diffLog.map((d) => [
-      d.timestamp,
-      d.diff > 0 ? `+${d.diff}` : `${d.diff}`,
-      ...d.values,
-    ]);
-    resultsArea.appendChild(buildTable(cols, rows));
-    return;
-  }
-
-  // Idle
-  resultsArea.appendChild(
-    h("div", { className: "placeholder", textContent: "Execute a statement from a worksheet to see results" })
-  );
+  if (mode === "error" || (mode === "subscribe-done" && lastError)) { renderError(); return; }
+  if (mode === "query-result" && lastResult) { renderQueryResult(); return; }
+  if ((mode === "subscribing" || mode === "subscribe-done") && activeTab === "live") { renderSubscribeLive(); return; }
+  if ((mode === "subscribing" || mode === "subscribe-done") && activeTab === "diffs") { renderSubscribeDiffs(); return; }
+  renderIdle();
 }
 
 function buildTable(
