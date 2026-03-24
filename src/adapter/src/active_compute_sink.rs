@@ -9,7 +9,6 @@
 
 //! Coordinator bookkeeping for active compute sinks.
 
-use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
@@ -18,8 +17,8 @@ use anyhow::anyhow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
-use mz_expr::compare_columns;
 use mz_expr::row::RowCollection;
+use mz_expr::{RowComparator, compare_columns};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_repr::adt::numeric;
@@ -162,8 +161,7 @@ impl ActiveSubscribe {
     ///
     /// Returns `true` if the subscribe is finished.
     pub fn process_response(&self, batch: SubscribeBatch) -> bool {
-        let left_datum_vec = RefCell::new(mz_repr::DatumVec::new());
-        let right_datum_vec = RefCell::new(mz_repr::DatumVec::new());
+        let comparator = RowComparator::new(self.output.row_order());
         let rows = match batch.updates {
             Ok(ref rows) => {
                 let iters = rows.iter().map(|r| r.iter());
@@ -171,16 +169,7 @@ impl ActiveSubscribe {
                     iters,
                     |(left_row, left_time, _), (right_row, right_time, _)| {
                         left_time.cmp(right_time).then_with(|| {
-                            let (mut left_datum_vec, mut right_datum_vec) =
-                                (left_datum_vec.borrow_mut(), right_datum_vec.borrow_mut());
-                            let left_datums = left_datum_vec.borrow_with(left_row);
-                            let right_datums = right_datum_vec.borrow_with(right_row);
-                            compare_columns(
-                                self.output.row_order(),
-                                &left_datums,
-                                &right_datums,
-                                || left_row.cmp(right_row),
-                            )
+                            comparator.compare_rows(left_row, right_row, || left_row.cmp(right_row))
                         })
                     },
                 );
@@ -256,6 +245,7 @@ impl ActiveSubscribe {
                 let mut it = rows.peekable();
                 let mut datum_vec = mz_repr::DatumVec::new();
                 let mut old_datum_vec = mz_repr::DatumVec::new();
+                let comparator = RowComparator::new(order_by_keys.as_slice());
                 let mut group = Vec::with_capacity(2);
                 let mut row_buf = Row::default();
                 // The iterator is sorted by time and key, so elements in the same group should be
@@ -266,12 +256,9 @@ impl ActiveSubscribe {
                     while let Some(row) = it.peek()
                         && start.1 == row.1
                         && {
-                            let left_datums = left_datum_vec.borrow_with(start.0);
-                            let right_datums = right_datum_vec.borrow_with(row.0);
-                            compare_columns(order_by_keys, &left_datums, &right_datums, || {
-                                Ordering::Equal
-                            })
-                            .is_eq()
+                            comparator
+                                .compare_rows(start.0, row.0, || Ordering::Equal)
+                                .is_eq()
                         }
                     {
                         group.extend(it.next());

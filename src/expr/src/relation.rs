@@ -9,6 +9,7 @@
 
 #![warn(missing_docs)]
 
+use std::cell::RefCell;
 use std::cmp::{Ordering, max};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -35,8 +36,8 @@ use mz_repr::explain::{
     DummyHumanizer, ExplainConfig, ExprHumanizer, IndexUsageType, PlanRenderingContext,
 };
 use mz_repr::{
-    ColumnName, Datum, Diff, GlobalId, IntoRowIterator, ReprColumnType, ReprRelationType,
-    ReprScalarType, Row, RowIterator, SqlColumnType, SqlRelationType, SqlScalarType,
+    ColumnName, Datum, DatumVec, Diff, GlobalId, IntoRowIterator, ReprColumnType, ReprRelationType,
+    ReprScalarType, Row, RowIterator, RowRef, SqlColumnType, SqlRelationType, SqlScalarType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -3731,6 +3732,62 @@ impl RowSetFinishingIncremental {
         }
 
         Ok(iter)
+    }
+}
+
+/// Compares two rows columnwise, using [compare_columns].
+///
+/// Compared to the naive implementation, this allows sharing some memory and implements some
+/// optimizations that avoid unnecessary row unpacking.
+#[derive(Debug, Clone)]
+pub struct RowComparator<O: AsRef<[ColumnOrder]> = Vec<ColumnOrder>> {
+    order: O,
+    /// Invariant: all column references in the order are less than this limit.
+    /// This allows for partial unpacking of rows.
+    limit: usize,
+    left_vec: RefCell<DatumVec>,
+    right_vec: RefCell<DatumVec>,
+}
+
+impl<O: AsRef<[ColumnOrder]>> RowComparator<O> {
+    /// Create a new row comparator from the given column ordering.
+    pub fn new(order: O) -> Self {
+        let limit = order
+            .as_ref()
+            .iter()
+            .map(|o| o.column + 1)
+            .max()
+            .unwrap_or(0);
+        Self {
+            order,
+            limit,
+            left_vec: Default::default(),
+            right_vec: Default::default(),
+        }
+    }
+
+    /// Compare two (references to) rows.
+    pub fn compare_rows(
+        &self,
+        left_row: &RowRef,
+        right_row: &RowRef,
+        tiebreaker: impl Fn() -> Ordering,
+    ) -> Ordering {
+        let order = if self.limit == 0 {
+            Ordering::Equal
+        } else {
+            // These borrows should never fail, since this struct is non-sync and this function
+            // is non-recursive.
+            let mut left_ref = self.left_vec.borrow_mut();
+            let mut right_ref = self.right_vec.borrow_mut();
+            let left_cols = left_ref.borrow_with_limit(left_row, self.limit);
+            let right_cols = right_ref.borrow_with_limit(right_row, self.limit);
+            compare_columns(self.order.as_ref(), &left_cols, &right_cols, || {
+                Ordering::Equal
+            })
+        };
+        // Tiebreak without the vecs borrowed, in case that recursively invokes this function.
+        order.then_with(tiebreaker)
     }
 }
 

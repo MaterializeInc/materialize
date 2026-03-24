@@ -9,7 +9,6 @@
 
 //! Defines types for working with collections of [`Row`].
 
-use std::cell::RefCell;
 use std::num::NonZeroUsize;
 
 use itertools::Itertools;
@@ -18,7 +17,7 @@ use mz_repr::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::ColumnOrder;
+use crate::{ColumnOrder, RowComparator};
 
 /// Collection of runs of sorted [`Row`]s represented as a single blob.
 ///
@@ -69,18 +68,11 @@ impl RowCollection {
     /// to ensure a consistent sort order. Anything else is undefined behavior.
     // TODO: Remember the `order_by` and assert that it is the same for all collections.
     pub fn new(mut rows: Vec<(Row, NonZeroUsize)>, order_by: &[ColumnOrder]) -> Self {
+        let comparator = RowComparator::new(order_by);
         // Sort data to maintain sortedness invariants.
-        if order_by.is_empty() {
-            // Skip row decoding if not required.
-            rows.sort();
-        } else {
-            let (mut datum_vec1, mut datum_vec2) = (DatumVec::new(), DatumVec::new());
-            rows.sort_by(|(row1, _diff1), (row2, _diff2)| {
-                let borrow1 = datum_vec1.borrow_with(row1);
-                let borrow2 = datum_vec2.borrow_with(row2);
-                crate::compare_columns(order_by, &borrow1, &borrow2, || row1.cmp(row2))
-            });
-        }
+        rows.sort_by(|(row1, _diff1), (row2, _diff2)| {
+            comparator.compare_rows(row1, row2, || row1.cmp(row2))
+        });
 
         // Pre-sizing our buffer should allow us to make just 1 allocation, and
         // use the perfect amount of memory.
@@ -165,24 +157,11 @@ impl RowCollection {
     /// In either case, the output will be a [RowCollection] that contains the full contents of all
     /// the input collections.
     pub fn merge_sorted(runs: &[Self], order_by: &[ColumnOrder]) -> RowCollection {
-        if order_by.is_empty() {
-            Self::merge_sorted_inner(runs, &Ord::cmp)
-        } else {
-            let left_datum_vec = RefCell::new(mz_repr::DatumVec::new());
-            let right_datum_vec = RefCell::new(mz_repr::DatumVec::new());
-
-            let cmp = &|left: &RowRef, right: &RowRef| {
-                let (mut left_datum_vec, mut right_datum_vec) =
-                    (left_datum_vec.borrow_mut(), right_datum_vec.borrow_mut());
-                let left_datums = left_datum_vec.borrow_with(left);
-                let right_datums = right_datum_vec.borrow_with(right);
-                crate::compare_columns(order_by, &left_datums, &right_datums, || left.cmp(right))
-            };
-            Self::merge_sorted_inner(runs, cmp)
-        }
+        let comparator = RowComparator::new(order_by);
+        Self::merge_sorted_inner(runs, |a, b| comparator.compare_rows(a, b, || a.cmp(b)))
     }
 
-    fn merge_sorted_inner<F>(runs: &[Self], cmp: &F) -> RowCollection
+    fn merge_sorted_inner<F>(runs: &[Self], cmp: F) -> RowCollection
     where
         F: Fn(&RowRef, &RowRef) -> std::cmp::Ordering,
     {

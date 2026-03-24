@@ -33,8 +33,8 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
+use mz_expr::{RowComparator, SafeMfpPlan};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -1564,8 +1564,7 @@ impl IndexPeek {
         // just at least those results that would have been returned.
         let max_results = peek.finishing.num_rows_needed();
 
-        let mut l_datum_vec = DatumVec::new();
-        let mut r_datum_vec = DatumVec::new();
+        let comparator = RowComparator::new(peek.finishing.order_by.as_slice());
 
         // Row iteration timing
         let row_iteration_start = Instant::now();
@@ -1626,14 +1625,7 @@ impl IndexPeek {
                         // in the other case).
                         let sort_start = Instant::now();
                         results.sort_by(|left, right| {
-                            let left_datums = l_datum_vec.borrow_with(&left.0);
-                            let right_datums = r_datum_vec.borrow_with(&right.0);
-                            mz_expr::compare_columns(
-                                &peek.finishing.order_by,
-                                &left_datums,
-                                &right_datums,
-                                || left.0.cmp(&right.0),
-                            )
+                            comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
                         });
                         sort_time_accum += sort_start.elapsed();
                         let dropped = results.drain(max_results..);
