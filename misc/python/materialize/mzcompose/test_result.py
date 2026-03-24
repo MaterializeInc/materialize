@@ -76,13 +76,30 @@ def try_determine_errors_from_cmd_execution(
 ) -> list[TestFailureDetails]:
     output = e.stderr or e.stdout
 
+    # Prefer specific errors (e.g., testdrive .td file/line) over generic messages.
+    if output is not None:
+        collected_errors = _extract_errors_from_output(output, e.cmd, test_context)
+        if collected_errors:
+            return collected_errors
+
     if "running docker compose failed" in str(e):
         return [determine_error_from_docker_compose_failure(e, output, test_context)]
 
-    if output is None:
-        return []
+    return []
 
+
+def _extract_errors_from_output(
+    output: str, cmd: list[str], test_context: str | None
+) -> list[TestFailureDetails]:
     error_chunks = extract_error_chunks_from_output(output)
+
+    # Pre-compute the fallback location from cmd once (only used for non-.td chunks)
+    fallback_file_path = try_determine_error_location_from_cmd(cmd)
+    if fallback_file_path is not None and ":" in fallback_file_path:
+        parts = fallback_file_path.split(":")
+        fallback_file_path, fallback_line_number = parts[0], int(parts[1])
+    else:
+        fallback_line_number = None
 
     collected_errors = []
     for chunk in error_chunks:
@@ -93,13 +110,8 @@ def try_determine_errors_from_cmd_execution(
             line_number = int(match.group(2))
         else:
             # for .py files like platform checks, file_path will be a path
-            file_path = try_determine_error_location_from_cmd(e.cmd)
-            if file_path is None or ":" not in file_path:
-                line_number = None
-            else:
-                parts = file_path.split(":")
-                file_path = parts[0]
-                line_number = int(parts[1])
+            file_path = fallback_file_path
+            line_number = fallback_line_number
 
         message = (
             f"Executing {file_path if file_path is not None else 'command'} failed!"
@@ -113,10 +125,7 @@ def try_determine_errors_from_cmd_execution(
             line_number=line_number,
         )
 
-        if failure_details in collected_errors:
-            # do not add an identical error again
-            pass
-        else:
+        if failure_details not in collected_errors:
             collected_errors.append(failure_details)
 
     return collected_errors
@@ -146,10 +155,11 @@ def try_determine_error_location_from_cmd(cmd: list[str]) -> str | None:
 
 
 def extract_error_chunks_from_output(output: str) -> list[str]:
-    if "+++ !!! Error Report" not in output:
+    pos = output.find("+++ !!! Error Report")
+    if pos == -1:
         return []
 
-    error_output = output[: output.index("+++ !!! Error Report") - 1]
+    error_output = output[: pos - 1]
     error_chunks = error_output.split("^^^ +++")
 
     return [chunk.strip() for chunk in error_chunks if len(chunk.strip()) > 0]
