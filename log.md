@@ -6,3 +6,4 @@
 | 2 | 0.2: Columnar ↔ Vec conversion utilities | Done | 2026-03-24 |
 | 3 | 1.1: Persist source emits columnar collections | Done | 2026-03-24 |
 | 4 | 2.1: Negate operator propagates columnar collections | Done | 2026-03-24 |
+| 5 | 2.2: Union operator propagates columnar collections | Done | 2026-03-24 |

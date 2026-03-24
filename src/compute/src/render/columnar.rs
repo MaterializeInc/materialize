@@ -291,4 +291,65 @@ mod tests {
             }
         });
     }
+
+    /// Verify that concatenating columnar collections (union) preserves all rows.
+    #[mz_ore::test]
+    fn union_columnar_concatenates() {
+        timely::execute_directly(|worker| {
+            let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> =
+                Rc::new(RefCell::new(Vec::new()));
+            let results_capture = results.clone();
+
+            let (mut input1, mut input2, probe) = worker.dataflow::<u64, _, _>(|scope| {
+                let (input1, collection1) = scope.new_collection::<Row, Diff>();
+                let (input2, collection2) = scope.new_collection::<Row, Diff>();
+
+                // Convert both to columnar, concatenate, convert back
+                let col1 = vec_to_columnar(collection1);
+                let col2 = vec_to_columnar(collection2);
+                let union = differential_dataflow::collection::concatenate(
+                    scope,
+                    vec![col1, col2],
+                );
+                let result = columnar_to_vec(union);
+
+                let (probe, _stream) = result
+                    .inner
+                    .inspect(move |item: &(Row, u64, Diff)| {
+                        results_capture
+                            .borrow_mut()
+                            .push((item.0.clone(), item.1, item.2));
+                    })
+                    .probe();
+
+                (input1, input2, probe)
+            });
+
+            let row1 = Row::pack_slice(&[Datum::Int32(1)]);
+            let row2 = Row::pack_slice(&[Datum::Int32(2)]);
+            let row3 = Row::pack_slice(&[Datum::Int32(3)]);
+
+            let one = Diff::from(1);
+            input1.update(row1.clone(), one);
+            input1.update(row2.clone(), one);
+            input2.update(row3.clone(), one);
+            input2.update(row1.clone(), Diff::from(2)); // duplicate row with different diff
+            input1.advance_to(1);
+            input2.advance_to(1);
+            input1.flush();
+            input2.flush();
+
+            worker.step_while(|| probe.less_than(&1));
+
+            let mut actual = results.borrow().clone();
+            actual.sort_by(|a, b| a.0.cmp(&b.0).then(a.2.cmp(&b.2)));
+
+            assert_eq!(actual.len(), 4, "Should have 4 updates total");
+            // row1 appears twice: once from input1 (diff=1) and once from input2 (diff=2)
+            let row1_entries: Vec<_> = actual.iter().filter(|(r, _, _)| *r == row1).collect();
+            assert_eq!(row1_entries.len(), 2);
+            assert!(actual.iter().any(|(r, _, d)| *r == row2 && *d == one));
+            assert!(actual.iter().any(|(r, _, d)| *r == row3 && *d == one));
+        });
+    }
 }
