@@ -56,7 +56,9 @@ use mz_repr::adt::regex;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, SqlScalarType, Timestamp};
+use mz_repr::{
+    CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
+};
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
     CatalogCluster, CatalogDatabase, CatalogSchema, CatalogType, DefaultPrivilegeObject,
@@ -1745,12 +1747,18 @@ impl CatalogState {
             diff,
         ));
 
+        let on_entry = self.get_entry_by_global_id(&index.on);
+        let on_desc = on_entry
+            .relation_desc()
+            .expect("can only create indexes on items with a valid description");
+        let repr_col_types: Vec<ReprColumnType> = on_desc
+            .typ()
+            .column_types
+            .iter()
+            .map(ReprColumnType::from)
+            .collect();
         for (i, key) in index.keys.iter().enumerate() {
-            let on_entry = self.get_entry_by_global_id(&index.on);
-            let on_desc = on_entry
-                .relation_desc()
-                .expect("can only create indexes on items with a valid description");
-            let nullable = key.sql_typ(&on_desc.typ().column_types).nullable;
+            let nullable = key.typ(&repr_col_types).nullable;
             let seq_in_index = u64::cast_from(i + 1);
             let key_sql = key_sqls
                 .get(i)
