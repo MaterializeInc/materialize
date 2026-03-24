@@ -776,6 +776,14 @@ where
                 )
                 .await?;
 
+            // Process retractions before insertions. A key update in
+            // persist is (key, old_value, -1) + (key, new_value, +1).
+            // These are different (key, value, time) triples so both
+            // survive consolidation. We must apply the retraction first
+            // so the insertion wins.
+            self.consolidate_scratch
+                .sort_by_key(|(_, _, diff)| if diff.is_positive() { 1i8 } else { 0 });
+
             for (key, value, diff) in self.consolidate_scratch.drain(..) {
                 stats.updates += 1;
                 if diff.is_positive() {
@@ -784,9 +792,6 @@ where
                     stats.deletes += 1;
                 }
 
-                // We rely on the diffs in our input instead of the result of
-                // multi_put below. This makes sure we report the same stats
-                // regardless of what values there were in state before.
                 stats.values_diff += diff;
 
                 let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
@@ -794,17 +799,13 @@ where
                     .value
                     .get_or_insert_with(|| StateValue::tombstone());
 
-                // Since persist delivers fully consolidated data, each update
-                // has diff exactly +1 or -1.
                 if diff.is_positive() {
-                    // Insertion: set the finalized value.
                     match val {
                         StateValue::Value(v) => {
                             v.finalized = Some(value);
                         }
                     }
                 } else {
-                    // Retraction: clear the finalized value (tombstone).
                     match val {
                         StateValue::Value(v) => {
                             v.finalized = None;
