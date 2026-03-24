@@ -446,7 +446,8 @@ steps:
               env:
                 - EXTERNAL_METADATA_STORE: alloydb
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # `gosu` doesn't work on Graviton
+          queue: hetzner-x86-64-4cpu-8gb
 
 
   - group: Limits
@@ -538,7 +539,8 @@ steps:
           composition: ssh-connection
           args: [--extended]
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      # SQL Server crashes on Graviton
+      queue: hetzner-x86-64-4cpu-8gb
 
   - id: sql-server-cdc
     label: SQL Server
