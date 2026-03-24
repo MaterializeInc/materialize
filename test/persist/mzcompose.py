@@ -27,7 +27,11 @@ SERVICES = [
     PostgresMetadata(),
     Service(
         "maelstrom-persist",
-        {"mzbuild": "maelstrom-persist", "volumes": ["./maelstrom:/store"]},
+        {
+            "mzbuild": "maelstrom-persist",
+            "volumes": ["./maelstrom:/store"],
+            "propagate_uid_gid": True,
+        },
     ),
 ]
 
