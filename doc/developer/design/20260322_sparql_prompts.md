@@ -288,3 +288,77 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~Read first: `src/sql/src/plan/hir.rs` (HIR types),
 > `src/sql/src/plan/lowering.rs` (HIR → MIR),
 > `src/adapter/src/coord/sequencer.rs` (deferred SPARQL compilation).~~
+
+---
+
+## Phase 5: Follow-up
+
+### Prompt 23: Direct SPARQL compilation (remove deferred compilation workaround)
+
+> Now that `mz-sparql` depends on `mz-hir` instead of `mz-sql`, add
+> `mz-sparql` as a dependency of `mz-sql` so the SQL planner can compile
+> SPARQL directly to HIR at plan time. Remove the deferred `sequence_sparql`
+> workaround in the adapter that currently re-parses and re-plans SPARQL
+> queries at sequencing time. SPARQL views should store HIR natively like
+> SQL views. Update tests to verify that `EXPLAIN` on SPARQL queries shows
+> the HIR plan directly.
+>
+> Read first: `src/adapter/src/coord/sequencer.rs` (deferred SPARQL
+> compilation), `src/sql/src/plan/statement.rs` (plan dispatch),
+> `src/sparql/Cargo.toml`, `src/sql/Cargo.toml`.
+
+### Prompt 24: Clean up dead code and warnings from HIR extraction
+
+> Remove the `HirRelationExprTextExplain` trait in
+> `src/sql/src/plan/explain/text.rs` which is now shadowed by inherent
+> methods in `mz-hir`. Audit and fix the ~26 warnings in `mz-sql` that
+> resulted from the HIR extraction (unused imports, dead code, etc.).
+> Run `cargo check -p mz-sql 2>&1` and eliminate all warnings.
+>
+> Read first: `src/sql/src/plan/explain/text.rs`,
+> `src/sql/src/plan/explain.rs`, `src/sql/src/plan/hir.rs`.
+
+### Prompt 25: Run SPARQL sqllogictests and fix errors
+
+> Run `test/sqllogictest/sparql.slt` end-to-end and fix all failures.
+> This test file exercises the full SPARQL pipeline: parsing, planning,
+> execution, CONSTRUCT/ASK/DESCRIBE, property paths, aggregates, catalog
+> RDF, views, and SUBSCRIBE. Debug each failure, fix the underlying code,
+> and re-run until all tests pass.
+>
+> Run: `cargo run --bin sqllogictest -- test/sqllogictest/sparql.slt`
+> Read first: `test/sqllogictest/sparql.slt`,
+> `doc/developer/guide-testing.md`.
+
+### Prompt 26: Fix SPARQL view rehydration panic on catalog startup
+
+> The coordinator panics when rehydrating a persisted SPARQL view:
+> ```
+> PlanError(Unstructured("failed to resolve rdf_quads: unknown catalog
+> item 'rdf_quads'")): invalid persisted SQL: CREATE VIEW
+> "materialize"."public"."sparql_people" AS SPARQL $$ ... $$
+> ```
+> The SPARQL planner resolves `rdf_quads` by name at plan time, but during
+> catalog rehydration the table may not yet exist or the name resolution
+> context differs from normal planning. Fix the SPARQL planner to resolve
+> table references through the catalog properly (using fully-qualified names
+> and dependency tracking), matching how SQL views handle table references.
+> Ensure SPARQL views survive restarts by testing: create a SPARQL view,
+> restart environmentd, verify the view is still queryable.
+>
+> Read first: `src/adapter/src/catalog/apply.rs:1189` (panic site),
+> `src/sparql/src/plan.rs` (rdf_quads resolution),
+> `src/sql/src/plan/statement/ddl.rs` (how SQL views track dependencies),
+> `src/adapter/src/catalog/open.rs` (catalog rehydration order).
+
+### Prompt 27: Fix all clippy warnings in SPARQL crates
+
+> Run `cargo clippy` on all SPARQL-related crates (`mz-sparql-parser`,
+> `mz-sparql`, `mz-hir`) and fix every warning. Common issues to expect:
+> unnecessary clones, redundant closures, `map` + `unwrap` that should be
+> `map_or`, manual `impl` of derived traits, needless borrows, and
+> `unwrap_or_else` with non-lazy default. Also check for clippy warnings
+> in files modified by the SPARQL project in `mz-sql`, `mz-adapter`, and
+> `mz-storage-types`.
+>
+> Run: `cargo clippy -p mz-sparql-parser -p mz-sparql -p mz-hir 2>&1`
