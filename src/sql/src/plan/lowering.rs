@@ -66,7 +66,7 @@ mod variadic_left;
 /// and column references at level zero simply start at the first column
 /// after all prior references.
 #[derive(Debug, Clone)]
-struct ColumnMap {
+pub struct ColumnMap {
     inner: BTreeMap<ColumnRef, usize>,
 }
 
@@ -119,11 +119,11 @@ impl ColumnMap {
 }
 
 /// Map with the CTEs currently in scope.
-type CteMap = BTreeMap<mz_expr::LocalId, CteDesc>;
+pub type CteMap = BTreeMap<mz_expr::LocalId, CteDesc>;
 
 /// Information about needed when finding a reference to a CTE in scope.
-#[derive(Clone)]
-struct CteDesc {
+#[derive(Debug, Clone)]
+pub struct CteDesc {
     /// The new ID assigned to the lowered version of the CTE, which may not match
     /// the ID of the input CTE.
     new_id: mz_expr::LocalId,
@@ -167,7 +167,8 @@ impl From<&SystemVars> for Config {
 }
 
 /// Context passed to the lowering. This is wired to most parts of the lowering.
-pub(crate) struct Context<'a> {
+#[derive(Debug)]
+pub struct Context<'a> {
     /// Feature flags affecting the behavior of lowering.
     pub config: &'a Config,
     /// Optional, because some callers don't have an `OptimizerMetrics` handy. When it's None, we

@@ -2116,3 +2116,40 @@ like SQL queries) instead of being deferred to the adapter's sequencing phase.
 - `cargo check -p mz-sql`: passes
 - `cargo check -p mz-adapter`: passes
 - `cargo clippy -p mz-sql -p mz-adapter`: no errors
+
+## 2026-03-24: Prompt 24 — Clean up dead code and warnings from HIR extraction
+
+### What was done
+
+Eliminated all 35 warnings in `mz-sql` that resulted from the HIR extraction
+(prompt 22). The warnings fell into three categories:
+
+**1. Dead `HirRelationExprTextExplain` trait** (1 warning) — The trait and its
+impl in `src/sql/src/plan/explain/text.rs` were dead code, fully superseded by
+the `DisplayText` impl and inherent methods in `mz-hir/src/explain/text.rs`.
+Deleted the entire file and removed the `mod text;` declaration from
+`src/sql/src/plan/explain.rs`. Also removed the now-empty `explain/` directory.
+
+**2. Private types in public trait signatures** (32 warnings) — The lowering
+traits (`HirRelationExprLowering`, `HirScalarExprLowering`,
+`AggregateExprLowering`) are `pub` and re-exported for use by `mz-adapter`, but
+their `applied_to` methods referenced private types (`ColumnMap`, `CteMap`,
+`CteDesc`, `Context`). Made these types `pub` to match the trait visibility.
+Added `#[derive(Debug)]` to `CteDesc` and `Context` to satisfy the
+`missing_debug_implementations` lint enabled in `mz-sql`.
+
+**3. Unused `QUAD_ARITY` constant** (1 warning, in `mz-sparql`) — Added
+`#[allow(dead_code)]` to match the existing `QUAD_GRAPH` annotation.
+
+### Files changed
+
+- `src/sql/src/plan/explain/text.rs` — **deleted** (dead code)
+- `src/sql/src/plan/explain.rs` — removed `mod text;`
+- `src/sql/src/plan/lowering.rs` — made `ColumnMap`, `CteDesc`, `CteMap`,
+  `Context` public; added `Debug` derives to `CteDesc` and `Context`
+- `src/sparql/src/plan.rs` — added `#[allow(dead_code)]` to `QUAD_ARITY`
+
+### Build results
+
+- `cargo check -p mz-sql`: 0 warnings
+- `cargo check -p mz-sparql`: 0 warnings

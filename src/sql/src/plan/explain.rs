@@ -10,5 +10,3 @@
 //! `EXPLAIN` support for structures defined in this crate.
 
 pub use mz_hir::explain::normalize_subqueries;
-
-mod text;

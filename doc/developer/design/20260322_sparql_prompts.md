@@ -307,16 +307,16 @@ includes the goal, key files to read, and acceptance criteria.
 > compilation), `src/sql/src/plan/statement.rs` (plan dispatch),
 > `src/sparql/Cargo.toml`, `src/sql/Cargo.toml`.~~
 
-### Prompt 24: Clean up dead code and warnings from HIR extraction
+### ~~Prompt 24: Clean up dead code and warnings from HIR extraction~~
 
-> Remove the `HirRelationExprTextExplain` trait in
+> ~~Remove the `HirRelationExprTextExplain` trait in
 > `src/sql/src/plan/explain/text.rs` which is now shadowed by inherent
 > methods in `mz-hir`. Audit and fix the ~26 warnings in `mz-sql` that
 > resulted from the HIR extraction (unused imports, dead code, etc.).
-> Run `cargo check -p mz-sql 2>&1` and eliminate all warnings.
+> Run `cargo check -p mz-sql 2>&1` and eliminate all warnings.~~
 >
-> Read first: `src/sql/src/plan/explain/text.rs`,
-> `src/sql/src/plan/explain.rs`, `src/sql/src/plan/hir.rs`.
+> ~~Read first: `src/sql/src/plan/explain/text.rs`,
+> `src/sql/src/plan/explain.rs`, `src/sql/src/plan/hir.rs`.~~
 
 ### Prompt 25: Run SPARQL sqllogictests and fix errors
 

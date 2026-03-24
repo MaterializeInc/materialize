@@ -30,6 +30,7 @@ const QUAD_PREDICATE: usize = 1;
 const QUAD_OBJECT: usize = 2;
 #[allow(dead_code)]
 const QUAD_GRAPH: usize = 3;
+#[allow(dead_code)]
 const QUAD_ARITY: usize = 4;
 
 /// Errors that can occur during SPARQL planning.
