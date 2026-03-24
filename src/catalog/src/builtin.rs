@@ -11473,213 +11473,214 @@ pub static MZ_RDF_CATALOG_TRIPLES: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         ("graph", "Named graph IRI (always urn:materialize:catalog)."),
     ]),
     sql: "
+-- N-Triples encoding: IRIs wrapped in <>, literals wrapped in \"\".
 -- Databases: rdf:type + mz:name
-SELECT 'urn:materialize:catalog:database/' || id AS subject,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type' AS predicate,
-       'urn:materialize:catalog:Database' AS object,
-       'urn:materialize:catalog' AS graph
+SELECT '<urn:materialize:catalog:database/' || id || '>' AS subject,
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>' AS predicate,
+       '<urn:materialize:catalog:ontology:Database>' AS object,
+       '<urn:materialize:catalog>' AS graph
 FROM mz_catalog.mz_databases
 UNION ALL
-SELECT 'urn:materialize:catalog:database/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:database/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_databases
 -- Schemas: rdf:type + mz:name + mz:inDatabase
 UNION ALL
-SELECT 'urn:materialize:catalog:schema/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:Schema',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:schema/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:Schema>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_schemas
 UNION ALL
-SELECT 'urn:materialize:catalog:schema/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:schema/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_schemas
 UNION ALL
-SELECT 'urn:materialize:catalog:schema/' || id,
-       'urn:materialize:catalog:inDatabase',
-       'urn:materialize:catalog:database/' || database_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:schema/' || id || '>',
+       '<urn:materialize:catalog:ontology:inDatabase>',
+       '<urn:materialize:catalog:database/' || database_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_schemas
 WHERE database_id IS NOT NULL
 -- Tables: rdf:type + mz:name + mz:inSchema
 UNION ALL
-SELECT 'urn:materialize:catalog:table/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:Table',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:table/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:Table>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_tables
 UNION ALL
-SELECT 'urn:materialize:catalog:table/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:table/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_tables
 UNION ALL
-SELECT 'urn:materialize:catalog:table/' || id,
-       'urn:materialize:catalog:inSchema',
-       'urn:materialize:catalog:schema/' || schema_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:table/' || id || '>',
+       '<urn:materialize:catalog:ontology:inSchema>',
+       '<urn:materialize:catalog:schema/' || schema_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_tables
 -- Columns: rdf:type + mz:columnName + mz:columnType + mz:ordinalPosition + parent mz:hasColumn
 UNION ALL
-SELECT 'urn:materialize:catalog:column/' || id || '.' || position,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:Column',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:column/' || id || '.' || position || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:Column>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_columns
 UNION ALL
-SELECT 'urn:materialize:catalog:column/' || id || '.' || position,
-       'urn:materialize:catalog:columnName',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:column/' || id || '.' || position || '>',
+       '<urn:materialize:catalog:ontology:columnName>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_columns
 UNION ALL
-SELECT 'urn:materialize:catalog:column/' || id || '.' || position,
-       'urn:materialize:catalog:columnType',
-       type,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:column/' || id || '.' || position || '>',
+       '<urn:materialize:catalog:ontology:columnType>',
+       '\"' || type || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_columns
 UNION ALL
-SELECT 'urn:materialize:catalog:column/' || id || '.' || position,
-       'urn:materialize:catalog:ordinalPosition',
-       position::text,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:column/' || id || '.' || position || '>',
+       '<urn:materialize:catalog:ontology:ordinalPosition>',
+       '\"' || position::text || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_columns
 UNION ALL
-SELECT id AS subject,
-       'urn:materialize:catalog:hasColumn',
-       'urn:materialize:catalog:column/' || id || '.' || position,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:table/' || id || '>',
+       '<urn:materialize:catalog:ontology:hasColumn>',
+       '<urn:materialize:catalog:column/' || id || '.' || position || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_columns
 -- Views: rdf:type + mz:name + mz:inSchema
 UNION ALL
-SELECT 'urn:materialize:catalog:view/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:View',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:view/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:View>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_views
 UNION ALL
-SELECT 'urn:materialize:catalog:view/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:view/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_views
 UNION ALL
-SELECT 'urn:materialize:catalog:view/' || id,
-       'urn:materialize:catalog:inSchema',
-       'urn:materialize:catalog:schema/' || schema_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:view/' || id || '>',
+       '<urn:materialize:catalog:ontology:inSchema>',
+       '<urn:materialize:catalog:schema/' || schema_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_views
 -- Materialized views: rdf:type + mz:name + mz:inSchema + mz:inCluster
 UNION ALL
-SELECT 'urn:materialize:catalog:materialized-view/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:MaterializedView',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:materialized-view/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:MaterializedView>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_materialized_views
 UNION ALL
-SELECT 'urn:materialize:catalog:materialized-view/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:materialized-view/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_materialized_views
 UNION ALL
-SELECT 'urn:materialize:catalog:materialized-view/' || id,
-       'urn:materialize:catalog:inSchema',
-       'urn:materialize:catalog:schema/' || schema_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:materialized-view/' || id || '>',
+       '<urn:materialize:catalog:ontology:inSchema>',
+       '<urn:materialize:catalog:schema/' || schema_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_materialized_views
 UNION ALL
-SELECT 'urn:materialize:catalog:materialized-view/' || id,
-       'urn:materialize:catalog:inCluster',
-       'urn:materialize:catalog:cluster/' || cluster_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:materialized-view/' || id || '>',
+       '<urn:materialize:catalog:ontology:inCluster>',
+       '<urn:materialize:catalog:cluster/' || cluster_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_materialized_views
 -- Sources: rdf:type + mz:name + mz:inSchema + mz:sourceType
 UNION ALL
-SELECT 'urn:materialize:catalog:source/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:Source',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:source/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:Source>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_sources
 UNION ALL
-SELECT 'urn:materialize:catalog:source/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:source/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_sources
 UNION ALL
-SELECT 'urn:materialize:catalog:source/' || id,
-       'urn:materialize:catalog:inSchema',
-       'urn:materialize:catalog:schema/' || schema_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:source/' || id || '>',
+       '<urn:materialize:catalog:ontology:inSchema>',
+       '<urn:materialize:catalog:schema/' || schema_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_sources
 UNION ALL
-SELECT 'urn:materialize:catalog:source/' || id,
-       'urn:materialize:catalog:sourceType',
-       type,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:source/' || id || '>',
+       '<urn:materialize:catalog:ontology:sourceType>',
+       '\"' || type || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_sources
 -- Sinks: rdf:type + mz:name + mz:inSchema
 UNION ALL
-SELECT 'urn:materialize:catalog:sink/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:Sink',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:sink/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:Sink>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_sinks
 UNION ALL
-SELECT 'urn:materialize:catalog:sink/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:sink/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_sinks
 UNION ALL
-SELECT 'urn:materialize:catalog:sink/' || id,
-       'urn:materialize:catalog:inSchema',
-       'urn:materialize:catalog:schema/' || schema_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:sink/' || id || '>',
+       '<urn:materialize:catalog:ontology:inSchema>',
+       '<urn:materialize:catalog:schema/' || schema_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_sinks
 -- Clusters: rdf:type + mz:name
 UNION ALL
-SELECT 'urn:materialize:catalog:cluster/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:Cluster',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:cluster/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:Cluster>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_clusters
 UNION ALL
-SELECT 'urn:materialize:catalog:cluster/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:cluster/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_clusters
 -- Indexes: rdf:type + mz:name + mz:onRelation + mz:inCluster
 UNION ALL
-SELECT 'urn:materialize:catalog:index/' || id,
-       'http://www.w3.org/1999/02/22-rdf-syntax-ns#type',
-       'urn:materialize:catalog:Index',
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:index/' || id || '>',
+       '<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>',
+       '<urn:materialize:catalog:ontology:Index>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_indexes
 UNION ALL
-SELECT 'urn:materialize:catalog:index/' || id,
-       'urn:materialize:catalog:name',
-       name,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:index/' || id || '>',
+       '<urn:materialize:catalog:ontology:name>',
+       '\"' || name || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_indexes
 UNION ALL
-SELECT 'urn:materialize:catalog:index/' || id,
-       'urn:materialize:catalog:onRelation',
-       on_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:index/' || id || '>',
+       '<urn:materialize:catalog:ontology:onRelation>',
+       '\"' || on_id || '\"',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_indexes
 UNION ALL
-SELECT 'urn:materialize:catalog:index/' || id,
-       'urn:materialize:catalog:inCluster',
-       'urn:materialize:catalog:cluster/' || cluster_id,
-       'urn:materialize:catalog'
+SELECT '<urn:materialize:catalog:index/' || id || '>',
+       '<urn:materialize:catalog:ontology:inCluster>',
+       '<urn:materialize:catalog:cluster/' || cluster_id || '>',
+       '<urn:materialize:catalog>'
 FROM mz_catalog.mz_indexes
 ",
     access: vec![PUBLIC_SELECT],

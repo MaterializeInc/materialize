@@ -318,17 +318,17 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~Read first: `src/sql/src/plan/explain/text.rs`,
 > `src/sql/src/plan/explain.rs`, `src/sql/src/plan/hir.rs`.~~
 
-### Prompt 25: Run SPARQL sqllogictests and fix errors
+### ~~Prompt 25: Run SPARQL sqllogictests and fix errors~~
 
-> Run `test/sqllogictest/sparql.slt` end-to-end and fix all failures.
+> ~~Run `test/sqllogictest/sparql.slt` end-to-end and fix all failures.
 > This test file exercises the full SPARQL pipeline: parsing, planning,
 > execution, CONSTRUCT/ASK/DESCRIBE, property paths, aggregates, catalog
 > RDF, views, and SUBSCRIBE. Debug each failure, fix the underlying code,
-> and re-run until all tests pass.
+> and re-run until all tests pass.~~
 >
-> Run: `cargo run --bin sqllogictest -- test/sqllogictest/sparql.slt`
+> ~~Run: `cargo run --bin sqllogictest -- test/sqllogictest/sparql.slt`
 > Read first: `test/sqllogictest/sparql.slt`,
-> `doc/developer/guide-testing.md`.
+> `doc/developer/guide-testing.md`.~~
 
 ### Prompt 26: Fix SPARQL view rehydration panic on catalog startup
 

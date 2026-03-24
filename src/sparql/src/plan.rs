@@ -200,16 +200,18 @@ impl SparqlPlanner {
             } => {
                 // Step 2: GROUP BY + aggregates.
                 if !query.group_by.is_empty() || self.has_aggregates_in_select(projection) {
-                    result =
+                    let (agg_result, gk_len, aggs) =
                         self.plan_group_by_and_aggregates(result, &query.group_by, projection)?;
+                    result = agg_result;
 
                     // Step 3: HAVING filter (applied after Reduce).
                     if let Some(having) = &query.having {
-                        result = self.apply_filter(result, having)?;
+                        result = self.apply_having(result, having, gk_len, &aggs)?;
                     }
 
-                    // Step 4: SELECT projection (post-aggregation).
-                    result = self.plan_select_projection_post_agg(result, projection)?;
+                    // Step 4: SELECT projection (post-aggregation) with type casts.
+                    result =
+                        self.plan_select_projection_post_agg(result, projection, gk_len, &aggs)?;
                 } else {
                     // No aggregation: apply HAVING as a regular filter if present.
                     if let Some(having) = &query.having {
@@ -248,9 +250,11 @@ impl SparqlPlanner {
                     self.plan_order_limit(result, &query.order_by, query.limit, query.offset)?;
             }
             QueryForm::Construct { template } => {
-                result = self.plan_construct(result, template)?;
+                // ORDER BY and LIMIT apply to the WHERE clause result before
+                // the CONSTRUCT template is applied (per SPARQL spec Section 16.2).
                 result =
                     self.plan_order_limit(result, &query.order_by, query.limit, query.offset)?;
+                result = self.plan_construct(result, template)?;
             }
             QueryForm::Ask => {
                 result = self.plan_ask(result)?;
@@ -329,12 +333,14 @@ impl SparqlPlanner {
     ///
     /// The output relation has group key columns first, then aggregate result columns.
     /// A post-reduce var_map maps the group key variables and aggregate aliases.
+    /// Returns (PlannedRelation, group_key_len, aggregates) so callers can
+    /// cast aggregate columns to String.
     fn plan_group_by_and_aggregates(
         &self,
         input: PlannedRelation,
         group_by: &[Expression],
         projection: &SelectClause,
-    ) -> Result<PlannedRelation, PlanError> {
+    ) -> Result<(PlannedRelation, usize, Vec<AggregateExpr>), PlanError> {
         // Determine group key columns: resolve each GROUP BY expression to a column index.
         let mut group_key = Vec::new();
         let mut group_key_vars: Vec<Option<String>> = Vec::new();
@@ -396,10 +402,15 @@ impl SparqlPlanner {
             new_var_map.insert(alias.clone(), group_key.len() + i);
         }
 
-        Ok(PlannedRelation {
-            expr: reduce,
-            var_map: new_var_map,
-        })
+        let gk_len = group_key.len();
+        Ok((
+            PlannedRelation {
+                expr: reduce,
+                var_map: new_var_map,
+            },
+            gk_len,
+            aggregates,
+        ))
     }
 
     /// Translates a SPARQL aggregate expression to an HIR AggregateExpr.
@@ -509,18 +520,25 @@ impl SparqlPlanner {
     /// Plans SELECT projection after GROUP BY + aggregation.
     ///
     /// Post-aggregation, the var_map already has the right columns from the Reduce.
-    /// We just need to project to the selected variables in order.
+    /// Aggregate result columns (Count→Int64, Sum→Float64, etc.) are cast to String
+    /// to match the all-String output schema of SPARQL queries.
     fn plan_select_projection_post_agg(
         &self,
         input: PlannedRelation,
         projection: &SelectClause,
+        group_key_len: usize,
+        aggregates: &[AggregateExpr],
     ) -> Result<PlannedRelation, PlanError> {
         match projection {
             SelectClause::Wildcard => {
                 // SELECT * with GROUP BY: keep all columns from Reduce output.
-                Ok(input)
+                // Cast aggregate columns to string.
+                self.cast_aggregates_to_string(input, group_key_len, aggregates)
             }
             SelectClause::Variables(vars) => {
+                // First cast aggregate columns to string.
+                let input = self.cast_aggregates_to_string(input, group_key_len, aggregates)?;
+
                 let mut output_cols = Vec::new();
                 let mut new_var_map = BTreeMap::new();
 
@@ -537,7 +555,6 @@ impl SparqlPlanner {
                             output_cols.push(*col);
                         }
                         SelectVariable::Expression(_, alias) => {
-                            // The aggregate alias was registered in var_map by plan_group_by_and_aggregates.
                             let col = input.var_map.get(&alias.name).ok_or_else(|| PlanError {
                                 message: format!(
                                     "aggregate alias ?{} not in Reduce output",
@@ -559,6 +576,81 @@ impl SparqlPlanner {
                 })
             }
         }
+    }
+
+    /// Casts aggregate result columns to String after a Reduce.
+    ///
+    /// After a Reduce, columns 0..group_key_len are group keys (already String),
+    /// and columns group_key_len.. are aggregate results that may be Int64 (Count)
+    /// or Float64 (Sum). We Map cast expressions and Project to replace originals.
+    fn cast_aggregates_to_string(
+        &self,
+        input: PlannedRelation,
+        group_key_len: usize,
+        aggregates: &[AggregateExpr],
+    ) -> Result<PlannedRelation, PlanError> {
+        if aggregates.is_empty() {
+            return Ok(input);
+        }
+
+        let total_cols = group_key_len + aggregates.len();
+
+        // Add cast expression for each aggregate column that isn't already String.
+        let mut cast_scalars = Vec::new();
+        let mut needs_cast = Vec::new();
+        for (i, agg) in aggregates.iter().enumerate() {
+            let agg_col = group_key_len + i;
+            let cast_expr = match agg.func {
+                AggregateFunc::Count => Some(HirScalarExpr::CallUnary {
+                    func: mz_expr::UnaryFunc::CastInt64ToString(mz_expr::func::CastInt64ToString),
+                    expr: Box::new(HirScalarExpr::column(agg_col)),
+                    name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                }),
+                AggregateFunc::SumFloat64 => {
+                    Some(self.from_float64(HirScalarExpr::column(agg_col)))
+                }
+                _ => None, // MinString, MaxString, StringAgg already produce String
+            };
+            if let Some(expr) = cast_expr {
+                cast_scalars.push(expr);
+                needs_cast.push(i);
+            }
+        }
+
+        if cast_scalars.is_empty() {
+            return Ok(input);
+        }
+
+        // Map the cast expressions (appended after existing columns).
+        let mapped = HirRelationExpr::Map {
+            input: Box::new(input.expr),
+            scalars: cast_scalars,
+        };
+
+        // Build project: keep group key columns as-is, replace aggregate
+        // columns with their cast versions where needed.
+        let mut project_cols: Vec<usize> = (0..group_key_len).collect();
+        let mut cast_idx = 0;
+        for i in 0..aggregates.len() {
+            if cast_idx < needs_cast.len() && needs_cast[cast_idx] == i {
+                // Use the cast column (appended after original columns).
+                project_cols.push(total_cols + cast_idx);
+                cast_idx += 1;
+            } else {
+                // Use original column.
+                project_cols.push(group_key_len + i);
+            }
+        }
+
+        let projected = HirRelationExpr::Project {
+            input: Box::new(mapped),
+            outputs: project_cols,
+        };
+
+        Ok(PlannedRelation {
+            expr: projected,
+            var_map: input.var_map,
+        })
     }
 
     /// Plans SELECT projection (non-aggregate case).
@@ -780,7 +872,8 @@ impl SparqlPlanner {
             expected_group_size: None,
         };
 
-        // Column 0 is the count. Map count > 0 as the boolean result.
+        // Column 0 is the count. Map count > 0 as the boolean result,
+        // then cast to string ("true"/"false") for the text-typed output.
         let gt_zero = HirScalarExpr::CallBinary {
             func: mz_expr::BinaryFunc::Gt(mz_expr::func::Gt),
             expr1: Box::new(HirScalarExpr::column(0)),
@@ -791,12 +884,26 @@ impl SparqlPlanner {
             name: mz_ore::treat_as_equal::TreatAsEqual(None),
         };
 
-        let mapped = HirRelationExpr::Map {
-            input: Box::new(reduced),
-            scalars: vec![gt_zero],
+        // Convert boolean to string: IF(gt_zero, "true", "false")
+        let as_string = HirScalarExpr::If {
+            cond: Box::new(gt_zero),
+            then: Box::new(HirScalarExpr::literal(
+                Datum::String("true"),
+                SqlScalarType::String,
+            )),
+            els: Box::new(HirScalarExpr::literal(
+                Datum::String("false"),
+                SqlScalarType::String,
+            )),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
         };
 
-        // Project to just the boolean column (column 1).
+        let mapped = HirRelationExpr::Map {
+            input: Box::new(reduced),
+            scalars: vec![as_string],
+        };
+
+        // Project to just the string result column (column 1).
         let projected = HirRelationExpr::Project {
             input: Box::new(mapped),
             outputs: vec![1],
@@ -956,10 +1063,13 @@ impl SparqlPlanner {
                 })?;
                 Ok(HirScalarExpr::column(*col))
             }
-            VerbPath::Path(PropertyPath::Iri(iri)) => Ok(HirScalarExpr::literal(
-                Datum::String(&iri.value),
-                SqlScalarType::String,
-            )),
+            VerbPath::Path(PropertyPath::Iri(iri)) => {
+                let encoded = format!("<{}>", iri.value);
+                Ok(HirScalarExpr::literal(
+                    Datum::String(&encoded),
+                    SqlScalarType::String,
+                ))
+            }
             VerbPath::Path(_) => Err(PlanError {
                 message: "property paths in CONSTRUCT templates are not allowed".to_string(),
             }),
@@ -1458,6 +1568,104 @@ impl SparqlPlanner {
     ///
     /// For non-boolean expressions, Effective Boolean Value (EBV) conversion
     /// is applied per SPARQL 1.1 Section 17.2.2.
+    /// Applies a HAVING filter after GROUP BY + aggregation.
+    ///
+    /// HAVING can reference aggregate expressions. We translate aggregate
+    /// sub-expressions by matching them against the Reduce's aggregate list
+    /// and substituting the corresponding output column reference.
+    fn apply_having(
+        &self,
+        rel: PlannedRelation,
+        having_expr: &Expression,
+        group_key_len: usize,
+        aggregates: &[AggregateExpr],
+    ) -> Result<PlannedRelation, PlanError> {
+        let hir_expr =
+            self.translate_having_expression(having_expr, &rel.var_map, group_key_len, aggregates)?;
+        let safe_expr = self.coalesce_false(hir_expr);
+
+        Ok(PlannedRelation {
+            expr: HirRelationExpr::Filter {
+                input: Box::new(rel.expr),
+                predicates: vec![safe_expr],
+            },
+            var_map: rel.var_map,
+        })
+    }
+
+    /// Translates a HAVING expression, resolving aggregate sub-expressions
+    /// to their Reduce output columns.
+    fn translate_having_expression(
+        &self,
+        expr: &Expression,
+        var_map: &BTreeMap<String, usize>,
+        group_key_len: usize,
+        aggregates: &[AggregateExpr],
+    ) -> Result<HirScalarExpr, PlanError> {
+        // If this expression is an aggregate, look it up in the Reduce output.
+        if self.expr_has_aggregate(expr) {
+            if let Ok(needle) = self.translate_aggregate(expr, var_map) {
+                // Find which aggregate column this matches.
+                for (i, agg) in aggregates.iter().enumerate() {
+                    if agg.func == needle.func && agg.distinct == needle.distinct {
+                        return Ok(HirScalarExpr::column(group_key_len + i));
+                    }
+                }
+            }
+            // If the aggregate itself isn't directly in the list, it might be
+            // wrapped in a comparison. Recurse into sub-expressions.
+            match expr {
+                Expression::GreaterThan(l, r)
+                | Expression::LessThan(l, r)
+                | Expression::GreaterThanOrEqual(l, r)
+                | Expression::LessThanOrEqual(l, r)
+                | Expression::Equal(l, r)
+                | Expression::NotEqual(l, r) => {
+                    let lh =
+                        self.translate_having_expression(l, var_map, group_key_len, aggregates)?;
+                    let rh =
+                        self.translate_having_expression(r, var_map, group_key_len, aggregates)?;
+                    let func = match expr {
+                        Expression::GreaterThan(..) => mz_expr::BinaryFunc::Gt(mz_expr::func::Gt),
+                        Expression::LessThan(..) => mz_expr::BinaryFunc::Lt(mz_expr::func::Lt),
+                        Expression::GreaterThanOrEqual(..) => {
+                            mz_expr::BinaryFunc::Gte(mz_expr::func::Gte)
+                        }
+                        Expression::LessThanOrEqual(..) => {
+                            mz_expr::BinaryFunc::Lte(mz_expr::func::Lte)
+                        }
+                        Expression::Equal(..) => mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
+                        Expression::NotEqual(..) => {
+                            mz_expr::BinaryFunc::NotEq(mz_expr::func::NotEq)
+                        }
+                        _ => unreachable!(),
+                    };
+                    // For HAVING comparisons involving aggregates, compare as
+                    // int64 since COUNT returns Int64.
+                    return Ok(HirScalarExpr::CallBinary {
+                        func,
+                        expr1: Box::new(lh),
+                        expr2: Box::new(rh),
+                        name: mz_ore::treat_as_equal::TreatAsEqual(None),
+                    });
+                }
+                _ => {}
+            }
+        }
+        // For numeric literals in HAVING context, produce Int64 values
+        // (to match COUNT's Int64 output type).
+        if let Expression::NumericLiteral(s) = expr {
+            if let Ok(n) = s.parse::<i64>() {
+                return Ok(HirScalarExpr::literal(
+                    Datum::Int64(n),
+                    SqlScalarType::Int64,
+                ));
+            }
+        }
+        // Fall back to regular expression translation for non-aggregate parts.
+        self.translate_expression(expr, var_map)
+    }
+
     fn apply_filter(
         &self,
         rel: PlannedRelation,
@@ -1586,14 +1794,49 @@ impl SparqlPlanner {
     }
 
     /// Checks if a string expression looks numeric (regex match).
+    /// Checks whether a string expression represents a numeric value.
+    ///
+    /// Matches both bare numbers (`42`, `3.14`) and XSD typed literals
+    /// (`"30"^^<http://www.w3.org/2001/XMLSchema#integer>`).
     fn is_numeric_check(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        // Match bare numbers OR typed numeric literals (integer, decimal, float, double).
         HirScalarExpr::CallBinary {
             func: mz_expr::func::IsRegexpMatchCaseSensitive.into(),
             expr1: Box::new(expr),
             expr2: Box::new(HirScalarExpr::literal(
-                Datum::String(r"^-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?$"),
+                Datum::String(
+                    r#"^(-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?|"-?[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?"\^\^<http://www\.w3\.org/2001/XMLSchema#(integer|decimal|float|double)>)$"#,
+                ),
                 SqlScalarType::String,
             )),
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        }
+    }
+
+    /// Extracts the numeric value from a string that may be either a bare
+    /// number or an XSD typed numeric literal.
+    ///
+    /// For typed literals like `"30"^^<xsd:integer>`, extracts the value
+    /// between the quotes. For bare numbers, returns them unchanged.
+    fn extract_numeric_value(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        let starts_with_quote = self.string_starts_with(expr.clone(), "\"");
+
+        // Strip typed literal wrapper: regexp_replace(expr, '^"([^"]*)".*$', '$1')
+        // MZ uses Rust regex syntax where $1 is the backreference (not \1).
+        let stripped = HirScalarExpr::CallVariadic {
+            func: mz_expr::VariadicFunc::RegexpReplace(mz_expr::func::variadic::RegexpReplace),
+            exprs: vec![
+                expr.clone(),
+                HirScalarExpr::literal(Datum::String(r#"^"([^"]*)".*$"#), SqlScalarType::String),
+                HirScalarExpr::literal(Datum::String("$1"), SqlScalarType::String),
+            ],
+            name: mz_ore::treat_as_equal::TreatAsEqual(None),
+        };
+
+        HirScalarExpr::If {
+            cond: Box::new(starts_with_quote),
+            then: Box::new(stripped),
+            els: Box::new(expr),
             name: mz_ore::treat_as_equal::TreatAsEqual(None),
         }
     }
@@ -1628,10 +1871,13 @@ impl SparqlPlanner {
                 if *b { Datum::True } else { Datum::False },
                 SqlScalarType::Bool,
             )),
-            Expression::Iri(iri) => Ok(HirScalarExpr::literal(
-                Datum::String(&iri.value),
-                SqlScalarType::String,
-            )),
+            Expression::Iri(iri) => {
+                let encoded = format!("<{}>", iri.value);
+                Ok(HirScalarExpr::literal(
+                    Datum::String(&encoded),
+                    SqlScalarType::String,
+                ))
+            }
 
             // Comparison operators — numeric-aware: if both operands are numeric,
             // compare as float64; otherwise fall back to string comparison.
@@ -2318,10 +2564,14 @@ impl SparqlPlanner {
     }
 
     /// Casts a string expression to float64.
+    ///
+    /// Handles both bare numbers and XSD typed literals by first extracting
+    /// the numeric value from the string encoding.
     fn to_float64(&self, expr: HirScalarExpr) -> HirScalarExpr {
+        let extracted = self.extract_numeric_value(expr);
         HirScalarExpr::CallUnary {
             func: mz_expr::UnaryFunc::CastStringToFloat64(mz_expr::func::CastStringToFloat64),
-            expr: Box::new(expr),
+            expr: Box::new(extracted),
             name: mz_ore::treat_as_equal::TreatAsEqual(None),
         }
     }
@@ -2405,15 +2655,7 @@ impl SparqlPlanner {
 
     /// Converts an RDF literal to its string representation.
     fn literal_to_string(&self, lit: &RdfLiteral) -> String {
-        match lit {
-            RdfLiteral::Simple(s) => s.clone(),
-            RdfLiteral::LanguageTagged { value, language } => {
-                format!("\"{}\"@{}", value, language)
-            }
-            RdfLiteral::Typed { value, datatype } => {
-                format!("\"{}\"^^<{}>", value, datatype.value)
-            }
-        }
+        self.literal_to_ntriples(lit)
     }
 
     /// Plans a single triple pattern.
@@ -2626,12 +2868,15 @@ impl SparqlPlanner {
     }
 
     /// Creates a filter predicate that checks a quad column equals an IRI.
+    ///
+    /// IRIs are stored in N-Triples format with angle brackets: `<http://...>`.
     fn iri_filter(&self, column: usize, iri: &Iri) -> HirScalarExpr {
+        let encoded = format!("<{}>", iri.value);
         HirScalarExpr::CallBinary {
             func: mz_expr::BinaryFunc::Eq(mz_expr::func::Eq),
             expr1: Box::new(HirScalarExpr::column(column)),
             expr2: Box::new(HirScalarExpr::literal(
-                Datum::String(&iri.value),
+                Datum::String(&encoded),
                 SqlScalarType::String,
             )),
             name: mz_ore::treat_as_equal::TreatAsEqual(None),
@@ -2641,28 +2886,43 @@ impl SparqlPlanner {
     /// Converts an RDF term to its string representation for storage in the quad table.
     ///
     /// The encoding follows N-Triples conventions:
-    /// - IRIs: stored as the bare IRI string (no angle brackets)
-    /// - Simple literals: stored as the string value
+    /// - IRIs: `<http://example.org/foo>`
+    /// - Simple literals: `"hello"`
     /// - Language-tagged literals: `"value"@lang`
     /// - Typed literals: `"value"^^<datatype>`
     /// - Blank nodes: `_:label`
-    /// - Numeric literals: stored as the literal string
-    /// - Boolean literals: `"true"` or `"false"`
+    /// - Numeric literals: `"value"^^<xsd:type>` (typed form)
+    /// - Boolean literals: `"true"^^<xsd:boolean>` or `"false"^^<xsd:boolean>`
     fn term_to_string(&self, term: &GraphTerm) -> String {
         match term {
-            GraphTerm::Iri(iri) => iri.value.clone(),
-            GraphTerm::Literal(lit) => match lit {
-                RdfLiteral::Simple(s) => s.clone(),
-                RdfLiteral::LanguageTagged { value, language } => {
-                    format!("\"{}\"@{}", value, language)
-                }
-                RdfLiteral::Typed { value, datatype } => {
-                    format!("\"{}\"^^<{}>", value, datatype.value)
-                }
-            },
+            GraphTerm::Iri(iri) => format!("<{}>", iri.value),
+            GraphTerm::Literal(lit) => self.literal_to_ntriples(lit),
             GraphTerm::BlankNode(label) => format!("_:{}", label),
-            GraphTerm::NumericLiteral(s) => s.clone(),
-            GraphTerm::BooleanLiteral(b) => b.to_string(),
+            GraphTerm::NumericLiteral(s) => {
+                // Numeric literals in triple patterns match the stored N-Triples
+                // encoding which wraps them in typed literal syntax.
+                if s.contains('.') || s.contains('e') || s.contains('E') {
+                    format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#double>", s)
+                } else {
+                    format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#integer>", s)
+                }
+            }
+            GraphTerm::BooleanLiteral(b) => {
+                format!("\"{}\"^^<http://www.w3.org/2001/XMLSchema#boolean>", b)
+            }
+        }
+    }
+
+    /// Converts an RDF literal to N-Triples string encoding.
+    fn literal_to_ntriples(&self, lit: &RdfLiteral) -> String {
+        match lit {
+            RdfLiteral::Simple(s) => format!("\"{}\"", s),
+            RdfLiteral::LanguageTagged { value, language } => {
+                format!("\"{}\"@{}", value, language)
+            }
+            RdfLiteral::Typed { value, datatype } => {
+                format!("\"{}\"^^<{}>", value, datatype.value)
+            }
         }
     }
 
@@ -3195,6 +3455,18 @@ mod tests {
         }
     }
 
+    /// Helper: extract the Reduce from a plan that may be wrapped in
+    /// Project(Map(Reduce(...))) due to aggregate-to-string casting,
+    /// or just Project(Reduce(...)) for string aggregates.
+    fn find_reduce(expr: &HirRelationExpr) -> &HirRelationExpr {
+        match expr {
+            r @ HirRelationExpr::Reduce { .. } => r,
+            HirRelationExpr::Project { input, .. } => find_reduce(input),
+            HirRelationExpr::Map { input, .. } => find_reduce(input),
+            other => panic!("expected to find Reduce, got {:?}", other),
+        }
+    }
+
     // --- Single triple pattern tests ---
 
     #[mz_ore::test]
@@ -3283,7 +3555,7 @@ mod tests {
                                 let datum = row.unpack_first();
                                 assert_eq!(
                                     datum.unwrap_str(),
-                                    "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
+                                    "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type>"
                                 );
                             }
                             other => panic!("expected Literal, got {:?}", other),
@@ -4605,21 +4877,18 @@ mod tests {
         // SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }
         let result = plan_query("SELECT (COUNT(*) AS ?count) WHERE { ?s ?p ?o }");
         assert_eq!(var_names(&result), vec!["count"]);
-        // Should be Project(Reduce(...))
-        match &result.expr {
-            HirRelationExpr::Project { input, .. } => match input.as_ref() {
-                HirRelationExpr::Reduce {
-                    group_key,
-                    aggregates,
-                    ..
-                } => {
-                    assert!(group_key.is_empty()); // no GROUP BY → single group
-                    assert_eq!(aggregates.len(), 1);
-                    assert!(!aggregates[0].distinct);
-                }
-                other => panic!("expected Reduce, got {:?}", other),
-            },
-            other => panic!("expected Project, got {:?}", other),
+        // Should contain a Reduce (possibly wrapped in Map+Project for type casting).
+        match find_reduce(&result.expr) {
+            HirRelationExpr::Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                assert!(group_key.is_empty()); // no GROUP BY → single group
+                assert_eq!(aggregates.len(), 1);
+                assert!(!aggregates[0].distinct);
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -4627,15 +4896,12 @@ mod tests {
     fn test_count_distinct_aggregate() {
         let result = plan_query("SELECT (COUNT(DISTINCT ?s) AS ?count) WHERE { ?s ?p ?o }");
         assert_eq!(var_names(&result), vec!["count"]);
-        match &result.expr {
-            HirRelationExpr::Project { input, .. } => match input.as_ref() {
-                HirRelationExpr::Reduce { aggregates, .. } => {
-                    assert_eq!(aggregates.len(), 1);
-                    assert!(aggregates[0].distinct);
-                }
-                other => panic!("expected Reduce, got {:?}", other),
-            },
-            other => panic!("expected Project, got {:?}", other),
+        match find_reduce(&result.expr) {
+            HirRelationExpr::Reduce { aggregates, .. } => {
+                assert_eq!(aggregates.len(), 1);
+                assert!(aggregates[0].distinct);
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -4645,19 +4911,16 @@ mod tests {
         let result =
             plan_query("SELECT ?type (COUNT(?s) AS ?count) WHERE { ?s a ?type } GROUP BY ?type");
         assert_eq!(var_names(&result), vec!["count", "type"]);
-        match &result.expr {
-            HirRelationExpr::Project { input, .. } => match input.as_ref() {
-                HirRelationExpr::Reduce {
-                    group_key,
-                    aggregates,
-                    ..
-                } => {
-                    assert_eq!(group_key.len(), 1); // GROUP BY ?type
-                    assert_eq!(aggregates.len(), 1); // COUNT(?s)
-                }
-                other => panic!("expected Reduce, got {:?}", other),
-            },
-            other => panic!("expected Project, got {:?}", other),
+        match find_reduce(&result.expr) {
+            HirRelationExpr::Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                assert_eq!(group_key.len(), 1); // GROUP BY ?type
+                assert_eq!(aggregates.len(), 1); // COUNT(?s)
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -4669,19 +4932,16 @@ mod tests {
              GROUP BY ?type ?name",
         );
         assert_eq!(var_names(&result), vec!["count", "name", "type"]);
-        match &result.expr {
-            HirRelationExpr::Project { input, .. } => match input.as_ref() {
-                HirRelationExpr::Reduce {
-                    group_key,
-                    aggregates,
-                    ..
-                } => {
-                    assert_eq!(group_key.len(), 2);
-                    assert_eq!(aggregates.len(), 1);
-                }
-                other => panic!("expected Reduce, got {:?}", other),
-            },
-            other => panic!("expected Project, got {:?}", other),
+        match find_reduce(&result.expr) {
+            HirRelationExpr::Reduce {
+                group_key,
+                aggregates,
+                ..
+            } => {
+                assert_eq!(group_key.len(), 2);
+                assert_eq!(aggregates.len(), 1);
+            }
+            _ => unreachable!(),
         }
     }
 
@@ -4710,7 +4970,7 @@ mod tests {
              GROUP BY ?type ORDER BY DESC(?count) LIMIT 10",
         );
         assert_eq!(var_names(&result), vec!["count", "type"]);
-        // Outermost should be TopK(Project(Reduce(...)))
+        // Outermost should be TopK(...) wrapping a Reduce (with possible Map/Project casts).
         match &result.expr {
             HirRelationExpr::TopK {
                 input,
@@ -4721,19 +4981,16 @@ mod tests {
                 assert_eq!(order_key.len(), 1);
                 assert!(order_key[0].desc);
                 assert!(limit.is_some());
-                match input.as_ref() {
-                    HirRelationExpr::Project { input, .. } => match input.as_ref() {
-                        HirRelationExpr::Reduce {
-                            group_key,
-                            aggregates,
-                            ..
-                        } => {
-                            assert_eq!(group_key.len(), 1);
-                            assert_eq!(aggregates.len(), 1);
-                        }
-                        other => panic!("expected Reduce, got {:?}", other),
-                    },
-                    other => panic!("expected Project, got {:?}", other),
+                match find_reduce(input) {
+                    HirRelationExpr::Reduce {
+                        group_key,
+                        aggregates,
+                        ..
+                    } => {
+                        assert_eq!(group_key.len(), 1);
+                        assert_eq!(aggregates.len(), 1);
+                    }
+                    _ => unreachable!(),
                 }
             }
             other => panic!("expected TopK, got {:?}", other),
@@ -4778,14 +5035,11 @@ mod tests {
              GROUP BY ?type",
         );
         assert_eq!(var_names(&result), vec!["total", "type"]);
-        match &result.expr {
-            HirRelationExpr::Project { input, .. } => match input.as_ref() {
-                HirRelationExpr::Reduce { aggregates, .. } => {
-                    assert_eq!(aggregates.len(), 1);
-                }
-                other => panic!("expected Reduce, got {:?}", other),
-            },
-            other => panic!("expected Project, got {:?}", other),
+        match find_reduce(&result.expr) {
+            HirRelationExpr::Reduce { aggregates, .. } => {
+                assert_eq!(aggregates.len(), 1);
+            }
+            _ => unreachable!(),
         }
     }
 
