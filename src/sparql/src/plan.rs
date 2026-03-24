@@ -751,11 +751,17 @@ impl SparqlPlanner {
         }
 
         // Convert limit/offset to the types TopK expects.
-        let limit_expr =
-            limit.map(|l| HirScalarExpr::literal(Datum::Int64(l as i64), SqlScalarType::Int64));
+        let limit_expr = limit.map(|l| {
+            HirScalarExpr::literal(
+                Datum::Int64(i64::try_from(l).expect("LIMIT value too large")),
+                SqlScalarType::Int64,
+            )
+        });
         let offset_val = offset.unwrap_or(0);
-        let offset_expr =
-            HirScalarExpr::literal(Datum::Int64(offset_val as i64), SqlScalarType::Int64);
+        let offset_expr = HirScalarExpr::literal(
+            Datum::Int64(i64::try_from(offset_val).expect("OFFSET value too large")),
+            SqlScalarType::Int64,
+        );
 
         Ok(PlannedRelation {
             expr: HirRelationExpr::TopK {
