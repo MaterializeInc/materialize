@@ -10763,7 +10763,7 @@ __metadata:
     markdown-table: "npm:^3.0.4"
     miragejs: "npm:^0.1.48"
     mitt: "npm:^3.0.1"
-    module-alias: "npm:^2.2.3"
+    module-alias: "npm:^2.3.4"
     msw: "npm:^2.6.4"
     oidc-client-ts: "npm:^3.4.1"
     openapi-fetch: "npm:^0.17.0"
@@ -11078,10 +11078,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"module-alias@npm:^2.2.3":
-  version: 2.2.3
-  resolution: "module-alias@npm:2.2.3"
-  checksum: 10c0/47dc5b6d04f6e7df0ff330ca9b2a37c688a682ed661e9432b0b327e1e6c43eedad052151b8d50d6beea8b924828d2a92fa4625c18d651bf2d93d8f03aa0172fa
+"module-alias@npm:^2.3.4":
+  version: 2.3.4
+  resolution: "module-alias@npm:2.3.4"
+  checksum: 10c0/c0af11f640410d928db9dd62ba66a39d55475ff5d9e8943bb753b6688a35fd07f0ec950285fb0519d337bcd5bf9503d54ef1d557754a38aa371b095d1197a8b8
   languageName: node
   linkType: hard
 
