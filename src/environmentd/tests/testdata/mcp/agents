@@ -1,0 +1,123 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# =============================================================================
+# Initialize
+# =============================================================================
+
+# Standard MCP initialize handshake.
+mcp-agents
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-agents","version":"<VERSION>"}}}
+
+# =============================================================================
+# Tools List (query tool disabled by default)
+# =============================================================================
+
+# tools/list should return get_data_products, get_data_product_details, read_data_product but NOT query.
+mcp-agents
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"get_data_products","description":"Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"get_data_product_details","description":"Get the complete schema and structure of a specific data product. This shows you exactly what fields are available, their types, and what data you can query. Use this after finding a data product from get_data_products() to understand how to query it.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact name of the data product from get_data_products() list"}},"required":["name"]}},{"name":"read_data_product","description":"Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact fully-qualified name of the data product (e.g. '\"materialize\".\"schema\".\"view_name\"')"},"limit":{"type":"integer","description":"Maximum number of rows to return (default 500, max 1000)","default":500},"cluster":{"type":"string","description":"Optional cluster override. If omitted, uses the cluster from the data product catalog."}},"required":["name"]}}]}}
+
+# =============================================================================
+# Notifications (no id = no response body expected, just 200)
+# =============================================================================
+
+# notifications/initialized is a notification (no id), should return 200 with empty body.
+mcp-agents
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+----
+200 OK
+
+# =============================================================================
+# get_data_products - no data products configured
+# =============================================================================
+
+# With no data products set up, get_data_products returns empty array.
+mcp-agents
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[]"}]}}
+
+# =============================================================================
+# get_data_product_details - nonexistent product
+# =============================================================================
+
+# Looking up a nonexistent data product returns an error.
+mcp-agents
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_data_product_details","arguments":{"name":"nonexistent_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":11,"error":{"code":-32602,"message":"Data product not found: nonexistent_product","data":{"error_type":"DataProductNotFound"}}}
+
+# =============================================================================
+# read_data_product - nonexistent product
+# =============================================================================
+
+# Reading a nonexistent data product returns an error.
+mcp-agents
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"nonexistent_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":12,"error":{"code":-32602,"message":"Data product not found: nonexistent_product","data":{"error_type":"DataProductNotFound"}}}
+
+# =============================================================================
+# query tool - disabled by default
+# =============================================================================
+
+# Calling the query tool when disabled should return a ToolNotFound error.
+mcp-agents
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Tool not found: query tool is not available. Use get_data_products, get_data_product_details, and read_data_product instead.","data":{"error_type":"ToolNotFound"}}}
+
+# =============================================================================
+# Observatory tools on agents endpoint - wrong endpoint
+# =============================================================================
+
+# Calling query_system_catalog on agents endpoint should fail.
+mcp-agents
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_tables"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"Tool not found: query_system_catalog is not available on agents endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# =============================================================================
+# JSON-RPC version validation
+# =============================================================================
+
+# Wrong JSON-RPC version should return InvalidRequest error.
+mcp-agents
+{"jsonrpc":"1.0","id":30,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":30,"error":{"code":-32600,"message":"Invalid JSON-RPC version: expected 2.0","data":{"error_type":"InvalidRequest"}}}
+
+# =============================================================================
+# String id values
+# =============================================================================
+
+# String id values should be echoed back.
+mcp-agents
+{"jsonrpc":"2.0","id":"my-request-id","method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":"my-request-id","result":{"tools":[{"name":"get_data_products","description":"Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.","inputSchema":{"type":"object","properties":{},"required":[]}},{"name":"get_data_product_details","description":"Get the complete schema and structure of a specific data product. This shows you exactly what fields are available, their types, and what data you can query. Use this after finding a data product from get_data_products() to understand how to query it.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact name of the data product from get_data_products() list"}},"required":["name"]}},{"name":"read_data_product","description":"Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product.","inputSchema":{"type":"object","properties":{"name":{"type":"string","description":"Exact fully-qualified name of the data product (e.g. '\"materialize\".\"schema\".\"view_name\"')"},"limit":{"type":"integer","description":"Maximum number of rows to return (default 500, max 1000)","default":500},"cluster":{"type":"string","description":"Optional cluster override. If omitted, uses the cluster from the data product catalog."}},"required":["name"]}}]}}
+
+# Null id is treated as a notification by serde (Option<Value> deserializes null as None).
+mcp-agents
+{"jsonrpc":"2.0","id":null,"method":"tools/list"}
+----
+200 OK

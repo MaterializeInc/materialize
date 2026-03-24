@@ -4963,3 +4963,724 @@ fn test_webhook_request_compression() {
     let rnd_body = row.as_ref().map(|r| r.get("body"));
     assert_eq!(rnd_body, Some(og_body));
 }
+
+// =============================================================================
+// MCP (Model Context Protocol) integration tests
+// =============================================================================
+
+/// Helper to set up an MCP test server and run datadriven tests.
+fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
+    let version_re = Regex::new(r#"\d+\.\d+\.\d+(\.\d+)?(-dev(\.\d+)?)?"#).unwrap();
+
+    datadriven::walk(testdata_path, |f| {
+        let server = harness.clone().start_blocking();
+
+        // Grant all privileges to default http user (same setup as test_http_sql).
+        {
+            let mut super_user = server
+                .pg_config_internal()
+                .user(&SYSTEM_USER.name)
+                .connect(postgres::NoTls)
+                .unwrap();
+            super_user
+                .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+            super_user
+                .batch_execute(&format!(
+                    "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                    &HTTP_DEFAULT_USER.name
+                ))
+                .unwrap();
+        }
+
+        let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
+        let observatory_url = format!("http://{}/api/mcp/observatory", server.http_local_addr());
+
+        f.run(|tc| {
+            let url = match tc.directive.as_str() {
+                "mcp-agents" => &agents_url,
+                "mcp-observatory" => &observatory_url,
+                other => panic!("unknown directive: {}", other),
+            };
+
+            let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
+            let res = Client::new().post(url).json(&json).send().unwrap();
+
+            let status = res.status();
+            let body = res.text().unwrap();
+
+            // Replace version numbers for stable output.
+            let body = version_re.replace_all(&body, "<VERSION>").to_string();
+
+            if body.is_empty() {
+                format!("{}\n", status)
+            } else {
+                format!("{}\n{}\n", status, body)
+            }
+        });
+    });
+}
+
+/// Tests the MCP agents endpoint with default feature flags
+/// (enable_mcp_agents=true, enable_mcp_agents_query_tool=false).
+#[mz_ore::test]
+fn test_mcp_agents() {
+    let harness = test_util::TestHarness::default().with_mcp_routes(true, false);
+    run_mcp_datadriven("tests/testdata/mcp/agents", harness);
+}
+
+/// Tests the MCP agents endpoint with the query tool enabled.
+#[mz_ore::test]
+fn test_mcp_agents_query_tool() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default(
+            "enable_mcp_agents_query_tool".to_string(),
+            "true".to_string(),
+        );
+    run_mcp_datadriven("tests/testdata/mcp/agents_query_tool", harness);
+}
+
+/// Tests that the MCP agents endpoint returns 503 when the feature flag is disabled.
+#[mz_ore::test]
+fn test_mcp_agents_disabled() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .with_system_parameter_default("enable_mcp_agents".to_string(), "false".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/agents_disabled", harness);
+}
+
+/// Tests the MCP observatory endpoint.
+#[mz_ore::test]
+fn test_mcp_observatory() {
+    let harness = test_util::TestHarness::default().with_mcp_routes(false, true);
+    run_mcp_datadriven("tests/testdata/mcp/observatory", harness);
+}
+
+/// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
+fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
+    let res = Client::new().post(url).json(&json).send().unwrap();
+    let status = res.status();
+    let body: serde_json::Value = res.json().unwrap_or(serde_json::Value::Null);
+    (status, body)
+}
+
+/// Tests get_data_products, get_data_product_details, and read_data_product against
+/// a real data product (view + index + comment).
+#[mz_ore::test]
+fn test_mcp_agents_with_data_product() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
+
+    // Set up a data product: create a view, index it, and add a comment on the index.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        // Create the HTTP user and grant privileges.
+        super_user
+            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON CLUSTER quickstart TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Create a view and an index on it.
+        super_user
+            .batch_execute(
+                "CREATE VIEW test_products AS SELECT 1::int AS id, 'widget'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE INDEX test_products_idx IN CLUSTER quickstart ON test_products (id)",
+            )
+            .unwrap();
+        // Comment on the index makes it show up as a data product.
+        super_user
+            .batch_execute("COMMENT ON INDEX test_products_idx IS 'A test data product for integration testing'")
+            .unwrap();
+        // Grant SELECT on the view to the HTTP user so it appears in mz_show_my_object_privileges.
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_products TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        // Grant USAGE on the cluster so it appears in mz_show_my_cluster_privileges.
+        super_user
+            .batch_execute(&format!(
+                "GRANT USAGE ON CLUSTER quickstart TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+
+    // get_data_products should now return our data product.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_products",
+                "arguments": {}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let products: serde_json::Value = serde_json::from_str(result_text).unwrap();
+    assert!(
+        products.as_array().unwrap().len() >= 1,
+        "expected at least one data product"
+    );
+    // Find our product
+    let product = products
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| {
+            p.as_array()
+                .map(|arr| arr[0].as_str().unwrap_or("").contains("test_products"))
+                .unwrap_or(false)
+        })
+        .expect("test_products data product should exist");
+    let object_name = product.as_array().unwrap()[0].as_str().unwrap();
+    assert!(
+        object_name.contains("test_products"),
+        "object_name should contain test_products, got: {}",
+        object_name
+    );
+
+    // get_data_product_details with the exact name.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_product_details",
+                "arguments": {"name": object_name}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["result"]["content"][0]["text"].as_str().is_some());
+    assert!(body["error"].is_null());
+
+    // read_data_product should return the row from the view.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 10}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1, "expected 1 row");
+    // The row should have id=1, name=widget
+    let row = &rows[0];
+    assert_eq!(row[0].as_str().unwrap(), "1");
+    assert_eq!(row[1].as_str().unwrap(), "widget");
+
+    // read_data_product with cluster override.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 10, "cluster": "quickstart"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["error"].is_null(), "cluster override should work");
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 1);
+
+    // read_data_product with limit 0 should return no rows.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 0}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["error"].is_null());
+    let rows_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let rows: serde_json::Value = serde_json::from_str(rows_text).unwrap();
+    assert_eq!(
+        rows.as_array().unwrap().len(),
+        0,
+        "limit 0 should return no rows"
+    );
+
+    // read_data_product with limit > MAX_READ_LIMIT (1000) should be clamped, not error.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 6,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "limit": 9999}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "limit above max should be clamped, not rejected"
+    );
+
+    // SQL injection attempt in data product name: should return DataProductNotFound, not execute.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_product_details",
+                "arguments": {"name": "'; DROP TABLE test_products; --"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Data product not found"),
+        "SQL injection in name should be safely handled"
+    );
+
+    // SQL injection attempt in read_data_product name.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": "x' UNION SELECT * FROM mz_tables --"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Data product not found"),
+        "SQL injection in read_data_product name should be safely handled"
+    );
+
+    // SQL injection attempt in cluster override.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "read_data_product",
+                "arguments": {"name": object_name, "cluster": "'; DROP TABLE test_products; --"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    // The cluster name is escaped, so this should fail as an invalid cluster, not execute injection.
+    // It may be a query execution error (bad cluster name) which is fine - the key is no injection.
+    assert!(
+        body["error"].is_object(),
+        "injection in cluster should produce an error, not succeed"
+    );
+}
+
+/// Tests runtime toggling of MCP feature flags.
+#[mz_ore::test]
+fn test_mcp_agents_runtime_flag_toggle() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, true)
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
+    let observatory_url = format!("http://{}/api/mcp/observatory", server.http_local_addr());
+
+    let tools_list = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list"
+    });
+
+    // Both endpoints should be enabled by default (feature flags default to true).
+    let (status, _) = mcp_post(&agents_url, tools_list.clone());
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = mcp_post(&observatory_url, tools_list.clone());
+    assert_eq!(status, StatusCode::OK);
+
+    // Disable MCP agents at runtime.
+    server.disable_feature_flags(&["enable_mcp_agents"]);
+
+    let res = Client::new()
+        .post(&agents_url)
+        .json(&tools_list)
+        .send()
+        .unwrap();
+    assert_eq!(
+        res.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        "agents should return 503 after disabling"
+    );
+
+    // Observatory should still work.
+    let (status, _) = mcp_post(&observatory_url, tools_list.clone());
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "observatory should still be enabled"
+    );
+
+    // Re-enable MCP agents.
+    server.enable_feature_flags(&["enable_mcp_agents"]);
+    let (status, _) = mcp_post(&agents_url, tools_list.clone());
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "agents should work again after re-enabling"
+    );
+
+    // Test query tool toggling: initially disabled.
+    let query_call = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query",
+            "arguments": {"cluster": "quickstart", "sql_query": "SELECT 1"}
+        }
+    });
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("query tool is not available"),
+        "query tool should be disabled by default"
+    );
+
+    // Enable query tool at runtime.
+    server.enable_feature_flags(&["enable_mcp_agents_query_tool"]);
+
+    let (status, body) = mcp_post(&agents_url, query_call.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "query tool should work after enabling"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("1"),
+        "query should return result with 1"
+    );
+
+    // Disable query tool again.
+    server.disable_feature_flags(&["enable_mcp_agents_query_tool"]);
+    let (_, body) = mcp_post(&agents_url, query_call.clone());
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("query tool is not available"),
+        "query tool should be disabled again"
+    );
+}
+
+/// Tests that the MCP agents endpoint respects RBAC: data products are only visible
+/// to users with both SELECT on the view and USAGE on the cluster.
+///
+/// The `mz_mcp_data_products` view joins `mz_show_my_object_privileges` (SELECT) and
+/// `mz_show_my_cluster_privileges` (USAGE) — both must be satisfied for a product to appear.
+#[mz_ore::test]
+fn test_mcp_agents_rbac() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(true, false)
+        .start_blocking();
+
+    let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
+
+    let mut super_user = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    // Create the HTTP default user with basic system/database/schema privileges
+    // but NO object-level grants yet.
+    super_user
+        .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+        .unwrap();
+    super_user
+        .batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    super_user
+        .batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    super_user
+        .batch_execute(&format!(
+            "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+
+    // Create a dedicated cluster with no PUBLIC USAGE grant so we can control
+    // USAGE precisely (quickstart grants USAGE to PUBLIC by default).
+    super_user
+        .batch_execute("CREATE CLUSTER rbac_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
+        .unwrap();
+
+    // Create a data product: view + index on the dedicated cluster.
+    super_user
+        .batch_execute("CREATE VIEW rbac_product AS SELECT 1::int AS id, 'secret'::text AS payload")
+        .unwrap();
+    super_user
+        .batch_execute("CREATE INDEX rbac_product_idx IN CLUSTER rbac_cluster ON rbac_product (id)")
+        .unwrap();
+
+    let get_products = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {"name": "get_data_products", "arguments": {}}
+    });
+
+    let products_visible = |body: &serde_json::Value| -> bool {
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("[]");
+        let products: serde_json::Value =
+            serde_json::from_str(text).unwrap_or(serde_json::json!([]));
+        products
+            .as_array()
+            .map(|arr| {
+                arr.iter().any(|p| {
+                    p.as_array()
+                        .map(|row| row[0].as_str().unwrap_or("").contains("rbac_product"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    };
+
+    // 1. No SELECT, no USAGE → product NOT visible.
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !products_visible(&body),
+        "product should not be visible with no privileges"
+    );
+
+    // 2. Grant SELECT on view only (no cluster USAGE) → still NOT visible.
+    super_user
+        .batch_execute(&format!(
+            "GRANT SELECT ON rbac_product TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !products_visible(&body),
+        "product should not be visible with SELECT but no cluster USAGE"
+    );
+
+    // 3. Also grant USAGE on rbac_cluster → product NOW visible.
+    super_user
+        .batch_execute(&format!(
+            "GRANT USAGE ON CLUSTER rbac_cluster TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        products_visible(&body),
+        "product should be visible with both SELECT and cluster USAGE"
+    );
+
+    // Capture the fully-qualified product name for subsequent tests.
+    let text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let products: serde_json::Value = serde_json::from_str(text).unwrap();
+    let product_name = products
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| {
+            p.as_array()
+                .map(|row| row[0].as_str().unwrap_or("").contains("rbac_product"))
+                .unwrap_or(false)
+        })
+        .unwrap()
+        .as_array()
+        .unwrap()[0]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // 4. Revoke SELECT → product disappears.
+    super_user
+        .batch_execute(&format!(
+            "REVOKE SELECT ON rbac_product FROM {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !products_visible(&body),
+        "product should disappear after revoking SELECT"
+    );
+
+    // 5. read_data_product by name while lacking SELECT → DataProductNotFound.
+    //    The lookup queries mz_mcp_data_products which filters by privilege,
+    //    so the product is invisible and returns an error rather than data.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {"name": "read_data_product", "arguments": {"name": product_name}}
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Data product not found"),
+        "read_data_product should fail with not-found when SELECT is revoked"
+    );
+
+    // 6. Re-grant SELECT → visible again.
+    super_user
+        .batch_execute(&format!(
+            "GRANT SELECT ON rbac_product TO {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        products_visible(&body),
+        "product should reappear after re-granting SELECT"
+    );
+
+    // 7. Revoke cluster USAGE → product disappears again.
+    super_user
+        .batch_execute(&format!(
+            "REVOKE USAGE ON CLUSTER rbac_cluster FROM {}",
+            &HTTP_DEFAULT_USER.name
+        ))
+        .unwrap();
+    let (status, body) = mcp_post(&agents_url, get_products.clone());
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !products_visible(&body),
+        "product should disappear after revoking cluster USAGE"
+    );
+
+    // 8. get_data_product_details by name while invisible → DataProductNotFound.
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "get_data_product_details", "arguments": {"name": product_name}}
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Data product not found"),
+        "get_data_product_details should fail with not-found when cluster USAGE is revoked"
+    );
+}

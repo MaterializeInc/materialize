@@ -1,0 +1,133 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# =============================================================================
+# Initialize
+# =============================================================================
+
+# Standard MCP initialize handshake for observatory endpoint.
+mcp-observatory
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-observatory","version":"<VERSION>"}}}
+
+# =============================================================================
+# Tools List
+# =============================================================================
+
+# Observatory should only expose query_system_catalog.
+mcp-observatory
+{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","description":"Query Materialize system catalog tables (mz_*) for troubleshooting and observability. Only mz_* tables are accessible.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"SQL query restricted to mz_* system tables"}},"required":["sql_query"]}}]}}
+
+# =============================================================================
+# query_system_catalog - valid system catalog queries
+# =============================================================================
+
+# Query mz_databases for the default database should work and return predictable result.
+mcp-observatory
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}]}}
+
+# Query with qualified schema should work.
+mcp-observatory
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_catalog.mz_databases WHERE name = 'materialize'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}]}}
+
+# =============================================================================
+# query_system_catalog - non-system tables rejected
+# =============================================================================
+
+# Querying a non-system table should be rejected.
+mcp-observatory
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM user_table"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: user_table. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# Querying a non-system schema should be rejected.
+mcp-observatory
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM public.my_view"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.my_view. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - DDL rejected
+# =============================================================================
+
+# DDL on system tables should still be rejected (read-only validation runs first).
+mcp-observatory
+{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"DROP TABLE mz_tables"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":22,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - multi-statement rejected
+# =============================================================================
+
+mcp-observatory
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1; SELECT * FROM mz_tables"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":23,"error":{"code":-32602,"message":"Query validation failed: Only one query allowed at a time. Found 2 statements.","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - empty query
+# =============================================================================
+
+mcp-observatory
+{"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":""}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":24,"error":{"code":-32602,"message":"Query validation failed: Empty query","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# query_system_catalog - must reference at least one system table
+# =============================================================================
+
+# A query with no table reference should be rejected.
+mcp-observatory
+{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":25,"error":{"code":-32602,"message":"Query validation failed: Query must reference at least one system catalog table","data":{"error_type":"ValidationError"}}}
+
+# =============================================================================
+# Agents tools on observatory endpoint - wrong endpoint
+# =============================================================================
+
+# Calling get_data_products on observatory endpoint should fail.
+mcp-observatory
+{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":30,"error":{"code":-32602,"message":"Tool not found: get_data_products is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling read_data_product on observatory endpoint should fail.
+mcp-observatory
+{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"some_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":31,"error":{"code":-32602,"message":"Tool not found: read_data_product is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling query on observatory endpoint should fail.
+mcp-observatory
+{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"Tool not found: query is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
