@@ -1333,8 +1333,14 @@ where
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
-                CollectionBundle::from_collections(oks.negate(), errs)
+                if let Some((col_oks, col_errs)) = input.columnar_collection() {
+                    let negated = crate::render::columnar::negate_columnar(col_oks.clone());
+                    CollectionBundle::from_columnar_collections(negated, col_errs.clone())
+                } else {
+                    let (oks, errs) =
+                        input.as_specific_collection(None, &self.config_set);
+                    CollectionBundle::from_collections(oks.negate(), errs)
+                }
             }
             Threshold {
                 input,
