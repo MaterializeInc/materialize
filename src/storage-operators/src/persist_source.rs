@@ -156,10 +156,9 @@ impl Subtime {
 /// timestamp in the consolidation scope to enable smooth frontier advancement
 /// during snapshot consolidation.
 ///
-/// Derived from the first 8 bytes of the row's internal representation,
-/// interpreted as a big-endian u64. Since `Row::Ord` compares by
-/// (length, then bytes) and rows within a shard share a schema (same length),
-/// this is monotonically non-decreasing in `Row::Ord` order.
+/// Encoded as `(row_length, first_6_bytes)` packed into a u64 to match
+/// `Row::Ord`, which sorts by (length first, then bytes). This ensures
+/// `KeyProgress` is monotonically non-decreasing in `SourceData::Ord` order.
 ///
 /// For `SourceData(Err(_))`, we use `u64::MAX` since errors sort after
 /// valid rows in `Result::Ord`.
@@ -210,18 +209,26 @@ impl differential_dataflow::lattice::Maximum for KeyProgress {
 impl KeyProgress {
     /// Derive a `KeyProgress` value from a `SourceData` key.
     ///
-    /// Takes the first 8 bytes of the row's internal byte representation and
-    /// interprets them as a big-endian u64. For rows shorter than 8 bytes, the
-    /// value is zero-padded on the right. For errors, returns `u64::MAX` since
-    /// `Err` sorts after `Ok` in `Result::Ord`.
+    /// Encodes `(length, first_6_bytes)` into a u64 to match `Row::Ord`,
+    /// which sorts by (length first, then bytes). The top 2 bytes hold the
+    /// row length (capped at u16::MAX), and the bottom 6 bytes hold the
+    /// first 6 bytes of row data. This ensures `KeyProgress` is
+    /// monotonically non-decreasing in `Row::Ord` order.
+    ///
+    /// For `SourceData(Err(_))`, returns `u64::MAX` since errors sort after
+    /// valid rows in `Result::Ord`.
     fn from_source_data(key: &SourceData) -> Self {
         match &key.0 {
             Ok(row) => {
                 let data = row.data();
-                let mut buf = [0u8; 8];
-                let len = std::cmp::min(data.len(), 8);
-                buf[..len].copy_from_slice(&data[..len]);
-                KeyProgress(u64::from_be_bytes(buf))
+                // Top 2 bytes: row length (capped). Bottom 6 bytes: data prefix.
+                let len_part = (data.len().min(u16::MAX as usize) as u64) << 48;
+                let mut prefix = [0u8; 6];
+                let copy_len = data.len().min(6);
+                prefix[..copy_len].copy_from_slice(&data[..copy_len]);
+                // Interpret the 6 bytes as a big-endian u48 in the lower bits.
+                let data_part = u64::from_be_bytes([0, 0, prefix[0], prefix[1], prefix[2], prefix[3], prefix[4], prefix[5]]);
+                KeyProgress(len_part | data_part)
             }
             Err(_) => KeyProgress(u64::MAX),
         }
@@ -1106,6 +1113,13 @@ where
                         // Derive KeyProgress from the key prefix and downgrade
                         // our capability so the consolidate frontier advances.
                         let key_progress = KeyProgress::from_source_data(&key);
+                        debug_assert!(
+                            key_progress >= cap.time().1,
+                            "KeyProgress went backwards: {:?} < {:?} for key {:?}",
+                            key_progress,
+                            cap.time().1,
+                            key,
+                        );
                         let emit_time: InnerTime = (
                             (time, cap.time().0 .1),
                             key_progress,

@@ -79,19 +79,13 @@
 //! `InMemoryHashMap`, they may be rough estimates of actual memory usage. See
 //! `StateValue::memory_size` for more information.
 //!
-//! Note also that after consolidation, additional space may be used if `StateValue` is
-//! used.
-//!
 
 use std::fmt;
-use std::num::Wrapping;
 use std::sync::Arc;
 use std::time::Instant;
 
-use bincode::Options;
-use itertools::Itertools;
 use mz_ore::error::ErrorExt;
-use mz_repr::{Diff, GlobalId};
+use mz_repr::Diff;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::metrics::upsert::{UpsertMetrics, UpsertSharedMetrics};
@@ -161,43 +155,25 @@ pub struct PutValue<V> {
     pub previous_value_metadata: Option<ValueMetadata<i64>>,
 }
 
-/// A value to put in with a `multi_merge`.
-pub struct MergeValue<V> {
-    /// The value of the merge operand to write to the backend.
-    pub value: V,
-    /// The 'diff' of this merge operand value, used to estimate the overall size diff
-    /// of the working set after this merge operand is merged by the backend.
-    pub diff: Diff,
-}
-
-/// `UpsertState` has 2 modes:
-/// - Normal operation
-/// - Consolidation.
-///
-/// This struct and its substructs are helpers to simplify the logic that
-/// individual `UpsertState` implementations need to do to manage these 2 modes.
+/// `UpsertState` stores values associated with keys, supporting both finalized and provisional
+/// values.
 ///
 /// Normal operation is simple, we just store an ordinary `UpsertValue`, and allow the implementer
-/// to store it any way they want. During consolidation, the logic is more complex.
-/// See the docs on `StateValue::merge_update` for more information.
+/// to store it any way they want.
 ///
 /// Note also that this type is designed to support _partial updates_. All values are
 /// associated with an _order key_ `O` that can be used to determine if a value existing in the
 /// `UpsertStateBackend` occurred before or after a value being considered for insertion.
 ///
 /// `O` typically required to be `: Default`, with the default value sorting below all others.
-/// During consolidation, values consolidate correctly (as they are actual
-/// differential updates with diffs), so order keys are not required.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub enum StateValue<T, O> {
-    Consolidating(Consolidating),
     Value(Value<T, O>),
 }
 
 impl<T, O> std::fmt::Debug for StateValue<T, O> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            StateValue::Consolidating(c) => std::fmt::Display::fmt(c, f),
             StateValue::Value(_) => write!(f, "Value"),
         }
     }
@@ -243,35 +219,7 @@ pub struct ProvisionalValue<T, O> {
     pub value: Option<UpsertValue>,
 }
 
-/// A value as produced during consolidation.
-#[derive(Clone, Default, serde::Serialize, serde::Deserialize, Debug)]
-pub struct Consolidating {
-    #[serde(with = "serde_bytes")]
-    value_xor: Vec<u8>,
-    len_sum: Wrapping<i64>,
-    checksum_sum: Wrapping<i64>,
-    diff_sum: Wrapping<i64>,
-}
-
-impl fmt::Display for Consolidating {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("Consolidating")
-            .field("len_sum", &self.len_sum)
-            .field("checksum_sum", &self.checksum_sum)
-            .field("diff_sum", &self.diff_sum)
-            .finish_non_exhaustive()
-    }
-}
-
 impl<T, O> StateValue<T, O> {
-    /// A finalized, that is (assumed) persistent, value.
-    pub fn finalized_value(value: UpsertValue) -> Self {
-        Self::Value(Value {
-            finalized: Some(value),
-            provisional: None,
-        })
-    }
-
     #[allow(unused)]
     /// A tombstoned value.
     pub fn tombstone() -> Self {
@@ -285,15 +233,13 @@ impl<T, O> StateValue<T, O> {
     pub fn is_tombstone(&self) -> bool {
         match self {
             Self::Value(value) => value.finalized.is_none(),
-            _ => false,
         }
     }
 
-    /// Pull out the `Value` value for a `StateValue`, after `ensure_decoded` has been called.
+    /// Pull out the `Value` value for a `StateValue`.
     pub fn into_decoded(self) -> Value<T, O> {
         match self {
             Self::Value(value) => value,
-            _ => panic!("called `into_decoded without calling `ensure_decoded`"),
         }
     }
 
@@ -308,7 +254,6 @@ impl<T, O> StateValue<T, O> {
         use std::mem::size_of;
 
         let heap_size = match self {
-            Self::Consolidating(Consolidating { value_xor, .. }) => value_xor.len(),
             Self::Value(value) => {
                 let finalized_heap_size = match value.finalized {
                     Some(Ok(ref row)) => {
@@ -363,9 +308,6 @@ impl<T: Eq, O> StateValue<T, O> {
                     order,
                 }),
             }),
-            StateValue::Consolidating(_) => {
-                panic!("called `into_provisional_value` without calling `ensure_decoded`")
-            }
         }
     }
 
@@ -397,9 +339,6 @@ impl<T: Eq, O> StateValue<T, O> {
                     order,
                 }),
             }),
-            StateValue::Consolidating(_) => {
-                panic!("called `into_provisional_tombstone` without calling `ensure_decoded`")
-            }
         }
     }
 
@@ -410,9 +349,6 @@ impl<T: Eq, O> StateValue<T, O> {
                 Some(p) if &p.timestamp == ts => Some(&p.order),
                 _ => None,
             },
-            Self::Consolidating(_) => {
-                panic!("called `provisional_order` without calling `ensure_decoded`")
-            }
         }
     }
 
@@ -424,263 +360,17 @@ impl<T: Eq, O> StateValue<T, O> {
                 Some(p) if &p.timestamp == ts => p.value.as_ref(),
                 _ => value.finalized.as_ref(),
             },
-            Self::Consolidating(_) => {
-                panic!("called `provisional_value_ref` without calling `ensure_decoded`")
-            }
         }
     }
 
-    /// Returns the the finalized value, if one is present.
-    pub fn into_finalized_value(self) -> Option<UpsertValue> {
-        match self {
-            Self::Value(v) => v.finalized,
-            _ => panic!("called `into_finalized_value` without calling `ensure_decoded`"),
-        }
-    }
-}
-
-impl<T: Eq, O> StateValue<T, O> {
-    /// We use a XOR trick in order to accumulate the values without having to store the full
-    /// unconsolidated history in memory. For all (value, diff) updates of a key we track:
-    /// - diff_sum = SUM(diff)
-    /// - checksum_sum = SUM(checksum(bincode(value)) * diff)
-    /// - len_sum = SUM(len(bincode(value)) * diff)
-    /// - value_xor = XOR(bincode(value))
-    ///
-    /// ## Return value
-    /// Returns a `bool` indicating whether or not the current merged value is able to be deleted.
-    ///
-    /// ## Correctness
-    ///
-    /// The method is correct because a well formed upsert collection at a given
-    /// timestamp will have for each key:
-    /// - Zero or one updates of the form (cur_value, +1)
-    /// - Zero or more pairs of updates of the form (prev_value, +1), (prev_value, -1)
-    ///
-    /// We are interested in extracting the cur_value of each key and discard all prev_values
-    /// that might be included in the stream. Since the history of prev_values always comes in
-    /// pairs, computing the XOR of those is always going to cancel their effects out. Also,
-    /// since XOR is commutative this property is true independent of the order. The same is
-    /// true for the summations of the length and checksum since the sum will contain the
-    /// unrelated values zero times.
-    ///
-    /// Therefore the accumulators will end up precisely in one of two states:
-    /// 1. diff == 0, checksum == 0, value == [0..] => the key is not present
-    /// 2. diff == 1, checksum == checksum(cur_value) value == cur_value => the key is present
-    ///
-    /// ## Robustness
-    ///
-    /// In the absense of bugs, accumulating the diff and checksum is not required since we know
-    /// that a well formed collection always satisfies XOR(bincode(values)) == bincode(cur_value).
-    /// However bugs may happen and so storing 16 more bytes per key to have a very high
-    /// guarantee that we're not decoding garbage is more than worth it.
-    /// The main key->value used to store previous values.
-    #[allow(clippy::as_conversions)]
-    pub fn merge_update(
-        &mut self,
-        value: UpsertValue,
-        diff: mz_repr::Diff,
-        bincode_opts: BincodeOpts,
-        bincode_buffer: &mut Vec<u8>,
-    ) -> bool {
-        match self {
-            Self::Consolidating(Consolidating {
-                value_xor,
-                len_sum,
-                checksum_sum,
-                diff_sum,
-            }) => {
-                bincode_buffer.clear();
-                bincode_opts
-                    .serialize_into(&mut *bincode_buffer, &value)
-                    .unwrap();
-                let len = i64::try_from(bincode_buffer.len()).unwrap();
-
-                *diff_sum += diff.into_inner();
-                *len_sum += len.wrapping_mul(diff.into_inner());
-                // Truncation is fine (using `as`) as this is just a checksum
-                *checksum_sum +=
-                    (seahash::hash(&*bincode_buffer) as i64).wrapping_mul(diff.into_inner());
-
-                // XOR of even diffs cancel out, so we only do it if diff is odd
-                if diff.abs() % Diff::from(2) == Diff::ONE {
-                    if value_xor.len() < bincode_buffer.len() {
-                        value_xor.resize(bincode_buffer.len(), 0);
-                    }
-                    // Note that if the new value is _smaller_ than the `value_xor`, and
-                    // the values at the end are zeroed out, we can shrink the buffer. This
-                    // is extremely sensitive code, so we don't (yet) do that.
-                    for (acc, val) in value_xor[0..bincode_buffer.len()]
-                        .iter_mut()
-                        .zip_eq(bincode_buffer.drain(..))
-                    {
-                        *acc ^= val;
-                    }
-                }
-
-                // Returns whether or not the value can be deleted. This allows
-                // us to delete values in `UpsertState::consolidate_chunk` (even
-                // if they come back later), to minimize space usage.
-                diff_sum.0 == 0 && checksum_sum.0 == 0 && value_xor.iter().all(|&x| x == 0)
-            }
-            StateValue::Value(_value) => {
-                // We can turn a Value back into a Consolidating state:
-                // `std::mem::take` will leave behind a default value, which
-                // happens to be a default `Consolidating` `StateValue`.
-                let this = std::mem::take(self);
-
-                let finalized_value = this.into_finalized_value();
-                if let Some(finalized_value) = finalized_value {
-                    // If we had a value before, merge it into the
-                    // now-consolidating state first.
-                    let _ =
-                        self.merge_update(finalized_value, Diff::ONE, bincode_opts, bincode_buffer);
-
-                    // Then merge the new value in.
-                    self.merge_update(value, diff, bincode_opts, bincode_buffer)
-                } else {
-                    // We didn't have a value before, might have been a
-                    // tombstone. So just merge in the new value.
-                    self.merge_update(value, diff, bincode_opts, bincode_buffer)
-                }
-            }
-        }
-    }
-
-    /// Merge an existing StateValue into this one, using the same method described in `merge_update`.
-    /// See the docstring above for more information on correctness and robustness.
-    pub fn merge_update_state(&mut self, other: &Self) {
-        match (self, other) {
-            (
-                Self::Consolidating(Consolidating {
-                    value_xor,
-                    len_sum,
-                    checksum_sum,
-                    diff_sum,
-                }),
-                Self::Consolidating(other_consolidating),
-            ) => {
-                *diff_sum += other_consolidating.diff_sum;
-                *len_sum += other_consolidating.len_sum;
-                *checksum_sum += other_consolidating.checksum_sum;
-                if other_consolidating.value_xor.len() > value_xor.len() {
-                    value_xor.resize(other_consolidating.value_xor.len(), 0);
-                }
-                for (acc, val) in value_xor[0..other_consolidating.value_xor.len()]
-                    .iter_mut()
-                    .zip_eq(other_consolidating.value_xor.iter())
-                {
-                    *acc ^= val;
-                }
-            }
-            _ => panic!("`merge_update_state` called with non-consolidating state"),
-        }
-    }
-
-    /// During and after consolidation, we assume that values in the `UpsertStateBackend` implementation
-    /// can be `Self::Consolidating`, with a `diff_sum` of 1 (or 0, if they have been deleted).
-    /// Afterwards, if we need to retract one of these values, we need to assert that its in this correct state,
-    /// then mutate it to its `Value` state, so the `upsert` operator can use it.
-    #[allow(clippy::as_conversions)]
-    pub fn ensure_decoded(
-        &mut self,
-        bincode_opts: BincodeOpts,
-        source_id: GlobalId,
-        key: Option<&UpsertKey>,
-    ) {
-        match self {
-            StateValue::Consolidating(consolidating) => {
-                match consolidating.diff_sum.0 {
-                    1 => {
-                        let len = usize::try_from(consolidating.len_sum.0)
-                            .map_err(|_| {
-                                format!(
-                                    "len_sum can't be made into a usize, state: {}, {}",
-                                    consolidating, source_id,
-                                )
-                            })
-                            .expect("invalid upsert state");
-                        let value = &consolidating
-                            .value_xor
-                            .get(..len)
-                            .ok_or_else(|| {
-                                format!(
-                                    "value_xor is not the same length ({}) as len ({}), state: {}, {}",
-                                    consolidating.value_xor.len(),
-                                    len,
-                                    consolidating,
-                                    source_id,
-                                )
-                            })
-                            .expect("invalid upsert state");
-                        // Truncation is fine (using `as`) as this is just a checksum
-                        assert_eq!(
-                            consolidating.checksum_sum.0,
-                            // Hash the value, not the full buffer, which may have extra 0's
-                            seahash::hash(value) as i64,
-                            "invalid upsert state: checksum_sum does not match, state: {}, {}",
-                            consolidating,
-                            source_id,
-                        );
-                        *self = Self::finalized_value(bincode_opts.deserialize(value).unwrap());
-                    }
-                    0 => {
-                        assert_eq!(
-                            consolidating.len_sum.0, 0,
-                            "invalid upsert state: len_sum is non-0, state: {}, {}",
-                            consolidating, source_id,
-                        );
-                        assert_eq!(
-                            consolidating.checksum_sum.0, 0,
-                            "invalid upsert state: checksum_sum is non-0, state: {}, {}",
-                            consolidating, source_id,
-                        );
-                        assert!(
-                            consolidating.value_xor.iter().all(|&x| x == 0),
-                            "invalid upsert state: value_xor not all 0s with 0 diff. \
-                            Non-zero positions: {:?}, state: {}, {}",
-                            consolidating
-                                .value_xor
-                                .iter()
-                                .positions(|&x| x != 0)
-                                .collect::<Vec<_>>(),
-                            consolidating,
-                            source_id,
-                        );
-                        *self = Self::tombstone();
-                    }
-                    other => {
-                        // If diff_sum is odd, value_xor holds the bincode of a
-                        // single value (even XORs cancel out). Try to decode it
-                        // so we can log the shape (not contents) for debugging.
-                        let value_byte_len = usize::try_from(consolidating.len_sum.0 / other).ok();
-                        let decode_ok = value_byte_len
-                            .and_then(|l| consolidating.value_xor.get(..l))
-                            .and_then(|bytes| bincode_opts.deserialize::<UpsertValue>(bytes).ok())
-                            .map(|v| match v {
-                                Ok(row) => format!(
-                                    "Ok(Row(byte_len={}, col_count={}))",
-                                    row.byte_len(),
-                                    row.iter().count(),
-                                ),
-                                Err(_) => "Err(UpsertValueError)".to_string(),
-                            });
-                        panic!(
-                            "invalid upsert state: non 0/1 diff_sum: {}, state: {}, {}, \
-                            key: {:?}, value_byte_len: {:?}, decodable: {:?}",
-                            other, consolidating, source_id, key, value_byte_len, decode_ok,
-                        )
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 impl<T, O> Default for StateValue<T, O> {
     fn default() -> Self {
-        Self::Consolidating(Consolidating::default())
+        Self::Value(Value {
+            finalized: None,
+            provisional: None,
+        })
     }
 }
 
@@ -709,22 +399,6 @@ impl std::ops::AddAssign for SnapshotStats {
         self.inserts += rhs.inserts;
         self.deletes += rhs.deletes;
     }
-}
-
-/// Statistics for a single call to `multi_merge`.
-#[derive(Clone, Default, Debug)]
-pub struct MergeStats {
-    /// The number of updates written as merge operands to the backend, for the backend
-    /// to process async in the `consolidating_merge_function`.
-    /// Should be equal to number of inserts + deletes
-    pub written_merge_operands: u64,
-    /// The total size of values provided to `multi_merge`. The backend will write these
-    /// down and then later merge them in the `consolidating_merge_function`.
-    pub size_written: u64,
-    /// The estimated diff of the total size of the working set after the merge operands
-    /// are merged by the backend. This is an estimate since it can't account for the
-    /// size overhead of `StateValue` for values that consolidate to 0 (tombstoned-values).
-    pub size_diff: i64,
 }
 
 /// Statistics for a single call to `multi_put`.
@@ -860,9 +534,6 @@ where
     T: 'static,
     O: 'static,
 {
-    /// Whether this backend supports the `multi_merge` operation.
-    fn supports_merge(&self) -> bool;
-
     /// Insert or delete for all `puts` keys, prioritizing the last value for
     /// repeated keys.
     ///
@@ -892,76 +563,10 @@ where
     where
         G: IntoIterator<Item = UpsertKey>,
         R: IntoIterator<Item = &'r mut UpsertValueAndSize<T, O>>;
-
-    /// For each key in `merges` writes a 'merge operand' to the backend. The backend stores these
-    /// merge operands and periodically calls the `consolidating_merge_function` to merge them into
-    /// any existing value for each key. The backend will merge the merge operands in the order
-    /// they are provided, and the merge function will always be run for a given key when a `get`
-    /// operation is performed on that key, or when the backend decides to run the merge based
-    /// on its own internal logic.
-    /// This allows avoiding the read-modify-write method of updating many values to
-    /// improve performance.
-    ///
-    /// The `MergeValue` should include a `diff` field that represents the update diff for the
-    /// value. This is used to estimate the overall size diff of the working set
-    /// after the merge operands are merged by the backend `sum[merges: m](m.diff * m.size)`.
-    ///
-    /// `MergeStats` **must** be populated correctly, according to these semantics:
-    /// - `written_merge_operands` must record the number of merge operands written to the backend.
-    /// - `size_written` must record the total size of values written to the backend.
-    ///     Note that the size of the post-merge values are not known, so this is the size of the
-    ///     values written to the backend as merge operands.
-    /// - `size_diff` must record the estimated diff of the total size of the working set after the
-    ///    merge operands are merged by the backend.
-    async fn multi_merge<P>(&mut self, merges: P) -> Result<MergeStats, anyhow::Error>
-    where
-        P: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>;
 }
 
-/// A function that merges a set of updates for a key into the existing value
-/// for the key. This is called by the backend implementation when it has
-/// accumulated a set of updates for a key, and needs to merge them into the
-/// existing value for the key.
-///
-/// The function is called with the following arguments:
-/// - The key for which the merge is being performed.
-/// - An iterator over any current value and merge operands queued for the key.
-///
-/// The function should return the new value for the key after merging all the updates.
-pub(crate) fn consolidating_merge_function<T: Eq, O>(
-    _key: UpsertKey,
-    updates: impl Iterator<Item = StateValue<T, O>>,
-) -> StateValue<T, O> {
-    let mut current: StateValue<T, O> = Default::default();
-
-    let mut bincode_buf = Vec::new();
-    for update in updates {
-        match update {
-            StateValue::Consolidating(_) => {
-                current.merge_update_state(&update);
-            }
-            StateValue::Value(_) => {
-                // This branch is more expensive, but we hopefully rarely hit
-                // it.
-                if let Some(finalized_value) = update.into_finalized_value() {
-                    let mut update = StateValue::default();
-                    update.merge_update(
-                        finalized_value,
-                        Diff::ONE,
-                        upsert_bincode_opts(),
-                        &mut bincode_buf,
-                    );
-                    current.merge_update_state(&update);
-                }
-            }
-        }
-    }
-
-    current
-}
-
-/// An `UpsertStateBackend` wrapper that supports consolidating merging, and
-/// reports basic metrics about the usage of the `UpsertStateBackend`.
+/// An `UpsertStateBackend` wrapper that reports basic metrics about the usage
+/// of the `UpsertStateBackend`.
 pub struct UpsertState<'metrics, S, T, O> {
     inner: S,
 
@@ -976,10 +581,6 @@ pub struct UpsertState<'metrics, S, T, O> {
     worker_metrics: &'metrics UpsertMetrics,
     // User-facing statistics.
     stats: SourceStatistics,
-
-    // Bincode options and buffer used in `consolidate_chunk`.
-    bincode_opts: BincodeOpts,
-    bincode_buffer: Vec<u8>,
 
     // We need to iterate over `updates` in `consolidate_chunk` twice, so we
     // have a scratch vector for this.
@@ -1007,8 +608,6 @@ impl<'metrics, S, T, O> UpsertState<'metrics, S, T, O> {
             metrics,
             worker_metrics,
             stats,
-            bincode_opts: upsert_bincode_opts(),
-            bincode_buffer: Vec::new(),
             consolidate_scratch: Vec::new(),
             consolidate_upsert_scratch: indexmap::IndexMap::new(),
             multi_get_scratch: Vec::new(),
@@ -1026,19 +625,14 @@ where
     /// Consolidate the following differential updates into the state. Updates
     /// provided to this method can be assumed to consolidate into a single
     /// value per-key, after all chunks of updates for a given timestamp have
-    /// been processed,
-    ///
-    /// Therefore, after all updates of a given timestamp have been
-    /// `consolidated`, all values must be in the correct state (as determined
-    /// by `StateValue::ensure_decoded`).
+    /// been processed.
     ///
     /// The `completed` boolean communicates whether or not this is the final
     /// chunk of updates for the initial "snapshot" from persist.
     ///
-    /// If the backend supports it, this method will use `multi_merge` to
-    /// consolidate the updates to avoid having to read the existing value for
-    /// each key first. On some backends (like RocksDB), this can be
-    /// significantly faster than the read-then-write consolidation strategy.
+    /// Since persist delivers fully consolidated data, each (key, value) update
+    /// has diff exactly +1 or -1. This method reads existing state, applies the
+    /// updates, and writes the results back.
     ///
     /// Also note that we use `self.inner.multi_*`, not `self.multi_*`. This is
     /// to avoid erroneously changing metric and stats values.
@@ -1090,15 +684,9 @@ where
             }
         }
 
-        // Depending on if the backend supports multi_merge, call the appropriate method.
-        let stats = if self.inner.supports_merge() {
-            self.consolidate_merge_inner(updates).await?
-        } else {
-            self.consolidate_read_write_inner(updates).await?
-        };
+        let stats = self.consolidate_read_write_inner(updates).await?;
 
         // NOTE: These metrics use the term `merge` to refer to the consolidation of values.
-        // This is because they were introduced before we the `multi_merge` operation was added.
         self.metrics
             .merge_snapshot_latency
             .observe(now.elapsed().as_secs_f64());
@@ -1158,66 +746,9 @@ where
         Ok(())
     }
 
-    /// Consolidate the updates into the state. This method requires the backend
-    /// has support for the `multi_merge` operation, and will panic if
-    /// `self.inner.supports_merge()` was not checked before calling this
-    /// method. `multi_merge` will write the updates as 'merge operands' to the
-    /// backend, and then the backend will consolidate those updates with any
-    /// existing state using the `consolidating_merge_function`.
-    ///
-    /// This method can have significant performance benefits over the
-    /// read-then-write method of `consolidate_read_write_inner`.
-    async fn consolidate_merge_inner<U>(
-        &mut self,
-        updates: U,
-    ) -> Result<SnapshotStats, anyhow::Error>
-    where
-        U: IntoIterator<Item = (UpsertKey, UpsertValue, mz_repr::Diff)> + ExactSizeIterator,
-    {
-        let mut updates = updates.into_iter().peekable();
-
-        let mut stats = SnapshotStats::default();
-
-        if updates.peek().is_some() {
-            let m_stats = self
-                .inner
-                .multi_merge(updates.map(|(k, v, diff)| {
-                    // Transform into a `StateValue<O>` that can be used by the
-                    // `consolidating_merge_function` to merge with any existing
-                    // value for the key.
-                    let mut val: StateValue<T, O> = Default::default();
-                    val.merge_update(v, diff, self.bincode_opts, &mut self.bincode_buffer);
-
-                    stats.updates += 1;
-                    if diff.is_positive() {
-                        stats.inserts += 1;
-                    } else if diff.is_negative() {
-                        stats.deletes += 1;
-                    }
-
-                    // To keep track of the overall `values_diff` we can use the sum of diffs which
-                    // should be equal to the number of non-tombstoned values in the backend.
-                    // This is a bit misleading as this represents the eventual state after the
-                    // `consolidating_merge_function` has been called to merge all the updates,
-                    // and not the state after this `multi_merge` call.
-                    //
-                    // This does not accurately report values that have been consolidated to diff == 0, as tracking that
-                    // per-key is extremely difficult.
-                    stats.values_diff += diff;
-
-                    (k, MergeValue { value: val, diff })
-                }))
-                .await?;
-
-            stats.size_diff = m_stats.size_diff;
-        }
-
-        Ok(stats)
-    }
-
     /// Consolidates the updates into the state. This method reads the existing
-    /// values for each key, consolidates the updates, and writes the new values
-    /// back to the state.
+    /// values for each key, applies the consolidated updates (each with diff +1
+    /// or -1), and writes the new values back to the state.
     async fn consolidate_read_write_inner<U>(
         &mut self,
         updates: U,
@@ -1254,29 +785,50 @@ where
                 }
 
                 // We rely on the diffs in our input instead of the result of
-                // multi_put below. This makes sure we report the same stats as
-                // `consolidate_merge_inner`, regardless of what values
-                // there were in state before.
+                // multi_put below. This makes sure we report the same stats
+                // regardless of what values there were in state before.
                 stats.values_diff += diff;
 
                 let entry = self.consolidate_upsert_scratch.get_mut(&key).unwrap();
-                let val = entry.value.get_or_insert_with(Default::default);
+                let val = entry
+                    .value
+                    .get_or_insert_with(|| StateValue::tombstone());
 
-                if val.merge_update(value, diff, self.bincode_opts, &mut self.bincode_buffer) {
-                    entry.value = None;
+                // Since persist delivers fully consolidated data, each update
+                // has diff exactly +1 or -1.
+                if diff.is_positive() {
+                    // Insertion: set the finalized value.
+                    match val {
+                        StateValue::Value(v) => {
+                            v.finalized = Some(value);
+                        }
+                    }
+                } else {
+                    // Retraction: clear the finalized value (tombstone).
+                    match val {
+                        StateValue::Value(v) => {
+                            v.finalized = None;
+                        }
+                    }
                 }
             }
 
+            // If a key ended up as a tombstone (finalized == None), remove it
+            // from state entirely (value = None in PutValue means delete).
             // Note we do 1 `multi_get` and 1 `multi_put` while processing a _batch of updates_.
             // Within the batch, we effectively consolidate each key, before persisting that
             // consolidated value. Easy!!
             let p_stats = self
                 .inner
                 .multi_put(self.consolidate_upsert_scratch.drain(..).map(|(k, v)| {
+                    let is_tombstone = v
+                        .value
+                        .as_ref()
+                        .map_or(true, |sv| sv.is_tombstone());
                     (
                         k,
                         PutValue {
-                            value: v.value,
+                            value: if is_tombstone { None } else { v.value },
                             previous_value_metadata: v.metadata.map(|v| ValueMetadata {
                                 size: v.size.try_into().expect("less than i64 size"),
                                 is_tombstone: v.is_tombstone,
@@ -1381,31 +933,15 @@ mod tests {
     use mz_repr::Row;
 
     use super::*;
-    #[mz_ore::test]
-    fn test_merge_update() {
-        let mut buf = Vec::new();
-        let opts = upsert_bincode_opts();
-
-        let mut s = StateValue::<(), ()>::Consolidating(Consolidating::default());
-
-        let small_row = Ok(Row::default());
-        let longer_row = Ok(Row::pack([mz_repr::Datum::Null]));
-        s.merge_update(small_row, Diff::ONE, opts, &mut buf);
-        s.merge_update(longer_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
-        // This clears the retraction of the `longer_row`, but the
-        // `value_xor` is the length of the `longer_row`. This tests
-        // that we are tracking checksums correctly.
-        s.merge_update(longer_row, Diff::ONE, opts, &mut buf);
-
-        // Assert that the `Consolidating` value is fully merged.
-        s.ensure_decoded(opts, GlobalId::User(1), None);
-    }
 
     // We guard some of our assumptions. Increasing in-memory size of StateValue
     // has a direct impact on memory usage of in-memory UPSERT sources.
     #[mz_ore::test]
     fn test_memory_size() {
-        let finalized_value: StateValue<(), ()> = StateValue::finalized_value(Ok(Row::default()));
+        let finalized_value: StateValue<(), ()> = StateValue::Value(Value {
+            finalized: Some(Ok(Row::default())),
+            provisional: None,
+        });
         assert!(
             finalized_value.memory_size() <= 64,
             "memory size is {}",
@@ -1427,72 +963,5 @@ mod tests {
             "memory size is {}",
             provisional_value_without_finalized_value.memory_size(),
         );
-
-        let mut consolidating_value: StateValue<(), ()> = StateValue::default();
-        consolidating_value.merge_update(
-            Ok(Row::default()),
-            Diff::ONE,
-            upsert_bincode_opts(),
-            &mut Vec::new(),
-        );
-        assert!(
-            consolidating_value.memory_size() <= 66,
-            "memory size is {}",
-            consolidating_value.memory_size(),
-        );
-    }
-
-    #[mz_ore::test]
-    #[should_panic(
-        expected = "invalid upsert state: len_sum is non-0, state: Consolidating { len_sum: 1"
-    )]
-    fn test_merge_update_len_0_assert() {
-        let mut buf = Vec::new();
-        let opts = upsert_bincode_opts();
-
-        let mut s = StateValue::<(), ()>::Consolidating(Consolidating::default());
-
-        let small_row = Ok(mz_repr::Row::default());
-        let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
-        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-        s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
-
-        s.ensure_decoded(opts, GlobalId::User(1), None);
-    }
-
-    #[mz_ore::test]
-    #[should_panic(
-        expected = "invalid upsert state: \"value_xor is not the same length (3) as len (4), state: Consolidating { len_sum: 4"
-    )]
-    fn test_merge_update_len_to_long_assert() {
-        let mut buf = Vec::new();
-        let opts = upsert_bincode_opts();
-
-        let mut s = StateValue::<(), ()>::Consolidating(Consolidating::default());
-
-        let small_row = Ok(mz_repr::Row::default());
-        let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Null]));
-        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-        s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
-        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-
-        s.ensure_decoded(opts, GlobalId::User(1), None);
-    }
-
-    #[mz_ore::test]
-    #[should_panic(expected = "invalid upsert state: checksum_sum does not match")]
-    fn test_merge_update_checksum_doesnt_match() {
-        let mut buf = Vec::new();
-        let opts = upsert_bincode_opts();
-
-        let mut s = StateValue::<(), ()>::Consolidating(Consolidating::default());
-
-        let small_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(2)]));
-        let longer_row = Ok(mz_repr::Row::pack([mz_repr::Datum::Int64(1)]));
-        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-        s.merge_update(small_row.clone(), Diff::MINUS_ONE, opts, &mut buf);
-        s.merge_update(longer_row.clone(), Diff::ONE, opts, &mut buf);
-
-        s.ensure_decoded(opts, GlobalId::User(1), None);
     }
 }

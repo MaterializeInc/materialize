@@ -21,8 +21,8 @@ use mz_ore::cast::CastFrom;
 
 use super::UpsertKey;
 use super::types::{
-    GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
-    UpsertValueAndSize, ValueMetadata,
+    GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
+    ValueMetadata,
 };
 
 /// A `HashMap` tracking its total size
@@ -46,10 +46,6 @@ where
     O: Clone + 'static,
     T: Clone + 'static,
 {
-    fn supports_merge(&self) -> bool {
-        false
-    }
-
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<T, O>>)>,
@@ -71,13 +67,6 @@ where
         }
         self.total_size += stats.size_diff;
         Ok(stats)
-    }
-
-    async fn multi_merge<M>(&mut self, _merges: M) -> Result<MergeStats, anyhow::Error>
-    where
-        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>,
-    {
-        anyhow::bail!("InMemoryHashMap does not support merging");
     }
 
     async fn multi_get<'r, G, R>(

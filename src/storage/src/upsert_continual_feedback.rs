@@ -94,11 +94,8 @@ use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 /// ## Processing the Persist Input
 ///
 /// We continually ingest updates from the persist input into our state using
-/// `UpsertState::consolidate_chunk`. We might be ingesting updates from the
-/// initial snapshot (when starting the operator) that are not consolidated or
-/// we might be ingesting updates from a partial emission (see above). In either
-/// case, our input might not be consolidated and `consolidate_chunk` is able to
-/// handle that.
+/// `UpsertState::consolidate_chunk`. The input is guaranteed to be consolidated
+/// by `SourceConsolidation::Full`.
 pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
@@ -203,22 +200,6 @@ where
         let mut persist_stash = vec![];
         let mut persist_upper = Antichain::from_elem(Timestamp::minimum());
 
-        // We keep track of the largest timestamp seen on the persist input so
-        // that we can block processing source input while that timestamp is
-        // beyond the persist frontier. While ingesting updates of a timestamp,
-        // our upsert state is in a consolidating state, and trying to read it
-        // at that time would yield a panic.
-        //
-        // NOTE(aljoscha): You would think that it cannot happen that we even
-        // attempt to process source updates while the state is in a
-        // consolidating state, because we always wait until the persist
-        // frontier "catches up" with the timestamp of the source input. If
-        // there is only this here UPSERT operator and no concurrent instances,
-        // this is true. But with concurrent instances it can happen that an
-        // operator that is faster than us makes it so updates get written to
-        // persist. And we would then be ingesting them.
-        let mut largest_seen_persist_ts: Option<G::Timestamp> = None;
-
         // A buffer for our output.
         let mut output_updates = vec![];
 
@@ -240,12 +221,6 @@ where
 
                                 persist_stash.extend(data.into_iter().map(
                                     |((key, value), ts, diff)| {
-                                        largest_seen_persist_ts =
-                                            std::cmp::max(
-                                                largest_seen_persist_ts
-                                                    .clone(),
-                                                Some(ts.clone()),
-                                            );
                                         (key, value, ts, diff)
                                     },
                                 ));
@@ -274,15 +249,10 @@ where
                         ?persist_upper,
                         "ingesting persist snapshot chunk");
 
-                    // Log any (key, ts) pairs in this batch that have a suspicious
-                    // net diff, to help diagnose how diff_sum corruption enters the
-                    // system.
-                    //
-                    // Consolidating by key alone is too noisy during hydration,
-                    // because a single batch can legitimately contain multiple
-                    // timestamps for the same key. The suspicious shape for this
-                    // bug is multiple net updates for the same key at one logical
-                    // timestamp.
+                    // Check that (key, ts) pairs in this batch have expected
+                    // net diffs after consolidation. With SourceConsolidation::Full
+                    // the input is guaranteed to be consolidated, so any net diff
+                    // with absolute value > 1 indicates a bug.
                     {
                         let mut key_ts_diffs: Vec<(
                             (UpsertKey, G::Timestamp),
@@ -293,19 +263,20 @@ where
                             .collect();
                         differential_dataflow::consolidation::consolidate(&mut key_ts_diffs);
                         for ((key, ts), net_diff) in &key_ts_diffs {
-                            if net_diff.into_inner() > 1 || net_diff.into_inner() < -1 {
-                                tracing::warn!(
-                                    worker_id = %source_config.worker_id,
-                                    source_id = %source_config.id,
-                                    ?key,
-                                    ?ts,
-                                    net_diff = net_diff.into_inner(),
-                                    %hydrating,
-                                    ?persist_upper,
-                                    "persist feedback batch has (key, ts) with suspicious net diff \
-                                    (expected -1, 0, or 1 after per-(key, ts) consolidation)"
-                                );
-                            }
+                            debug_assert!(
+                                net_diff.into_inner().abs() <= 1,
+                                "persist feedback batch has (key, ts) with suspicious net diff \
+                                (expected -1, 0, or 1 after per-(key, ts) consolidation): \
+                                worker_id={}, source_id={}, key={:?}, ts={:?}, net_diff={}, \
+                                hydrating={}, persist_upper={:?}",
+                                source_config.worker_id,
+                                source_config.id,
+                                key,
+                                ts,
+                                net_diff.into_inner(),
+                                hydrating,
+                                persist_upper,
+                            );
                         }
                     }
 
@@ -462,18 +433,6 @@ where
                     }
                 }
             };
-
-            // While we have partially ingested updates of a timestamp our state
-            // is in an inconsistent/consolidating state and accessing it would
-            // panic.
-            if let Some(largest_seen_persist_ts) = largest_seen_persist_ts.as_ref() {
-                let largest_seen_outer_persist_ts = largest_seen_persist_ts.clone().to_outer();
-                let outer_persist_upper = persist_upper.iter().map(|ts| ts.clone().to_outer());
-                let outer_persist_upper = Antichain::from_iter(outer_persist_upper);
-                if outer_persist_upper.less_equal(&largest_seen_outer_persist_ts) {
-                    continue;
-                }
-            }
 
             // We try and drain from our stash every time we go through the
             // loop. More of our stash can become eligible for draining both
@@ -781,7 +740,6 @@ where
         a_ts == b_ts && a_key == b_key
     });
 
-    let bincode_opts = upsert_types::upsert_bincode_opts();
     // Upsert the values into `commands_state`, by recording the latest
     // value (or deletion). These will be synced at the end to the `state`.
     //
@@ -802,10 +760,6 @@ where
         };
 
         let existing_state_cell = &mut command_state.get_mut().value;
-
-        if let Some(cs) = existing_state_cell.as_mut() {
-            cs.ensure_decoded(bincode_opts, source_config.id, Some(&key));
-        }
 
         // Skip this command if its order key is below the one in the upsert state.
         // Note that the existing order key may be `None` if the existing value
@@ -946,7 +900,7 @@ mod test {
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::ShardId;
     use mz_repr::{Datum, Timestamp as MzTimestamp};
-    use mz_rocksdb::{RocksDBConfig, ValueIterator};
+    use mz_rocksdb::RocksDBConfig;
     use mz_storage_operators::persist_source::Subtime;
     use mz_storage_types::sources::SourceEnvelope;
     use mz_storage_types::sources::envelope::{KeyEnvelope, UpsertEnvelope, UpsertStyle};
@@ -960,7 +914,7 @@ mod test {
     use crate::source::SourceExportCreationConfig;
     use crate::statistics::{SourceStatistics, SourceStatisticsMetricDefs};
     use crate::upsert::memory::InMemoryHashMap;
-    use crate::upsert::types::{BincodeOpts, consolidating_merge_function, upsert_bincode_opts};
+    use crate::upsert::types::upsert_bincode_opts;
 
     use super::*;
 
@@ -1175,29 +1129,14 @@ mod test {
 
                         // A closure that will initialize and return a configured RocksDB instance
                         let rocksdb_init_fn = move || async move {
-                            let merge_operator = Some((
-                                "upsert_state_snapshot_merge_v1".to_string(),
-                                |a: &[u8],
-                                 b: ValueIterator<
-                                    BincodeOpts,
-                                    StateValue<(MzTimestamp, Subtime), u64>,
-                                >| {
-                                    consolidating_merge_function::<(MzTimestamp, Subtime), u64>(
-                                        a.into(),
-                                        b,
-                                    )
-                                },
-                            ));
                             let rocksdb_cleanup_tries = 5;
                             let tuning = RocksDBConfig::new(Default::default(), None);
                             let mut rocksdb_inst = mz_rocksdb::RocksDBInstance::new(
                                 rocksdb_dir.path(),
-                                mz_rocksdb::InstanceOptions::new(
+                                mz_rocksdb::InstanceOptions::<_, StateValue<(MzTimestamp, Subtime), u64>, mz_rocksdb::StubMergeOperator<StateValue<(MzTimestamp, Subtime), u64>>>::new(
                                     Env::mem_env().unwrap(),
                                     rocksdb_cleanup_tries,
-                                    merge_operator,
-                                    // For now, just use the same config as the one used for
-                                    // merging snapshots.
+                                    None,
                                     upsert_bincode_opts(),
                                 ),
                                 tuning,

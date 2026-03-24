@@ -157,7 +157,7 @@ pub fn shard_source<'g, K, V, T, D, DT, G, C>(
     error_handler: ErrorHandler,
     // When true, sort parts by their structured key lower bound before distributing
     // to workers. This improves consolidation by ensuring workers get contiguous
-    // key ranges. Has no effect on listen (non-snapshot) batches.
+    // key ranges. Applied to all batches (snapshot and listen).
     sorted_part_assignment: bool,
 ) -> (
     StreamVec<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
