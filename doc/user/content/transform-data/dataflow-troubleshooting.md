@@ -1,6 +1,12 @@
 ---
 title: "Dataflow troubleshooting"
 description: "How to troubleshoot common dataflow-level scenarios where Materialize is not working as expected."
+menu:
+  main:
+    name: "Dataflow troubleshooting"
+    identifier: dataflow-troubleshooting
+    parent: transform-data
+    weight: 88
 ---
 
 If you're unable to troubleshoot your issue using the [`Ingest data`](/ingest-data/troubleshooting/)

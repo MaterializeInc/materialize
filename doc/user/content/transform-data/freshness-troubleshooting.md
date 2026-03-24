@@ -9,201 +9,170 @@ menu:
     weight: 85
 ---
 
-[Freshness](/concepts/reaction-time/#freshness) measures the time from when a change occurs in an upstream system to when it becomes visible in the results of a query.
-This guide helps you diagnose why freshness is degraded and identify which component in the dependency graph is responsible.
+[Freshness](/concepts/reaction-time/#freshness) measures the time from when a
+change occurs in an upstream system to when it becomes visible in the results of
+a query. This guide can help you diagnose why freshness is degraded.
 
 ## Key concepts
 
 | Concept | Description |
 | ------- | ----------- |
-| **Write frontier** |  The next timestamp at which data for an object can change.  That is, for an object, all its data changes with timestamp less than the write frontier has been processed. Each object (source, table, materialized view, index, sink) has its own write frontier. Materialize tracks freshness using **write frontiers**. |
-| **Materialization lag** | The difference between an object's write frontier and the write frontier of its slowest input. |
-| **Wallclock lag** | The difference between wall-clock time and an object's write frontier. Generally used to indicate issue with the source. |
+| **Write frontier** |  The next timestamp at which data for an object can change; i.e., for an object, all its data changes with timestamp less than the write frontier has been processed. Materialize measures freshness using **write frontiers**. Each object (source, table, materialized view, index, sink) has its own write frontier. |
+| **Wallclock lag** | The difference between wall-clock time and an object's write frontier. |
+| **Materialization lag** | The difference between an object's write frontier and the write frontier of its inputs. Materialization lag can be considered in two parts:  <ul><li>**local_lag**: The lag between the object and its direct inputs. It represents the portion of lag introduced by the object itself.</li><li>**global_lag**: The lag between the object and its root inputs (sources and tables). It represents the total accumulated lag across the dataflow.</li></ul>|
 
 ## Common causes
 
-When an object's freshness degrades, the cause is typically one of the
-following:
+Common causes of lag include:
 
-* **Source ingestion bottleneck**: The source is not ingesting data fast enough
-  (e.g., upstream connectivity issues or replication lag). See [Source
-  ingestion bottleneck](#source-ingestion-bottleneck).
+- [**Materialization lag**](#check-materialization-lag): The object itself
+  (and/or a specific input in its dependency graph) introduces a lag.
+- [**Cluster health**](#check-cluster-health): The cluster is overloaded, out of
+  memory, or missing compute. All objects on the cluster are affected.
+- [**Source ingestion**](#check-source-ingestion): The source is behind. All
+  downstream objects for the source are affected.
+- [**Sink batch/commit intervals**](#check-sink-lag): A sink
+  introduces lag due to batching and commit intervals.
+- [**DDL or deploy activity**](#check-for-ddl-or-deploy-activity): A deploy or
+  schema change triggers a rehydration.
 
-* **Cluster CPU or memory pressure**: The cluster is overloaded and cannot keep
-  up with the rate of changes. See [Cluster CPU or memory
-  pressure](#cluster-cpu-or-memory-pressure).
+## Check materialization lag
 
-* **Cluster has no compute**: The cluster has `replication_factor = 0`, so no
-  replicas are running (sources on such clusters show `paused`). See [Cluster
-  has no compute](#cluster-has-no-compute).
+### Step 1. Find lagging object(s)
 
-* **Computation bottleneck**: A specific edge in the dependency graph introduces
-  processing delay (e.g., an expensive materialized view or a slow sink). See
-  [Computation bottleneck](#computation-bottleneck).
-
-* **DDL or deploy activity**: Object creation, alteration, or deletion triggers
-  rehydration. See [DDL or deploy activity](#ddl-or-deploy-activity).
-
-## Check lags
-
-### Check wallclock lag
-
-Wallclock lag is used to indicate issue with the source. Query
-[`mz_internal.mz_wallclock_global_lag`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag)
-to see the current lag for user objects:
+Query to see the current lag for all user objects:
 
 ```mzsql
-SELECT o.id, o.name, o.type, wl.lag
+SELECT
+  o.id AS object_id,
+  o.name,
+  o.type,
+  wl.lag,
+  c.name as cluster_name,
+  c.id as cluster_id
 FROM mz_internal.mz_wallclock_global_lag wl
 JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+JOIN mz_catalog.mz_clusters c ON o.cluster_id = c.id
 WHERE o.id LIKE 'u%'
 ORDER BY wl.lag DESC NULLS LAST
 LIMIT 20;
 ```
 
-- Lag of a few seconds are typical for healthy systems.
-- Larger lag values (minutes or hours) indicate a problem, with the following
-  exception:
-  - Some objects may report high lag without representing a real issue (e.g.,
-paused sources, zero-replica clusters). To exclude these, see [Filtering
-noise](#filtering-noise).
+- Lag of a few seconds typically indicates a healthy system.
+- Lag on the order of mintues or hours typically indicates a problem.[^1]
 
-For historical trends, query [`mz_internal.mz_wallclock_global_lag_recent_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history), replacing `<object_id>` with the ID of the object from the previous query:
+To inspect an object's lag, see [Step
+2](#step-2a-identify-materialization-lag-contributors).
 
-```mzsql
-SELECT o.name, wl.lag, wl.occurred_at
-FROM mz_internal.mz_wallclock_global_lag_recent_history wl
-JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
-WHERE o.id = '<object_id>'
-ORDER BY wl.occurred_at DESC
-LIMIT 50;
-```
+[^1]: Some objects may report high lag without representing a real issue (e.g.,
+    intentionally paused clusters). To exclude these, see [Filtering
+    noise](#filtering-noise).
 
-### Check materialization lag
+### Step 2a. Identify materialization lag contributors.
 
-[`mz_internal.mz_materialization_lag`](/sql/system-catalog/mz_internal/#mz_materialization_lag) breaks down lag for each materialization (index, materialized view, sink) into two components:
+`mz_internal.mz_materialization_lag` breaks down lag for each materialization
+(index, materialized view, sink) into two components:
 
-* **`local_lag`**: how far behind the object is compared to its direct inputs.
-* **`global_lag`**: how far behind the object is compared to its root inputs (sources and tables).
+* **`local_lag`**: the lag introduced by the object itself; i.e., how far behind
+  the object is compared to its direct inputs.
+* **`global_lag`**: the object's lag relative to its root inputs (sources and
+  tables); i.e., how far behind the object is compared to its root inputs
+  (sources and tables).
 
-The difference between `global_lag` and `local_lag` is the lag accumulated by upstream objects.
+The difference between `global_lag` and `local_lag` is the lag
+accumulated/inherited from the object's upstream dependencies.
 
-```mzsql
+Query
+[`mz_internal.mz_materialization_lag`](/sql/system-catalog/mz_internal/#mz_materialization_lag)
+to identify the lag contributors; replace the `<object_id>` with your object's
+id:
+
+```mzsql {hl_lines="12"}
 SELECT
+    o.id AS object_id,
     o.name,
-    o.type,
-    ml.local_lag,
-    ml.global_lag,
-    slo.name AS slowest_local_input,
-    sgo.name AS slowest_global_input
+    ml.local_lag,                                  -- lag introduced by the object itself
+    ml.global_lag - ml.local_lag AS inherited_lag, -- lag inherited from dependencies
+    ml.global_lag                                  -- total lag
 FROM mz_internal.mz_materialization_lag ml
 JOIN mz_catalog.mz_objects o ON ml.object_id = o.id
-LEFT JOIN mz_catalog.mz_objects slo ON ml.slowest_local_input_id = slo.id
-LEFT JOIN mz_catalog.mz_objects sgo ON ml.slowest_global_input_id = sgo.id
-WHERE o.id LIKE 'u%'
-  AND ml.global_lag > INTERVAL '5 seconds'
+WHERE o.id = '<object_id>'
 ORDER BY ml.global_lag DESC;
 ```
 
-### Diagnosis
+- To investigate a high `local_lag`, use [Dataflow
+  troubleshooting](/transform-data/dataflow-troubleshooting/) to identify
+  expensive operators for the object. If possible, optimize the query, resize
+  the cluster, or move the object to a cluster with more resources.
 
-| Results | Diagnosis | Next steps |
-|---|---|---|
-| **`local_lag` and `global_lag` are similar and high** | The object itself is the bottleneck. The cluster running it may be overloaded, or the dataflow is expensive. | See [Cluster CPU or memory pressure](#cluster-cpu-or-memory-pressure) and [Computation bottleneck](#computation-bottleneck). |
-| **`local_lag` is low but `global_lag` is high** | An upstream dependency is the bottleneck. Look at `slowest_global_input` to identify the root cause. | See [Computation bottleneck](#computation-bottleneck). |
-| **`local_lag` = 0, `global_lag` = 0, wallclock lag is high** | The root source is behind. The entire pipeline is caught up relative to its inputs, but the inputs themselves lag behind wall-clock time. | See [Source ingestion bottleneck](#source-ingestion-bottleneck). |
+- To investigate high `inherited_lag`, use [Check dependency
+  lags](#step-2b-check-dependency-lags) to find which dependencies contributed
+  the most delay and troubleshoot those objects.
 
-## Source ingestion bottleneck
-### Check source status
+### Step 2b: Check dependency lags
 
-A source ingestion bottleneck occurs when the source is not ingesting data fast
-enough. This can be caused by upstream connectivity issues, replication lag,
-credential expiration, or a deliberately paused source.
+To find the lag contribution of an object's dependencies (replace `<object_id>`
+with your object id):
 
-To check if a source or its associated subsource/table is unhealthy, query
-[`mz_internal.mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses):
-
-```mzsql
-SELECT s.id, o.name, s.type, s.status, s.error
-FROM mz_internal.mz_source_statuses s
-JOIN mz_catalog.mz_objects o ON s.id = o.id
-WHERE o.id LIKE 'u%'
-  AND s.status <> 'running';
+```mzsql{hl_lines="3 30"}
+WITH MUTUALLY RECURSIVE
+    depends_on(probe text, prev text, next text) AS (
+        SELECT '<object_id>', '<object_id>', '<object_id>' -- update
+        UNION
+        SELECT d.probe, dep.dependency_id, dep.object_id
+        FROM mz_internal.mz_compute_dependencies dep
+        JOIN depends_on d ON d.prev = dep.object_id
+    )
+SELECT
+    o_probe.name AS object_name,
+    o_prev.name AS from_name,
+    o_prev.id   AS from_id,
+    o_prev.type AS from_type,
+    o_next.name AS to_name,
+    o_next.type AS to_type,
+    fp.write_frontier::text::numeric
+        - fn.write_frontier::text::numeric AS lag_ms
+FROM depends_on d
+JOIN mz_internal.mz_frontiers fp ON d.prev = fp.object_id
+JOIN mz_internal.mz_frontiers fn ON d.next = fn.object_id
+JOIN mz_catalog.mz_objects o_probe ON d.probe = o_probe.id
+JOIN mz_catalog.mz_objects o_prev ON d.prev = o_prev.id
+JOIN mz_catalog.mz_objects o_next ON d.next = o_next.id
+WHERE d.prev != d.next
+  AND fp.write_frontier IS NOT NULL
+  AND fn.write_frontier IS NOT NULL
+  AND fn.write_frontier::text::numeric <=
+      (SELECT write_frontier::text::numeric
+         FROM mz_internal.mz_frontiers
+        WHERE object_id = '<object_id>')                   -- update
+ORDER BY lag_ms DESC;
 ```
 
-A source (or its associated subsource/table) with status
-[`stalled`](#stalled-or-disconnected-source), `starting`,
-[`paused`](#paused-source) will hold back all downstream objects.
+Using the returned `from_id`, you can iterate Step 2a and Step 2b as needed. For
+an object, use [Dataflow
+troubleshooting](/transform-data/dataflow-troubleshooting/) to identify
+expensive operators for the object. If possible, optimize the query, resize the
+cluster, or move the object to a cluster with more resources.
 
-{{< tip >}}
-A source that is in a restart loop may briefly show `running` between
-restarts. Check
-[`mz_internal.mz_source_status_history`](/sql/system-catalog/mz_internal/#mz_source_status_history)
-for repeated transitions to confirm.
-{{< /tip >}}
+## Check cluster health
 
-#### Stalled or disconnected source
+A cluster can become overloaded if:
 
-If the `status` for a source shows `stalled`:
+- It is undersized for its workload; or
 
-| | |
-|--|--|
-| **Symptoms** | Extremely high wallclock lag (hours or days) on the source and all downstream objects. All subsources/tables of the same parent source show identical lag. |
-| **Diagnosis** | Check the returned `error` field. Common causes include network partitions, credential expiration, and upstream database restarts. |
-| **Resolution** | Address the specified `error`. Once the source reconnects, downstream objects catch up automatically. |
+- It contains an inefficient or overly expensive object that effectively makes
+  the cluster undersized.
 
-#### Paused source
+When a cluster is overloaded, this may manifest as high CPU utilization, high
+memory utilization forcing data to disk, or Out of Memory (OOM) crash loops.
 
-If the `status` for a source shows `paused`:
+### Check the CPU or memory pressure
 
-| | |
-|--|--|
-| **Symptoms** | Extremely high wallclock lag (days or more) on a single source and all downstream objects. Other sources are unaffected. |
-| **Diagnosis** | The cluster associated with the source has no compute/replica assigned (`replication_factor = 0`). |
-| **Resolution** | See [Cluster has no compute](#cluster-has-no-compute). |
+{{< tabs >}}
+{{< tab "Specific cluster" >}}
 
-{{< tip >}}
-
-- Zero-replica clusters are common for scheduled batch jobs (e.g., dbt snapshot
-  runs) where replicas are scaled to zero between runs to save costs. High lag
-  on these clusters is expected and does not indicate a problem.
-
-- When measuring aggregate freshness, exclude intentionally paused sources to
-  avoid skewing metrics.
-
-{{< /tip >}}
-
-### Correlated subsource lag (PostgreSQL)
-
-For PostgreSQL sources, the associated subsources/tables share replication state
-with the parent source. As such, if one subsource/table lags (e.g., due to a
-large transaction), all subsources/tables of that source typically lag together.
-
-To check:
-- Verify the parent source's status in Materialize is `running`; and
-- Check the replication slot lag on the upstream PostgreSQL database.
-
-| | |
-|--|--|
-| **Symptoms** | Multiple subsources of a PostgreSQL source all show similar wallclock lag and the parent source status is `running`. |
-| **Diagnosis** | PostgreSQL sources use a single replication stream for all subsources/tables. If one slows down (e.g., due to a large transaction), all subsources/tables for that source are affected. |
-| **Resolution** | Wait for the subsource/table to catch up. |
-
-## Cluster CPU or memory pressure
-
-Cluster CPU or memory pressure refers to when a cluster is overloaded and cannot
-keep up with the rate of changes. This can manifest as high CPU utilization,
-high memory utilization forcing data to disk, or Out of Memory (OOM) crash
-loops.
-
-- If the cluster is running but slow, start with [Check cluster health](#check-cluster-health).
-- If the cluster is repeatedly restarting, start with [Check for OOM crash loops](#check-for-oom-crash-loops).
-
-### Check cluster health
-
-If the [bottleneck is a materialized view, index, or sink](#diagnosis), check
-the associated cluster's resource utilization, replacing `<cluster_name>` with
-the name of cluster associated with the lagging object:
+You can run the following query to check a cluster's resource utilization,
+replacing `<cluster_name>` with the name of cluster:
 
 ```mzsql
 SELECT
@@ -218,81 +187,43 @@ JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
 WHERE c.name = '<cluster_name>'
 ORDER BY u.cpu_percent DESC;
 ```
-
-- If the returned `cpu_percent` is high, all objects on that cluster experience
-correlated freshness degradation.
-
-- If the returned `memory_percent` is high, Materialize may force data to disk
-which can slow down processing.
-
-To confirm that lag is cluster-wide, check the `local_lag` for all objects on
-the affected cluster, replacing `<cluster_id>` with the `cluster_id` returned
-from the previous query:
+{{< /tab >}}
+{{< tab "All clusters" >}}
+You can run the following query to check resource utilization for all clusters:
 
 ```mzsql
 SELECT
-    o.name,
-    o.type,
-    ml.local_lag
-FROM mz_internal.mz_materialization_lag ml
-JOIN mz_catalog.mz_objects o ON ml.object_id = o.id
-WHERE o.cluster_id = '<cluster_id>'
-  AND o.id LIKE 'u%'
-ORDER BY ml.local_lag DESC;
+    c.name AS cluster_name,
+    c.id as cluster_id,
+    r.name AS replica_name,
+    u.cpu_percent,
+    u.memory_percent
+FROM mz_internal.mz_cluster_replica_utilization u
+JOIN mz_catalog.mz_cluster_replicas r ON u.replica_id = r.id
+JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
+WHERE c.id LIKE 'u%'
+ORDER BY u.cpu_percent DESC;
 ```
+{{< /tab >}}
+{{< /tabs >}}
 
-Depending on the range of the `local_lag` values,
-- [Cluster is the bottleneck](#cluster-is-the-bottleneck)
-- [Cluster is not the bottleneck](#cluster-is-not-the-bottleneck)
+- If the returned `cpu_percent` is high, all objects on that cluster experience
+  correlated freshness degradation.
 
-#### Cluster is the bottleneck
+- If the returned `memory_percent` is high, Materialize may force data to disk,
+  which can slow down processing.
 
-| | |
-|--|--|
-| **Symptom** | All objects on the cluster **have** similar `local_lag`. |
-| **Diagnosis** | The cluster is the bottleneck. Cross-reference with [expensive operators](/transform-data/dataflow-troubleshooting/#identifying-expensive-operators-in-a-dataflow) to find the heaviest workloads. |
-| **Resolution** | Scale the cluster up, or move expensive workloads to a dedicated cluster. |
-
-#### Cluster is not the bottleneck
-
-| | |
-|--|--|
-| **Symptom** | Objects on the cluster do **not** have similar `local_lag`. |
-| **Diagnosis** | The dataflow is expensive, not the cluster. |
-| **Resolution** | Check the [Computation bottleneck](#computation-bottleneck) for the objects with high `local_lag`. |
+To resolve, scale the cluster up to a larger size([`ALTER CLUSTER ... SET (SIZE
+= '<new size>')`](/sql/alter-cluster/)), and/or move enough objects to another
+cluster to reduce load on the current cluster. If the pressure is caused by an
+[inefficient/expensive object](#step-1-find-lagging-objects), optimize the query
+if possible.
 
 ### Check for OOM crash loops
 
 A cluster that repeatedly runs out of memory (OOM) will have its replica crash
 and restart. Each restart triggers rehydration, during which no progress is
 made, causing recurring freshness degradation.
-
-#### Replica is currently offline
-
-Check if a replica for the cluster is currently offline, replacing
-`<cluster_name>` with the name of your cluster:
-
-```mzsql
-SELECT
-    c.name AS cluster_name,
-    rs.replica_id,
-    rs.process_id,
-    rs.status,
-    rs.reason,
-    rs.updated_at
-FROM mz_internal.mz_cluster_replica_statuses rs
-JOIN mz_catalog.mz_cluster_replicas r ON rs.replica_id = r.id
-JOIN mz_catalog.mz_clusters c ON r.cluster_id = c.id
-WHERE c.name = '<cluster_name>';
-```
-
-| | |
-|--|--|
-| **Symptom** | A replica has the current status `offline` and reason `oom-killed`. |
-| **Diagnosis** | The cluster is currently out of memory. |
-| **Resolution** | Scale the cluster up to a larger size([`ALTER CLUSTER ... SET (SIZE = <new size>)`](/sql/alter-cluster/)), or reduce the number of objects on the cluster. |
-
-#### Replica is in an OOM crash loop
 
 To check if a replica for a cluster is in an OOM crash loop, check its status
 history, replacing `<cluster_name>` with your cluster name:
@@ -310,17 +241,30 @@ ORDER BY rsh.occurred_at DESC
 LIMIT 20;
 ```
 
-| | |
-|--|--|
-| **Symptom** | A repeating pattern of `offline` with reason `oom-killed` followed by `online` confirms a crash loop. |
-| **Diagnosis** | A replica that OOMs every few minutes is fundamentally too small for its workload.  |
-| **Resolution** | Scale the cluster up to a larger size([`ALTER CLUSTER ... SET (SIZE = <new size>)`](/sql/alter-cluster/)), or reduce the number of objects on the cluster. |
+A repeating pattern of `offline` with reason `oom-killed` followed by `online`
+confirms a crash loop. A replica that OOMs every few minutes is fundamentally
+too small for its workload.
 
+To resolve, scale the cluster up to a larger size([`ALTER CLUSTER ... SET (SIZE
+= '<new size>')`](/sql/alter-cluster/)), and/or move enough objects to another
+cluster to reduce load on the current cluster. If the pressure is caused by an
+[inefficient/expensive object](#step-1-find-lagging-objects), optimize the query
+if possible.
 
-## Cluster has no compute
+### Check for no compute
 
 The cluster has `replication_factor = 0`, meaning no replicas (i.e., compute
-resources) are assigned.
+resources) are assigned. On clusters without replicas, objects have frontiers
+that are frozen, and their lag grows indefinitely.
+
+{{< note >}}
+- Zero-replica clusters are common for scheduled batch jobs (e.g., dbt snapshot
+  runs) where replicas are scaled to zero between runs to save costs. High lag
+  on these clusters is expected and does not indicate a problem.
+
+- When measuring aggregate freshness, exclude intentionally paused sources to
+  avoid skewing metrics.
+{{< /note >}}
 
 To check, you can query `mz_catalog.mz_clusters` for clusters whose
 `replication_factor = 0`.
@@ -331,78 +275,43 @@ FROM mz_catalog.mz_clusters c
 WHERE c.replication_factor = 0;
 ```
 
-On clusters without replicas, objects have frontiers that are frozen, and their
-lag grows indefinitely.
+- If the cluster was paused intentionally, no further action is needed.
 
-| | |
-|--|--|
-| **Symptoms** | <ul><li>Sources (and associated subsources/tables) show [status `paused`](#check-source-status).</li><li> All objects on a cluster show wallclock lag that grows linearly over time (1 minute per minute).</li><li>The cluster has no entries in `mz_internal.mz_cluster_replica_utilization`.</li> |
-| **Diagnosis** | The cluster has no compute assigned (`replication_factor = 0`). |
-| **Resolution** | If the cluster was paused intentionally, no resolution is needed. If compute is needed, set the replication factor to a non-zero integer ([`ALTER CLUSTER ... SET (REPLICATION FACTOR = <int>)`](/sql/alter-cluster/)). |
+- If compute is needed, set the replication factor to a non-zero integer
+  ([`ALTER CLUSTER ... SET (REPLICATION FACTOR = <int>)`](/sql/alter-cluster/)).
 
-{{< tip >}}
-Zero-replica clusters are common for scheduled batch jobs (e.g., dbt snapshot
-runs) where replicas are scaled to zero between runs to save costs. High lag on
-these clusters is expected and does not indicate a problem. When measuring aggregate freshness, exclude intentionally paused sources to
-avoid skewing metrics.
-{{< /tip >}}
+## Check source ingestion
 
-## Computation bottleneck
+A source ingestion bottleneck occurs when the source is not ingesting data fast
+enough. This can be caused by upstream connectivity issues, replication lag,
+credential expiration, or a deliberately paused source.
 
-A specific edge in the dependency graph introduces processing delay (e.g., an
-expensive materialized view or a slow sink).
+### Check source status
 
-### Attribute lag through the dependency graph
+To check if a source or its associated subsource/table is unhealthy, query
+[`mz_internal.mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses):
 
-For more complex pipelines, you may need to trace which specific edge in the dependency graph introduces delay.
-The following query walks the full dependency chain and computes the delay introduced at each edge:
 
 ```mzsql
-WITH MUTUALLY RECURSIVE
-    depends_on(probe text, prev text, next text) AS (
-        SELECT object_id, object_id, object_id
-        FROM mz_internal.mz_frontiers
-        WHERE object_id LIKE 'u%'
-        UNION
-        SELECT depends_on.probe, d.dependency_id, d.object_id
-        FROM mz_internal.mz_materialization_dependencies d, depends_on
-        WHERE depends_on.prev = d.object_id
-    )
-SELECT
-    o_probe.name AS object_name,
-    o_prev.name AS from_name,
-    o_prev.type AS from_type,
-    o_next.name AS to_name,
-    o_next.type AS to_type,
-    to_timestamp(fp.write_frontier::text::double / 1000)
-        - to_timestamp(fn.write_frontier::text::double / 1000)
-        AS edge_delay
-FROM depends_on
-JOIN mz_internal.mz_frontiers fp ON depends_on.prev = fp.object_id
-JOIN mz_internal.mz_frontiers fn ON depends_on.next = fn.object_id
-JOIN mz_catalog.mz_objects o_probe ON depends_on.probe = o_probe.id
-JOIN mz_catalog.mz_objects o_prev ON depends_on.prev = o_prev.id
-JOIN mz_catalog.mz_objects o_next ON depends_on.next = o_next.id
-WHERE depends_on.prev <> depends_on.next
-  AND fn.write_frontier <= fp.write_frontier
-  AND fp.write_frontier::text::numeric > fn.write_frontier::text::numeric
-ORDER BY edge_delay DESC
-LIMIT 30;
+SELECT s.id, o.name, s.type, s.status, s.error, s.details
+FROM mz_internal.mz_source_statuses s
+JOIN mz_catalog.mz_objects o ON s.id = o.id
+WHERE o.id LIKE 'u%'
+  AND s.status <> 'running';
 ```
 
-Each row represents an edge in the dependency graph where the downstream object (`to_name`) is behind its upstream input (`from_name`) by `edge_delay`.
-The `object_name` column indicates which user-facing object is affected by this delay.
+A source with status `stalled`, `paused`, and `starting` will hold back all its
+downstream objects. If the `status` for a source shows:
 
-To trace a specific object's dependency chain, replace the first `SELECT` in the recursive CTE:
+| Status   | Description |
+| -------  | ----------- |
+| `stalled`| Common causes include network partitions, credential expiration, and upstream database restarts. Check the returned `error` field and address appropriately. Once the source reconnects, downstream objects should catch up automatically. |
+| `paused` | The cluster associated with the source has no compute/replica assigned (`replication_factor = 0`). See [Check for no compute](#check-for-no-compute). |
+| `starting` | Wait for the source to transition to running. Downstream objects should catch up automatically.  |
 
-```mzsql
--- Replace the base case to trace a single object
-SELECT '<object_id>', '<object_id>', '<object_id>'
-```
+## Check sink lag
 
-### Check sink lag
-
-Sinks export data to external systems and often introduce lag due to batching and commit intervals.
+Sinks often introduce lag due to batching and commit intervals.
 
 ```mzsql
 SELECT
@@ -419,27 +328,8 @@ WHERE o.type = 'sink'
 ORDER BY ml.local_lag DESC;
 ```
 
-### Common patterns
 
-#### Expensive dataflow
-
-**Symptoms**: One materialized view or index has high `local_lag` while others on the same cluster are fine.
-
-**Diagnosis**: The object's dataflow is expensive.
-Use [dataflow troubleshooting](/transform-data/dataflow-troubleshooting/) to identify expensive operators.
-
-**Resolution**: Optimize the query, or move the object to a dedicated cluster with more resources.
-
-#### Skew
-
-**Symptoms**: One index or materialized view has high `local_lag` while the CPU utilization is low
-
-**Diagnosis**: The data might be skewed, or the query includes non-data-parallel patterns, like cross joins.
-Use [dataflow troubleshooting](/transform-data/dataflow-troubleshooting/) to identify expensive operators.
-
-**Resolution**: Optimize the view query to avoid the problem.
-
-## DDL or deploy activity
+## Check for DDL or deploy activity
 
 Object creation, alteration, or deletion triggers rehydration, which can cause
 transient freshness degradation.
@@ -466,9 +356,7 @@ Look for patterns such as:
 * **Sink `alter` events**: sinks being swapped to point to new upstream MVs trigger reprocessing.
 * **Bulk `drop`/`create` of MVs or indexes**: mass DDL causes rehydration on the affected cluster.
 
-### Common patterns
-
-#### Deploy-related freshness degradation
+### Check for deploy-related freshness degradation
 
 **Symptoms**: All objects on a live cluster show elevated wallclock lag (30 seconds to several minutes) for 10–20 minutes.
 Source lag remains low during the spike.
@@ -489,10 +377,10 @@ LIMIT 30;
 Look for deploy clusters being created, sinks being altered, or bulk object creation/deletion that overlaps with the lag window.
 Use the [time-series correlation query](#distinguish-source-driven-vs-computation-driven-spikes) to confirm that source lag stays low while the downstream cluster lags.
 
-**Resolution**: If freshness degrades on objects that were not themselves modified during the deploy, file a support ticket.
+**Action**: If freshness degrades on objects that were not themselves modified during the deploy, file a support ticket.
 Include the spike time window and the audit event output so the team can investigate the contention.
 
-#### System-wide freshness spike
+### Check for system-wide freshness spike
 
 **Symptoms**: All objects across multiple clusters spike simultaneously.
 Lag grows linearly at 1 minute per minute, then recovers.
@@ -501,7 +389,7 @@ Lag grows linearly at 1 minute per minute, then recovers.
 Common causes include environment restarts, version upgrades, and storage layer disruptions.
 Use the [historical spike analysis](#determine-spike-scope) to confirm that all clusters were affected at the same time.
 
-**Resolution**: These spikes are typically transient and self-resolving.
+**Action**: These spikes are typically transient and self-resolving.
 If they recur frequently, check environment upgrade schedules and storage layer health.
 
 ## Measuring aggregate freshness
@@ -513,10 +401,13 @@ To measure overall freshness across your deployment, for example, to answer "wha
 
 Raw aggregation over all objects produces misleading results because several categories of objects report high lag without representing a real freshness problem:
 
-* **Paused sources**: A deliberately paused source stops ingesting data and its lag grows indefinitely.
-  Filter these out by joining `mz_internal.mz_source_statuses` and excluding `status = 'paused'`.
-* **Zero-replica clusters**: Clusters with `replication_factor = 0` have no compute assigned.
-  Their frontiers are frozen and lag grows linearly over time, but no work is expected.
+* **Paused sources**: A deliberately paused source (i.e., the source cluster has
+  `replication_factor = 0`) stops ingesting data and its lag grows indefinitely.
+  Filter these out by joining `mz_internal.mz_source_statuses` and excluding
+  `status = 'paused'`.
+* **Zero-replica clusters**: Clusters with `replication_factor = 0` have no
+  compute assigned. If objects are on a cluster with no replias, their frontiers
+  are frozen and lag grows linearly over time.
 * **Non-production clusters**: Development or staging clusters may not represent production freshness.
 
 ### Peak and threshold-based freshness
@@ -586,6 +477,24 @@ ORDER BY max(wl.lag) DESC;
 
 Materialize retains wallclock lag history for at least 30 days in [`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history), binned by minute.
 Use this data to find past freshness spikes and determine their cause.
+
+### Check historical trends.
+
+To look at the historical trends for an object (such as if its lag has been
+steadily growing, etc.), query
+[`mz_internal.mz_wallclock_global_lag_recent_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history),
+replacing `<object_id>` with the ID of the object from the previous query:
+
+```mzsql
+SELECT o.name, wl.lag, wl.occurred_at
+FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+WHERE o.id = '<object_id>'
+ORDER BY wl.occurred_at DESC
+LIMIT 50;
+```
+
+
 
 ### Find recent spikes
 
