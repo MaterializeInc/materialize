@@ -5617,8 +5617,8 @@ fn test_mcp_agents_rbac() {
     );
 
     // 5. read_data_product by name while lacking SELECT → DataProductNotFound.
-    //    The lookup queries mz_mcp_data_products which filters by privilege,
-    //    so the product is invisible and returns an error rather than data.
+    //    The query fails with a privilege error, which is translated into
+    //    DataProductNotFound so callers get a clean, actionable message.
     let (status, body) = mcp_post(
         &agents_url,
         serde_json::json!({
