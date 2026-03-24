@@ -48,7 +48,7 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 # Now drop the replication slot
 $ postgres-execute connection=postgres://postgres:postgres@postgres
-SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
+SELECaT pg_drop_replication_slot(slot_name) FROM pg_replication_slots
 
 # Resume the ingestion by adding a replica to the cluster.
 > CREATE CLUSTER REPLICA storage.r1 SIZE = 'scale=1,workers=1';
