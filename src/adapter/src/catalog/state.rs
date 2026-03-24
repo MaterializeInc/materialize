@@ -704,7 +704,7 @@ impl CatalogState {
         // and the schema may not exist yet if no temporary items have been created.
         let schema = match &name.qualifiers.schema_spec {
             SchemaSpecifier::Temporary => MZ_TEMP_SCHEMA.to_string(),
-            _ => self
+            SchemaSpecifier::Id(_) => self
                 .get_schema(
                     &name.qualifiers.database_spec,
                     &name.qualifiers.schema_spec,

@@ -208,7 +208,7 @@ impl UnplannedSourceEnvelope {
                             UnplannedSourceEnvelope::Upsert { .. } => {
                                 (key_desc.with_key(vec![0]), Some(vec![0]))
                             }
-                            _ => unreachable!(),
+                            UnplannedSourceEnvelope::CdcV2 => unreachable!(),
                         };
                         (Some(key_desc), key)
                     }

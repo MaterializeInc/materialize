@@ -142,7 +142,7 @@ impl SemijoinIdempotence {
                                 .iter()
                                 .filter_map(|(id, _filter)| match id {
                                     Id::Local(lid) => Some(lid),
-                                    _ => None,
+                                    Id::Global(_) => None,
                                 })
                         {
                             if referenced_id >= id {

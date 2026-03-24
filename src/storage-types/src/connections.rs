@@ -559,14 +559,14 @@ impl IcebergCatalogConnection<InlinedConnection> {
     pub fn s3tables_catalog(&self) -> Option<&S3TablesRestIcebergCatalog> {
         match &self.catalog {
             IcebergCatalogImpl::S3TablesRest(s3tables) => Some(s3tables),
-            _ => None,
+            IcebergCatalogImpl::Rest(_) => None,
         }
     }
 
     pub fn rest_catalog(&self) -> Option<&RestIcebergCatalog> {
         match &self.catalog {
             IcebergCatalogImpl::Rest(rest) => Some(rest),
-            _ => None,
+            IcebergCatalogImpl::S3TablesRest(_) => None,
         }
     }
 
@@ -1802,7 +1802,7 @@ impl PostgresConnectionValidationError {
                     .into(),
             ),
             Self::ReplicationDisabled => Some("set max_wal_senders to a value > 0".into()),
-            _ => None,
+            Self::InsufficientWalLevel { .. } => None,
         }
     }
 }

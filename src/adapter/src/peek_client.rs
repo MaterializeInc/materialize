@@ -338,7 +338,7 @@ impl PeekClient {
                     strategy,
                 )
             }
-            _ => {
+            FastPathPlan::Constant(..) => {
                 // FastPathPlan::Constant handled above.
                 unreachable!()
             }

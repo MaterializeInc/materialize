@@ -305,7 +305,7 @@ impl ShouldTerminateGracefully for mz_catalog::durable::CatalogError {
     fn should_terminate_gracefully(&self) -> bool {
         match &self {
             Self::Durable(e) => e.should_terminate_gracefully(),
-            _ => false,
+            Self::Catalog(_) => false,
         }
     }
 }

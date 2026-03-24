@@ -2174,7 +2174,9 @@ pub fn plan_copy(
                     }
                     stmt
                 }
-                _ => sql_bail!("COPY {} {} not supported", direction, target),
+                CopyRelation::Subscribe(_) => {
+                    sql_bail!("COPY {} {} not supported", direction, target)
+                }
             };
 
             let (plan, desc) = plan_select_inner(scx, stmt, &Params::empty(), None)?;

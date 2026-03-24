@@ -320,7 +320,7 @@ impl HirRelationExpr {
                                 .project(projection)
                         }
                     }
-                    _ => {
+                    mz_expr::Id::Global(_) => {
                         // Get statements are only to external sources, and are not correlated with `get_outer`.
                         get_outer.product(SR::Get {
                             id,

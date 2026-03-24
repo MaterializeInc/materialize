@@ -660,7 +660,7 @@ impl<'a> TestDeserializeContext for MirRelationExprDeserializeContext<'a> {
                                             }
                                         }
                                     }
-                                    _ => {
+                                    Id::Local(_) => {
                                         format!("(get {})", id)
                                     }
                                 });

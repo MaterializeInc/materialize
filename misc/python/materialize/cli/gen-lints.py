@@ -183,6 +183,10 @@ WARN_CLIPPY_LINTS = [
     # of `Err(_)`). This makes discarded errors visible and prevents bugs
     # where errors are silently swallowed (e.g., converted to NULL).
     "match_wild_err_arm",
+    # Catch-all match arms (`_ => ...`) on enums with only one unmatched
+    # variant silently swallow new variants. Prefer explicit arms so the
+    # compiler flags new variants as unhandled.
+    "match_wildcard_for_single_variants",
 ]
 
 MESSAGE_LINT_MISSING = (

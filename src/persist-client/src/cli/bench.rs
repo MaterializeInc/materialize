@@ -86,7 +86,7 @@ async fn bench_s3(args: &S3FetchArgs) -> Result<(), anyhow::Error> {
         for part in &batch_parts {
             let key = match &**part {
                 BatchPart::Hollow(x) => x.key.complete(&shard_id),
-                _ => continue,
+                BatchPart::Inline { .. } => continue,
             };
             let blob = Arc::clone(&state_versions.blob);
             let metrics = Arc::clone(&state_versions.metrics);

@@ -5799,7 +5799,22 @@ fn plan_drop_item(
 fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> bool {
     match object_type {
         ObjectType::Type => true,
-        _ => match dep.item_type() {
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::MaterializedView
+        | ObjectType::Source
+        | ObjectType::Sink
+        | ObjectType::Index
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Schema
+        | ObjectType::Func
+        | ObjectType::ContinualTask
+        | ObjectType::NetworkPolicy => match dep.item_type() {
             CatalogItemType::Func
             | CatalogItemType::Table
             | CatalogItemType::Source
@@ -6524,7 +6539,19 @@ pub fn plan_alter_item_set_cluster(
         ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
             bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
-        _ => {
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::Type
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Schema
+        | ObjectType::Func
+        | ObjectType::ContinualTask
+        | ObjectType::NetworkPolicy => {
             bail_never_supported!(
                 format!("ALTER {object_type} SET CLUSTER"),
                 "sql/alter-set-cluster/",
@@ -6918,7 +6945,28 @@ pub fn plan_alter_object_swap(
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name_a), name_b) => {
             plan_alter_cluster_swap(scx, name_a, name_b, gen_temp_suffix)
         }
-        (object_type, _, _) => Err(PlanError::Unsupported {
+        (ObjectType::Schema | ObjectType::Cluster, _, _) => {
+            unreachable!("parser ensures name type matches object type")
+        }
+        (
+            ObjectType::Table
+            | ObjectType::View
+            | ObjectType::MaterializedView
+            | ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Role
+            | ObjectType::ClusterReplica
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Database
+            | ObjectType::Func
+            | ObjectType::ContinualTask
+            | ObjectType::NetworkPolicy,
+            _,
+            _,
+        ) => Err(PlanError::Unsupported {
             feature: format!("ALTER {object_type} .. SWAP WITH ..."),
             discussion_no: None,
         }),
@@ -7924,7 +7972,22 @@ pub(crate) fn resolve_item_or_type<'a>(
     let name = normalize::unresolved_item_name(name)?;
     let catalog_item = match object_type {
         ObjectType::Type => scx.catalog.resolve_type(&name),
-        _ => scx.catalog.resolve_item(&name),
+        ObjectType::Table
+        | ObjectType::View
+        | ObjectType::MaterializedView
+        | ObjectType::Source
+        | ObjectType::Sink
+        | ObjectType::Index
+        | ObjectType::Role
+        | ObjectType::Cluster
+        | ObjectType::ClusterReplica
+        | ObjectType::Secret
+        | ObjectType::Connection
+        | ObjectType::Database
+        | ObjectType::Schema
+        | ObjectType::Func
+        | ObjectType::ContinualTask
+        | ObjectType::NetworkPolicy => scx.catalog.resolve_item(&name),
     };
 
     match catalog_item {

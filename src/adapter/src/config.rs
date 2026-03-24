@@ -62,7 +62,7 @@ impl SystemParameterSyncClientConfig {
     fn is_launch_darkly(&self) -> bool {
         match &self {
             Self::LaunchDarkly { .. } => true,
-            _ => false,
+            Self::File { .. } => false,
         }
     }
 }

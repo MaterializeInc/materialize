@@ -68,7 +68,7 @@ impl CopyToS3Uploader for PgCopyUploader {
                 current_file_uploader: None,
                 params,
             }),
-            _ => anyhow::bail!("Expected PgCopy format"),
+            S3SinkFormat::Parquet => anyhow::bail!("Expected PgCopy format"),
         }
     }
 

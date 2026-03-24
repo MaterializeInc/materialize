@@ -364,7 +364,7 @@ async fn get_next_ids(
     let next_replica_id = next_user_id(tx.get_cluster_replicas().filter_map(
         |r| match r.replica_id {
             ReplicaId::User(id) => Some(id),
-            _ => None,
+            ReplicaId::System(_) => None,
         },
     ));
 

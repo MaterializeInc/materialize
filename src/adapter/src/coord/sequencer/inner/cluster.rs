@@ -433,7 +433,7 @@ impl Coordinator {
                     }) => {
                         *pending = false;
                     }
-                    _ => {}
+                    mz_controller::clusters::ReplicaLocation::Unmanaged(_) => {}
                 }
 
                 let mut replica_ops = vec![];
@@ -1274,7 +1274,7 @@ impl Coordinator {
                     config: new_config,
                 });
             }
-            _ => {}
+            NeedsFinalization::Yes => {}
         }
         self.catalog_transact(session, ops).await?;
         for (cluster_id, replica_name) in create_cluster_replicas {
@@ -1373,7 +1373,7 @@ impl Coordinator {
                 AlterOptionParameter::Reset | AlterOptionParameter::Unchanged => {
                     coord_bail!("Missing SIZE for empty cluster")
                 }
-                _ => {} // Was set within the calling function.
+                AlterOptionParameter::Set(_) => {} // Was set within the calling function.
             }
         } else if sizes.len() == 1 {
             let size = sizes.into_iter().next().expect("must exist");

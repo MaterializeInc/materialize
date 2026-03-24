@@ -3019,7 +3019,13 @@ impl Coordinator {
                     };
                     collections.push((sink.global_id, collection_desc));
                 }
-                _ => (),
+                CatalogItem::Log(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Index(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_) => (),
             }
         }
 
@@ -3444,7 +3450,15 @@ impl Coordinator {
 
                     compute_instance.insert_collection(ct.global_id());
                 }
-                _ => (),
+                CatalogItem::Table(_)
+                | CatalogItem::Source(_)
+                | CatalogItem::Log(_)
+                | CatalogItem::View(_)
+                | CatalogItem::Sink(_)
+                | CatalogItem::Type(_)
+                | CatalogItem::Func(_)
+                | CatalogItem::Secret(_)
+                | CatalogItem::Connection(_) => (),
             }
         }
 

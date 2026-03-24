@@ -80,7 +80,7 @@ impl TryFromValue<WithOptionValue<Aug>> for Secret {
     fn try_from_value(v: WithOptionValue<Aug>) -> Result<Self, PlanError> {
         match StringOrSecret::try_from_value(v)? {
             StringOrSecret::Secret(id) => Ok(Secret(id)),
-            _ => sql_bail!("must provide a secret value"),
+            StringOrSecret::String(_) => sql_bail!("must provide a secret value"),
         }
     }
 

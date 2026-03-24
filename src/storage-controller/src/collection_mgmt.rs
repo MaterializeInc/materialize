@@ -597,7 +597,7 @@ where
                     ControlFlow::Break(reason) => {
                         info!("write_task-{} ending: {}", id, reason);
                     }
-                    c => {
+                    c @ ControlFlow::Continue(_) => {
                         unreachable!(
                             "cannot break out of the loop with a Continue, but got: {:?}",
                             c

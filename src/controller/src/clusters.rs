@@ -230,7 +230,7 @@ impl ReplicaLocation {
             ReplicaLocation::Managed(ManagedReplicaLocation { billed_as, .. }) => {
                 billed_as.as_deref()
             }
-            _ => None,
+            ReplicaLocation::Unmanaged(_) => None,
         }
     }
 
@@ -260,7 +260,7 @@ impl ReplicaLocation {
     pub fn pending(&self) -> bool {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { pending, .. }) => *pending,
-            _ => false,
+            ReplicaLocation::Unmanaged(_) => false,
         }
     }
 }
