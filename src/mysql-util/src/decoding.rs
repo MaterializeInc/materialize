@@ -30,7 +30,31 @@ pub fn pack_mysql_row(
     table_desc: &MySqlTableDesc,
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
-    let row_values = row.unwrap();
+    // let row_values = row.unwrap();
+    let included_col_names = table_desc
+        .columns
+        .iter()
+        .map(|col| col.name.as_str())
+        .collect::<Vec<_>>();
+
+    let row_col_names = row
+        .columns_ref()
+        .iter()
+        .map(|col| col.name_str().clone())
+        .collect::<Vec<_>>();
+
+    tracing::info!("packing row with columns: {row_col_names:?}");
+    tracing::info!("including columns: {included_col_names:?}");
+    let row_values = row
+        .columns_ref()
+        .iter()
+        .enumerate()
+        .filter(|(_, col)| included_col_names.contains(&col.name_str().as_ref()))
+        .map(|(i, _)| {
+            row.as_ref(i)
+                .expect("Can't unwrap row if some of columns was taken")
+                .clone()
+        });
 
     for values in table_desc.columns.iter().zip_longest(row_values) {
         let (col_desc, value) = match values {
