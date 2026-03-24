@@ -24,6 +24,7 @@ use std::time::Instant;
 use mz_expr::OptimizedMirRelationExpr;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
+use mz_sql::plan::HirRelationExprLowering;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};

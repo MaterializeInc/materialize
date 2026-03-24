@@ -57,6 +57,7 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
+use mz_sql::plan::HirRelationExprLowering;
 use mz_sql::plan::{
     AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
     StatementContext,

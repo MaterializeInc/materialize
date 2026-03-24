@@ -52,6 +52,8 @@ use crate::ast::{
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
+use crate::plan::hir::{CoercibleScalarExprExt, HirRelationExprExt, HirScalarExprExt};
+use crate::plan::lowering::{HirRelationExprLowering, HirScalarExprLowering};
 use crate::plan::query::{
     ExprContext, QueryLifetime, offset_into_value, plan_as_of_or_up_to, plan_expr,
 };

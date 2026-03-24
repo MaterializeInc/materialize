@@ -18,6 +18,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::{CatalogItemId, ColumnIndex, Datum, RelationDesc, Row, RowArena};
 use mz_sql::catalog::SessionCatalog;
+use mz_sql::plan::HirScalarExprLowering;
 use mz_sql::plan::{self, CopyFromFilter, CopyFromSource, HirScalarExpr};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::client::TableData;

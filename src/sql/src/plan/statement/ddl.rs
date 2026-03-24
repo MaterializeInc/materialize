@@ -136,6 +136,8 @@ use crate::names::{
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
+use crate::plan::hir::{CoercibleScalarExprExt, HirRelationExprExt, HirScalarExprExt};
+use crate::plan::lowering::HirScalarExprLowering;
 use crate::plan::query::{
     CteDesc, ExprContext, QueryLifetime, cast_relation, plan_expr, scalar_type_from_catalog,
     scalar_type_from_sql,

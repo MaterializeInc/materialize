@@ -14,7 +14,9 @@ use mz_repr::Diff;
 
 use crate::plan::PlanError;
 use crate::plan::hir::{HirRelationExpr, HirScalarExpr};
-use crate::plan::lowering::{ColumnMap, Context, CteMap};
+use crate::plan::lowering::{
+    ColumnMap, Context, CteMap, HirRelationExprLowering, HirScalarExprLowering,
+};
 
 /// Attempt to render a stack of left joins as an inner join against "enriched" right relations.
 ///

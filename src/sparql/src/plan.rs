@@ -13,8 +13,8 @@
 //! SPARQL graph patterns into relational algebra over a quad table.
 
 use mz_expr::{ColumnOrder, Id, LocalId};
+use mz_hir::{AggregateExpr, AggregateFunc, HirRelationExpr, HirScalarExpr, JoinKind};
 use mz_repr::{Datum, GlobalId, SqlColumnType, SqlRelationType, SqlScalarType};
-use mz_sql::plan::{AggregateExpr, AggregateFunc, HirRelationExpr, HirScalarExpr, JoinKind};
 use std::cell::Cell;
 use std::collections::BTreeMap;
 

@@ -107,10 +107,12 @@ use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 pub use hir::{
-    AggregateExpr, AggregateFunc, CoercibleScalarExpr, ColumnRef, Hir, HirRelationExpr,
-    HirScalarExpr, JoinKind, WindowExprType,
+    AggregateExpr, AggregateFunc, CoercibleScalarExpr, CoercibleScalarExprExt, ColumnRef, Hir,
+    HirRelationExpr, HirRelationExprExt, HirScalarExpr, HirScalarExprExt, JoinKind, WindowExprType,
 };
-pub use lowering::Config as HirToMirConfig;
+pub use lowering::{
+    AggregateExprLowering, Config as HirToMirConfig, HirRelationExprLowering, HirScalarExprLowering,
+};
 pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;

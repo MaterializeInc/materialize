@@ -6778,6 +6778,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-hir"
+version = "0.0.0"
+dependencies = [
+ "itertools 0.14.0",
+ "mz-expr",
+ "mz-ore",
+ "mz-repr",
+ "serde",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
@@ -7898,10 +7911,10 @@ name = "mz-sparql"
 version = "0.0.0"
 dependencies = [
  "mz-expr",
+ "mz-hir",
  "mz-ore",
  "mz-repr",
  "mz-sparql-parser",
- "mz-sql",
  "workspace-hack",
 ]
 
@@ -7949,6 +7962,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-expr",
+ "mz-hir",
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",

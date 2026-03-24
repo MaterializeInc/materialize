@@ -12,6 +12,7 @@ use mz_ore::instrument;
 use mz_repr::GlobalId;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_sql::plan::HirRelationExprLowering;
 use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
 use timely::progress::Antichain;

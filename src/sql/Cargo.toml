@@ -45,6 +45,7 @@ mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
+mz-hir = { path = "../hir" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator = { path = "../orchestrator" }

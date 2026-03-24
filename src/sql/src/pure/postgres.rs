@@ -31,6 +31,7 @@ use tokio_postgres::types::Oid;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
 use crate::plan::hir::ColumnRef;
+use crate::plan::lowering::HirScalarExprLowering;
 use crate::plan::typeconv::{CastContext, plan_cast};
 use crate::plan::{
     ExprContext, HirScalarExpr, PlanError, QueryContext, QueryLifetime, Scope, StatementContext,

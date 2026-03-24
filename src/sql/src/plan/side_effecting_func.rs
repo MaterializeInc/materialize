@@ -44,6 +44,8 @@ use mz_sql_parser::ast::{CteBlock, Expr, Function, FunctionArgs, Select, SelectI
 use crate::ast::{Query, SelectStatement};
 use crate::func::Func;
 use crate::names::Aug;
+use crate::plan::hir::{CoercibleScalarExprExt, HirScalarExprExt};
+use crate::plan::lowering::HirScalarExprLowering;
 use crate::plan::query::{self, ExprContext, QueryLifetime};
 use crate::plan::scope::Scope;
 use crate::plan::statement::StatementContext;

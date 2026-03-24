@@ -313,18 +313,24 @@ fn column_type(
     expr.typ(outers, &inner_type, &NO_PARAMS)
 }
 
-impl HirScalarExpr {
+pub trait HirScalarExprTransform {
     /// Similar to `MirScalarExpr::support`, but adapted to `HirScalarExpr` in a special way: it
     /// considers column references that target the root level.
     /// (See `visit_columns_referring_to_root_level`.)
+    fn support(&self) -> Vec<usize>;
+
+    /// Changes column references in `self` by the given remapping.
+    /// Panics if a referred column is not present in `idx_map`!
+    fn remap(self, idx_map: &BTreeMap<usize, usize>) -> HirScalarExpr;
+}
+
+impl HirScalarExprTransform for HirScalarExpr {
     fn support(&self) -> Vec<usize> {
         let mut result = Vec::new();
         self.visit_columns_referring_to_root_level(&mut |c| result.push(c));
         result
     }
 
-    /// Changes column references in `self` by the given remapping.
-    /// Panics if a referred column is not present in `idx_map`!
     fn remap(mut self, idx_map: &BTreeMap<usize, usize>) -> HirScalarExpr {
         self.visit_columns_referring_to_root_level_mut(&mut |c| {
             *c = idx_map[c];

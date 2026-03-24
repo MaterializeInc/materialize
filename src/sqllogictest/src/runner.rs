@@ -2632,6 +2632,7 @@ fn generate_view_sql(
             name: name.clone(),
             columns: columns.clone(),
             query,
+            sparql: None,
         },
     })
     .to_ast_string_stable();

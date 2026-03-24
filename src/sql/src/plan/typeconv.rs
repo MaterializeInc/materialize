@@ -28,6 +28,7 @@ use crate::plan::error::PlanError;
 use crate::plan::hir::{
     AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, UnaryFunc,
 };
+use crate::plan::lowering::HirScalarExprLowering;
 use crate::plan::query::{ExprContext, QueryContext};
 use crate::plan::scope::Scope;
 

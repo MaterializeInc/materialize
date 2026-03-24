@@ -29,9 +29,9 @@ use crate::catalog::{CatalogType, TypeCategory, TypeReference};
 use crate::names::{self, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
-    AggregateFunc, BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder,
-    HirRelationExpr, HirScalarExpr, ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc,
-    ValueWindowFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, CoercibleScalarExpr, CoercibleScalarExprExt, CoercibleScalarType,
+    ColumnOrder, HirRelationExpr, HirScalarExpr, HirScalarExprExt, ScalarWindowFunc, TableFunc,
+    UnaryFunc, UnmaterializableFunc, ValueWindowFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext};
 use crate::plan::scope::Scope;

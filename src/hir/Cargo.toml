@@ -1,6 +1,6 @@
 [package]
-name = "mz-sparql"
-description = "SPARQL 1.1 query planner for Materialize."
+name = "mz-hir"
+description = "High-level Intermediate Representation (HIR) types for Materialize query planning."
 version = "0.0.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -10,11 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
+itertools = "0.14.0"
 mz-expr = { path = "../expr" }
-mz-hir = { path = "../hir" }
-mz-ore = { path = "../ore" }
+mz-ore = { path = "../ore", features = ["panic"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
-mz-sparql-parser = { path = "../sparql-parser" }
+serde = { version = "1.0.219", features = ["derive"] }
+tracing = "0.1.41"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
