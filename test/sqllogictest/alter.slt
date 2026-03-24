@@ -190,3 +190,41 @@ query T
 SELECT create_sql FROM (SHOW CREATE INDEX i)
 ----
 CREATE INDEX i IN CLUSTER quickstart ON materialize.public.t (a);
+
+# Test ALTER SOURCE SET/RESET (TIMESTAMP INTERVAL).
+# This exercises the AlterSource -> Altered implication path in
+# catalog_implications, which calls alter_ingestion_source_desc.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET min_timestamp_interval = '100ms';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET max_timestamp_interval = '10s';
+----
+COMPLETE 0
+
+statement ok
+ALTER SOURCE s SET (TIMESTAMP INTERVAL '2s')
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER⏎WITH (TIMESTAMP INTERVAL = '2s');
+
+statement ok
+ALTER SOURCE s SET (TIMESTAMP INTERVAL '500ms')
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE materialize.public.s⏎IN CLUSTER quickstart⏎FROM LOAD GENERATOR COUNTER⏎WITH (TIMESTAMP INTERVAL = '500ms');
+
+statement ok
+ALTER SOURCE s RESET (TIMESTAMP INTERVAL)
+
+query T
+SELECT create_sql FROM (SHOW CREATE SOURCE s)
+----
+CREATE SOURCE materialize.public.s IN CLUSTER quickstart FROM LOAD GENERATOR COUNTER;

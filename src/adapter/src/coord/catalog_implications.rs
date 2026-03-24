@@ -55,7 +55,9 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::connections::inline::{InlinedConnection, IntoInlineConnection};
 use mz_storage_types::sinks::StorageSinkConnection;
-use mz_storage_types::sources::{GenericSourceConnection, SourceExport, SourceExportDataConfig};
+use mz_storage_types::sources::{
+    GenericSourceConnection, SourceDesc, SourceExport, SourceExportDataConfig,
+};
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
@@ -223,6 +225,7 @@ impl Coordinator {
             BTreeMap::new();
         let mut source_export_data_configs_to_alter: BTreeMap<GlobalId, SourceExportDataConfig> =
             BTreeMap::new();
+        let mut source_descs_to_alter: BTreeMap<GlobalId, SourceDesc> = BTreeMap::new();
 
         // We're incrementally migrating the code that manipulates the
         // controller from closures in the sequencer. For some types of catalog
@@ -283,7 +286,7 @@ impl Coordinator {
                     .await?
                 }
                 CatalogImplication::Source(CatalogImplicationKind::Altered {
-                    prev: (prev_source, prev_connection),
+                    prev: (prev_source, _prev_connection),
                     new: (new_source, new_connection),
                 }) => {
                     if prev_source.custom_logical_compaction_window
@@ -294,13 +297,29 @@ impl Coordinator {
                             .unwrap_or(CompactionWindow::Default);
                         self.update_storage_read_policies(vec![(catalog_id, new_window.into())]);
                     }
-                    tracing::debug!(
-                        ?prev_source,
-                        ?prev_connection,
-                        ?new_source,
-                        ?new_connection,
-                        "not handling other source alterations (e.g., connection changes, subsource additions/drops) in here yet"
-                    );
+                    match (&prev_source.data_source, &new_source.data_source) {
+                        (
+                            DataSourceDesc::Ingestion {
+                                desc: prev_desc, ..
+                            }
+                            | DataSourceDesc::OldSyntaxIngestion {
+                                desc: prev_desc, ..
+                            },
+                            DataSourceDesc::Ingestion { desc: new_desc, .. }
+                            | DataSourceDesc::OldSyntaxIngestion { desc: new_desc, .. },
+                        ) => {
+                            if prev_desc != new_desc {
+                                let inlined_connection = new_connection
+                                    .expect("ingestion source should have inlined connection");
+                                let inlined_desc = SourceDesc {
+                                    connection: inlined_connection,
+                                    timestamp_interval: new_desc.timestamp_interval,
+                                };
+                                source_descs_to_alter.insert(new_source.global_id, inlined_desc);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 CatalogImplication::Source(CatalogImplicationKind::Dropped(
                     (source, connection),
@@ -756,6 +775,14 @@ impl Coordinator {
                 .alter_ingestion_export_data_configs(source_export_data_configs_to_alter)
                 .await
                 .unwrap_or_terminate("altering source export data configs after txn must succeed");
+        }
+
+        if !source_descs_to_alter.is_empty() {
+            self.controller
+                .storage
+                .alter_ingestion_source_desc(source_descs_to_alter)
+                .await
+                .unwrap_or_terminate("cannot fail to alter ingestion source desc");
         }
 
         // Apply source drop overwrites.

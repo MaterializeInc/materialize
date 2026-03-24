@@ -3120,30 +3120,8 @@ impl Coordinator {
             value: plan.value,
             interval: plan.interval,
         }];
-        self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-            Box::pin(async move {
-                let source = coord
-                    .catalog()
-                    .get_entry(&plan.id)
-                    .source()
-                    .expect("known to be source");
-                let (global_id, desc) = match &source.data_source {
-                    DataSourceDesc::Ingestion { desc, .. }
-                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
-                        (source.global_id, desc.clone())
-                    }
-                    _ => return,
-                };
-                let desc = desc.into_inline_connection(coord.catalog().state());
-                coord
-                    .controller
-                    .storage
-                    .alter_ingestion_source_desc(BTreeMap::from([(global_id, desc)]))
-                    .await
-                    .unwrap_or_terminate("cannot fail to alter ingestion source desc");
-            })
-        })
-        .await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }
 
