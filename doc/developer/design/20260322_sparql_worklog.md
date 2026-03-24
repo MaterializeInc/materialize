@@ -2339,3 +2339,245 @@ modified by the SPARQL project (`dml.rs`, `ddl.rs`).
 ## All prompts complete
 
 All 27 prompts in the SPARQL frontend implementation are now done.
+
+---
+
+## Future Work: Native RDF Datum Encoding
+
+### Problem
+
+The current SPARQL implementation stores all RDF terms as `Datum::String` in
+the quad table `(subject TEXT, predicate TEXT, object TEXT, graph TEXT)` using
+N-Triples encoding (IRIs in `<>`, literals in `""`, typed literals as
+`"value"^^<type>`). This is:
+
+1. **Slow**: Every comparison requires runtime string parsing to extract
+   numeric values, detect types, and apply promotion rules.
+2. **Sort-broken**: String sort order ≠ numeric sort order. `"9"` > `"10"`.
+3. **Space-inefficient**: The integer `42` is stored as the 24-byte string
+   `"42"^^<http://www.w3.org/2001/XMLSchema#integer>`.
+4. **Lossy for equality**: Can't distinguish term-equality from value-equality
+   without parsing. `"1"^^xsd:integer` and `"01"^^xsd:integer` are different
+   terms but equal values.
+
+### Goal
+
+Encode RDF terms using native `Datum` variants wherever possible, and add
+a small number of new types for RDF-specific concepts. The model should
+support efficient comparison, sorting, and arithmetic without runtime string
+parsing.
+
+### RDF Term Taxonomy
+
+Every RDF term is one of:
+
+| Kind | Example | Current encoding |
+|------|---------|-----------------|
+| IRI | `<http://example.org/alice>` | `"<http://example.org/alice>"` |
+| Blank node | `_:b0` | `"_:b0"` |
+| Simple literal (= xsd:string) | `"hello"` | `"\"hello\""` |
+| Language-tagged string | `"hello"@en` | `"\"hello\"@en"` |
+| Typed literal (xsd:integer) | `"42"^^xsd:integer` | `"\"42\"^^<xsd:integer>"` |
+| Typed literal (xsd:boolean) | `"true"^^xsd:boolean` | `"\"true\"^^<xsd:boolean>"` |
+| Typed literal (xsd:dateTime) | `"2024-01-01T00:00:00"^^xsd:dateTime` | string |
+
+### XSD → Datum Mapping
+
+Many XSD types have direct Datum equivalents:
+
+| XSD type | Datum variant | Notes |
+|----------|---------------|-------|
+| `xsd:boolean` | `Datum::True` / `Datum::False` | Direct mapping |
+| `xsd:integer` and all subtypes (`long`, `int`, `short`, `byte`, `unsignedLong`, etc.) | `Datum::Int64` | All integer subtypes collapse to i64. Out-of-range values could use `Datum::Numeric`. |
+| `xsd:decimal` | `Datum::Numeric` | Exact decimal arithmetic |
+| `xsd:float` | `Datum::Float32` | IEEE 754 single |
+| `xsd:double` | `Datum::Float64` | IEEE 754 double |
+| `xsd:string` | `Datum::String` | Direct mapping |
+| `xsd:dateTime` | `Datum::TimestampTz` or `Datum::Timestamp` | Depending on timezone presence |
+| `xsd:date` | `Datum::Date` | Direct mapping |
+| `xsd:time` | `Datum::Time` | Direct mapping |
+| `xsd:hexBinary`, `xsd:base64Binary` | `Datum::Bytes` | Decode to raw bytes |
+
+Types that have **no** natural Datum equivalent:
+
+| XSD type | Proposed handling |
+|----------|-------------------|
+| `xsd:duration` | `Datum::Interval` (close but not identical semantics) |
+| `xsd:gYear`, `xsd:gMonth`, etc. | Store as `Datum::String` (rarely used) |
+| `rdf:langString` | Needs new representation (see below) |
+| Custom/unknown datatypes | Needs new representation (see below) |
+
+### Proposed Data Model: `Datum::Rdf`
+
+The key insight is that an RDF term is really **two values**: a type tag
+and a payload. This is analogous to `Datum::Jsonb`, which is not a single
+type but a family of types (null, bool, number, string, array, object) all
+stored under one SQL column type.
+
+We propose a new composite `Datum` representation for RDF terms. Two main
+design options:
+
+#### Option A: Tagged composite datum (like Jsonb)
+
+Add a new `ScalarType::Rdf` that maps to a `Datum::List` encoding:
+
+```
+RDF term = DatumList [ tag: Int32, payload: <varies> ]
+```
+
+Where `tag` discriminates:
+
+| Tag | Meaning | Payload |
+|-----|---------|---------|
+| 0 | IRI | `String` (the IRI) |
+| 1 | Blank node | `String` (the bnode label) |
+| 2 | xsd:string | `String` (the value) |
+| 3 | rdf:langString | `List[String, String]` (value, lang tag) |
+| 4 | xsd:boolean | `True` / `False` |
+| 5 | xsd:integer | `Int64` |
+| 6 | xsd:decimal | `Numeric` |
+| 7 | xsd:float | `Float32` |
+| 8 | xsd:double | `Float64` |
+| 9 | xsd:dateTime | `TimestampTz` |
+| 10 | xsd:date | `Date` |
+| 11 | xsd:time | `Time` |
+| 12 | xsd:duration | `Interval` |
+| 13 | Other typed literal | `List[String, String]` (value, datatype IRI) |
+
+**Pros**: No new Datum variants needed. Reuses existing List encoding.
+Extensible — new XSD types just get new tag numbers.
+
+**Cons**: Every access requires unpacking a List. More bytes per datum
+(tag overhead). Can't use native comparison operators directly — need
+RDF-aware comparison functions.
+
+#### Option B: Dedicated `Datum::Rdf*` variants
+
+Add a small number of new Datum variants:
+
+```rust
+Datum::RdfIri(&'a str),
+Datum::RdfBlankNode(&'a str),
+Datum::RdfLangString { value: &'a str, lang: &'a str },
+Datum::RdfTypedLiteral { value: &'a str, datatype: &'a str },
+```
+
+Known XSD types would be stored in their native Datum forms (Int64,
+Float64, etc.) with a **separate column** for the type tag:
+
+```sql
+CREATE TABLE rdf_quads (
+    subject_tag  INT2,     -- 0=IRI, 1=bnode
+    subject      TEXT,     -- IRI string or bnode label
+    predicate    TEXT,     -- always an IRI
+    object_tag   INT2,     -- discriminant for the value column
+    object_value ANY,      -- native Datum (Int64, Float64, String, etc.)
+    object_type  TEXT,     -- XSD type IRI (NULL for IRIs/bnodes/xsd:string)
+    object_lang  TEXT,     -- language tag (NULL unless rdf:langString)
+    graph        TEXT
+);
+```
+
+**Pros**: Native comparison/sorting/arithmetic on the `object_value` column
+without any decoding. Can leverage existing indexes and operators.
+
+**Cons**: More columns → wider rows. Subjects and predicates are always
+strings anyway (IRIs/bnodes), so the benefit is mainly for the object
+position. Requires the SPARQL planner to generate different plans depending
+on the object type.
+
+#### Option C: Hybrid — Rdf column type with native payloads (recommended)
+
+Add a new `ScalarType::Rdf` column type with a custom Row encoding that
+packs the tag and native value together efficiently:
+
+```
+Row encoding for an Rdf datum:
+  [Tag::Rdf] [rdf_kind: u8] [payload: ...]
+```
+
+Where `rdf_kind` determines how `payload` is decoded:
+
+- `0` (IRI): payload is a string (length-prefixed bytes)
+- `1` (Blank node): payload is a string
+- `2` (xsd:string): payload is a string
+- `3` (rdf:langString): payload is [lang_len: u8][lang: bytes][value: string]
+- `4` (xsd:boolean): payload is 1 byte (0 or 1)
+- `5` (xsd:integer): payload is i64 (8 bytes)
+- `6` (xsd:decimal): payload is Numeric encoding
+- `7` (xsd:float): payload is f32 (4 bytes)
+- `8` (xsd:double): payload is f64 (8 bytes)
+- `9` (xsd:dateTime): payload is TimestampTz encoding
+- `10` (xsd:date): payload is Date encoding
+- `11` (xsd:time): payload is Time encoding
+- `12` (xsd:duration): payload is Interval encoding
+- `13` (other typed): payload is [type_iri: string][value: string]
+
+This is essentially the same as Option A but with a dedicated Row-level
+tag instead of encoding as a `DatumList`. The Datum variant would be:
+
+```rust
+/// An RDF term with embedded type tag.
+Datum::Rdf(RdfDatum<'a>)
+```
+
+Where `RdfDatum<'a>` is an enum matching the `rdf_kind` values above.
+
+**Pros**: Single column per position (like today). Native payloads for
+known types (efficient comparison/arithmetic). Custom comparison function
+can dispatch on `rdf_kind` for SPARQL semantics (numeric promotion, EBV,
+three-valued logic). Compact encoding.
+
+**Cons**: Requires a new Datum variant + Row tag + columnar encoder.
+More upfront work. Comparison between Rdf datums requires a custom
+operator (can't use the built-in `<`/`>` on the column directly).
+
+### SPARQL Comparison Semantics
+
+Regardless of encoding choice, the SPARQL planner must generate comparison
+logic that handles:
+
+1. **Numeric promotion**: `xsd:integer` → `xsd:decimal` → `xsd:float` →
+   `xsd:double`. When comparing two numeric RDF terms, promote to the
+   wider type before comparing.
+
+2. **Three-valued logic**: FILTER errors (type mismatch in `<`/`>`,
+   incompatible types) evaluate to `false`, not to an error. This means
+   the comparison function should return `Option<Ordering>` or a
+   tri-state, and FILTER wraps it in a COALESCE-to-false.
+
+3. **Effective Boolean Value (EBV)**: Used by FILTER, IF, &&, ||.
+   - Boolean → its value
+   - String → non-empty = true
+   - Numeric → non-zero and non-NaN = true
+   - Everything else → error (→ false in FILTER)
+
+4. **Term equality vs value equality**: `=` in SPARQL uses value equality
+   for known types with promotion, but falls back to term equality (exact
+   match of lexical form + datatype) for unknown types. This means the
+   comparison function needs access to both the native value AND the
+   original type tag.
+
+### Recommendation
+
+**Option C (hybrid Rdf column type)** is the best path forward because:
+
+- It preserves the current 4-column quad table shape (no schema explosion)
+- It encodes known XSD types natively (fast comparison, compact storage)
+- It's extensible to new types via new `rdf_kind` values
+- The custom `Datum::Rdf` variant gives us a place to implement SPARQL's
+  non-standard comparison semantics (promotion, EBV, three-valued logic)
+  as scalar functions over the Rdf type
+- It follows the Jsonb precedent: one SQL type, many internal representations
+
+### Migration Path
+
+1. **Phase 1 (current)**: All-string encoding. Works, just slow.
+2. **Phase 2**: Add `ScalarType::Rdf` + `Datum::Rdf`. Update the SPARQL
+   planner to produce Rdf datums. The quad table schema becomes
+   `(subject RDF, predicate RDF, object RDF, graph RDF)`.
+3. **Phase 3**: Add RDF-aware comparison functions (`rdf_eq`, `rdf_lt`,
+   `rdf_ebv`, `rdf_numeric_add`, etc.) as `UnaryFunc`/`BinaryFunc`
+   implementations. Update the SPARQL expression translator to emit these.
+4. **Phase 4**: Add RDF-aware indexing (index on the native payload for
+   known types, enabling efficient range scans on numeric/date values).
