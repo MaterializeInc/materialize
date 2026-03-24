@@ -155,6 +155,10 @@ pub fn shard_source<'g, K, V, T, D, DT, G, C>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    // When true, sort parts by their structured key lower bound before distributing
+    // to workers. This improves consolidation by ensuring workers get contiguous
+    // key ranges. Has no effect on listen (non-snapshot) batches.
+    sorted_part_assignment: bool,
 ) -> (
     StreamVec<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
     Vec<PressOnDropButton>,
@@ -222,6 +226,7 @@ where
         listen_sleep,
         start_signal,
         error_handler.clone(),
+        sorted_part_assignment,
     );
     tokens.push(descs_token);
 
@@ -309,6 +314,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    sorted_part_assignment: bool,
 ) -> (
     StreamVec<G, (usize, ExchangeableBatchPart<G::Timestamp>)>,
     PressOnDropButton,
@@ -503,6 +509,8 @@ where
                 .expect("until should always be <= the empty frontier");
             let session_cap = cap_set.delayed(current_ts);
 
+            // Filter parts (stats pushdown, auditing), collecting survivors.
+            let mut filtered_parts = Vec::new();
             for mut part_desc in parts {
                 // TODO: Push more of this logic into LeasedBatchPart like we've
                 // done for project?
@@ -562,14 +570,37 @@ where
                         metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                     }
                 }
+                filtered_parts.push(part_desc);
+            }
 
-                // Give the part to a random worker. This isn't round robin in an attempt to avoid
-                // skew issues: if your parts alternate size large, small, then you'll end up only
-                // using half of your workers.
-                //
-                // There's certainly some other things we could be doing instead here, but this has
-                // seemed to work okay so far. Continue to revisit as necessary.
-                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+            // When sorted part assignment is enabled, sort parts by their
+            // structured key lower bound so that each worker gets a contiguous
+            // slice of the keyspace. This improves consolidation effectiveness
+            // by making it more likely that updates for the same key land on the
+            // same worker. Parts without a structured key lower (e.g. inline
+            // parts) sort first.
+            if sorted_part_assignment {
+                filtered_parts.sort_by(|a, b| {
+                    let a_lower = a.part.structured_key_lower();
+                    let b_lower = b.part.structured_key_lower();
+                    match (a_lower, b_lower) {
+                        (None, None) => std::cmp::Ordering::Equal,
+                        (None, Some(_)) => std::cmp::Ordering::Less,
+                        (Some(_), None) => std::cmp::Ordering::Greater,
+                        (Some(a), Some(b)) => a.get().cmp(&b.get()),
+                    }
+                });
+            }
+
+            for (i, part_desc) in filtered_parts.into_iter().enumerate() {
+                let worker_idx = if sorted_part_assignment {
+                    // Round-robin assignment in sorted order gives each worker
+                    // a contiguous key range.
+                    i % num_workers
+                } else {
+                    // Random assignment avoids skew when parts alternate in size.
+                    usize::cast_from(Instant::now().hashed()) % num_workers
+                };
                 let (part, lease) = part_desc.into_exchangeable_part();
                 leases.borrow_mut().push_at(current_ts.clone(), lease);
                 descs_output.give(&session_cap, (worker_idx, part));
@@ -767,6 +798,7 @@ mod tests {
                         false.then_some(|| unreachable!()),
                         async {},
                         ErrorHandler::Halt("test"),
+                        false,
                     );
                     (stream.leave(), tokens)
                 });
@@ -837,6 +869,7 @@ mod tests {
                         false.then_some(|| unreachable!()),
                         async {},
                         ErrorHandler::Halt("test"),
+                        false,
                     );
                     (stream.leave(), tokens)
                 });

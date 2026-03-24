@@ -543,6 +543,7 @@ impl DataSubscribe {
                     false.then_some(|| unreachable!()),
                     async {},
                     ErrorHandler::Halt("data_subscribe"),
+                    false,
                 );
                 (data_stream.leave(), token)
             });

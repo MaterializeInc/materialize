@@ -311,6 +311,7 @@ where
                             false.then_some(|| unreachable!()),
                             async {},
                             error_handler,
+                            persist_source::SourceConsolidation::BestEffort,
                         );
                         (
                             stream.as_collection(),

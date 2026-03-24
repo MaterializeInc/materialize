@@ -89,6 +89,18 @@ use crate::metrics::BackpressureMetrics;
 )]
 pub struct Subtime(u64);
 
+/// How the persist source should consolidate its output.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum SourceConsolidation {
+    /// Best-effort consolidation within parts. Current behavior.
+    #[default]
+    BestEffort,
+    /// Fully consolidated, snapshot-monotonic output.
+    /// Enables sorted part assignment and (in future phases)
+    /// streaming merge and fine-grained-timestamp-based consolidation.
+    Full,
+}
+
 impl PartialOrder for Subtime {
     fn less_equal(&self, other: &Self) -> bool {
         self.0.less_equal(&other.0)
@@ -158,6 +170,7 @@ pub fn persist_source<G>(
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    consolidation: SourceConsolidation,
 ) -> (
     StreamVec<G, (Row, Timestamp, Diff)>,
     StreamVec<G, (DataflowError, Timestamp, Diff)>,
@@ -223,6 +236,7 @@ where
             subscribe_sleep,
             start_signal,
             error_handler,
+            consolidation,
         );
         tokens.extend(source_tokens);
 
@@ -294,6 +308,7 @@ pub fn persist_source_core<'g, G>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    consolidation: SourceConsolidation,
 ) -> (
     Stream<
         RefinedScope<'g, G>,
@@ -382,6 +397,7 @@ where
         listen_sleep,
         start_signal,
         error_handler,
+        matches!(consolidation, SourceConsolidation::Full),
     );
     let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
     (rows, token)
