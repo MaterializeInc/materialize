@@ -256,12 +256,12 @@
   code: |
     CREATE CONNECTION <connection_name> TO KAFKA (
         AWS PRIVATELINKS (
+            '<broker_address>' TO <privatelink_connection> (PORT <port>),
             '<pattern1>' TO <privatelink_connection1> (
                 PORT <port1>,
                 AVAILABILITY ZONE = '<az_id1>'
             ),
-            '<pattern2>' TO <privatelink_connection2>,
-            <default_privatelink_connection> (PORT <default_port>)
+            '<pattern2>' TO <privatelink_connection2>
         ),
         ...
     );
@@ -272,8 +272,9 @@
         the named AWS PrivateLink connection.
         A pattern may begin with `*` to match any prefix. A pattern may end with `*` to match any suffix.
         All other characters in the pattern are matched literally.
+        Patterns without wildcards are used as bootstrap broker addresses.
         Rules are evaluated in order. The first matching rule wins.
-        If no rule matches, Materialize will attempt to connect through the default PrivateLink connection listed at the end.
+        If no rule matches, Materialize will attempt to connect to the broker directly, without tunneling.
     - name: "`AVAILABILITY ZONE`"
       description: |
         *Value:* `text`
@@ -285,11 +286,6 @@
         *Value:* `integer`
 
         The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
-    - name: "`<default_connection_name>`"
-      description: |
-        *Value:* object name. Required.
-
-        The AWS PrivateLink connection to use for bootstrapping.
 
 - name: "syntax-csr"
   code: |

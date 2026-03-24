@@ -2592,18 +2592,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_aws_privatelink_rule(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        let pattern = self.parse_connection_rule_pattern()?;
+        self.expect_keywords(&[TO])?;
         Ok(WithOptionValue::ConnectionAwsPrivatelinkRule(
-            if let Some(Token::String(_)) = self.peek_token() {
-                let pattern = self.parse_connection_rule_pattern()?;
-                self.expect_keywords(&[TO])?;
-                ConnectionAwsPrivatelinkRule::AwsPrivatelinkRule(ConnectionAwsPrivatelinkPattern {
-                    pattern,
-                    to: self.parse_aws_privatelink()?,
-                })
-            } else {
-                ConnectionAwsPrivatelinkRule::AwsPrivatelinkRuleDefault(
-                    self.parse_default_aws_privatelink_()?,
-                )
+            ConnectionAwsPrivatelinkPattern {
+                pattern,
+                to: self.parse_aws_privatelink()?,
             },
         ))
     }

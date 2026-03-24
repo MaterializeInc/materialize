@@ -942,8 +942,7 @@ impl KafkaConnection {
         options.insert("allow.auto.create.topics".into(), "false".into());
 
         let brokers = match &self.default_tunnel {
-            Tunnel::AwsPrivatelink(t)
-            | Tunnel::AwsPrivatelinks(AwsPrivatelinks { default: t, .. }) => {
+            Tunnel::AwsPrivatelink(t) => {
                 assert!(&self.brokers.is_empty());
 
                 let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
@@ -960,6 +959,28 @@ impl KafkaConnection {
                     ),
                     t.port.unwrap_or(9092)
                 )
+            }
+            Tunnel::AwsPrivatelinks(pl) => {
+                assert!(&self.brokers.is_empty());
+
+                let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
+                    .get(storage_configuration.config_set());
+                options.insert("ssl.endpoint.identification.algorithm".into(), algo.into());
+
+                // Exact-match patterns (no wildcards) provide bootstrap broker addresses.
+                // Their original hostnames are used for bootstrap.servers so that TLS SNI is correct.
+                let brokers = pl
+                    .rules
+                    .iter()
+                    .filter(|r| r.pattern.is_exact())
+                    .map(|r| &r.pattern.literal_match)
+                    .join(",");
+                if brokers.is_empty() {
+                    return Err(ContextCreationError::Other(anyhow::anyhow!(
+                        "AWS PRIVATELINKS option has no exact-match rules to use as bootstrap brokers"
+                    )));
+                }
+                brokers
             }
             _ => self.brokers.iter().map(|b| &b.address).join(","),
         };
@@ -1077,6 +1098,8 @@ impl KafkaConnection {
                 ));
             }
             Tunnel::AwsPrivatelinks(pl) => {
+                // All rules (both exact-match and wildcard) go through dynamic routing.
+                // Exact-match rules also provide bootstrap broker addresses (set above).
                 context.set_default_tunnel(TunnelConfig::Rules(
                     KafkaConnection::from_aws_privatelinks(pl),
                 ));
@@ -1282,7 +1305,6 @@ impl KafkaConnection {
                 .iter()
                 .map(KafkaConnection::from_aws_privatelink_rule)
                 .collect_vec(),
-            default: KafkaConnection::from_default_aws_privatelink(&pl.default),
         }
     }
 }
@@ -2618,10 +2640,9 @@ impl AlterCompatible for AwsPrivatelink {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct AwsPrivatelinks {
     /// Route to brokers through PrivateLink connections according to these rules.
-    /// First applicable rule wins.
+    /// Exact-match rules (no wildcards) are used as bootstrap brokers.
+    /// Wildcard rules are applied dynamically to discovered brokers.
     pub rules: Vec<AwsPrivatelinkRule>,
-    /// Bootstrap through this PrivateLink connection.
-    pub default: AwsPrivatelink,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
