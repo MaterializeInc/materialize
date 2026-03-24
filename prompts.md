@@ -64,16 +64,16 @@ always `None` at this point.
 
 ### Prompt 0.2: Columnar ↔ Vec conversion utilities
 
-[ ] Implement `vec_to_columnar` and `columnar_to_vec` stream operators that convert between
+[*] Implement `vec_to_columnar` and `columnar_to_vec` stream operators that convert between
 `VecCollection<S, Row, Diff>` and the columnar equivalent.
 
-[ ] The `vec_to_columnar` operator should batch rows into columnar containers using
+[*] The `vec_to_columnar` operator should batch rows into columnar containers using
 `ColumnBuilder`. Use a configurable batch size (default 1024 or container-size-driven).
 
-[ ] The `columnar_to_vec` operator should iterate the columnar container and emit individual
+[*] The `columnar_to_vec` operator should iterate the columnar container and emit individual
 `(Row, T, Diff)` tuples.
 
-[ ] Add unit tests that round-trip data through both conversions.
+[*] Add unit tests that round-trip data through both conversions.
 
 **Files**: `src/compute/src/render/context.rs` or a new `src/compute/src/render/columnar.rs`
 

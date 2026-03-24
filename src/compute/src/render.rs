@@ -166,6 +166,7 @@ use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
+pub(crate) mod columnar;
 pub mod context;
 pub(crate) mod continual_task;
 mod errors;
