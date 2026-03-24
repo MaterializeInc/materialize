@@ -365,34 +365,61 @@ includes the goal, key files to read, and acceptance criteria.
 
 ## Phase 6: Native RDF Encoding
 
-### Prompt 28: Implement `ScalarType::Rdf` with Jsonb-style `Rdf`/`RdfRef` wrapper
+### Prompt 28: Implement `ScalarType::Iri`, `ScalarType::Rdf`, and Jsonb-style wrappers
 
 > Implement native RDF term encoding following the Jsonb pattern described
 > in the "Future Work: Native RDF Datum Encoding" section of the worklog.
-> No new `Datum` variants — reuse existing ones with a wrapper type.
+> No new `Datum` variants — reuse existing ones with wrapper types.
 >
-> **Step 1: `src/repr/src/adt/rdf.rs`** — Create `Rdf` (owned, backed by
+> **Step 1: `ScalarType::Iri`** — A dedicated scalar type for IRIs. Stored
+> as `Datum::String` under the hood (zero encoding overhead), but gives
+> type safety: can't pass a plain string where an IRI is expected. This
+> is used for the subject, predicate, and graph columns of the quad table.
+> SPARQL functions like `isIRI()`, `STR()` can type-check at plan time.
+> Wire up `datum_type()`, pgwire mapping (TEXT), `nullable()`.
+>
+> **Step 2: `src/repr/src/adt/rdf.rs`** — Create `Rdf` (owned, backed by
 > `Row`) and `RdfRef<'a>` (borrowed, wraps `Datum<'a>`) types. Implement
 > `RdfRef::kind() -> RdfKind<'a>` that dispatches on the Datum variant:
+>
+> *Common path — bare Datum, zero overhead:*
 > - `Datum::Int64` → `RdfKind::Integer`
 > - `Datum::Float32/Float64` → `RdfKind::Float/Double`
 > - `Datum::Numeric` → `RdfKind::Decimal`
 > - `Datum::True/False` → `RdfKind::Boolean`
 > - `Datum::Date/TimestampTz/Time/Interval` → corresponding kinds
 > - `Datum::String` → `RdfKind::XsdString` (bare string = xsd:string)
-> - `Datum::List` → read tag int, dispatch to `Iri(0)`, `BlankNode(1)`,
->   `LangString(3)`, `OtherTyped(13)`
+>
+> *Compound path — `Datum::List` with small sequential tags:*
+>
+> Tags must be small sequential integers (0, 1, 2, 3) because Row
+> encodes integers with variable-width encoding — smaller values use
+> fewer bytes.
+>
+> - `Datum::List[Int32(0), String]` → `RdfKind::Iri`
+> - `Datum::List[Int32(1), String]` → `RdfKind::BlankNode`
+> - `Datum::List[Int32(2), String(value), String(lang)]` → `RdfKind::LangString`
+> - `Datum::List[Int32(3), String(value), String(type_iri)]` → `RdfKind::OtherTyped`
 >
 > Implement `RdfPacker` (like `JsonbPacker`) for pushing RDF terms into a
 > `RowPacker`. Implement `fmt::Display` for N-Triples serialization.
 >
-> **Step 2: `ScalarType::Rdf`** — Add the scalar type variant. Wire up
-> `datum_type()`, the pgwire type mapping (map to TEXT for now), and
-> `ScalarType::nullable()`.
+> **Step 3: `ScalarType::Rdf`** — Add the scalar type variant for the
+> polymorphic object column. Wire up `datum_type()`, pgwire mapping
+> (TEXT for now), `nullable()`.
 >
-> **Step 3: Tests** — Unit tests for round-tripping all RDF term kinds
+> **Step 4: Quad table schema** — The new schema is:
+> ```sql
+> (subject IRI NOT NULL, predicate IRI NOT NULL, object RDF NOT NULL, graph IRI)
+> ```
+> Subject/predicate/graph use `ScalarType::Iri` (just String, but typed).
+> Object uses `ScalarType::Rdf` (polymorphic). This eliminates the
+> IRI-vs-string ambiguity for subject/predicate/graph at zero cost.
+>
+> **Step 5: Tests** — Unit tests for round-tripping all RDF term kinds
 > through `RdfPacker` → `Row` → `RdfRef::kind()`. Test edge cases:
 > NaN, negative zero, empty string, long IRIs, multi-byte language tags.
+> Also test `ScalarType::Iri` round-trip.
 >
 > Read first: `src/repr/src/adt/jsonb.rs` (the pattern to follow),
 > `src/repr/src/scalar.rs` (ScalarType), the worklog section

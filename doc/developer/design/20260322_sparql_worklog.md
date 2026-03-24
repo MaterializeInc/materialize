@@ -2458,18 +2458,22 @@ type from the Datum variant. No tag overhead, no list unpacking.
 
 **Compound path — `Datum::List` for types that need annotation:**
 
-| RDF kind | Datum encoding | Tag value |
-|----------|----------------|-----------|
+Tags are small sequential integers (0–3) because Row encodes integers
+with variable-width encoding — smaller values use fewer bytes.
+
+| RDF kind | Datum encoding | Tag |
+|----------|----------------|-----|
 | IRI | `List[Int32(0), String(iri)]` | 0 |
 | Blank node | `List[Int32(1), String(label)]` | 1 |
+| rdf:langString | `List[Int32(2), String(value), String(lang)]` | 2 |
+| Other typed literal | `List[Int32(3), String(value), String(type_iri)]` | 3 |
 | xsd:string | `Datum::String` directly (no list!) | — |
-| rdf:langString | `List[Int32(3), String(value), String(lang)]` | 3 |
-| Other typed literal | `List[Int32(13), String(value), String(type_iri)]` | 13 |
 
 The tag is only needed to distinguish term kinds that would otherwise be
-ambiguous — specifically IRIs and blank nodes vs plain strings. xsd:string
-gets the zero-overhead `Datum::String` path since it's the most common
-literal type.
+ambiguous — specifically IRIs and blank nodes vs plain strings, and
+compound types that carry extra metadata (language tag or custom datatype
+IRI). xsd:string gets the zero-overhead `Datum::String` path since it's
+the most common literal type.
 
 #### Why this works
 
@@ -2497,13 +2501,13 @@ impl<'a> RdfRef<'a> {
                 let mut iter = list.iter();
                 let tag = iter.next().unwrap().unwrap_int32();
                 match tag {
-                    0  => RdfKind::Iri(iter.next().unwrap().unwrap_str()),
-                    1  => RdfKind::BlankNode(iter.next().unwrap().unwrap_str()),
-                    3  => RdfKind::LangString {
+                    0 => RdfKind::Iri(iter.next().unwrap().unwrap_str()),
+                    1 => RdfKind::BlankNode(iter.next().unwrap().unwrap_str()),
+                    2 => RdfKind::LangString {
                         value: iter.next().unwrap().unwrap_str(),
                         lang: iter.next().unwrap().unwrap_str(),
                     },
-                    13 => RdfKind::OtherTyped {
+                    3 => RdfKind::OtherTyped {
                         value: iter.next().unwrap().unwrap_str(),
                         datatype: iter.next().unwrap().unwrap_str(),
                     },
@@ -2516,31 +2520,37 @@ impl<'a> RdfRef<'a> {
 }
 ```
 
-#### Column type considerations
+#### Column types: `ScalarType::Iri` and `ScalarType::Rdf`
 
-Subjects are always IRIs or blank nodes. Predicates are always IRIs. Only
-the **object** position can be any RDF term. This suggests a refined quad
-table schema:
+IRIs are the most common RDF term — every subject, predicate, and graph
+is an IRI (subjects can also be blank nodes, but that's rare). A dedicated
+`ScalarType::Iri` gives us:
+
+- **Type safety**: can't pass a plain string where an IRI is expected
+- **Self-documenting schema**: `subject IRI` is clearer than `subject TEXT`
+- **Plan-time type checking**: `isIRI(?s)` can be resolved statically
+- **Zero encoding overhead**: stored as `Datum::String` under the hood
+
+The quad table schema becomes:
 
 ```sql
 CREATE TABLE rdf_quads (
-    subject   TEXT NOT NULL,  -- IRI or bnode label (always a string)
-    predicate TEXT NOT NULL,  -- always an IRI (always a string)
+    subject   IRI  NOT NULL,  -- IRI (or bnode label by convention)
+    predicate IRI  NOT NULL,  -- always an IRI
     object    RDF  NOT NULL,  -- the polymorphic position
-    graph     TEXT             -- IRI of the named graph
+    graph     IRI              -- IRI of the named graph
 );
 ```
 
-Only the `object` column uses `ScalarType::Rdf`. Subject/predicate/graph
-remain `TEXT` since they're always strings (IRIs or bnode labels). This
-eliminates the IRI-vs-string ambiguity for those positions and avoids
-List overhead on every subject/predicate.
+Subject/predicate/graph use `ScalarType::Iri` (String under the hood).
+Object uses `ScalarType::Rdf` (polymorphic, any RDF term).
 
-If we wanted to distinguish IRIs from blank nodes in the subject position
-(e.g., for `isIRI(?s)` or `isBlank(?s)` functions), we could either:
-- Use `ScalarType::Rdf` for subject too (pays the List overhead)
-- Add a `subject_is_bnode BOOL` column (rare case, cheap)
-- Convention: bnode labels start with `_:` (parser-level, zero overhead)
+For blank nodes in the subject position: by convention, bnode labels
+start with `_:` (parser-level, zero overhead). `isBlank(?s)` checks
+this prefix. This avoids the need for a separate subject type tag.
+
+Inside `ScalarType::Rdf`, IRIs use the `Datum::List[0, string]` encoding
+since the object column needs to distinguish IRIs from xsd:strings.
 
 #### Advantages over alternatives
 
