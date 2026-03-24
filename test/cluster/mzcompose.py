@@ -5233,6 +5233,112 @@ def workflow_test_zero_downtime_reconfigure(
         )
 
 
+def workflow_test_pending_replica_drop_audit_log(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that dropping a pending cluster replica during startup migration
+    emits an audit log event in mz_audit_events.
+    """
+    with c.override(
+        Testdrive(no_reset=True),
+    ):
+        c.up(
+            "materialized",
+            "clusterd1",
+            "zookeeper",
+            "kafka",
+            "schema-registry",
+            Service("testdrive", idle=True),
+        )
+
+        c.sql(
+            """
+            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
+            CREATE CLUSTER pending_audit_cluster ( SIZE = 'scale=1,workers=1');
+            GRANT ALL ON CLUSTER pending_audit_cluster TO materialize;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+        # Record the max audit log id before the restart so we can filter
+        # to only events that occur after restart.
+        max_id_before = c.sql_query("SELECT max(id) FROM mz_audit_events;")[0][0]
+
+        def zero_downtime_alter():
+            try:
+                c.sql(
+                    """
+                    ALTER CLUSTER pending_audit_cluster SET (SIZE = 'scale=1,workers=2') WITH ( WAIT FOR '10s')
+                    """,
+                    port=6877,
+                    user="mz_system",
+                )
+            except OperationalError:
+                pass
+
+        # Start an ALTER that creates a pending replica, then kill before it finishes.
+        thread = Thread(target=zero_downtime_alter)
+        thread.start()
+        time.sleep(3)
+
+        # Verify the pending replica exists.
+        replicas = c.sql_query(
+            """
+            SELECT cr.name
+            FROM mz_internal.mz_pending_cluster_replicas ur
+            INNER JOIN mz_cluster_replicas cr ON cr.id = ur.id
+            INNER JOIN mz_clusters c ON c.id = cr.cluster_id
+            WHERE c.name = 'pending_audit_cluster';
+            """
+        )
+        assert len(replicas) == 1, f"Expected 1 pending replica, found {replicas}"
+
+        # Kill and restart materialized. The pending replica should be cleaned
+        # up during the startup migration.
+        c.kill("materialized")
+        c.up("materialized")
+
+        # The pending replica should be gone.
+        replicas = c.sql_query(
+            """
+            SELECT mz_cluster_replicas.name
+            FROM mz_cluster_replicas
+            INNER JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
+            WHERE mz_clusters.name = 'pending_audit_cluster';
+            """
+        )
+        assert len(replicas) == 1, f"Expected 1 non-pending replica, found {replicas}"
+
+        # Verify that a 'drop' audit log event was emitted for the pending
+        # replica during the restart migration.
+        drop_events = c.sql_query(
+            f"""
+            SELECT event_type, object_type, details::text
+            FROM mz_audit_events
+            WHERE id > {max_id_before}
+              AND event_type = 'drop'
+              AND object_type = 'cluster-replica'
+              AND details::text LIKE '%pending_audit_cluster%'
+            ORDER BY id;
+            """
+        )
+        assert (
+            len(drop_events) > 0
+        ), f"Expected at least one 'drop' audit event for the pending replica, found: {drop_events}"
+
+        # Clean up.
+        c.sql(
+            """
+            DROP CLUSTER pending_audit_cluster CASCADE;
+            ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
+            """,
+            port=6877,
+            user="mz_system",
+        )
+
+
 def workflow_crash_on_replica_expiration_mv(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
