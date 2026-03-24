@@ -360,3 +360,40 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~`mz-storage-types`.~~
 >
 > ~~Run: `cargo clippy -p mz-sparql-parser -p mz-sparql -p mz-hir 2>&1`~~
+
+---
+
+## Phase 6: Native RDF Encoding
+
+### Prompt 28: Implement `ScalarType::Rdf` with Jsonb-style `Rdf`/`RdfRef` wrapper
+
+> Implement native RDF term encoding following the Jsonb pattern described
+> in the "Future Work: Native RDF Datum Encoding" section of the worklog.
+> No new `Datum` variants — reuse existing ones with a wrapper type.
+>
+> **Step 1: `src/repr/src/adt/rdf.rs`** — Create `Rdf` (owned, backed by
+> `Row`) and `RdfRef<'a>` (borrowed, wraps `Datum<'a>`) types. Implement
+> `RdfRef::kind() -> RdfKind<'a>` that dispatches on the Datum variant:
+> - `Datum::Int64` → `RdfKind::Integer`
+> - `Datum::Float32/Float64` → `RdfKind::Float/Double`
+> - `Datum::Numeric` → `RdfKind::Decimal`
+> - `Datum::True/False` → `RdfKind::Boolean`
+> - `Datum::Date/TimestampTz/Time/Interval` → corresponding kinds
+> - `Datum::String` → `RdfKind::XsdString` (bare string = xsd:string)
+> - `Datum::List` → read tag int, dispatch to `Iri(0)`, `BlankNode(1)`,
+>   `LangString(3)`, `OtherTyped(13)`
+>
+> Implement `RdfPacker` (like `JsonbPacker`) for pushing RDF terms into a
+> `RowPacker`. Implement `fmt::Display` for N-Triples serialization.
+>
+> **Step 2: `ScalarType::Rdf`** — Add the scalar type variant. Wire up
+> `datum_type()`, the pgwire type mapping (map to TEXT for now), and
+> `ScalarType::nullable()`.
+>
+> **Step 3: Tests** — Unit tests for round-tripping all RDF term kinds
+> through `RdfPacker` → `Row` → `RdfRef::kind()`. Test edge cases:
+> NaN, negative zero, empty string, long IRIs, multi-byte language tags.
+>
+> Read first: `src/repr/src/adt/jsonb.rs` (the pattern to follow),
+> `src/repr/src/scalar.rs` (ScalarType), the worklog section
+> "Future Work: Native RDF Datum Encoding" for the full design.
