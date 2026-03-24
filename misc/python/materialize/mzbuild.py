@@ -1292,7 +1292,7 @@ class DependencySet:
                 print(
                     f"+++ Expected builds to be available, the build probably failed, so not proceeding: {expected_deps}"
                 )
-                sys.exit(5)
+                sys.exit(128)
 
         prep = self._prepare_batch(deps_to_build)
         for dep in deps_to_build:

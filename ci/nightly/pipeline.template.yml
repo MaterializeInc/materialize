@@ -141,7 +141,7 @@ steps:
   - id: miri-test
     label: ":rust: Miri test (full)"
     depends_on: []
-    timeout_in_minutes: 600
+    timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
           composition: cargo-test
@@ -156,7 +156,7 @@ steps:
       - id: feature-benchmark
         label: "Feature benchmark against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 720
+        timeout_in_minutes: 60
         parallelism: 12
         agents:
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -170,7 +170,7 @@ steps:
       - id: scalability-benchmark-dml-dql
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 60
         env:
           # Runs against Dockerhub directly
           MZ_GHCR: 0
@@ -195,7 +195,7 @@ steps:
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 60
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -224,7 +224,7 @@ steps:
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 60
         parallelism: 2
         env:
           # Runs against Dockerhub directly
@@ -251,7 +251,7 @@ steps:
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 5
         agents:
           # Larger instance is more stable in performance
@@ -269,7 +269,7 @@ steps:
       - id: workload-replay
         label: "Workload Replay (1% initial data)"
         depends_on: build-x86_64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 60
         parallelism: 5
         plugins:
           - ./ci/plugins/mzcompose:
@@ -288,7 +288,7 @@ steps:
       - id: kafka-matrix
         label: Previous Kafka versions
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -325,7 +325,7 @@ steps:
       - id: redpanda-testdrive
         label: ":panda_face: :racing_car: testdrive"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -337,7 +337,7 @@ steps:
       - id: testdrive-partitions-5
         label: ":racing_car: testdrive with --kafka-default-partitions 5"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -349,7 +349,7 @@ steps:
       - id: testdrive-replicas-4
         label: ":racing_car: testdrive 4 replicas"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -361,7 +361,7 @@ steps:
       - id: testdrive-size-1
         label: ":racing_car: testdrive with SIZE 1"
         depends_on: build-aarch64
-        timeout_in_minutes: 360
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -373,7 +373,7 @@ steps:
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -398,7 +398,7 @@ steps:
       - id: azurite-testdrive
         label: "testdrive with :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           # Larger agent because Azurite is slow
@@ -411,7 +411,7 @@ steps:
       - id: azurite-testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8 and :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -423,7 +423,7 @@ steps:
       - id: testdrive-fdb
         label: "testdrive with FoundationDB"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         inputs: [test/testdrive]
         plugins:
@@ -437,7 +437,7 @@ steps:
       - id: testdrive-alloydb
         label: "testdrive with AlloyDB"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         inputs: [test/testdrive]
         plugins:
@@ -461,7 +461,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: limits
               run: main
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 3
 
       - id: limits-instance-size
@@ -473,12 +473,12 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: limits
               run: instance-size
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
 
       - id: bounded-memory
         label: "Bounded Memory"
         depends_on: build-aarch64
-        timeout_in_minutes: 90
+        timeout_in_minutes: 60
         parallelism: 3
         agents:
           queue: hetzner-aarch64-4cpu-8gb
@@ -488,7 +488,7 @@ steps:
       - id: bounded-memory-search
         label: "Bounded Memory Search (materialized only)"
         depends_on: build-aarch64
-        timeout_in_minutes: 150
+        timeout_in_minutes: 60
         parallelism: 8
         skip: "disabled by default"
         agents:
@@ -561,7 +561,7 @@ steps:
       - id: zippy-kafka-sources
         label: "Zippy Kafka Sources"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
@@ -572,7 +572,7 @@ steps:
       - id: zippy-kafka-sources-azurite
         label: "Zippy Kafka Sources with :azure: blob store"
         depends_on: build-x86_64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           # Azurite is rather slow, prevent timeouts by using dedicated CPUs
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -584,7 +584,7 @@ steps:
       - id: zippy-kafka-parallel-insert
         label: "Zippy Kafka Parallel Insert"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
@@ -595,7 +595,7 @@ steps:
       - id: zippy-kafka-parallel-insert-azurite
         label: "Zippy Kafka Parallel Insert with :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
@@ -606,7 +606,7 @@ steps:
       - id: zippy-user-tables
         label: "Zippy User Tables"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -618,7 +618,7 @@ steps:
       - id: zippy-postgres-cdc
         label: "Zippy Postgres CDC"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -629,7 +629,7 @@ steps:
       - id: zippy-mysql-cdc
         label: "Zippy MySQL CDC"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -640,7 +640,7 @@ steps:
       - id: zippy-sql-server-cdc
         label: "Zippy SQL Server CDC"
         depends_on: build-x86_64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           # Flaky timeouts with smaller agent, SQL Server seems to use a lot of CPU
           queue: hetzner-x86-64-12cpu-24gb
@@ -653,7 +653,7 @@ steps:
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -664,7 +664,7 @@ steps:
       - id: zippy-cluster-replicas
         label: "Zippy Cluster Replicas"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         plugins:
@@ -675,7 +675,7 @@ steps:
       - id: zippy-crdb-latest
         label: "Zippy w/ latest CRDB"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -687,7 +687,7 @@ steps:
       - id: zippy-alter-connection
         label: "Zippy w/ alter connection"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -698,7 +698,7 @@ steps:
       - id: zippy-copy-s3
         label: "Zippy w/ copy to/from S3"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-8cpu-16gb
         plugins:
@@ -773,7 +773,7 @@ steps:
       - id: mysql-cdc-migration
         label: MySQL CDC source-versioning migration
         depends_on: build-aarch64
-        timeout_in_minutes: 360
+        timeout_in_minutes: 60
         parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
@@ -817,7 +817,7 @@ steps:
       - id: pg-cdc-migration
         label: Postgres CDC source-versioning migration
         depends_on: build-aarch64
-        timeout_in_minutes: 360
+        timeout_in_minutes: 60
         parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
@@ -839,7 +839,7 @@ steps:
       - id: pg-cdc-old-syntax-multi-version-upgrade-random
         label: Postgres CDC (before source versioning, multi-version upgrade, random upgrade path)
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
@@ -852,7 +852,7 @@ steps:
       - id: pg-cdc-old-syntax-multi-version-upgrade-earliest-to-current
         label: Postgres CDC (before source versioning, multi-version upgrade, earliest to current direct upgrade)
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
@@ -875,7 +875,7 @@ steps:
       - id: testdrive-old-kafka-src-syntax
         label: "Testdrive (before Kafka source versioning) with :azure: blob store"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive-old-kafka-src-syntax
@@ -886,7 +886,7 @@ steps:
       - id: testdrive-kafka-migration
         label: "Testdrive (before Kafka source versioning) migration"
         depends_on: build-aarch64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive-old-kafka-src-syntax
@@ -898,7 +898,7 @@ steps:
       - id: sql-server-cdc-old-syntax
         label: SQL Server CDC old syntax
         depends_on: build-x86_64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         inputs: [test/sql-server-cdc-old-syntax]
         plugins:
           - ./ci/plugins/mzcompose:
@@ -968,7 +968,7 @@ steps:
       - id: checks-restart-entire-mz
         label: "Checks + restart of the entire Mz"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -980,7 +980,7 @@ steps:
       - id: checks-backup-rollback
         label: "Checks + backup + rollback to previous"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -992,7 +992,7 @@ steps:
       - id: checks-parallel-drop-create-default-replica
         label: "Checks parallel + DROP/CREATE replica"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1004,7 +1004,7 @@ steps:
       - id: checks-parallel-restart-clusterd-compute
         label: "Checks parallel + restart compute clusterd"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1016,7 +1016,7 @@ steps:
       - id: checks-parallel-restart-entire-mz
         label: "Checks parallel + restart of the entire Mz"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1028,7 +1028,7 @@ steps:
       - id: checks-parallel-restart-environmentd-clusterd-storage
         label: "Checks parallel + restart of environmentd & storage clusterd"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1040,7 +1040,7 @@ steps:
       - id: checks-parallel-kill-clusterd-storage
         label: "Checks parallel + kill storage clusterd"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1052,7 +1052,7 @@ steps:
       - id: checks-upgrade-entire-mz
         label: "Checks upgrade, whole-Mz restart"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1064,7 +1064,7 @@ steps:
       - id: checks-self-managed-upgrade
         label: "Checks Self-Managed upgrade, whole-Mz restart"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 4
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1076,7 +1076,7 @@ steps:
       - id: checks-self-managed-upgrade-previous
         label: "Checks Self-Managed upgrade from previous, whole-Mz restart"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 4
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1088,7 +1088,7 @@ steps:
       - id: checks-preflight-check-rollback
         label: "Checks preflight-check and roll back upgrade"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1101,7 +1101,7 @@ steps:
       - id: checks-0dt-restart-entire-mz-forced-migrations
         label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1113,7 +1113,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz
         label: "Checks 0dt upgrade, whole-Mz restart"
         depends_on: build-x86_64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1125,7 +1125,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-two-versions
         label: "Checks 0dt upgrade across two versions"
         depends_on: build-x86_64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1137,7 +1137,7 @@ steps:
       - id: checks-0dt-upgrade-entire-mz-four-versions
         label: "Checks 0dt upgrade across four versions"
         depends_on: build-x86_64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1149,7 +1149,7 @@ steps:
       - id: cloudtest-upgrade
         label: "Platform checks upgrade in Cloudtest/K8s"
         depends_on: build-x86_64
-        timeout_in_minutes: 240
+        timeout_in_minutes: 60
         env:
           CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
         parallelism: 2
@@ -1166,7 +1166,7 @@ steps:
       - id: checks-self-managed-earliest-to-latest-direct-upgrade
         label: "Checks Self-Managed earliest to latest direct upgrade"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1179,7 +1179,7 @@ steps:
       - id: checks-self-managed-random-upgrade-path
         label: "Checks Self-Managed random upgrade path"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 60
         parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
@@ -1420,7 +1420,7 @@ steps:
     - id: cloud-canary
       label: "Canary Deploy in Staging Cloud"
       depends_on: build-aarch64
-      timeout_in_minutes: 240
+      timeout_in_minutes: 60
       concurrency: 1
       concurrency_group: 'cloud-canary'
       agents:
@@ -1433,7 +1433,7 @@ steps:
     - id: mz-e2e
       label: "Mz E2E Test"
       depends_on: build-aarch64
-      timeout_in_minutes: 240
+      timeout_in_minutes: 60
       concurrency: 1
       concurrency_group: 'mz-e2e-test'
       agents:
@@ -1447,7 +1447,7 @@ steps:
       label: "Terraform + Helm Chart E2E on AWS"
       artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 120
+      timeout_in_minutes: 60
       concurrency: 1
       concurrency_group: 'terraform-aws'
       agents:
@@ -1467,7 +1467,7 @@ steps:
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 120
+      timeout_in_minutes: 60
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
       agents:
@@ -1492,7 +1492,7 @@ steps:
       label: "Terraform + Helm Chart E2E on GCP"
       artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 120
+      timeout_in_minutes: 60
       concurrency: 1
       concurrency_group: 'terraform-gcp'
       agents:
@@ -1511,7 +1511,7 @@ steps:
       label: "Terraform + Helm Chart E2E on Azure"
       artifact_paths: [test/terraform/azure-temporary/terraform.tfstate, "mz_debug_*.zip"]
       depends_on: devel-docker-tags
-      timeout_in_minutes: 120
+      timeout_in_minutes: 60
       concurrency: 1
       concurrency_group: 'terraform-azure'
       agents:
@@ -1728,7 +1728,7 @@ steps:
         label: "RQG dbt3-joins workload"
         depends_on: build-aarch64
         # Some queries run very slow on Postgres, set a higher timeout to give them a chance to finish
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         agents:
           # Runs into timeout/OoM on small agents
           queue: hetzner-aarch64-8cpu-16gb
@@ -2114,7 +2114,7 @@ steps:
   - id: txn-wal-fencing
     label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
-    timeout_in_minutes: 120
+    timeout_in_minutes: 60
     parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
@@ -2183,7 +2183,7 @@ steps:
   - id: 0dt
     label: Zero downtime
     depends_on: build-x86_64
-    timeout_in_minutes: 300
+    timeout_in_minutes: 60
     parallelism: 4
     plugins:
       - ./ci/plugins/mzcompose:
@@ -2199,7 +2199,7 @@ steps:
         label: "Orchestratord + documentation defaults"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2213,7 +2213,7 @@ steps:
         label: "Orchestratord + rolling upgrade downtime"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2227,7 +2227,7 @@ steps:
         label: "Orchestratord + defaults for properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2240,7 +2240,7 @@ steps:
         label: "Orchestratord + individual properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2254,7 +2254,7 @@ steps:
         label: "Orchestratord + combine properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2268,7 +2268,7 @@ steps:
         label: "Orchestratord + upgrade, individual props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2281,7 +2281,7 @@ steps:
         label: "Orchestratord + upgrade, combine props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2294,7 +2294,7 @@ steps:
         label: "Orchestratord + upgrade chain, individual props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2307,7 +2307,7 @@ steps:
         label: "Orchestratord + upgrade chain, combine props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2320,7 +2320,7 @@ steps:
         label: Orchestratord balancer CRD
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2333,7 +2333,7 @@ steps:
         label: Orchestratord operator upgrade
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2355,7 +2355,7 @@ steps:
   - id: sqllogictest
     label: ":bulb: SLT (2 replicas)"
     depends_on: build-aarch64
-    timeout_in_minutes: 480
+    timeout_in_minutes: 60
     parallelism: 10
     agents:
       queue: hetzner-aarch64-16cpu-32gb
@@ -2381,7 +2381,7 @@ steps:
        - id: race-condition-subsequent
          label: "Race Condition Test (subsequent)"
          depends_on: build-x86_64
-         timeout_in_minutes: 180
+         timeout_in_minutes: 60
          agents:
            queue: hetzner-x86-64-8cpu-16gb
          plugins:
@@ -2393,7 +2393,7 @@ steps:
        - id: race-condition-subsequent-100
          label: "Race Condition Test (subsequent, 100 objects)"
          depends_on: build-x86_64
-         timeout_in_minutes: 180
+         timeout_in_minutes: 60
          agents:
            queue: hetzner-x86-64-12cpu-24gb
          plugins:
@@ -2405,7 +2405,7 @@ steps:
        - id: race-condition-subsequent-chain
          label: "Race Condition Test (subsequent chain)"
          depends_on: build-x86_64
-         timeout_in_minutes: 180
+         timeout_in_minutes: 60
          agents:
            queue: hetzner-x86-64-8cpu-16gb
          plugins:
@@ -2417,7 +2417,7 @@ steps:
        - id: race-condition-subsequent-chain-50
          label: "Race Condition Test (subsequent chain, 50 objects)"
          depends_on: build-x86_64
-         timeout_in_minutes: 180
+         timeout_in_minutes: 60
          agents:
            queue: hetzner-x86-64-12cpu-24gb
          plugins:
@@ -2430,7 +2430,7 @@ steps:
        - id: race-condition-concurrent
          label: "Race Condition Test (concurrent)"
          depends_on: build-x86_64
-         timeout_in_minutes: 180
+         timeout_in_minutes: 60
          agents:
            queue: hetzner-x86-64-8cpu-16gb
          plugins:

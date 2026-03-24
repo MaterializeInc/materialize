@@ -312,7 +312,7 @@ steps:
     depends_on: build-aarch64
     timeout_in_minutes: 30
     inputs: [test/sqllogictest]
-    parallelism: 4
+    parallelism: 5
     plugins:
       - ./ci/plugins/mzcompose:
           composition: sqllogictest
@@ -325,7 +325,7 @@ steps:
     label: Restart
     depends_on: build-aarch64
     timeout_in_minutes: 30
-    parallelism: 4
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: restart
@@ -337,7 +337,7 @@ steps:
     steps:
       - id: mysql-cdc
         label: MySQL CDC
-        parallelism: 8
+        parallelism: 5
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/mysql-cdc]
@@ -363,7 +363,7 @@ steps:
     steps:
       - id: pg-cdc
         label: Postgres CDC
-        parallelism: 8
+        parallelism: 6
         depends_on: build-aarch64
         timeout_in_minutes: 30
         inputs: [test/pg-cdc]
