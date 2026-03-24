@@ -10,8 +10,6 @@
 //! A source that reads from an a persist shard.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -19,7 +17,6 @@ use std::hash::Hash;
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::difference::{IsZero, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
@@ -781,219 +778,6 @@ impl PendingWork {
     }
 }
 
-// ============================================================================
-// Consolidating decode path
-// ============================================================================
-
-/// A cursor over a single `FetchedPart`, with a peeked next value for use in a
-/// merge heap. Compares rows using `ArrayOrd` (persist's structured columnar
-/// ordering) so that the merge interleaves parts in the same order they're
-/// sorted by (`RunOrder::Structured`).
-struct MergeCursor {
-    part: FetchedPart<SourceData, (), Timestamp, StorageDiff>,
-    /// The raw columnar index of the peeked row. Used with
-    /// `part.structured_key_ord()` for heap comparison in `ArrayOrd` order.
-    peeked_index: usize,
-    /// The decoded KVT from this part (peeked ahead).
-    peeked: ((SourceData, ()), Timestamp, StorageDiff),
-    /// Re-usable allocation for decoded `SourceData`.
-    row_buf: Option<SourceData>,
-    /// Stats for filter pushdown audit, if this part is being audited.
-    filter_pushdown_audit: Option<Box<dyn Debug>>,
-}
-
-impl MergeCursor {
-    /// Create a cursor from a parsed part, returning `None` if the part is empty.
-    fn new(mut part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>) -> Option<Self> {
-        let filter_pushdown_audit = part
-            .part
-            .is_filter_pushdown_audit()
-            .map(|s| Box::new(s) as Box<dyn Debug>);
-        let mut row_buf = None;
-        let (idx, kv, t, d) = part.part.next_with_index(&mut row_buf, &mut None)?;
-        Some(MergeCursor {
-            part: part.part,
-            peeked_index: idx,
-            peeked: (kv, t, d),
-            row_buf,
-            filter_pushdown_audit,
-        })
-    }
-
-    /// Advance to the next row. Returns `Some(self)` if there is a next row,
-    /// `None` if the part is exhausted.
-    fn advance(mut self) -> Option<Self> {
-        match self.part.next_with_index(&mut self.row_buf, &mut None) {
-            Some((idx, kv, t, d)) => {
-                self.peeked_index = idx;
-                self.peeked = (kv, t, d);
-                Some(self)
-            }
-            None => None,
-        }
-    }
-}
-
-/// Order `MergeCursor`s by their peeked key using `ArrayOrd` (structured
-/// columnar ordering), falling back to decoded `SourceData::Ord` for legacy
-/// parts without structured keys.
-impl PartialEq for MergeCursor {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-impl Eq for MergeCursor {}
-
-impl PartialOrd for MergeCursor {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for MergeCursor {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Compare using ArrayOrd (structured columnar ordering) when available.
-        // This matches the order parts are sorted by (RunOrder::Structured).
-        let key_ord = match (
-            self.part.structured_key_ord(),
-            other.part.structured_key_ord(),
-        ) {
-            (Some(a_ord), Some(b_ord)) => {
-                a_ord.at(self.peeked_index).cmp(&b_ord.at(other.peeked_index))
-            }
-            _ => {
-                // Fallback for legacy parts without structured keys.
-                let ((ref kv_a, _), _, _) = self.peeked;
-                let ((ref kv_b, _), _, _) = other.peeked;
-                kv_a.cmp(kv_b)
-            }
-        };
-        key_ord.then_with(|| self.peeked.1.cmp(&other.peeked.1))
-    }
-}
-
-/// A streaming merge across multiple sorted `FetchedPart`s. Iterates through
-/// all parts in structured key order, consolidating updates with identical KVT.
-struct SourcePartMerger {
-    heap: BinaryHeap<Reverse<MergeCursor>>,
-    /// Monotonically increasing counter, incremented on each distinct key
-    /// emitted. Used as `KeyProgress` for smooth frontier advancement.
-    key_counter: u64,
-}
-
-impl SourcePartMerger {
-    fn new() -> Self {
-        SourcePartMerger {
-            heap: BinaryHeap::new(),
-            key_counter: 0,
-        }
-    }
-
-    /// Add a parsed part to the merge.
-    fn push(&mut self, part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>) {
-        if let Some(cursor) = MergeCursor::new(part) {
-            self.heap.push(Reverse(cursor));
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.heap.is_empty()
-    }
-
-    /// Check if the top of the heap has the same key as the given cursor,
-    /// using `ArrayOrd` when available.
-    fn heap_top_matches_key(
-        heap: &BinaryHeap<Reverse<MergeCursor>>,
-        popped_cursor: &MergeCursor,
-        popped_time: &Timestamp,
-    ) -> bool {
-        let Some(Reverse(top)) = heap.peek() else {
-            return false;
-        };
-        let time_eq = top.peeked.1 == *popped_time;
-        if !time_eq {
-            return false;
-        }
-        match (
-            popped_cursor.part.structured_key_ord(),
-            top.part.structured_key_ord(),
-        ) {
-            (Some(a_ord), Some(b_ord)) => {
-                a_ord.at(popped_cursor.peeked_index) == b_ord.at(top.peeked_index)
-            }
-            _ => {
-                let ((ref popped_key, _), _, _) = popped_cursor.peeked;
-                let ((ref top_key, _), _, _) = top.peeked;
-                popped_key == top_key
-            }
-        }
-    }
-
-    /// Returns the next consolidated (key, val, time, diff, key_progress) from
-    /// the merge, along with whether this row is part of a filter pushdown
-    /// audit.
-    ///
-    /// Consecutive updates with identical (key, val, time) are consolidated
-    /// into a single update. Zero diffs are suppressed.
-    ///
-    /// `key_progress` is a monotonically increasing counter that advances on
-    /// each distinct key, suitable for use as a `KeyProgress` timestamp.
-    fn next(&mut self) -> Option<((SourceData, ()), Timestamp, StorageDiff, bool, KeyProgress)> {
-        loop {
-            let Reverse(cursor) = self.heap.pop()?;
-            let ((key, val), time, diff) = cursor.peeked.clone();
-            let is_audit = cursor.filter_pushdown_audit.is_some();
-
-            // Consolidate: absorb any subsequent entries with the same KVT.
-            // We compare using ArrayOrd before advancing the popped cursor.
-            let mut consolidated_diff = diff;
-            while Self::heap_top_matches_key(&self.heap, &cursor, &time) {
-                let Reverse(next_cursor) = self.heap.pop().unwrap();
-                let (_, _, next_diff) = next_cursor.peeked.clone();
-                consolidated_diff.plus_equals(&next_diff);
-                if let Some(advanced) = next_cursor.advance() {
-                    self.heap.push(Reverse(advanced));
-                }
-            }
-
-            // Check if the next key in the heap is different from the current
-            // one, and if so, bump the key counter.
-            let next_is_different = self.heap.peek().map_or(true, |Reverse(top)| {
-                match (
-                    cursor.part.structured_key_ord(),
-                    top.part.structured_key_ord(),
-                ) {
-                    (Some(a_ord), Some(b_ord)) => {
-                        a_ord.at(cursor.peeked_index) != b_ord.at(top.peeked_index)
-                    }
-                    _ => {
-                        let ((ref top_key, _), _, _) = top.peeked;
-                        top_key != &key
-                    }
-                }
-            });
-
-            // Re-insert the popped cursor after all comparisons are done.
-            if let Some(advanced) = cursor.advance() {
-                self.heap.push(Reverse(advanced));
-            }
-
-            // Suppress zero diffs.
-            if consolidated_diff.is_zero() {
-                continue;
-            }
-
-            if next_is_different {
-                self.key_counter += 1;
-            }
-            let progress = KeyProgress(self.key_counter);
-
-            return Some(((key, val), time, consolidated_diff, is_audit, progress));
-        }
-    }
-}
-
 /// A variant of [`decode_and_mfp`] that performs a streaming merge across all
 /// fetched parts at the same timestamp, consolidating updates with identical
 /// key-value-time before applying MFP.
@@ -1029,7 +813,7 @@ where
 
                 // Build the streaming merge decode operator in the inner scope.
                 // It manages KeyProgress capabilities based on the key prefix.
-                let decoded = streaming_merge_decode(
+                let decoded = decode_with_key_progress(
                     cfg,
                     fetched_inner,
                     &name_owned,
@@ -1061,13 +845,14 @@ where
         )
 }
 
-/// The streaming merge decode operator for the consolidation inner scope.
+/// Decode operator for the consolidation inner scope. Processes fetched parts
+/// one at a time (like [`decode_and_mfp`]), but emits rows with monotonically
+/// increasing [`KeyProgress`] timestamps so the downstream `consolidate` can
+/// make incremental progress.
 ///
-/// Receives fetched blobs, merges them using [`SourcePartMerger`], applies MFP,
-/// and emits rows with [`KeyProgress`] timestamps derived from key prefixes.
-/// Periodically downgrades capabilities to allow the downstream `consolidate`
-/// to make incremental progress.
-fn streaming_merge_decode<G>(
+/// Cross-part consolidation is handled by the `consolidate()` operator in the
+/// enclosing scope, not by merging here.
+fn decode_with_key_progress<G>(
     cfg: PersistConfig,
     fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
@@ -1079,7 +864,7 @@ where
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
-        format!("persist_source::streaming_merge_decode({})", name),
+        format!("persist_source::decode_with_key_progress({})", name),
         scope.clone(),
     );
     let operator_info = builder.operator_info();
@@ -1110,31 +895,19 @@ where
         let activations = scope.activations();
         let activator = Activator::new(operator_info.address, activations);
 
-        // Each entry: a capability (for creating delayed caps / dropped when
-        // done), the merger, and the current max KeyProgress for downgrading.
-        let mut pending_mergers: std::collections::VecDeque<(
+        // Pending parts, each with its own capability and a row counter for
+        // KeyProgress. Processed front-to-back, one part at a time.
+        let mut pending_work: std::collections::VecDeque<(
             Capability<InnerTime>,
-            SourcePartMerger,
+            ShardSourcePart<SourceData, (), Timestamp, StorageDiff>,
+            u64, // row counter for KeyProgress
         )> = std::collections::VecDeque::new();
 
         move |_frontier| {
             fetched_input.for_each(|time, data| {
                 let capability = time.retain(0);
-
-                // Find or create a merger for this time.
-                let merger = if let Some((_, m)) = pending_mergers
-                    .iter_mut()
-                    .find(|(c, _)| c.time() == capability.time())
-                {
-                    m
-                } else {
-                    pending_mergers
-                        .push_back((capability, SourcePartMerger::new()));
-                    &mut pending_mergers.back_mut().unwrap().1
-                };
-
                 for fetched_blob in data.drain(..) {
-                    merger.push(fetched_blob.parse());
+                    pending_work.push_back((capability.clone(), fetched_blob.parse(), 0));
                 }
             });
 
@@ -1145,29 +918,27 @@ where
             let mut work = 0;
             let start_time = Instant::now();
             let mut output = updates_output.activate();
+            let mut row_buf = None;
 
-            while !pending_mergers.is_empty() && !yield_fn(start_time, work) {
+            while !pending_work.is_empty() && !yield_fn(start_time, work) {
                 let exhausted = {
-                    let (cap, merger) = pending_mergers.front_mut().unwrap();
+                    let (cap, part, row_counter) = pending_work.front_mut().unwrap();
+                    let is_filter_pushdown_audit = part.part.is_filter_pushdown_audit();
 
-                    while let Some(((key, _val), time, diff, is_audit, key_progress)) = merger.next() {
+                    while let Some(((key, val), time, diff)) =
+                        part.part.next_with_storage(&mut row_buf, &mut None)
+                    {
                         if until.less_equal(&time) {
                             continue;
                         }
 
-                        let emit_time: InnerTime = (
-                            (time, cap.time().0 .1),
-                            key_progress,
-                        );
-                        // Downgrade to signal we won't emit earlier key positions.
-                        // key_progress is monotonically non-decreasing because the
-                        // merger iterates in ArrayOrd order and increments the
-                        // counter on each distinct key.
+                        *row_counter += 1;
+                        let key_progress = KeyProgress(*row_counter);
+                        let emit_time: InnerTime = ((time, cap.time().0 .1), key_progress);
                         cap.downgrade(&emit_time);
-                        let mut session = output.session_with_builder(cap);
 
-                        match key {
-                            SourceData(Ok(row)) => {
+                        match (key, val) {
+                            (SourceData(Ok(row)), ()) => {
                                 if let Some(mfp) = map_filter_project.as_ref() {
                                     work += 1;
                                     let arena = RowArena::new();
@@ -1180,13 +951,15 @@ where
                                         |time| !until.less_equal(time),
                                         &mut row_builder,
                                     ) {
-                                        if is_audit {
+                                        if is_filter_pushdown_audit.is_some() {
                                             report_pushdown_audit(&name, panic_on_audit);
                                         }
                                         match result {
                                             Ok((row, time, diff)) => {
                                                 if !until.less_equal(&time) {
                                                     let et = ((time, emit_time.0 .1), key_progress);
+                                                    let mut session =
+                                                        output.session_with_builder(cap);
                                                     session.give((Ok(row), et, diff));
                                                     work += 1;
                                                 }
@@ -1194,39 +967,45 @@ where
                                             Err((err, time, diff)) => {
                                                 if !until.less_equal(&time) {
                                                     let et = ((time, emit_time.0 .1), key_progress);
+                                                    let mut session =
+                                                        output.session_with_builder(cap);
                                                     session.give((Err(err), et, diff));
                                                     work += 1;
                                                 }
                                             }
                                         }
                                     }
+                                    drop(datums_local);
+                                    row_buf.replace(SourceData(Ok(row)));
                                 } else {
+                                    let mut session = output.session_with_builder(cap);
                                     session.give((Ok(row.clone()), emit_time, diff.into()));
+                                    row_buf.replace(SourceData(Ok(row)));
                                     work += 1;
                                 }
                             }
-                            SourceData(Err(err)) => {
+                            (SourceData(Err(err)), ()) => {
+                                let mut session = output.session_with_builder(cap);
                                 session.give((Err(err), emit_time, diff.into()));
                                 work += 1;
                             }
                         }
-                        // Drop session before next iteration to avoid borrow conflict.
-                        drop(session);
                         if yield_fn(start_time, work) {
                             break;
                         }
                     }
 
-                    merger.is_empty()
+                    // Part is exhausted if the while loop ended without a yield break.
+                    !yield_fn(start_time, work)
                 };
                 if exhausted {
-                    pending_mergers.pop_front();
+                    pending_work.pop_front();
                 } else {
                     break;
                 }
             }
 
-            if !pending_mergers.is_empty() {
+            if !pending_work.is_empty() {
                 activator.activate();
             }
         }
