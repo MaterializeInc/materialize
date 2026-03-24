@@ -17,6 +17,7 @@ documentation][user-docs].
 
 import argparse
 import copy
+import html
 import importlib
 import importlib.abc
 import importlib.util
@@ -24,17 +25,21 @@ import inspect
 import io
 import json
 import os
+import re
 import selectors
 import subprocess
 import sys
 import threading
+import threading as _threading
 import time
 import traceback
 import urllib.parse
+import xml.etree.ElementTree as ET
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from inspect import Traceback, getframeinfo, getmembers, isfunction, stack
+from pathlib import Path
 from tempfile import TemporaryFile
 from typing import IO, Any, TextIO, TypeVar, cast
 
@@ -918,31 +923,110 @@ class Composition:
             )
         environment = {"CLUSTER_REPLICA_SIZES": json.dumps(cluster_replica_size_map())}
 
-        if persistent:
-            if not self.is_running(service):
-                self.up(Service(service, idle=True))
+        if persistent and not self.is_running(service):
+            self.up(Service(service, idle=True))
 
-            return self.exec(
-                service,
-                *args,
-                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-                env_extra=environment,
+        with self._testdrive_junit(args, service=service) as td_args:
+            if persistent:
+                return self.exec(
+                    service,
+                    *td_args,
+                    capture_and_print=not quiet,
+                    capture=quiet,
+                    capture_stderr=quiet,
+                    env_extra=environment,
+                    silent=True,
+                )
+            else:
+                return self.run(
+                    service,
+                    *td_args,
+                    capture_and_print=not quiet,
+                    capture=quiet,
+                    capture_stderr=quiet,
+                    env_extra=environment,
+                    silent=True,
+                )
+
+    @contextmanager
+    def _testdrive_junit(
+        self, args: tuple[str, ...] | list[str], service: str = "testdrive"
+    ) -> Iterator[tuple[str, ...]]:
+        """Wraps a testdrive invocation to capture per-file error details via
+        testdrive's own --junit-report, replacing generic docker compose
+        failures with specific testdrive errors when available."""
+        use_junit = not any(
+            "--rewrite-results" in a or "--junit-report" in a for a in args
+        )
+        junit_filename = f".td_junit_{os.getpid()}_{_threading.get_ident()}.xml"
+        # Write to /share/tmp inside the container (Docker-managed volume,
+        # always writable) rather than /workdir which may be read-only in CI.
+        container_junit_path = f"/share/tmp/{junit_filename}"
+        host_junit_path = self.path / junit_filename
+
+        try:
+            if use_junit:
+                yield (f"--junit-report={container_junit_path}", *args)
+            else:
+                yield tuple(args)
+        except CommandFailureCausedUIError:
+            if use_junit:
+                self._copy_from_service(service, container_junit_path, host_junit_path)
+                errors = self._read_testdrive_junit_errors(host_junit_path)
+                if errors:
+                    raise FailedTestExecutionError(errors)
+            raise
+        finally:
+            if use_junit:
+                try:
+                    host_junit_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _copy_from_service(
+        self, service: str, container_path: str, host_path: Path
+    ) -> None:
+        try:
+            self.invoke(
+                "cp",
+                f"{service}:{container_path}",
+                str(host_path),
+                check=False,
                 silent=True,
             )
-        else:
-            return self.run(
-                service,
-                *args,
-                # needed for sufficient error information in the junit.xml while still printing to stdout during execution
-                capture_and_print=not quiet,
-                capture=quiet,
-                capture_stderr=quiet,
-                env_extra=environment,
-                silent=True,
+        except Exception:
+            pass
+
+    _TD_LOCATION_RE = re.compile(r"(\S+\.td):(\d+):\d+:")
+
+    def _read_testdrive_junit_errors(
+        self, junit_path: Path
+    ) -> list[TestFailureDetails]:
+        try:
+            tree = ET.parse(junit_path)
+        except (ET.ParseError, OSError):
+            return []
+
+        errors: list[TestFailureDetails] = []
+        for testcase in tree.iter("testcase"):
+            failure = testcase.find("failure")
+            if failure is None:
+                continue
+            file_name = testcase.get("name", "unknown")
+            failure_text = html.unescape(failure.get("message") or failure.text or "")
+            match = self._TD_LOCATION_RE.search(failure_text)
+            location = match.group(1) if match else file_name
+            line_number = int(match.group(2)) if match else None
+            errors.append(
+                TestFailureDetails(
+                    message=f"Executing {location} failed!",
+                    details=failure_text,
+                    test_case_name_override=self.current_test_case_name_override,
+                    location=location,
+                    line_number=line_number,
+                )
             )
+        return errors
 
     def exec(
         self,
@@ -1507,16 +1591,17 @@ class Composition:
         if not self.is_running(service):
             self.up(Service(service, idle=True))
 
-        return self.exec(
-            service,
-            *args,
-            stdin=input,
-            capture_and_print=not quiet,
-            capture=quiet,
-            capture_stderr=quiet,
-            silent=silent,
-            print_prefix=print_prefix,
-        )
+        with self._testdrive_junit(args, service=service) as td_args:
+            return self.exec(
+                service,
+                *td_args,
+                stdin=input,
+                capture_and_print=not quiet,
+                capture=quiet,
+                capture_stderr=quiet,
+                silent=silent,
+                print_prefix=print_prefix,
+            )
 
     def enable_minio_versioning(self) -> None:
         self.up("minio", Service("mc", idle=True))
