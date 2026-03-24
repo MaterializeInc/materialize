@@ -536,13 +536,23 @@ async fn handle_tools_list(
             vec![
                 ToolDefinition {
                     name: "query_system_catalog".to_string(),
-                    description: "Query Materialize system catalog tables (mz_*) for troubleshooting and observability. Only mz_* tables are accessible.".to_string(),
+                    description: concat!(
+                        "Query Materialize system catalog tables for troubleshooting and observability. ",
+                        "Only mz_*, pg_catalog, and information_schema tables are accessible.\n\n",
+                        "Key tables by scenario:\n",
+                        "- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n",
+                        "- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n",
+                        "- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n",
+                        "- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n",
+                        "- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\n",
+                        "Use SHOW TABLES FROM mz_internal or mz_catalog to discover more tables.",
+                    ).to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
                             "sql_query": {
                                 "type": "string",
-                                "description": "SQL query restricted to mz_* system tables"
+                                "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"
                             }
                         },
                         "required": ["sql_query"]
@@ -807,9 +817,9 @@ async fn query_system_catalog(
     // Then validate that query only references mz_* tables by parsing the SQL
     validate_system_catalog_query(sql_query)?;
 
-    // Use READ ONLY transaction for defense-in-depth
-    let wrapped_query = format!("BEGIN READ ONLY; {}; COMMIT;", sql_query);
-    let rows = execute_sql(client, &wrapped_query).await?;
+    // Single statement — skip explicit transaction for better performance.
+    // Read-only safety is enforced by validate_readonly_query above.
+    let rows = execute_sql(client, sql_query).await?;
 
     let text =
         serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
