@@ -48,6 +48,24 @@ mcp-observatory
 {"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}]}}
 
 # =============================================================================
+# query_system_catalog - pg_catalog and information_schema
+# =============================================================================
+
+# pg_catalog should be accessible.
+mcp-observatory
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT typname FROM pg_catalog.pg_type WHERE typname = 'bool'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"bool\"\n  ]\n]"}]}}
+
+# information_schema should be accessible.
+mcp-observatory
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT table_schema FROM information_schema.tables WHERE table_name = 'mz_databases' AND table_schema = 'mz_catalog' LIMIT 1"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"mz_catalog\"\n  ]\n]"}]}}
+
+# =============================================================================
 # query_system_catalog - non-system tables rejected
 # =============================================================================
 
@@ -131,3 +149,87 @@ mcp-observatory
 ----
 200 OK
 {"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"Tool not found: query is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling get_data_product_details on observatory endpoint should fail.
+mcp-observatory
+{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"get_data_product_details","arguments":{"name":"some_product"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":33,"error":{"code":-32602,"message":"Tool not found: get_data_product_details is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+
+# Calling a completely unknown tool fails at deserialization (422).
+mcp-observatory
+{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}
+----
+422 Unprocessable Entity
+Failed to deserialize the JSON body into the target type: .: unknown variant `nonexistent_tool`, expected one of `get_data_products`, `get_data_product_details`, `read_data_product`, `query`, `query_system_catalog` at line 1 column 99
+
+# =============================================================================
+# JSON-RPC protocol validation
+# =============================================================================
+
+# Wrong JSON-RPC version should return InvalidRequest error.
+mcp-observatory
+{"jsonrpc":"1.0","id":40,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":40,"error":{"code":-32600,"message":"Invalid JSON-RPC version: expected 2.0","data":{"error_type":"InvalidRequest"}}}
+
+# Unknown method should return MethodNotFound error.
+mcp-observatory
+{"jsonrpc":"2.0","id":41,"method":"unknown/method"}
+----
+200 OK
+{"jsonrpc":"2.0","id":41,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
+
+# Notification (no id) should return 200 with empty body.
+mcp-observatory
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+----
+200 OK
+
+# String id should be echoed back.
+mcp-observatory
+{"jsonrpc":"2.0","id":"my-request-42","method":"tools/list"}
+----
+200 OK
+{"jsonrpc":"2.0","id":"my-request-42","result":{"tools":[{"name":"query_system_catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible.\n\nKey tables by scenario:\n- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\nUse SHOW TABLES FROM mz_internal or mz_catalog to discover more tables.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]}}]}}
+
+# =============================================================================
+# query_system_catalog - additional rejection cases
+# =============================================================================
+
+# INSERT should be rejected.
+mcp-observatory
+{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"INSERT INTO mz_tables VALUES (1)"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":50,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# UPDATE should be rejected.
+mcp-observatory
+{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"UPDATE mz_tables SET name = 'hacked'"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":51,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# CREATE should be rejected.
+mcp-observatory
+{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"CREATE TABLE mz_evil (id INT)"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":52,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
+
+# Schema-squatting should be rejected (mz_catalogg is not a valid system schema).
+mcp-observatory
+{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_catalogg.fake_table"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":53,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: mz_catalogg.fake_table. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
+
+# Mixed system and user tables in JOIN should be rejected.
+mcp-observatory
+{"jsonrpc":"2.0","id":54,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_tables t JOIN public.user_data u ON t.id = u.table_id"}}}
+----
+200 OK
+{"jsonrpc":"2.0","id":54,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: public.user_data. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
