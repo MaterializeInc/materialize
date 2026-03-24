@@ -349,14 +349,14 @@ includes the goal, key files to read, and acceptance criteria.
 > ~~`src/sql/src/plan/statement/ddl.rs` (how SQL views track dependencies),~~
 > ~~`src/adapter/src/catalog/open.rs` (catalog rehydration order).~~
 
-### Prompt 27: Fix all clippy warnings in SPARQL crates
+### ~~Prompt 27: Fix all clippy warnings in SPARQL crates~~
 
-> Run `cargo clippy` on all SPARQL-related crates (`mz-sparql-parser`,
-> `mz-sparql`, `mz-hir`) and fix every warning. Common issues to expect:
-> unnecessary clones, redundant closures, `map` + `unwrap` that should be
-> `map_or`, manual `impl` of derived traits, needless borrows, and
-> `unwrap_or_else` with non-lazy default. Also check for clippy warnings
-> in files modified by the SPARQL project in `mz-sql`, `mz-adapter`, and
-> `mz-storage-types`.
+> ~~Run `cargo clippy` on all SPARQL-related crates (`mz-sparql-parser`,~~
+> ~~`mz-sparql`, `mz-hir`) and fix every warning. Common issues to expect:~~
+> ~~unnecessary clones, redundant closures, `map` + `unwrap` that should be~~
+> ~~`map_or`, manual `impl` of derived traits, needless borrows, and~~
+> ~~`unwrap_or_else` with non-lazy default. Also check for clippy warnings~~
+> ~~in files modified by the SPARQL project in `mz-sql`, `mz-adapter`, and~~
+> ~~`mz-storage-types`.~~
 >
-> Run: `cargo clippy -p mz-sparql-parser -p mz-sparql -p mz-hir 2>&1`
+> ~~Run: `cargo clippy -p mz-sparql-parser -p mz-sparql -p mz-hir 2>&1`~~

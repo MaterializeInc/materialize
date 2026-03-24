@@ -2312,3 +2312,30 @@ bracket syntax.
 - `cargo test -p mz-sql-parser`: 13 tests pass, 0 failures
 - `bin/fmt`: passes (except missing `buf` tool)
 - `bin/lint`: only pre-existing missing-tool failures
+
+## 2026-03-24: Prompt 27 — Fix all clippy warnings in SPARQL crates
+
+### What was done
+
+Ran `cargo clippy -p mz-sparql-parser -p mz-sparql -p mz-hir` and fixed
+all warnings. Only 2 warnings existed, both in `mz-sparql`:
+
+- `src/sparql/src/plan.rs:755` — `l as i64` cast for LIMIT value
+- `src/sparql/src/plan.rs:758` — `offset_val as i64` cast for OFFSET value
+
+Both triggered `clippy::as_conversions`. Fixed by replacing `as i64` with
+`i64::try_from(val).expect("value too large")`.
+
+Also verified `cargo clippy -p mz-sql` produces no warnings in the files
+modified by the SPARQL project (`dml.rs`, `ddl.rs`).
+
+### Build results
+
+- `cargo clippy -p mz-sparql-parser -p mz-sparql -p mz-hir`: 0 warnings
+- `cargo clippy -p mz-sql`: 0 warnings in SPARQL-modified files
+
+---
+
+## All prompts complete
+
+All 27 prompts in the SPARQL frontend implementation are now done.
