@@ -115,7 +115,7 @@ pub enum Statement<T: AstInfo> {
     ReassignOwned(ReassignOwnedStatement<T>),
     ValidateConnection(ValidateConnectionStatement<T>),
     Comment(CommentStatement<T>),
-    Sparql(SparqlStatement),
+    Sparql(SparqlStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for Statement<T> {
@@ -1343,7 +1343,7 @@ pub struct ViewDefinition<T: AstInfo> {
     pub query: Query<T>,
     /// If set, this view is defined by a SPARQL query rather than the SQL `query` field.
     /// The `query` field is a dummy placeholder when this is `Some`.
-    pub sparql: Option<SparqlStatement>,
+    pub sparql: Option<SparqlStatement<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for ViewDefinition<T> {
@@ -1411,7 +1411,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     /// If set, this materialized view is defined by a SPARQL query rather than
     /// the SQL `query` field. The `query` field is a dummy placeholder when
     /// this is `Some`.
-    pub sparql: Option<SparqlStatement>,
+    pub sparql: Option<SparqlStatement<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
@@ -3966,7 +3966,7 @@ impl_display_t!(SubscribeStatement);
 pub enum SubscribeRelation<T: AstInfo> {
     Name(T::ItemName),
     Query(Query<T>),
-    Sparql(SparqlStatement),
+    Sparql(SparqlStatement<T>),
 }
 
 impl<T: AstInfo> AstDisplay for SubscribeRelation<T> {
@@ -5779,24 +5779,39 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
 
 impl_display_t!(CommentObjectType);
 
-/// `SPARQL $body$`
+/// `SPARQL $body$` or `SPARQL ON <quad_table> $body$`
 ///
 /// Wraps a raw SPARQL query string to be parsed and planned by the SPARQL
 /// frontend crates (`mz-sparql-parser` and `mz-sparql`).
+///
+/// The optional `quad_table` field stores a reference to the RDF quad table.
+/// In the `Raw` form, this is a `RawItemName`; in the `Aug` form, a
+/// `ResolvedItemName` carrying the `CatalogItemId` and `GlobalId`. This is
+/// set during planning and persisted in `create_sql` (using the standard
+/// `[id AS db.schema.item]` syntax) so that catalog rehydration can resolve
+/// the table without relying on the session's search path.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SparqlStatement {
+pub struct SparqlStatement<T: AstInfo> {
     /// The raw SPARQL query body (contents of the dollar-quoted string).
     pub body: String,
+    /// Reference to the quad table, resolved during name resolution.
+    pub quad_table: Option<T::ItemName>,
 }
 
-impl AstDisplay for SparqlStatement {
+impl<T: AstInfo> AstDisplay for SparqlStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("SPARQL $$");
+        f.write_str("SPARQL ");
+        if let Some(ref qt) = self.quad_table {
+            f.write_str("ON ");
+            f.write_node(qt);
+            f.write_str(" ");
+        }
+        f.write_str("$$");
         f.write_str(&self.body);
         f.write_str("$$");
     }
 }
-impl_display!(SparqlStatement);
+impl_display_t!(SparqlStatement);
 
 // Include the `AstDisplay` implementations for simple options derived by the
 // crate's build.rs script.

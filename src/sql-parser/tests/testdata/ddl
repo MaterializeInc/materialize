@@ -3502,25 +3502,25 @@ CREATE VIEW triples AS SPARQL $$ SELECT ?s ?p ?o WHERE { ?s ?p ?o } $$
 ----
 CREATE VIEW triples AS SPARQL $$ SELECT ?s ?p ?o WHERE { ?s ?p ?o } $$
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("triples")]), columns: [], query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, sparql: Some(SparqlStatement { body: " SELECT ?s ?p ?o WHERE { ?s ?p ?o } " }) } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("triples")]), columns: [], query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, sparql: Some(SparqlStatement { body: " SELECT ?s ?p ?o WHERE { ?s ?p ?o } ", quad_table: None }) } })
 
 parse-statement
 CREATE MATERIALIZED VIEW mat_triples AS SPARQL $$ SELECT ?s ?p ?o WHERE { ?s ?p ?o } $$
 ----
 CREATE MATERIALIZED VIEW mat_triples AS SPARQL $$ SELECT ?s ?p ?o WHERE { ?s ?p ?o } $$
 =>
-CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mat_triples")]), columns: [], replacement_for: None, in_cluster: None, in_cluster_replica: None, query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, as_of: None, with_options: [], sparql: Some(SparqlStatement { body: " SELECT ?s ?p ?o WHERE { ?s ?p ?o } " }) })
+CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mat_triples")]), columns: [], replacement_for: None, in_cluster: None, in_cluster_replica: None, query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, as_of: None, with_options: [], sparql: Some(SparqlStatement { body: " SELECT ?s ?p ?o WHERE { ?s ?p ?o } ", quad_table: None }) })
 
 parse-statement
 CREATE VIEW construct_view AS SPARQL $$ CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } $$
 ----
 CREATE VIEW construct_view AS SPARQL $$ CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } $$
 =>
-CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("construct_view")]), columns: [], query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, sparql: Some(SparqlStatement { body: " CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } " }) } })
+CreateView(CreateViewStatement { if_exists: Error, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("construct_view")]), columns: [], query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, sparql: Some(SparqlStatement { body: " CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o } ", quad_table: None }) } })
 
 parse-statement
 CREATE OR REPLACE VIEW triples AS SPARQL $$ SELECT ?s ?p ?o WHERE { ?s ?p ?o } $$
 ----
 CREATE OR REPLACE VIEW triples AS SPARQL $$ SELECT ?s ?p ?o WHERE { ?s ?p ?o } $$
 =>
-CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("triples")]), columns: [], query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, sparql: Some(SparqlStatement { body: " SELECT ?s ?p ?o WHERE { ?s ?p ?o } " }) } })
+CreateView(CreateViewStatement { if_exists: Replace, temporary: false, definition: ViewDefinition { name: UnresolvedItemName([Ident("triples")]), columns: [], query: Query { ctes: Simple([]), body: Values(Values([])), order_by: [], limit: None, offset: None }, sparql: Some(SparqlStatement { body: " SELECT ?s ?p ?o WHERE { ?s ?p ?o } ", quad_table: None }) } })

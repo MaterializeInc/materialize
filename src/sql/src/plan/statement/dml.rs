@@ -308,17 +308,17 @@ fn plan_select_inner(
 
 pub fn describe_sparql(
     _scx: &StatementContext,
-    stmt: SparqlStatement,
+    stmt: SparqlStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     let desc = sparql_desc(&stmt)?;
     Ok(StatementDesc::new(Some(desc)))
 }
 
-pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan, PlanError> {
+pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement<Aug>) -> Result<Plan, PlanError> {
     let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
         .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
 
-    let quad_table_id = resolve_quad_table(scx)?;
+    let (quad_table_id, _) = resolve_quad_table(scx, stmt.quad_table.as_ref())?;
     let catalog_triples_id = resolve_catalog_triples(scx);
 
     // Compile SPARQL directly to HIR at plan time.
@@ -346,7 +346,7 @@ pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement) -> Result<Plan
 
 /// Build a [`RelationDesc`] for the output of a SPARQL query.
 /// Parse a SPARQL statement and return its output [`RelationDesc`].
-fn sparql_desc(stmt: &SparqlStatement) -> Result<RelationDesc, PlanError> {
+fn sparql_desc(stmt: &SparqlStatement<Aug>) -> Result<RelationDesc, PlanError> {
     let query = mz_sparql_parser::parser::parse(&stmt.body)
         .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
     Ok(sparql_query_desc(&query))
@@ -389,20 +389,50 @@ pub(crate) fn sparql_query_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> R
     desc.finish()
 }
 
-/// Resolve the `rdf_quads` table from the catalog and return its [`GlobalId`].
-pub(crate) fn resolve_quad_table(scx: &StatementContext) -> Result<GlobalId, PlanError> {
-    use crate::names::PartialItemName;
-    let quad_table_name = PartialItemName {
-        database: None,
-        schema: None,
-        item: "rdf_quads".into(),
-    };
-    let quad_table_item = scx
-        .catalog
-        .resolve_item(&quad_table_name)
-        .map_err(|e| PlanError::Unstructured(format!("failed to resolve rdf_quads: {e}")))?;
-    let quad_table = quad_table_item.at_version(mz_repr::RelationVersionSelector::Latest);
-    Ok(quad_table.global_id())
+/// Resolve the `rdf_quads` table and return its [`GlobalId`] and a
+/// [`ResolvedItemName`] suitable for persisting in `create_sql`.
+///
+/// If the SPARQL statement already carries a resolved `quad_table`
+/// (from a persisted `create_sql` with `[id AS db.schema.item]` syntax),
+/// use it directly. Otherwise, resolve `rdf_quads` by partial name and
+/// construct a `ResolvedItemName` for normalization.
+pub(crate) fn resolve_quad_table(
+    scx: &StatementContext,
+    resolved: Option<&ResolvedItemName>,
+) -> Result<(GlobalId, ResolvedItemName), PlanError> {
+    use crate::names::ResolvedItemName;
+
+    if let Some(name) = resolved {
+        // Already resolved (rehydration path or re-planning persisted SQL).
+        let item = scx.catalog.get_item(name.item_id());
+        let gid = item
+            .at_version(mz_repr::RelationVersionSelector::Latest)
+            .global_id();
+        Ok((gid, name.clone()))
+    } else {
+        // First-time resolution by partial name.
+        use crate::names::PartialItemName;
+        let quad_table_name = PartialItemName {
+            database: None,
+            schema: None,
+            item: "rdf_quads".into(),
+        };
+        let item = scx
+            .catalog
+            .resolve_item(&quad_table_name)
+            .map_err(|e| PlanError::Unstructured(format!("failed to resolve rdf_quads: {e}")))?;
+        let gid = item
+            .at_version(mz_repr::RelationVersionSelector::Latest)
+            .global_id();
+        let resolved_name = ResolvedItemName::Item {
+            id: item.id(),
+            qualifiers: item.name().qualifiers.clone(),
+            full_name: scx.catalog.resolve_full_name(item.name()),
+            print_id: true,
+            version: mz_repr::RelationVersionSelector::Latest,
+        };
+        Ok((gid, resolved_name))
+    }
 }
 
 /// Try to resolve `mz_internal.mz_rdf_catalog_triples` from the catalog.
@@ -424,12 +454,12 @@ pub(crate) fn resolve_catalog_triples(scx: &StatementContext) -> Option<GlobalId
 /// returns a [`SubscribeFrom::Query`].
 fn plan_sparql_subscribe(
     scx: &StatementContext,
-    stmt: &SparqlStatement,
+    stmt: &SparqlStatement<Aug>,
 ) -> Result<(SubscribeFrom, RelationDesc, Scope), PlanError> {
     let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
         .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
 
-    let quad_table_id = resolve_quad_table(scx)?;
+    let (quad_table_id, _) = resolve_quad_table(scx, stmt.quad_table.as_ref())?;
     let catalog_triples_id = resolve_catalog_triples(scx);
     let desc = sparql_query_desc(&sparql_query);
 

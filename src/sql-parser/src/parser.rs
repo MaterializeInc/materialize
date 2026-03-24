@@ -3896,23 +3896,13 @@ impl<'a> Parser<'a> {
 
         // Check for SPARQL $$ ... $$ syntax.
         if self.parse_keyword(SPARQL) {
-            let body = match self.next_token() {
-                Some(Token::String(s)) => s,
-                other => {
-                    return self.expected(
-                        self.peek_prev_pos(),
-                        "a dollar-quoted string containing a SPARQL query",
-                        other,
-                    );
-                }
-            };
-            // Use a dummy query placeholder — the SPARQL body is authoritative.
+            let sparql_stmt = self.parse_sparql_stmt()?;
             let query = Self::dummy_query();
             return Ok(ViewDefinition {
                 name,
                 columns,
                 query,
-                sparql: Some(SparqlStatement { body }),
+                sparql: Some(sparql_stmt),
             });
         }
 
@@ -3975,17 +3965,8 @@ impl<'a> Parser<'a> {
 
         // Check for SPARQL $$ ... $$ syntax.
         let (query, sparql) = if self.parse_keyword(SPARQL) {
-            let body = match self.next_token() {
-                Some(Token::String(s)) => s,
-                other => {
-                    return self.expected(
-                        self.peek_prev_pos(),
-                        "a dollar-quoted string containing a SPARQL query",
-                        other,
-                    );
-                }
-            };
-            (Self::dummy_query(), Some(SparqlStatement { body }))
+            let sparql_stmt = self.parse_sparql_stmt()?;
+            (Self::dummy_query(), Some(sparql_stmt))
         } else {
             (self.parse_query()?, None)
         };
@@ -8925,7 +8906,10 @@ impl<'a> Parser<'a> {
                     );
                 }
             };
-            SubscribeRelation::Sparql(SparqlStatement { body })
+            SubscribeRelation::Sparql(SparqlStatement {
+                body,
+                quad_table: None,
+            })
         } else if self.consume_token(&Token::LParen) {
             let query = self.parse_query()?;
             self.expect_token(&Token::RParen)?;
@@ -10245,7 +10229,17 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_sparql(&mut self) -> Result<Statement<Raw>, ParserError> {
+    /// Parse a `SparqlStatement`: optional `ON <fq_name>` followed by a
+    /// dollar-quoted body.  The `SPARQL` keyword must already be consumed.
+    fn parse_sparql_stmt(&mut self) -> Result<SparqlStatement<Raw>, ParserError> {
+        // Optional: ON [id AS db.schema.table] or ON db.schema.table
+        // Persisted in create_sql for catalog rehydration. Uses
+        // parse_raw_name() so the [id AS name] bracket syntax round-trips.
+        let quad_table = if self.parse_keyword(ON) {
+            Some(self.parse_raw_name()?)
+        } else {
+            None
+        };
         let body = match self.next_token() {
             Some(Token::String(s)) => s,
             other => {
@@ -10256,7 +10250,11 @@ impl<'a> Parser<'a> {
                 );
             }
         };
-        Ok(Statement::Sparql(SparqlStatement { body }))
+        Ok(SparqlStatement { body, quad_table })
+    }
+
+    fn parse_sparql(&mut self) -> Result<Statement<Raw>, ParserError> {
+        Ok(Statement::Sparql(self.parse_sparql_stmt()?))
     }
 }
 

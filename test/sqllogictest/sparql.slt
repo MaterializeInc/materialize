@@ -676,15 +676,62 @@ colName colType
 # =============================================================================
 # 11. CREATE VIEW from SPARQL
 # =============================================================================
-# SKIP: CREATE VIEW causes a catalog rehydration panic when the coordinator
-# tries to re-plan the persisted SPARQL SQL (rdf_quads cannot be resolved
-# by name during catalog deserialization). This is tracked by Prompt 26.
-# Uncomment these tests once Prompt 26 is implemented.
+
+# Create a SPARQL view
+statement ok
+CREATE VIEW sparql_people AS SPARQL $$
+  PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+  SELECT ?name
+  WHERE {
+    ?s a foaf:Person .
+    ?s foaf:name ?name .
+  }
+  ORDER BY ?name
+$$
+
+# Query the view via SQL
+query T colnames
+SELECT * FROM sparql_people
+----
+name
+"Alice"
+"Bob"
+"Carol"
+"Dave"
+
+# Drop the view
+statement ok
+DROP VIEW sparql_people
 
 # =============================================================================
 # 12. CREATE MATERIALIZED VIEW from SPARQL
 # =============================================================================
-# SKIP: Same catalog rehydration issue as CREATE VIEW (Prompt 26).
+
+# Create a materialized view from SPARQL SELECT
+statement ok
+CREATE MATERIALIZED VIEW mat_sparql_people AS SPARQL $$
+  PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+  SELECT ?name
+  WHERE {
+    ?s a foaf:Person .
+    ?s foaf:name ?name .
+  }
+  ORDER BY ?name
+$$
+
+# Query the materialized view
+query T colnames
+SELECT * FROM mat_sparql_people
+----
+name
+"Alice"
+"Bob"
+"Carol"
+"Dave"
+
+# Drop the materialized view
+statement ok
+DROP MATERIALIZED VIEW mat_sparql_people
 
 # =============================================================================
 # 13. SUBSCRIBE TO SPARQL (smoke test)

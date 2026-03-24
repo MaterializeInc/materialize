@@ -2572,6 +2572,17 @@ pub fn plan_view(
     def: &mut ViewDefinition<Aug>,
     temporary: bool,
 ) -> Result<(QualifiedItemName, View), PlanError> {
+    // For SPARQL views, resolve the quad table reference before
+    // normalization so the [id AS db.schema.item] reference gets
+    // persisted in create_sql. This ensures catalog rehydration works
+    // even with the system session's empty search path.
+    if let Some(ref mut sparql_stmt) = def.sparql {
+        if sparql_stmt.quad_table.is_none() {
+            let (_, resolved_name) = dml::resolve_quad_table(scx, None)?;
+            sparql_stmt.quad_table = Some(resolved_name);
+        }
+    }
+
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -2590,7 +2601,7 @@ pub fn plan_view(
 
     let (expr, mut desc) = if let Some(sparql_stmt) = sparql {
         // Compile SPARQL directly to HIR at plan time.
-        let quad_table_id = dml::resolve_quad_table(scx)?;
+        let (quad_table_id, _) = dml::resolve_quad_table(scx, sparql_stmt.quad_table.as_ref())?;
         let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
             .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
         let desc = dml::sparql_query_desc(&sparql_query);
@@ -2815,6 +2826,14 @@ pub fn plan_create_materialized_view(
         None => None,
     };
 
+    // For SPARQL materialized views, resolve quad table before normalization.
+    if let Some(ref mut sparql_stmt) = stmt.sparql {
+        if sparql_stmt.quad_table.is_none() {
+            let (_, resolved_name) = dml::resolve_quad_table(scx, None)?;
+            sparql_stmt.quad_table = Some(resolved_name);
+        }
+    }
+
     let create_sql =
         normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
@@ -2823,7 +2842,7 @@ pub fn plan_create_materialized_view(
 
     let (expr, mut desc) = if let Some(sparql_stmt) = &stmt.sparql {
         // Compile SPARQL directly to HIR at plan time.
-        let quad_table_id = dml::resolve_quad_table(scx)?;
+        let (quad_table_id, _) = dml::resolve_quad_table(scx, sparql_stmt.quad_table.as_ref())?;
         let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
             .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
         let desc = dml::sparql_query_desc(&sparql_query);
