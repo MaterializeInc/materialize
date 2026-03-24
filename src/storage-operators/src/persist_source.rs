@@ -156,12 +156,10 @@ impl Subtime {
 /// timestamp in the consolidation scope to enable smooth frontier advancement
 /// during snapshot consolidation.
 ///
-/// Encoded as `(row_length, first_6_bytes)` packed into a u64 to match
-/// `Row::Ord`, which sorts by (length first, then bytes). This ensures
-/// `KeyProgress` is monotonically non-decreasing in `SourceData::Ord` order.
-///
-/// For `SourceData(Err(_))`, we use `u64::MAX` since errors sort after
-/// valid rows in `Result::Ord`.
+/// Values are monotonically increasing counters maintained by
+/// [`SourcePartMerger`], incremented on each distinct key emitted.
+/// The merge iterates in `ArrayOrd` order (matching persist's
+/// `RunOrder::Structured`), so the counter is naturally monotonic.
 #[derive(
     Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
 )]
@@ -203,35 +201,6 @@ impl Lattice for KeyProgress {
 impl differential_dataflow::lattice::Maximum for KeyProgress {
     fn maximum() -> Self {
         KeyProgress(u64::MAX)
-    }
-}
-
-impl KeyProgress {
-    /// Derive a `KeyProgress` value from a `SourceData` key.
-    ///
-    /// Encodes `(length, first_6_bytes)` into a u64 to match `Row::Ord`,
-    /// which sorts by (length first, then bytes). The top 2 bytes hold the
-    /// row length (capped at u16::MAX), and the bottom 6 bytes hold the
-    /// first 6 bytes of row data. This ensures `KeyProgress` is
-    /// monotonically non-decreasing in `Row::Ord` order.
-    ///
-    /// For `SourceData(Err(_))`, returns `u64::MAX` since errors sort after
-    /// valid rows in `Result::Ord`.
-    fn from_source_data(key: &SourceData) -> Self {
-        match &key.0 {
-            Ok(row) => {
-                let data = row.data();
-                // Top 2 bytes: row length (capped). Bottom 6 bytes: data prefix.
-                let len_part = (data.len().min(u16::MAX as usize) as u64) << 48;
-                let mut prefix = [0u8; 6];
-                let copy_len = data.len().min(6);
-                prefix[..copy_len].copy_from_slice(&data[..copy_len]);
-                // Interpret the 6 bytes as a big-endian u48 in the lower bits.
-                let data_part = u64::from_be_bytes([0, 0, prefix[0], prefix[1], prefix[2], prefix[3], prefix[4], prefix[5]]);
-                KeyProgress(len_part | data_part)
-            }
-            Err(_) => KeyProgress(u64::MAX),
-        }
     }
 }
 
@@ -817,11 +786,15 @@ impl PendingWork {
 // ============================================================================
 
 /// A cursor over a single `FetchedPart`, with a peeked next value for use in a
-/// merge heap. Parts are sorted by `RunOrder::Structured`, so calling
-/// `next_with_storage` yields rows in key-value-time order within the part.
+/// merge heap. Compares rows using `ArrayOrd` (persist's structured columnar
+/// ordering) so that the merge interleaves parts in the same order they're
+/// sorted by (`RunOrder::Structured`).
 struct MergeCursor {
     part: FetchedPart<SourceData, (), Timestamp, StorageDiff>,
-    /// The next KVT from this part (peeked ahead for comparison in the heap).
+    /// The raw columnar index of the peeked row. Used with
+    /// `part.structured_key_ord()` for heap comparison in `ArrayOrd` order.
+    peeked_index: usize,
+    /// The decoded KVT from this part (peeked ahead).
     peeked: ((SourceData, ()), Timestamp, StorageDiff),
     /// Re-usable allocation for decoded `SourceData`.
     row_buf: Option<SourceData>,
@@ -837,10 +810,11 @@ impl MergeCursor {
             .is_filter_pushdown_audit()
             .map(|s| Box::new(s) as Box<dyn Debug>);
         let mut row_buf = None;
-        let peeked = part.part.next_with_storage(&mut row_buf, &mut None)?;
+        let (idx, kv, t, d) = part.part.next_with_index(&mut row_buf, &mut None)?;
         Some(MergeCursor {
             part: part.part,
-            peeked,
+            peeked_index: idx,
+            peeked: (kv, t, d),
             row_buf,
             filter_pushdown_audit,
         })
@@ -849,9 +823,10 @@ impl MergeCursor {
     /// Advance to the next row. Returns `Some(self)` if there is a next row,
     /// `None` if the part is exhausted.
     fn advance(mut self) -> Option<Self> {
-        match self.part.next_with_storage(&mut self.row_buf, &mut None) {
-            Some(next) => {
-                self.peeked = next;
+        match self.part.next_with_index(&mut self.row_buf, &mut None) {
+            Some((idx, kv, t, d)) => {
+                self.peeked_index = idx;
+                self.peeked = (kv, t, d);
                 Some(self)
             }
             None => None,
@@ -859,8 +834,9 @@ impl MergeCursor {
     }
 }
 
-/// Order `MergeCursor`s by their peeked (key, time), so the `BinaryHeap` with
-/// `Reverse` gives us the minimum.
+/// Order `MergeCursor`s by their peeked key using `ArrayOrd` (structured
+/// columnar ordering), falling back to decoded `SourceData::Ord` for legacy
+/// parts without structured keys.
 impl PartialEq for MergeCursor {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == std::cmp::Ordering::Equal
@@ -877,22 +853,40 @@ impl PartialOrd for MergeCursor {
 
 impl Ord for MergeCursor {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let ((ref kv_a, _), ref t_a, _) = self.peeked;
-        let ((ref kv_b, _), ref t_b, _) = other.peeked;
-        (kv_a, t_a).cmp(&(kv_b, t_b))
+        // Compare using ArrayOrd (structured columnar ordering) when available.
+        // This matches the order parts are sorted by (RunOrder::Structured).
+        let key_ord = match (
+            self.part.structured_key_ord(),
+            other.part.structured_key_ord(),
+        ) {
+            (Some(a_ord), Some(b_ord)) => {
+                a_ord.at(self.peeked_index).cmp(&b_ord.at(other.peeked_index))
+            }
+            _ => {
+                // Fallback for legacy parts without structured keys.
+                let ((ref kv_a, _), _, _) = self.peeked;
+                let ((ref kv_b, _), _, _) = other.peeked;
+                kv_a.cmp(kv_b)
+            }
+        };
+        key_ord.then_with(|| self.peeked.1.cmp(&other.peeked.1))
     }
 }
 
 /// A streaming merge across multiple sorted `FetchedPart`s. Iterates through
-/// all parts in key-value-time order, consolidating updates with identical KVT.
+/// all parts in structured key order, consolidating updates with identical KVT.
 struct SourcePartMerger {
     heap: BinaryHeap<Reverse<MergeCursor>>,
+    /// Monotonically increasing counter, incremented on each distinct key
+    /// emitted. Used as `KeyProgress` for smooth frontier advancement.
+    key_counter: u64,
 }
 
 impl SourcePartMerger {
     fn new() -> Self {
         SourcePartMerger {
             heap: BinaryHeap::new(),
+            key_counter: 0,
         }
     }
 
@@ -907,36 +901,82 @@ impl SourcePartMerger {
         self.heap.is_empty()
     }
 
-    /// Returns the next consolidated (key, val, time, diff) from the merge,
-    /// along with whether this row is part of a filter pushdown audit.
+    /// Check if the top of the heap has the same key as the given cursor,
+    /// using `ArrayOrd` when available.
+    fn heap_top_matches_key(
+        heap: &BinaryHeap<Reverse<MergeCursor>>,
+        popped_cursor: &MergeCursor,
+        popped_time: &Timestamp,
+    ) -> bool {
+        let Some(Reverse(top)) = heap.peek() else {
+            return false;
+        };
+        let time_eq = top.peeked.1 == *popped_time;
+        if !time_eq {
+            return false;
+        }
+        match (
+            popped_cursor.part.structured_key_ord(),
+            top.part.structured_key_ord(),
+        ) {
+            (Some(a_ord), Some(b_ord)) => {
+                a_ord.at(popped_cursor.peeked_index) == b_ord.at(top.peeked_index)
+            }
+            _ => {
+                let ((ref popped_key, _), _, _) = popped_cursor.peeked;
+                let ((ref top_key, _), _, _) = top.peeked;
+                popped_key == top_key
+            }
+        }
+    }
+
+    /// Returns the next consolidated (key, val, time, diff, key_progress) from
+    /// the merge, along with whether this row is part of a filter pushdown
+    /// audit.
     ///
     /// Consecutive updates with identical (key, val, time) are consolidated
     /// into a single update. Zero diffs are suppressed.
-    fn next(&mut self) -> Option<((SourceData, ()), Timestamp, StorageDiff, bool)> {
+    ///
+    /// `key_progress` is a monotonically increasing counter that advances on
+    /// each distinct key, suitable for use as a `KeyProgress` timestamp.
+    fn next(&mut self) -> Option<((SourceData, ()), Timestamp, StorageDiff, bool, KeyProgress)> {
         loop {
             let Reverse(cursor) = self.heap.pop()?;
             let ((key, val), time, diff) = cursor.peeked.clone();
             let is_audit = cursor.filter_pushdown_audit.is_some();
 
-            // Re-insert the cursor after advancing.
-            if let Some(advanced) = cursor.advance() {
-                self.heap.push(Reverse(advanced));
+            // Consolidate: absorb any subsequent entries with the same KVT.
+            // We compare using ArrayOrd before advancing the popped cursor.
+            let mut consolidated_diff = diff;
+            while Self::heap_top_matches_key(&self.heap, &cursor, &time) {
+                let Reverse(next_cursor) = self.heap.pop().unwrap();
+                let (_, _, next_diff) = next_cursor.peeked.clone();
+                consolidated_diff.plus_equals(&next_diff);
+                if let Some(advanced) = next_cursor.advance() {
+                    self.heap.push(Reverse(advanced));
+                }
             }
 
-            // Consolidate: absorb any subsequent entries with the same KVT.
-            let mut consolidated_diff = diff;
-            while let Some(Reverse(top)) = self.heap.peek() {
-                let ((ref next_key, _), ref next_time, _) = top.peeked;
-                if next_key == &key && next_time == &time {
-                    let Reverse(next_cursor) = self.heap.pop().unwrap();
-                    let (_, _, next_diff) = next_cursor.peeked.clone();
-                    consolidated_diff.plus_equals(&next_diff);
-                    if let Some(advanced) = next_cursor.advance() {
-                        self.heap.push(Reverse(advanced));
+            // Check if the next key in the heap is different from the current
+            // one, and if so, bump the key counter.
+            let next_is_different = self.heap.peek().map_or(true, |Reverse(top)| {
+                match (
+                    cursor.part.structured_key_ord(),
+                    top.part.structured_key_ord(),
+                ) {
+                    (Some(a_ord), Some(b_ord)) => {
+                        a_ord.at(cursor.peeked_index) != b_ord.at(top.peeked_index)
                     }
-                } else {
-                    break;
+                    _ => {
+                        let ((ref top_key, _), _, _) = top.peeked;
+                        top_key != &key
+                    }
                 }
+            });
+
+            // Re-insert the popped cursor after all comparisons are done.
+            if let Some(advanced) = cursor.advance() {
+                self.heap.push(Reverse(advanced));
             }
 
             // Suppress zero diffs.
@@ -944,7 +984,12 @@ impl SourcePartMerger {
                 continue;
             }
 
-            return Some(((key, val), time, consolidated_diff, is_audit));
+            if next_is_different {
+                self.key_counter += 1;
+            }
+            let progress = KeyProgress(self.key_counter);
+
+            return Some(((key, val), time, consolidated_diff, is_audit, progress));
         }
     }
 }
@@ -1105,26 +1150,19 @@ where
                 let exhausted = {
                     let (cap, merger) = pending_mergers.front_mut().unwrap();
 
-                    while let Some(((key, _val), time, diff, is_audit)) = merger.next() {
+                    while let Some(((key, _val), time, diff, is_audit, key_progress)) = merger.next() {
                         if until.less_equal(&time) {
                             continue;
                         }
 
-                        // Derive KeyProgress from the key prefix and downgrade
-                        // our capability so the consolidate frontier advances.
-                        let key_progress = KeyProgress::from_source_data(&key);
-                        debug_assert!(
-                            key_progress >= cap.time().1,
-                            "KeyProgress went backwards: {:?} < {:?} for key {:?}",
-                            key_progress,
-                            cap.time().1,
-                            key,
-                        );
                         let emit_time: InnerTime = (
                             (time, cap.time().0 .1),
                             key_progress,
                         );
                         // Downgrade to signal we won't emit earlier key positions.
+                        // key_progress is monotonically non-decreasing because the
+                        // merger iterates in ArrayOrd order and increments the
+                        // counter on each distinct key.
                         cap.downgrade(&emit_time);
                         let mut session = output.session_with_builder(cap);
 

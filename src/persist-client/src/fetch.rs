@@ -800,11 +800,17 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
             <V::Schema as Schema<V>>::Decoder,
         ),
     >,
+    /// The structured key ordering, if available. Used by the source's
+    /// streaming merge to compare rows in the same order that parts are
+    /// sorted by (`RunOrder::Structured`).
+    structured_key_ord: Option<ArrayOrd>,
     timestamps: Int64Array,
     diffs: Int64Array,
     migration: PartMigration<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
-    peek_stash: Option<((K, V), T, D)>,
+    /// Stashed next row from within-part consolidation. The `usize` is the
+    /// raw columnar index, used for `ArrayOrd` comparison in the merge.
+    peek_stash: Option<(usize, (K, V), T, D)>,
     part_cursor: usize,
     key_storage: Option<K::Storage>,
     val_storage: Option<V::Storage>,
@@ -893,6 +899,11 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                 }
             };
 
+            // Build an ArrayOrd from the structured key before creating decoders.
+            // This is used by the streaming merge in the source to compare rows
+            // in the same order that parts are sorted by (RunOrder::Structured).
+            let structured_key_ord = ArrayOrd::new(&*structured.key);
+
             let read_schema = migration.codec_read();
             let key = K::Schema::decoder_any(&*read_schema.key, &*structured.key);
             let val = V::Schema::decoder_any(&*read_schema.val, &*structured.val);
@@ -911,34 +922,36 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                 }
             }
 
-            Some((key.ok()?, val.ok()?))
+            Some((key.ok()?, val.ok()?, structured_key_ord))
         };
 
         let updates = part.normalize(&metrics.columnar);
         let timestamps = updates.timestamps().clone();
         let diffs = updates.diffs().clone();
-        let part = match updates {
+        let (part, structured_key_ord) = match updates {
             // If only one encoding is available, decode via that encoding.
-            BlobTraceUpdates::Row(records) => EitherOrBoth::Left(records),
-            BlobTraceUpdates::Structured { key_values, .. } => EitherOrBoth::Right(
+            BlobTraceUpdates::Row(records) => (EitherOrBoth::Left(records), None),
+            BlobTraceUpdates::Structured { key_values, .. } => {
                 // The structured-only data format was added after schema ids were recorded everywhere,
                 // so we expect this data to be present.
-                downcast_structured(key_values, true).expect("valid schemas for structured data"),
-            ),
+                let (k, v, ord) =
+                    downcast_structured(key_values, true).expect("valid schemas for structured data");
+                (EitherOrBoth::Right((k, v)), Some(ord))
+            }
             // If both are available, respect the specified part decode format.
             BlobTraceUpdates::Both(records, ext) => match part_decode_format {
                 PartDecodeFormat::Row {
                     validate_structured: false,
-                } => EitherOrBoth::Left(records),
+                } => (EitherOrBoth::Left(records), None),
                 PartDecodeFormat::Row {
                     validate_structured: true,
                 } => match downcast_structured(ext, false) {
-                    Some(decoders) => EitherOrBoth::Both(records, decoders),
-                    None => EitherOrBoth::Left(records),
+                    Some((k, v, ord)) => (EitherOrBoth::Both(records, (k, v)), Some(ord)),
+                    None => (EitherOrBoth::Left(records), None),
                 },
                 PartDecodeFormat::Arrow => match downcast_structured(ext, false) {
-                    Some(decoders) => EitherOrBoth::Right(decoders),
-                    None => EitherOrBoth::Left(records),
+                    Some((k, v, ord)) => (EitherOrBoth::Right((k, v)), Some(ord)),
+                    None => (EitherOrBoth::Left(records), None),
                 },
             },
         };
@@ -947,6 +960,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
             metrics,
             ts_filter,
             part,
+            structured_key_ord,
             peek_stash: None,
             timestamps,
             diffs,
@@ -987,6 +1001,13 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Monoid + Codec64 + Send + Sync,
 {
+    /// Returns the structured key ordering for this part, if available.
+    /// Used by the source's streaming merge to compare rows in
+    /// `RunOrder::Structured` order.
+    pub fn structured_key_ord(&self) -> Option<&ArrayOrd> {
+        self.structured_key_ord.as_ref()
+    }
+
     /// [Self::next] but optionally providing a `K` and `V` for alloc reuse.
     ///
     /// When `result_override` is specified, return it instead of decoding data.
@@ -996,6 +1017,17 @@ where
         key: &mut Option<K>,
         val: &mut Option<V>,
     ) -> Option<((K, V), T, D)> {
+        self.next_with_index(key, val).map(|(_idx, kv, t, d)| (kv, t, d))
+    }
+
+    /// Like [`Self::next_with_storage`], but also returns the raw columnar
+    /// index of the decoded row. This index can be used with
+    /// [`Self::structured_key_ord`] for comparison in the merge heap.
+    pub fn next_with_index(
+        &mut self,
+        key: &mut Option<K>,
+        val: &mut Option<V>,
+    ) -> Option<(usize, (K, V), T, D)> {
         let mut consolidated = self.peek_stash.take();
         loop {
             // Fetch and decode the next tuple in the sequence. (Or break if there is none.)
@@ -1013,14 +1045,14 @@ where
                     continue;
                 }
                 let kv = self.decode_kv(next_idx, key, val);
-                (kv, t, d)
+                (next_idx, kv, t, d)
             } else {
                 break;
             };
 
             // Attempt to consolidate in the next tuple, stashing it if that's not possible.
-            if let Some((kv, t, d)) = &mut consolidated {
-                let (kv_next, t_next, d_next) = &next;
+            if let Some((_idx, kv, t, d)) = &mut consolidated {
+                let (_next_idx, kv_next, t_next, d_next) = &next;
                 if kv == kv_next && t == t_next {
                     d.plus_equals(d_next);
                     if d.is_zero() {
@@ -1035,9 +1067,7 @@ where
             }
         }
 
-        let (kv, t, d) = consolidated?;
-
-        Some((kv, t, d))
+        consolidated
     }
 
     fn decode_kv(&mut self, index: usize, key: &mut Option<K>, val: &mut Option<V>) -> (K, V) {
