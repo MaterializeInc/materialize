@@ -185,7 +185,7 @@ hint  double␠precision  The␠hint␠value␠that␠will␠eliminate␠`to_cut
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_mappable_objects' ORDER BY position
 ----
-name  text  The␠name␠of␠the␠object.
+name  text  The␠name␠of␠the␠object.␠This␠name␠is␠unquoted,␠and␠you␠might␠need␠to␠call␠`quote_ident`␠if␠you␠want␠to␠reference␠the␠name␠shown␠here.
 global_id  text  The␠global␠ID␠of␠the␠object.
 
 query TTT

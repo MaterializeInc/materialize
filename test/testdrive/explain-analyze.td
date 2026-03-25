@@ -47,6 +47,8 @@ materialize.blue.t_idx      <XXX>        <XXX>
 
 > DROP SCHEMA green CASCADE;
 
+> SET SCHEMA = blue;
+
 # should still get output for blue!
 > EXPLAIN ANALYZE MEMORY FOR INDEX materialize.blue.t_idx;
 operator                      total_memory   total_records
@@ -132,3 +134,40 @@ operator                     total_elapsed
 "  Union" <XXX>
 "    Arranged <XXX>" <XXX>
 "    Arranged <XXX>" <XXX>
+
+> RESET CLUSTER
+
+# regression test for https://github.com/MaterializeInc/database-issues/issues/11260
+> DROP TABLE t;
+
+> CREATE TABLE t(x INT);
+
+> INSERT INTO t VALUES (5);
+
+> CREATE MATERIALIZED VIEW mv1 AS SELECT SUM(x) FROM t;
+
+> CREATE MATERIALIZED VIEW "Mv2" AS SELECT SUM(x) FROM t;
+
+> EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW mv1;
+"Returning Union"  <null>  <null>
+"  Unarranged Raw Stream"  <null>  <null>
+"  Map/Filter/Project"  <null>  <null>
+"    Consolidating Union"  <null>  <null>
+"      Constant (1 rows)"  <null>  <null>
+"      Negate Diffs"  <null>  <null>
+"        Arranged l0"  <null>  <null>
+"    Arranged l0"  <null>  <null>
+"With l0 = Accumulable GroupAggregate"  <XXX>  2
+"  Stream <XXX>"  <null>  <null>
+
+> EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW "Mv2";
+"Returning Union"  <null>  <null>
+"  Unarranged Raw Stream"  <null>  <null>
+"  Map/Filter/Project"  <null>  <null>
+"    Consolidating Union"  <null>  <null>
+"      Constant (1 rows)"  <null>  <null>
+"      Negate Diffs"  <null>  <null>
+"        Arranged l0"  <null>  <null>
+"    Arranged l0"  <null>  <null>
+"With l0 = Accumulable GroupAggregate"  <XXX>  2
+"  Stream <XXX>"  <null>  <null>
