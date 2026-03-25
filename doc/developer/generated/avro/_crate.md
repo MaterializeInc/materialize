@@ -1,16 +1,6 @@
 ---
-crate: mz_avro
-sources:
-  - src/avro/src/codec.rs
-  - src/avro/src/decode.rs
-  - src/avro/src/encode.rs
-  - src/avro/src/error.rs
-  - src/avro/src/lib.rs
-  - src/avro/src/reader.rs
-  - src/avro/src/schema.rs
-  - src/avro/src/types.rs
-  - src/avro/src/util.rs
-  - src/avro/src/writer.rs
+source: src/avro/src/lib.rs
+revision: 78cd347f2b
 ---
 
 `mz_avro` is Materialize's fork of the `avro-rs` crate, providing full read/write support for the Apache Avro binary format with several Materialize-specific extensions.
