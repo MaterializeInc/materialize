@@ -80,7 +80,9 @@ def instance_host(instance: Instance, user: str | None = None) -> str:
     return f"{user}@{instance.id}"
 
 
-def print_instances(ists: list[Instance], format: str) -> None:
+def print_instances(
+    ists: list[Instance], format: str = "table", numbered: bool = False
+) -> None:
     field_names = [
         "Name",
         "Instance ID",
@@ -90,21 +92,27 @@ def print_instances(ists: list[Instance], format: str) -> None:
         "Delete After",
         "State",
     ]
-    rows = [
-        [
-            name(tags),
+    if numbered:
+        field_names = ["#"] + field_names
+    rows = []
+    for idx, i in enumerate(ists, 1):
+        t = tags(i)
+        row = [
+            name(t),
             i.instance_id,
             i.public_ip_address,
             i.private_ip_address,
-            launched_by(tags),
-            delete_after(tags),
+            launched_by(t),
+            delete_after(t),
             i.state["Name"],
         ]
-        for (i, tags) in [(i, tags(i)) for i in ists]
-    ]
+        if numbered:
+            row = [idx] + row
+        rows.append(row)
     if format == "table":
         pt = PrettyTable()
         pt.field_names = field_names
+        pt.align = "l"
         pt.add_rows(rows)
         print(pt)
     elif format == "csv":
@@ -113,6 +121,165 @@ def print_instances(ists: list[Instance], format: str) -> None:
         w.writerows(rows)
     else:
         raise RuntimeError("Unknown format passed to print_instances")
+
+
+def mssh(
+    instance: Instance,
+    command: str,
+    *,
+    extra_ssh_args: list[str] = [],
+    input: bytes | None = None,
+    quiet: bool = False,
+) -> None:
+    """Runs a command over SSH via EC2 Instance Connect."""
+    host = instance_host(instance)
+    if command:
+        if not quiet:
+            print(f"{host}$ {command}", file=sys.stderr)
+        # Quote to work around:
+        # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
+        command = shlex.quote(command)
+    else:
+        print(f"$ mssh {host}")
+
+    result = subprocess.run(
+        [
+            *SSH_COMMAND,
+            *extra_ssh_args,
+            host,
+            command,
+        ],
+        input=input,
+        stdout=subprocess.DEVNULL if quiet else None,
+        stderr=subprocess.DEVNULL if quiet else None,
+    )
+    # Exit code 130 = SIGINT (Ctrl-C) — exit cleanly
+    if result.returncode == 130:
+        sys.exit(130)
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, result.args)
+
+
+def msftp(
+    instance: Instance,
+) -> None:
+    """Connects over SFTP via EC2 Instance Connect."""
+    host = instance_host(instance)
+    spawn.runv([*SFTP_COMMAND, host])
+
+
+def setup_ai_tools(instance: Instance) -> None:
+    """Transfer local Claude Code and Codex configs to a scratch instance
+    and install the materialize-docs skill."""
+    import io
+    import pathlib
+    import tarfile
+
+    home = pathlib.Path.home()
+
+    # Collect only essential config files — skip session logs, caches, etc.
+    items: list[tuple[str, pathlib.Path]] = []
+
+    # Claude Code: settings, credentials, and project memory files
+    claude_dir = home / ".claude"
+    if claude_dir.is_dir():
+        for cfg_name in ("settings.json", ".credentials.json"):
+            p = claude_dir / cfg_name
+            if p.is_file():
+                items.append((f".claude/{cfg_name}", p))
+        # Transfer memory directories from all projects
+        projects_dir = claude_dir / "projects"
+        if projects_dir.is_dir():
+            for proj in projects_dir.iterdir():
+                if not proj.is_dir():
+                    continue
+                memory_dir = proj / "memory"
+                if memory_dir.is_dir():
+                    items.append((f".claude/projects/{proj.name}/memory", memory_dir))
+
+    if (home / ".claude.json").is_file():
+        items.append((".claude.json", home / ".claude.json"))
+
+    # Codex: only config, not session logs
+    codex_dir = home / ".codex"
+    if codex_dir.is_dir():
+        for cfg_name in ("config.json", "instructions.md"):
+            p = codex_dir / cfg_name
+            if p.is_file():
+                items.append((f".codex/{cfg_name}", p))
+
+    if items:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for arcname, path in items:
+                tar.add(str(path), arcname=arcname)
+        mssh(instance, "tar xzf - -C ~", input=buf.getvalue(), quiet=True)
+
+    mssh(
+        instance,
+        "cd materialize && "
+        "NPM_CONFIG_UPDATE_NOTIFIER=false "
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a claude-code --copy -y --skill materialize-docs 2>/dev/null || true",
+        quiet=True,
+    )
+
+    mssh(
+        instance,
+        "cd materialize && "
+        "NPM_CONFIG_UPDATE_NOTIFIER=false "
+        "npx -q -y skills add MaterializeInc/agent-skills -g -a codex --copy -y --skill materialize-docs 2>/dev/null || true",
+        quiet=True,
+    )
+
+
+def mkrepo(
+    instance: Instance, rev: str, init: bool = True, force: bool = False
+) -> None:
+    if init:
+        mssh(instance, "git clone https://github.com/MaterializeInc/materialize.git")
+
+    rev = git.rev_parse(rev)
+
+    cmd: list[str] = [
+        "git",
+        "push",
+        "--no-verify",
+        f"{instance_host(instance)}:materialize/.git",
+        # Explicit refspec is required if the host repository is in detached
+        # HEAD mode.
+        f"{rev}:refs/heads/scratch",
+    ]
+    if force:
+        cmd.append("--force")
+
+    spawn.runv(
+        cmd,
+        cwd=MZ_ROOT,
+        env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
+    )
+    git_config_cmds = f"git checkout -f {rev}"
+
+    # Propagate local git user.name and user.email to the scratch instance.
+    if git_name := git.get_user_name():
+        git_config_cmds += f" && git config user.name {shlex.quote(git_name)}"
+    if git_email := git.get_user_email():
+        git_config_cmds += f" && git config user.email {shlex.quote(git_email)}"
+
+    mssh(
+        instance,
+        f"cd materialize && {git_config_cmds}",
+    )
+
+
+class MachineDesc(BaseModel):
+    name: str
+    launch_script: str | None = None
+    instance_type: str
+    ami: str
+    tags: dict[str, str] = {}
+    size_gb: int = 50
+    checkout: bool = True
+    ami_user: str = "ubuntu"
 
 
 def launch(
@@ -231,8 +398,13 @@ async def setup(
         )
 
     done = False
-    async for remaining in ui.async_timeout_loop(60, 5):
-        say(f"Waiting for instance to become ready: {remaining:0.0f}s remaining")
+    async for remaining in ui.async_timeout_loop(60, 2):
+        print(
+            f"\rscratch> Waiting for instance to become ready: {remaining:0.0f}s remaining\033[K",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
         try:
             i.reload()
             if is_ready(i):
@@ -240,74 +412,57 @@ async def setup(
                 break
         except ClientError:
             pass
+    print(file=sys.stderr)
     if not done:
         raise RuntimeError(
             f"Instance {i} did not become ready in a reasonable amount of time"
         )
 
+    # Wait for SSH to be available
     done = False
-    async for remaining in ui.async_timeout_loop(300, 5):
-        say(f"Checking whether setup has completed: {remaining:0.0f}s remaining")
+    async for remaining in ui.async_timeout_loop(120, 2):
+        print(
+            f"\rscratch> Waiting for SSH access: {remaining:0.0f}s remaining\033[K",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
         try:
-            mssh(i, "[[ -f /opt/provision/done ]]")
+            mssh(i, "true", quiet=True)
             done = True
             break
         except CalledProcessError:
             continue
+    print(file=sys.stderr)
+    if not done:
+        raise RuntimeError(
+            "SSH did not become available in a reasonable amount of time"
+        )
+
+    # Start git clone while provisioning continues
+    say("Cloning repo (provisioning continues in background)...")
+    mkrepo(i, git_rev)
+
+    # Wait for provisioning to finish
+    done = False
+    async for remaining in ui.async_timeout_loop(300, 2):
+        print(
+            f"\rscratch> Waiting for provisioning to complete: {remaining:0.0f}s remaining\033[K",
+            end="",
+            flush=True,
+            file=sys.stderr,
+        )
+        try:
+            mssh(i, "[[ -f /opt/provision/done ]]", quiet=True)
+            done = True
+            break
+        except CalledProcessError:
+            continue
+    print(file=sys.stderr)
     if not done:
         raise RuntimeError(
             "Instance did not finish setup in a reasonable amount of time"
         )
-
-    mkrepo(i, git_rev)
-
-
-def mkrepo(i: Instance, rev: str, init: bool = True, force: bool = False) -> None:
-    if init:
-        mssh(i, "git clone https://github.com/MaterializeInc/materialize.git")
-
-    rev = git.rev_parse(rev)
-
-    cmd: list[str] = [
-        "git",
-        "push",
-        "--no-verify",
-        f"{instance_host(i)}:materialize/.git",
-        # Explicit refspec is required if the host repository is in detached
-        # HEAD mode.
-        f"{rev}:refs/heads/scratch",
-    ]
-    if force:
-        cmd.append("--force")
-
-    spawn.runv(
-        cmd,
-        cwd=MZ_ROOT,
-        env=dict(os.environ, GIT_SSH_COMMAND=" ".join(SSH_COMMAND)),
-    )
-    git_config_cmds = f"git config core.bare false && git checkout {rev}"
-
-    # Propagate local git user.name and user.email to the scratch instance.
-    if git_name := git.get_user_name():
-        git_config_cmds += f" && git config user.name {shlex.quote(git_name)}"
-    if git_email := git.get_user_email():
-        git_config_cmds += f" && git config user.email {shlex.quote(git_email)}"
-
-    mssh(
-        i,
-        f"cd materialize && {git_config_cmds}",
-    )
-
-
-class MachineDesc(BaseModel):
-    name: str
-    launch_script: str | None
-    instance_type: str
-    ami: str
-    tags: dict[str, str] = {}
-    size_gb: int
-    checkout: bool = True
-    ami_user: str = "ubuntu"
 
 
 def launch_cluster(
@@ -354,11 +509,17 @@ def launch_cluster(
         )
     )
 
+    for i in instances:
+        i.reload()
+
     hosts_str = "".join(
         f"{i.private_ip_address}\t{d.name}\n" for (i, d) in zip(instances, descs)
     )
     for i in instances:
         mssh(i, "sudo tee -a /etc/hosts", input=hosts_str.encode())
+
+    for i in instances:
+        setup_ai_tools(i)
 
     env = " ".join(f"{k}={shlex.quote(v)}" for k, v in extra_env.items())
     for i, d in zip(instances, descs):
@@ -380,8 +541,6 @@ def get_instance(name: str) -> Instance:
     Get an instance by instance id. The special name 'mine' resolves to a
     unique running owned instance, if there is one; otherwise the name is
     assumed to be an instance id.
-    :param name: The instance id or the special case 'mine'.
-    :return: The instance to which the name refers.
     """
     if name == "mine":
         filters: list[FilterTypeDef] = [
@@ -399,6 +558,18 @@ def get_instance(name: str) -> Instance:
         say(f"understanding 'mine' as unique owned instance {instance.id}")
         return instance
     return boto3.resource("ec2").Instance(name)
+
+
+def list_instances(
+    owners: list[str] | None = None, all: bool = False
+) -> list[Instance]:
+    """List AWS instances, optionally filtered by owner."""
+    filters: list[FilterTypeDef] = []
+    if not all:
+        if not owners:
+            owners = [whoami()]
+        filters.append({"Name": "tag:LaunchedBy", "Values": owners})
+    return list(boto3.resource("ec2").instances.filter(Filters=filters))
 
 
 def get_instances_by_tag(k: str, v: str) -> list[InstanceTypeDef]:
@@ -427,40 +598,3 @@ def get_old_instances() -> list[InstanceTypeDef]:
         for i in r["Instances"]
         if exists(i) and is_old(i)
     ]
-
-
-def mssh(
-    instance: Instance,
-    command: str,
-    *,
-    extra_ssh_args: list[str] = [],
-    input: bytes | None = None,
-) -> None:
-    """Runs a command over SSH via EC2 Instance Connect."""
-    host = instance_host(instance)
-    if command:
-        print(f"{host}$ {command}", file=sys.stderr)
-        # Quote to work around:
-        # https://github.com/aws/aws-ec2-instance-connect-cli/pull/26
-        command = shlex.quote(command)
-    else:
-        print(f"$ mssh {host}")
-
-    subprocess.run(
-        [
-            *SSH_COMMAND,
-            *extra_ssh_args,
-            host,
-            command,
-        ],
-        check=True,
-        input=input,
-    )
-
-
-def msftp(
-    instance: Instance,
-) -> None:
-    """Connects over SFTP via EC2 Instance Connect."""
-    host = instance_host(instance)
-    spawn.runv([*SFTP_COMMAND, host])
