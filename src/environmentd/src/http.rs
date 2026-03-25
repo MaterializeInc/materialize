@@ -1183,7 +1183,7 @@ async fn auth(
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
                 let (auth_session, authenticated) =
-                    frontegg.authenticate(&username, &password.0).await?;
+                    frontegg.authenticate(&username, password.as_str()).await?;
                 let name = auth_session.user().into();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
                 (name, external_metadata_rx, authenticated)

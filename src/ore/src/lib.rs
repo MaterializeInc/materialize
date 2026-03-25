@@ -82,6 +82,7 @@ pub mod result;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod retry;
+pub mod secure;
 pub mod serde;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "stack")))]
 #[cfg(feature = "stack")]
