@@ -167,7 +167,7 @@ ci_collapsed_heading "Installing console dependencies"
 cd console
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack enable
-yarn install --immutable --network-timeout 30000
+retry yarn install --immutable --network-timeout 30000
 yarn playwright install
 
 # --- Run tests ---

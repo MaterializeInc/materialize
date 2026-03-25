@@ -43,7 +43,7 @@ export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack enable
 
 ci_collapsed_heading "Installing dependencies"
-yarn install --immutable --network-timeout 30000
+retry yarn install --immutable --network-timeout 30000
 yarn playwright install
 ci_collapsed_heading "Pulling Vercel production environment"
 npx vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
