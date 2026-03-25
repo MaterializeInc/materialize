@@ -17,14 +17,14 @@ use mz_audit_log::{
     AlterApplyReplacementV1, AlterDefaultPrivilegeV1, AlterRetainHistoryV1, AlterSetClusterV1,
     AlterSourceSinkV1, CreateClusterReplicaV1, CreateClusterReplicaV2, CreateClusterReplicaV3,
     CreateClusterReplicaV4, CreateIndexV1, CreateMaterializedViewV1,
-    CreateOrDropClusterReplicaReasonV1, CreateSourceSinkV1, CreateSourceSinkV2, CreateSourceSinkV3,
-    CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2, DropClusterReplicaV3,
-    EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1, GrantRoleV1, GrantRoleV2,
-    IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1, RefreshDecisionWithReasonV2,
-    RenameClusterReplicaV1, RenameClusterV1, RenameItemV1, RenameSchemaV1, RevokeRoleV1,
-    RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1, SchedulingDecisionsWithReasonsV1,
-    SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1, ToNewIdV1, UpdateItemV1,
-    UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
+    CreateOrDropClusterReplicaReasonV1, CreateRoleV1, CreateSourceSinkV1, CreateSourceSinkV2,
+    CreateSourceSinkV3, CreateSourceSinkV4, DropClusterReplicaV1, DropClusterReplicaV2,
+    DropClusterReplicaV3, EventDetails, EventType, EventV1, FromPreviousIdV1, FullNameV1,
+    GrantRoleV1, GrantRoleV2, IdFullNameV1, IdNameV1, RefreshDecisionWithReasonV1,
+    RefreshDecisionWithReasonV2, RenameClusterReplicaV1, RenameClusterV1, RenameItemV1,
+    RenameSchemaV1, RevokeRoleV1, RevokeRoleV2, RotateKeysV1, SchedulingDecisionV1,
+    SchedulingDecisionsWithReasonsV1, SchedulingDecisionsWithReasonsV2, SchemaV1, SchemaV2, SetV1,
+    ToNewIdV1, UpdateItemV1, UpdateOwnerV1, UpdatePrivilegeV1, VersionedEvent,
 };
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
@@ -1260,6 +1260,26 @@ impl RustType<crate::objects::audit_log_event_v1::RotateKeysV1> for RotateKeysV1
     }
 }
 
+impl RustType<crate::objects::audit_log_event_v1::CreateRoleV1> for CreateRoleV1 {
+    fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateRoleV1 {
+        crate::objects::audit_log_event_v1::CreateRoleV1 {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            auto_provision_source: self.auto_provision_source.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: crate::objects::audit_log_event_v1::CreateRoleV1,
+    ) -> Result<Self, TryFromProtoError> {
+        Ok(CreateRoleV1 {
+            id: proto.id,
+            name: proto.name,
+            auto_provision_source: proto.auto_provision_source,
+        })
+    }
+}
+
 impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::Details {
         use crate::objects::audit_log_event_v1::Details::*;
@@ -1327,6 +1347,7 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::SetV1(details) => SetV1(details.into_proto()),
             EventDetails::ResetAllV1 => ResetAllV1(Empty {}),
             EventDetails::RotateKeysV1(details) => RotateKeysV1(details.into_proto()),
+            EventDetails::CreateRoleV1(details) => CreateRoleV1(details.into_proto()),
         }
     }
 
@@ -1406,6 +1427,7 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             SetV1(details) => Ok(EventDetails::SetV1(details.into_rust()?)),
             ResetAllV1(Empty {}) => Ok(EventDetails::ResetAllV1),
             RotateKeysV1(details) => Ok(EventDetails::RotateKeysV1(details.into_rust()?)),
+            CreateRoleV1(details) => Ok(EventDetails::CreateRoleV1(details.into_rust()?)),
         }
     }
 }

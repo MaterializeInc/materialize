@@ -2365,6 +2365,23 @@ pub mod audit_log_event_v1 {
 
     #[derive(
         Clone,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Serialize,
+        Deserialize,
+        Arbitrary
+    )]
+    pub struct CreateRoleV1 {
+        pub id: String,
+        pub name: String,
+        pub auto_provision_source: Option<String>,
+    }
+
+    #[derive(
+        Clone,
         Copy,
         Debug,
         PartialEq,
@@ -2473,6 +2490,7 @@ pub mod audit_log_event_v1 {
         CreateIndexV1(CreateIndexV1),
         CreateMaterializedViewV1(CreateMaterializedViewV1),
         AlterApplyReplacementV1(AlterApplyReplacementV1),
+        CreateRoleV1(CreateRoleV1),
     }
 }
 

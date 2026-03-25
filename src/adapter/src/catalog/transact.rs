@@ -47,9 +47,10 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv};
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
-    CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
-    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, PasswordAction, PasswordConfig,
-    RoleAttributesRaw, RoleMembership, RoleVars,
+    AutoProvisionSource, CatalogDatabase, CatalogError as SqlCatalogError,
+    CatalogItem as SqlCatalogItem, CatalogRole, CatalogSchema, DefaultPrivilegeAclItem,
+    DefaultPrivilegeObject, PasswordAction, PasswordConfig, RoleAttributesRaw, RoleMembership,
+    RoleVars,
 };
 use mz_sql::names::{
     CommentObjectId, DatabaseId, FullItemName, ObjectId, QualifiedItemName,
@@ -1203,9 +1204,14 @@ impl Catalog {
                     audit_events,
                     EventType::Create,
                     ObjectType::Role,
-                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                    EventDetails::CreateRoleV1(mz_audit_log::CreateRoleV1 {
                         id: id.to_string(),
                         name: name.clone(),
+                        auto_provision_source: attributes.auto_provision_source.map(|s| match s {
+                            AutoProvisionSource::Oidc => "oidc".to_string(),
+                            AutoProvisionSource::Frontegg => "frontegg".to_string(),
+                            AutoProvisionSource::None => "none".to_string(),
+                        }),
                     }),
                 )?;
                 info!("create role {}", name);

@@ -87,8 +87,7 @@ use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::str::StrExt;
 use mz_pgwire_common::{ConnectionCounter, ConnectionHandle};
 use mz_repr::user::ExternalUserMetadata;
-use mz_server_core::listeners;
-use mz_server_core::listeners::{AllowedRoles, HttpRoutesEnabled};
+use mz_server_core::listeners::{self, AllowedRoles, HttpRoutesEnabled};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingSslContext, Server};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
