@@ -48,8 +48,8 @@ ArrangeAccumulable␠[val:␠empty]  12
 ArrangeBy[[CallBinary(JsonbGetStringStringify(JsonbGetStringStringify),␠Column(1,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠ReprColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  2
 ArrangeBy[[CallBinary(JsonbGetStringStringify(JsonbGetStringStringify),␠Column(2,␠"details"),␠Literal(Ok(Row{[String("id")]}),␠ReprColumnType␠{␠scalar_type:␠String,␠nullable:␠false␠}))]]  1
 ArrangeBy[[CallVariadic(Coalesce(Coalesce),␠[Column(2,␠"parent"),␠Column(3,␠"parent")])]]  2
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27),␠Column(28),␠Column(29),␠Column(30)]]  2
-ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22)]]  2
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21),␠Column(22),␠Column(23),␠Column(24),␠Column(25),␠Column(26),␠Column(27),␠Column(28),␠Column(29)]]  2
+ArrangeBy[[Column(0),␠Column(1),␠Column(2),␠Column(3),␠Column(4),␠Column(5),␠Column(6),␠Column(7),␠Column(8),␠Column(9),␠Column(10),␠Column(11),␠Column(12),␠Column(13),␠Column(14),␠Column(15),␠Column(16),␠Column(17),␠Column(18),␠Column(19),␠Column(20),␠Column(21)]]  2
 ArrangeBy[[Column(0),␠Column(1)]]  1
 ArrangeBy[[Column(0),␠Column(3)]]  1
 ArrangeBy[[Column(0)]]  34

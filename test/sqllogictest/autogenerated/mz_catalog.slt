@@ -292,7 +292,6 @@ name  text  The␠name␠of␠the␠role.
 inherit  boolean  Indicates␠whether␠the␠role␠has␠inheritance␠of␠privileges.
 rolcanlogin  boolean  Indicates␠whether␠the␠role␠can␠log␠in.
 rolsuper  boolean  Indicates␠whether␠the␠role␠is␠a␠superuser.
-autoprovisionsource  text  The␠authenticator␠that␠was␠used␠to␠auto-provision␠this␠role␠('oidc',␠'frontegg',␠or␠'none').
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_catalog' AND object = 'mz_role_members' ORDER BY position

@@ -60,8 +60,7 @@ use mz_repr::{
 };
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{
-    AutoProvisionSource, CatalogCluster, CatalogSchema, CatalogType, DefaultPrivilegeObject,
-    TypeCategory,
+    CatalogCluster, CatalogSchema, CatalogType, DefaultPrivilegeObject, TypeCategory,
 };
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
@@ -233,13 +232,6 @@ impl CatalogState {
                     Datum::Null
                 };
 
-                let auto_provision_source = match &role.attributes.auto_provision_source {
-                    Some(AutoProvisionSource::Oidc) => Datum::String("oidc"),
-                    Some(AutoProvisionSource::Frontegg) => Datum::String("frontegg"),
-                    Some(AutoProvisionSource::None) => Datum::String("none"),
-                    None => Datum::Null,
-                };
-
                 let role_update = BuiltinTableUpdate::row(
                     &*MZ_ROLES,
                     Row::pack_slice(&[
@@ -249,7 +241,6 @@ impl CatalogState {
                         Datum::from(role.attributes.inherit),
                         Datum::from(rolcanlogin),
                         rolsuper,
-                        auto_provision_source,
                     ]),
                     diff,
                 );
