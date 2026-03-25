@@ -75,6 +75,7 @@ CONFLUENT_PRIVATELINK_API_SECRET = os.getenv(
     "CONFLUENT_CLOUD_PRIVATELINK_KAFKA_PASSWORD"
 )
 # Public bootstrap server for testdrive's Kafka admin operations (topic creation)
+# and for the exact-match pattern in AWS PRIVATELINKS.
 CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER = os.getenv(
     "CONFLUENT_CLOUD_PRIVATELINK_BOOTSTRAP_SERVER"
 )
@@ -541,6 +542,7 @@ def td(
                 f"--var=confluent-az1={CONFLUENT_PRIVATELINK_AZS[0]}",
                 f"--var=confluent-az2={CONFLUENT_PRIVATELINK_AZS[1]}",
                 f"--var=confluent-pl-port={CONFLUENT_PRIVATELINK_BOOTSTRAP_PORT}",
+                f"--var=confluent-pl-bootstrap={CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER}",
             ],
         )
     elif redpanda and "redpanda" in str(filename):

@@ -25,10 +25,14 @@ abc:abc
 > CREATE SECRET confluent_privatelinks_password AS '${arg.confluent-pl-api-secret}';
 
 # AWS PRIVATELINKS (plural) with pattern-based AZ routing.
+# The exact-match pattern provides the bootstrap broker address.
 # Confluent brokers advertise AZ-specific addresses (e.g. *.use1-az1.glb.confluent.cloud)
 # that the wildcard patterns match to route through the correct AZ endpoint.
 > CREATE CONNECTION confluent_privatelinks_conn TO KAFKA (
   AWS PRIVATELINKS (
+      '${arg.confluent-pl-bootstrap}' TO confluent_privatelink_conn (
+          PORT ${arg.confluent-pl-port}
+      ),
       '*.${arg.confluent-az1}.*' TO confluent_privatelink_conn (
           AVAILABILITY ZONE = '${arg.confluent-az1}',
           PORT ${arg.confluent-pl-port}
@@ -36,8 +40,7 @@ abc:abc
       '*.${arg.confluent-az2}.*' TO confluent_privatelink_conn (
           AVAILABILITY ZONE = '${arg.confluent-az2}',
           PORT ${arg.confluent-pl-port}
-      ),
-      confluent_privatelink_conn (PORT ${arg.confluent-pl-port})
+      )
   ),
   SECURITY PROTOCOL = 'SASL_SSL',
   SASL MECHANISMS = 'PLAIN',
