@@ -41,6 +41,7 @@ where
     ) -> CollectionBundle<G> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
+        let has_columnar = input.columnar_collection.is_some();
         let (ok_collection, err_collection) =
             input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;
@@ -128,7 +129,12 @@ where
         let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
         let err_collection = err_collection.concat(new_err_collection);
-        CollectionBundle::from_collections(ok_collection, err_collection)
+        if has_columnar {
+            let col_oks = crate::render::columnar::vec_to_columnar(ok_collection);
+            CollectionBundle::from_columnar_collections(col_oks, err_collection)
+        } else {
+            CollectionBundle::from_collections(ok_collection, err_collection)
+        }
     }
 }
 
