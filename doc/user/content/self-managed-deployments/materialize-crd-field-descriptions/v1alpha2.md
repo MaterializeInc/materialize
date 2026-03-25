@@ -1,6 +1,6 @@
 ---
 title: "v1alpha2"
-description: "Reference page on Materialize CRD Fields for the v1alpha2 API (v26.17+)"
+description: "Reference page on Materialize CRD Fields for the v1alpha2 API (v26.18+)"
 menu:
   main:
     parent: "materialize-crd-field-descriptions"
