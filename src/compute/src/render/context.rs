@@ -464,6 +464,7 @@ where
             return;
         }
         if let Some((col_oks, col_errs)) = self.columnar_collection.take() {
+            tracing::debug!("Vec fallback: converting columnar→Vec via ensure_vec_collection");
             use differential_dataflow::AsCollection;
             use timely::dataflow::operators::core::Map;
 
