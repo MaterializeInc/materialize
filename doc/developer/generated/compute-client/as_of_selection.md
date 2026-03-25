@@ -1,0 +1,10 @@
+---
+source: src/compute-client/src/as_of_selection.rs
+revision: 52af3ba2a1
+---
+
+# mz-compute-client::as_of_selection
+
+Implements as-of selection for compute dataflows during system initialization.
+For each compute collection in a set of `DataflowDescription`s, it determines a compatible `as_of` timestamp by maintaining `AsOfBounds` (lower/upper bound pairs) that are iteratively refined by applying `Constraint`s derived from collection dependencies and storage since frontiers.
+The final upper bound is chosen to maximize compute reconciliation effectiveness and minimize historical data reads.

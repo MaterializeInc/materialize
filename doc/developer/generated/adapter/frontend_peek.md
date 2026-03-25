@@ -1,0 +1,10 @@
+---
+source: src/adapter/src/frontend_peek.rs
+revision: 298c9e1815
+---
+
+# adapter::frontend_peek
+
+Implements the "frontend peek" sequencing path, where SELECT query optimization and fast-path execution are performed in the pgwire connection task rather than the coordinator's main loop.
+The module sequences the full peek pipeline — plan resolution, timestamp determination, fast-path detection, persist fast-path execution, and slow-path dispatch via `Command::ExecuteSlowPathPeek` — while registering the peek with the coordinator for cancellation support and statement logging.
+`sequence_peek` is the main entry point, delegating fast-path execution to the compute or persist layer and sending slow-path plans back to the coordinator via the command channel.
