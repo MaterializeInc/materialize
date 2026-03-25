@@ -214,3 +214,19 @@
 
 ### Issues
 - None.
+
+## Prompt 6.3: Columnar Threshold input (verification only)
+
+### What was done
+- Reviewed `render_threshold` and `build_threshold_basic` in `threshold.rs`.
+- Confirmed that threshold operates entirely on arrangements via `input.arrangement(&key)` (line 84-86). It never accesses `self.collection` or calls `as_specific_collection`.
+- No code changes needed. Columnar-only bundles work correctly because arrangements are stored in the separate `arranged` field of `CollectionBundle`.
+
+### Key decisions
+- Verification-only prompt. The threshold operator is arrangement-native and does not interact with unarranged collections at all.
+
+### Files changed
+- None (verification only).
+
+### Issues
+- None.
