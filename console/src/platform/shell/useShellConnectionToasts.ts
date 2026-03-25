@@ -14,6 +14,8 @@ import { useEffect } from "react";
 import { reconnectionStateAtom } from "~/hooks/useAutomaticallyConnectSocket";
 import { useToast } from "~/hooks/useToast";
 
+const SHELL_CONNECTION_TOAST_ID = "shell-connection-status";
+
 /**
  * Reactive toast hook that shows connection status toasts
  * based on ReconnectionState transitions from WebsocketConnectionManager.
@@ -28,31 +30,37 @@ export function useShellConnectionToasts() {
   useEffect(() => {
     if (prevStatus === status) return;
 
-    // Show disconnect toast when transitioning away from "connected".
-    // On first render prevStatus is undefined (from usePrevious), so this
-    // naturally skips the initial connection.
     if (
       prevStatus === "connected" &&
       (status === "reconnecting" || status === "disconnected")
     ) {
-      toast({
+      const opts = {
+        id: SHELL_CONNECTION_TOAST_ID,
         description: "Connection interrupted. Reconnecting...",
-        status: "error",
+        status: "error" as const,
         duration: 5000,
         isClosable: true,
-      });
+      };
+      if (toast.isActive(SHELL_CONNECTION_TOAST_ID)) {
+        toast.update(SHELL_CONNECTION_TOAST_ID, opts);
+      } else {
+        toast(opts);
+      }
     }
 
-    // Show reconnect toast only after a real reconnection attempt.
-    // On first connection prevStatus is "disconnected", not "reconnecting",
-    // so this naturally skips the initial connection.
     if (status === "connected" && prevStatus === "reconnecting") {
-      toast({
+      const opts = {
+        id: SHELL_CONNECTION_TOAST_ID,
         description: "Reconnected to Materialize.",
-        status: "success",
+        status: "success" as const,
         duration: 2000,
         isClosable: true,
-      });
+      };
+      if (toast.isActive(SHELL_CONNECTION_TOAST_ID)) {
+        toast.update(SHELL_CONNECTION_TOAST_ID, opts);
+      } else {
+        toast(opts);
+      }
     }
   }, [prevStatus, status, toast]);
 }
