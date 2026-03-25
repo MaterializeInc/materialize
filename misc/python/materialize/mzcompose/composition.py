@@ -993,6 +993,43 @@ class Composition:
             print_prefix=print_prefix,
         )
 
+    def pull_images(
+        self,
+        *services: str | Service,
+        max_tries: int = 5,
+    ) -> None:
+        """Ensure images for the named services exist locally without
+        starting any containers.
+
+        Tries ``docker compose pull`` first, falling back to
+        ``docker compose build`` for any services whose images are not
+        in the registry (e.g. local development).  Unlike ``up`` with
+        ``idle=True``, no entrypoint is ever invoked, so this works
+        with distroless images that lack a shell or ``sleep``.
+
+        Args:
+            services: The names of services in the composition.
+            max_tries: Number of tries on failure.
+        """
+        service_names = [
+            service.name if isinstance(service, Service) else service
+            for service in services
+        ]
+        try:
+            self.invoke(
+                "pull",
+                *(["--quiet"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=max_tries,
+            )
+        except UIError:
+            self.invoke(
+                "build",
+                *(["--quiet"] if ui.env_is_truthy("CI") else []),
+                *service_names,
+                max_tries=max_tries,
+            )
+
     def pull_if_variable(self, services: list[str], max_tries: int = 2) -> None:
         """Pull fresh service images in case the tag indicates the underlying image may change over time.
 
