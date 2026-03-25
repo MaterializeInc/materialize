@@ -9,13 +9,11 @@
 
 import argparse
 
-from materialize.cli.scratch import check_required_vars
-from materialize.scratch import get_instance, mssh
+from materialize.cli.scratch import get_instance
+from materialize.scratch import mssh
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    check_required_vars()
-
     parser.add_argument(
         "instance",
         help="The ID of the instance to connect to, or 'mine' to specify your only live instance",
@@ -24,7 +22,7 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 
 def run(args: argparse.Namespace) -> None:
-    instance = get_instance(args.instance)
+    instance = get_instance(args.instance, getattr(args, "provider", None))
     ssh_args = []
     for port in args.ports:
         ssh_args.extend(["-L", f"{port}:127.0.0.1:{port}"])

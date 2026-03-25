@@ -1,5 +1,6 @@
 {
     "name": "c7a.2xlarge as used by the CI",
+    "provider": "aws",
     "launch_script": "true",
     "instance_type": "c7a.2xlarge",
     "ami": "ami-0ecb62995f68bb549",

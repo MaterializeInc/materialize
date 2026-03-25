@@ -1,0 +1,10 @@
+{
+    "name": "dedicated 48cpu 192gb",
+    "provider": "hetzner",
+    "launch_script": "true",
+    "server_type": "ccx63",
+    "image": "ubuntu-24.04",
+    "location": "fsn1",
+    "size_gb": 50,
+    "tags": {}
+}

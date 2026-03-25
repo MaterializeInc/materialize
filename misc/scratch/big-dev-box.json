@@ -1,5 +1,6 @@
 {
     "name": "one-off load testing",
+    "provider": "aws",
     "launch_script": "true",
     "instance_type": "r5a.4xlarge",
     "ami": "ami-0ecb62995f68bb549",

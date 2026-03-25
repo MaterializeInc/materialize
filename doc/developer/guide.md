@@ -618,10 +618,10 @@ To add the completions to bash, add the following to your `~/.bashrc`:
 source /path/to/materialize/misc/completions/bash/*
 ```
 
-For zsh, add the follow to your `~/.zshrc`:
+For zsh, add the following to your `~/.zshrc` **before** `compinit`:
 
 ```shell
-source /path/to/materialize/misc/completions/zsh/*
+fpath=(/path/to/materialize/misc/completions/zsh $fpath)
 ```
 
 [Apache Kafka]: https://kafka.apache.org

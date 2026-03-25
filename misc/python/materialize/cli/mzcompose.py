@@ -23,6 +23,7 @@ code, please talk to me first!
 from __future__ import annotations
 
 import argparse
+import enum
 import inspect
 import json
 import os
@@ -35,6 +36,7 @@ from pathlib import Path
 from typing import IO, Any
 
 import junit_xml
+import shtab
 from humanize import naturalsize
 from semver.version import Version
 
@@ -154,6 +156,16 @@ For additional details on mzcompose, consult doc/developer/mzbuild.md.""",
     UnpauseCommand.register(parser, subparsers)
     UpCommand.register(parser, subparsers)
     WebCommand().register(parser, subparsers)
+
+    completion_parser = subparsers.add_parser(
+        "completion", help="Generate shell completion script"
+    )
+    shtab.add_argument_to(completion_parser, "shell", parent=parser)
+
+    # shtab can't handle Enum choices (indexes with [0]). Convert to strings.
+    for action in parser._actions:  # noqa: SLF001
+        if isinstance(action.choices, type) and issubclass(action.choices, enum.Enum):
+            action.choices = [e.name for e in action.choices]
 
     args = parser.parse_args(argv)
     if args.file:

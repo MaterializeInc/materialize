@@ -1,5 +1,6 @@
 {
     "name": "persist benchmarking",
+    "provider": "aws",
     "launch_script": "true",
     "instance_type": "m6i.8xlarge",
     "ami": "ami-0ecb62995f68bb549",
