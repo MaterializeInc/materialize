@@ -76,6 +76,7 @@ tracing-subscriber = { version = "0.3.22", default-features = false, features = 
 ], optional = true }
 uuid = { version = "1.19.0", optional = true, features = ["v4", "v7"] }
 url = { version = "2.5.8", features = ["serde"] }
+zeroize = { version = "1.8.2", features = ["derive", "serde"], optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 # For the `tracing` feature
@@ -98,7 +99,7 @@ yansi = { version = "1.0.1", optional = true }
 [dev-dependencies]
 anyhow = { version = "1.0.101" }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
-mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
+mz-ore = { path = "../ore", features = ["id_gen", "chrono", "secure"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 scopeguard = "1.2.0"
 serde_json = "1.0.149"
@@ -154,6 +155,7 @@ assert-no-tracing = []
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
+secure = ["zeroize"]
 
 [[test]]
 name = "future"
@@ -166,6 +168,10 @@ required-features = ["panic"]
 [[test]]
 name = "task"
 required-features = ["async"]
+
+[[test]]
+name = "secure"
+required-features = ["secure"]
 
 [[bench]]
 name = "id_gen"
