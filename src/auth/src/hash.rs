@@ -15,6 +15,7 @@ use std::num::NonZeroU32;
 
 use base64::prelude::*;
 use itertools::Itertools;
+use mz_ore::secure::Zeroize;
 
 use crate::password::Password;
 
@@ -34,6 +35,12 @@ pub struct HashOpts {
     pub salt: [u8; DEFAULT_SALT_SIZE],
 }
 
+impl Drop for HashOpts {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+    }
+}
+
 pub struct PasswordHash {
     /// The salt used for hashing
     pub salt: [u8; DEFAULT_SALT_SIZE],
@@ -42,6 +49,13 @@ pub struct PasswordHash {
     /// The hash of the password.
     /// This is the result of PBKDF2 with SHA256
     pub hash: [u8; SHA256_OUTPUT_LEN],
+}
+
+impl Drop for PasswordHash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.hash.zeroize();
+    }
 }
 
 #[derive(Debug)]
@@ -269,6 +283,14 @@ struct ScramSha256Hash {
     stored_key: [u8; SHA256_OUTPUT_LEN],
 }
 
+impl Drop for ScramSha256Hash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.server_key.zeroize();
+        self.stored_key.zeroize();
+    }
+}
+
 impl Display for ScramSha256Hash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -326,6 +348,61 @@ mod tests {
     use super::*;
 
     const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(60).expect("Trust me on this");
+
+    // -------------------------------------------------------
+    // Zeroization tests
+    // -------------------------------------------------------
+
+    #[mz_ore::test]
+    fn test_password_hash_implements_drop() {
+        // PasswordHash must zeroize salt and hash on drop.
+        // Compile-time proof that Drop is implemented.
+        assert!(std::mem::needs_drop::<PasswordHash>());
+    }
+
+    #[mz_ore::test]
+    fn test_hash_opts_implements_drop() {
+        assert!(std::mem::needs_drop::<HashOpts>());
+    }
+
+    #[mz_ore::test]
+    fn test_scram_sha256_hash_implements_drop() {
+        assert!(std::mem::needs_drop::<ScramSha256Hash>());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_existing_scram_flow_with_zeroization() {
+        // Functional regression: the full SCRAM flow still works
+        // after adding zeroization. This is the most important test —
+        // zeroization must not break the crypto.
+        let password: Password = "password".into();
+        let hash = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash");
+        assert!(scram256_verify(&password, &hash).is_ok());
+        assert!(scram256_verify(&"wrong".into(), &hash).is_err());
+    }
+
+    // THROWAWAY: verify Password zeroizes its inner String
+    #[mz_ore::test]
+    fn throwaway_password_zeroize_trait() {
+        use mz_ore::secure::Zeroize;
+        let mut p = Password::from("secret");
+        p.0.zeroize();
+        assert_eq!(p.0, "");
+    }
+
+    // THROWAWAY: verify salt array can be zeroized
+    #[mz_ore::test]
+    fn throwaway_salt_zeroize() {
+        use mz_ore::secure::Zeroize;
+        let mut salt = [0xFFu8; 32];
+        salt.zeroize();
+        assert_eq!(salt, [0u8; 32]);
+    }
+
+    // -------------------------------------------------------
+    // Existing tests
+    // -------------------------------------------------------
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`

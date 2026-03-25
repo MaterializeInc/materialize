@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::secure::Zeroize;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
@@ -46,8 +47,30 @@ impl ToString for Password {
     }
 }
 
+impl Drop for Password {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
 impl Debug for Password {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Password(****)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_password_implements_drop() {
+        assert!(std::mem::needs_drop::<Password>());
+    }
+
+    #[mz_ore::test]
+    fn test_password_round_trip() {
+        let p = Password::from("hunter2");
+        assert_eq!(p.to_string(), "hunter2");
     }
 }

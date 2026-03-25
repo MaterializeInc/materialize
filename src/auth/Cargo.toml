@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 base64 = "0.22.1"
-mz-ore = { path = "../ore", features = ["test"] }
+mz-ore = { path = "../ore", features = ["test", "zeroize"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 serde = "1.0.219"
 proptest-derive = "0.8.0"
