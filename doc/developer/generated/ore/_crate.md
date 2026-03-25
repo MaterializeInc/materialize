@@ -58,7 +58,7 @@ Modules are included here when they are broadly useful but too small to warrant 
 | `process` | `process` | `halting` process exit via `libc` |
 | `region` | `region` | Columnar region allocator with lgalloc support |
 | `retry` | `async` | Configurable retry with exponential backoff |
-| `secure` | `secure` | `SecureString`, `SecureVec`, and `zeroize` re-exports for sensitive data that must be zeroed from memory on drop |
+| `secure` | `zeroize` | `SecureString`, `SecureVec`, and `zeroize` re-exports for sensitive data that must be zeroed from memory on drop |
 | `stack` | `stack` | `maybe_grow` — checked stack growth via `stacker` |
 | `task` | `async` | Tokio task/runtime spawning wrappers with tracing context propagation |
 | `test` | `test` | Test helpers: `timeout` wrappers |

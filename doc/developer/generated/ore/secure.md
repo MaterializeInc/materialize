@@ -7,7 +7,7 @@ revision: c9d4078b10
 
 Utilities for handling sensitive data that must be zeroed from memory on drop.
 
-**Feature gate:** `secure`
+**Feature gate:** `zeroize`
 
 ## Overview
 
@@ -21,7 +21,7 @@ This module provides wrapper types and re-exports for managing secrets (password
 | `ZeroizeOnDrop` | Marker trait indicating `Drop` zeroes the value |
 | `Zeroizing<T>` | Generic wrapper that zeroes `T` on drop; derefs to `T` |
 
-Downstream crates should depend on `mz-ore` with `features = ["secure"]` rather than adding a direct `zeroize` dependency. This keeps the zeroize version consistent across the workspace.
+Downstream crates should depend on `mz-ore` with `features = ["zeroize"]` rather than adding a direct `zeroize` dependency. This keeps the zeroize version consistent across the workspace.
 
 ## Types
 

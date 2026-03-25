@@ -48,7 +48,7 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - No "unable", "bad", "illegal", "unknown"; say what kind of object.
 
 ### Sensitive data handling
-- Types holding passwords, keys, tokens, or credentials should use `mz_ore::secure::{SecureString, SecureVec}` or `zeroize::Zeroizing<T>` (requires `mz-ore` `secure` feature).
+- Types holding passwords, keys, tokens, or credentials should use `mz_ore::secure::{SecureString, SecureVec}` or `zeroize::Zeroizing<T>` (requires `mz-ore` `zeroize` feature).
 - Sensitive types should **not** derive `Clone` or `Debug` (use custom `Debug` that redacts).
 - Stack-local buffers holding derived keys, nonces, or HMAC outputs should be wrapped in `Zeroizing<T>`.
 - See `doc/developer/generated/ore/secure.md` for full guidance and `src/ssh-util/src/keys.rs` for a reference implementation.
