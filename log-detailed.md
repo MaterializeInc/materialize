@@ -338,3 +338,53 @@
 - The LetRec code (`render.rs` ~line 956, 1007) directly accessed `.collection.unwrap()` — needed conversion to `as_vec_collection()`.
 - Hydration logging (`render.rs` ~line 1481) modified `.collection` in-place — updated to modify `columnar_collection` instead.
 - `ensure_collections` loop used `self.collection.take()`/`self.collection = Some(...)` pattern — replaced with local `cached_vec` variable.
+
+## Prompt 10.1: Investigate columnar arrangement spines (research/design)
+
+### Current Architecture
+- **`RowRowSpine`** (`row_spine.rs:35`): `Spine<Rc<OrdValBatch<RowRowLayout<...>>>>` — uses `DatumContainer` for both keys and values.
+- **`DatumContainer`** (`row_spine.rs:97-125`): Wraps `BytesContainer` which stores rows as concatenated byte sequences with offset-based indexing (`OffsetOptimized`). Each row's bytes are the same format as `Row`'s internal representation.
+- **`DatumSeq`** (`row_spine.rs:205-287`): Borrowed view into `DatumContainer`. Implements `Iterator<Item = Datum<'a>>` for sequential datum decoding from raw bytes.
+- **`Row` Columnar impl** (`repr/src/row.rs:428-632`): `Row` implements `Columnar` with a `Rows` container (bounds: `Vec<u64>` + values: `Vec<u8>`). This separates offsets from data but is still **row-oriented** (each row's datums are contiguous).
+
+### Feasibility of Column-of-Datums Layout
+
+**Technically feasible but requires significant infrastructure changes:**
+
+1. **Schema propagation**: Arrangement spines don't know the relation schema. A column-of-datums layout requires knowing column count, types, and nullability. `RelationDesc` would need to be threaded through to `Layout`/`BatchContainer`.
+
+2. **New `BatchContainer` implementations**: Each column type (Int32, Int64, String, etc.) would need its own contiguous array. This means either:
+   - A `ColumnBatchContainer` with per-column typed arrays (like Arrow)
+   - Or a `Vec<DatumColumn>` approach matching the vectorized eval types from PR #35464
+
+3. **Batch merging impact**: Spines merge batches during compaction. Column-oriented merge requires per-column merge logic. The current `BytesContainer` merge is simple byte-copy; columnar merge would need type-aware operations.
+
+4. **Cursor API compatibility**: The differential-dataflow cursor presents `(Key, Val, Time, Diff)` tuples. Column-oriented storage would need to reconstruct rows for the cursor API, negating some benefits. Alternatively, a columnar cursor extension could provide batch-level column access.
+
+5. **Variable-length types**: Strings, bytes, and nested types (arrays, maps, JSON) require offset+data separation within each column, adding complexity.
+
+### Recommendation
+
+A columnar arrangement spine is a **major undertaking** with prerequisites:
+- Vectorized evaluation (Prompt 3.2 / PR #35464) must land first to provide `DatumColumn`/`ColumnDatum` types
+- Schema propagation from the optimizer through to arrangements
+- A new `ColumnBatchContainer` implementing differential-dataflow's `BatchContainer` trait
+- Modified merge and cursor logic
+
+The current `DatumContainer` is already reasonably efficient (contiguous bytes, no per-row allocation, offset-based indexing). The biggest win from columnar spines would be **avoiding the Row→Column transpose at evaluation time**, which benchmarks show costs ~58μs/1024 rows. This savings only materializes when vectorized evaluation is available.
+
+**Suggested phased approach:**
+1. Land vectorized MFP evaluation (Prompt 3.2)
+2. Add schema metadata to arrangement creation
+3. Prototype a `ColumnarDatumContainer` for a single column type (e.g., Int64)
+4. Benchmark against `DatumContainer` for filter-heavy workloads
+5. Generalize to all column types
+
+### Files reviewed (read-only)
+- `src/compute/src/row_spine.rs` — `DatumContainer`, `DatumSeq`, `BytesContainer`, `RowRowLayout`
+- `src/compute/src/typedefs.rs` — `RowRowSpine`, `RowRowAgent`, type aliases
+- `src/repr/src/row.rs` — `Row`, `Rows` (Columnar impl), datum encoding
+- `src/timely-util/src/columnar/builder.rs` — `ColumnBuilder` (not used in spines)
+
+### Issues
+- None. Research/design prompt only.
