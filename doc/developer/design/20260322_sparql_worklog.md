@@ -2654,3 +2654,87 @@ This is deferred to Prompt 29.
 - `cargo check -p mz-repr`: passes, 0 warnings
 - `cargo test -p mz-repr -- adt::rdf`: 24/24 pass
 - `bin/fmt`: passes (except missing `buf` tool)
+
+## 2026-03-25: Prompt 29 — Add `ScalarType::Iri` and `ScalarType::Rdf` variants
+
+### What was done
+
+Added `Iri` and `Rdf` variants to both `SqlScalarType` and `ReprScalarType`,
+along with all required downstream updates across the codebase.
+
+**`SqlScalarType::Iri`**: A dedicated scalar type for IRIs. Stored as
+`Datum::String` under the hood (zero encoding overhead). Follows the
+`PgLegacyName` pattern — a string with extra type semantics. For
+`is_instance_of`, accepts `Datum::String`.
+
+**`SqlScalarType::Rdf`**: The polymorphic RDF object type. Follows the `Jsonb`
+pattern — accepts multiple datum variants. For `is_instance_of`, accepts all
+datum variants that `RdfRef::kind()` handles: `String`, `Int64`, `Float32`,
+`Float64`, `Numeric`, `True`/`False`, `Date`, `TimestampTz`, `Time`,
+`Interval`, `List` (for compound RDF terms).
+
+**`ReprScalarType::Iri`** and **`ReprScalarType::Rdf`**: Corresponding repr-level
+variants. `Iri` maps 1:1 with `SqlScalarType::Iri`. `Rdf` maps 1:1 with
+`SqlScalarType::Rdf`. Both are simple (no parameters).
+
+**Files modified:**
+
+1. `src/repr/src/scalar.rs` — Both enum definitions, `into_proto`/`from_proto`,
+   both `is_instance_of_scalar` functions (ReprScalarType and SqlScalarType
+   versions), `Display` for `ReprScalarType`, `union()`, `From<&SqlScalarType>
+   for ReprScalarType`, `from_repr()`, `interesting_datums()`,
+   `array_of_self_elem_type()`, `Arbitrary` impl, `arb_datum_for_scalar()`,
+   `scalar_type_test_cases()`.
+
+2. `src/repr/src/relation_and_scalar.proto` — Added `Iri = 39` and `Rdf = 40`
+   to `ProtoScalarType` oneof.
+
+3. `src/repr/src/row/encode.rs` — Added to `preserves_order()` (false for both)
+   and `scalar_type_to_encoder()` (Iri → String encoder, Rdf → Bytes encoder).
+
+4. `src/pgrepr/src/types.rs` — Added `Type::Iri` and `Type::Rdf` variants,
+   `inner()` (both → TEXT), `typlen()` (both → -1), `constraint()` (both → None),
+   `From<&SqlScalarType>`, `TryFrom<&Type>`.
+
+5. `src/pgrepr/src/value.rs` — `can_encode_binary()` (true for both),
+   `decode_text()`, `decode_text_into_row()`, `decode_binary()` (all treat as
+   TEXT).
+
+6. `src/interchange/src/avro/encode.rs` — Iri → String, Rdf → String format.
+7. `src/interchange/src/json.rs` — Both encode functions and schema builder.
+8. `src/expr/src/scalar/func.rs` — `stringify_datum()` for text output.
+9. `src/sql/src/func.rs` — `TypeCategory::from_type()` (UserDefined),
+   `SqlScalarBaseType` → `ParamType` conversion.
+10. `src/sql/src/plan/typeconv.rs` — `to_jsonb()` (cast to string then jsonb).
+
+### Key decisions
+
+1. **Separate ReprScalarType variants**: Rather than mapping Iri → `ReprScalarType::String`
+   (like PgLegacyName does), Iri and Rdf get their own `ReprScalarType` variants.
+   This preserves type information through the repr layer, enabling future
+   optimizations (e.g., specialized comparison operators for IRIs).
+
+2. **PgWire as TEXT**: Both types map to `postgres_types::Type::TEXT` in pgwire.
+   Clients see text columns. This is the simplest approach and matches how
+   PostgreSQL extension types work.
+
+3. **Rdf is_instance_of uses matches!**: Instead of the nested if/match pattern
+   used for Jsonb (which recursively validates List/Map contents), Rdf uses a
+   flat `matches!` macro. This is correct because Rdf terms don't nest
+   recursively — compound terms are a single `Datum::List` layer.
+
+4. **TypeCategory::UserDefined**: Both Iri and Rdf are classified as UserDefined
+   in the SQL type category system. This prevents them from participating in
+   implicit type coercions that could be surprising.
+
+5. **Rdf column encoder uses Bytes**: In the Persist column encoding
+   (`row/encode.rs`), Rdf uses `BinaryBuilder` (opaque bytes) because the
+   polymorphic datum could be any variant. This is analogous to how Jsonb would
+   be encoded.
+
+### Build results
+
+- `cargo check -p mz-environmentd`: passes
+- `cargo check -p mz-repr -p mz-pgrepr -p mz-expr -p mz-interchange -p mz-sql -p mz-adapter -p mz-sparql -p mz-pgwire -p mz-storage-types`: all pass
+- `bin/fmt`: passes (except missing `buf` tool)
+- `bin/lint`: all Rust checks pass; failures are missing external tools (buf, trufflehog, helm-docs)

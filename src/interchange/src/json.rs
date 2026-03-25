@@ -232,6 +232,10 @@ impl ToJson for TypedDatum<'_> {
                 json!(datum.unwrap_range().to_string())
             }
             SqlScalarType::MzAclItem => json!(datum.unwrap_mz_acl_item().to_string()),
+            // IRI is stored as String.
+            SqlScalarType::Iri => json!(datum.unwrap_str()),
+            // RDF: serialize as string representation.
+            SqlScalarType::Rdf => json!(format!("{}", datum)),
         };
         // We don't need to recurse into map or object here because those already recursively call
         // .json() with the number policy to generate the member Values.
@@ -399,6 +403,8 @@ fn build_row_schema_field_type(
         // https://debezium.io/documentation/reference/stable/connectors/postgresql.html
         SqlScalarType::Range { .. } => json!("string"),
         SqlScalarType::MzAclItem => json!("string"),
+        SqlScalarType::Iri => json!("string"),
+        SqlScalarType::Rdf => json!("string"),
     };
     if typ.nullable {
         // Should be revisited if we ever support a different kind of union scheme.

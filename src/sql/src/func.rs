@@ -114,6 +114,7 @@ impl TypeCategory {
             SqlScalarType::Map { .. } => Self::Pseudo,
             SqlScalarType::MzTimestamp => Self::Numeric,
             SqlScalarType::Range { .. } => Self::Range,
+            SqlScalarType::Iri | SqlScalarType::Rdf => Self::UserDefined,
         }
     }
 
@@ -908,6 +909,8 @@ impl From<SqlScalarBaseType> for ParamType {
             Int2Vector => SqlScalarType::Int2Vector,
             MzTimestamp => SqlScalarType::MzTimestamp,
             MzAclItem => SqlScalarType::MzAclItem,
+            Iri => SqlScalarType::Iri,
+            Rdf => SqlScalarType::Rdf,
         };
         ParamType::Plain(s)
     }

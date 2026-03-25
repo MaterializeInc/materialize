@@ -428,7 +428,7 @@ includes the goal, key files to read, and acceptance criteria.
 > **Status**: `src/repr/src/adt/rdf.rs` is complete with 24 passing tests.
 > `ScalarType::Iri` and `ScalarType::Rdf` are deferred to Prompt 29.
 
-### Prompt 29: Add `ScalarType::Iri` and `ScalarType::Rdf` variants
+### ~~Prompt 29: Add `ScalarType::Iri` and `ScalarType::Rdf` variants~~
 
 > Add `Iri` and `Rdf` variants to the scalar type system. This is a
 > mechanical but wide-reaching change — every exhaustive match on

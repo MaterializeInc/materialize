@@ -130,7 +130,9 @@ pub fn preserves_order(scalar_type: &SqlScalarType) -> bool {
         | SqlScalarType::RegType
         | SqlScalarType::RegClass
         | SqlScalarType::Int2Vector
-        | SqlScalarType::Range { .. } => false,
+        | SqlScalarType::Range { .. }
+        | SqlScalarType::Iri
+        | SqlScalarType::Rdf => false,
     }
 }
 
@@ -1857,6 +1859,10 @@ fn scalar_type_to_encoder(col_ty: &SqlScalarType) -> Result<DatumColumnEncoder, 
                 length: 0,
             }
         }
+        // IRI is stored as String.
+        SqlScalarType::Iri => DatumColumnEncoder::String(StringBuilder::new()),
+        // RDF is polymorphic — encode as opaque bytes (like Jsonb but simpler).
+        SqlScalarType::Rdf => DatumColumnEncoder::Bytes(BinaryBuilder::new()),
     };
     Ok(encoder)
 }
