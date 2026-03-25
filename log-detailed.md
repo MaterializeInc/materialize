@@ -145,3 +145,21 @@
 
 ### Issues
 - None. The temporary bundle clone is slightly wasteful but only occurs when the bundle lacks a Vec collection (columnar-only). Arrangement clones are cheap (reference-counted).
+
+## Prompt 4.1: Columnar FlatMap
+
+### What was done
+- Modified `render_flat_map` to accept columnar input and emit columnar output.
+- At the start of the method, checks if the input has a columnar collection (`has_columnar`). If the input has no Vec collection (columnar-only), calls `ensure_vec_collection()` to convert for the row-at-a-time table function evaluation.
+- At the end, if the input was columnar, converts the Vec ok output to columnar via `vec_to_columnar` and returns a columnar-only bundle. Otherwise returns Vec as before.
+
+### Key decisions
+- Table functions are inherently row-at-a-time (variable output rows per input), so no attempt is made to vectorize the table function evaluation itself. The columnar conversion is purely at the input/output boundaries.
+- Used `ensure_vec_collection()` (the escape hatch from Prompt 0.1) to handle columnar-only inputs, which converts columnar→Vec in-place on the mutable bundle.
+- Output follows the same pattern as Negate/Union: columnar-only when input was columnar, Vec-only otherwise.
+
+### Files changed
+- `src/compute/src/render/flat_map.rs` — Modified `render_flat_map` to handle columnar input/output.
+
+### Issues
+- None. Straightforward boundary conversion.

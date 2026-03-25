@@ -174,11 +174,11 @@ types):
 
 ### Prompt 4.1: Columnar FlatMap
 
-[ ] Convert `render_flat_map` to accept columnar input. Since `FlatMap` applies table functions
+[*] Convert `render_flat_map` to accept columnar input. Since `FlatMap` applies table functions
 that can produce variable numbers of output rows per input row, the output is naturally a
 stream and may not benefit from columnar representation on the output side.
 
-[ ] Accept columnar input, convert batch-at-a-time for table function evaluation, and emit
+[*] Accept columnar input, convert batch-at-a-time for table function evaluation, and emit
 columnar output if practical.
 
 **Files**: `src/compute/src/render/flat_map.rs`
