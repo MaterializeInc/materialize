@@ -927,6 +927,11 @@ where
                 .iter()
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
         if form_raw_collection && self.collection.is_none() {
+            // If we have columnar but no Vec, convert columnar→Vec first so
+            // as_collection_core can access it for the non-arrangement path.
+            if self.columnar_collection.is_some() && input_key.is_none() {
+                self.ensure_vec_collection();
+            }
             self.collection = Some(self.as_collection_core(
                 input_mfp,
                 input_key.map(|k| (k, None)),
