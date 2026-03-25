@@ -1828,6 +1828,7 @@ def workflow_documentation_defaults(
 
         with open(os.path.join(dir, "sample-values.yaml")) as f:
             sample_values = yaml.load(f, Loader=yaml.Loader)
+        sample_values["operator"]["image"]["tag"] = str(current_version)
         helm_install_operator(sample_values, upgrade=False)
 
         spawn.runv(
