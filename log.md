@@ -11,3 +11,4 @@
 | 7 | 3.1: Columnar as_collection_core with Get/Mfp wiring | Done | 2026-03-25 |
 | 8 | 4.1: Columnar FlatMap accepts columnar input, emits columnar output | Done | 2026-03-25 |
 | 9 | 5.1: Columnar input to arrangements via ensure_collections | Done | 2026-03-25 |
+| 10 | 6.1: Columnar Reduce input via ensure_vec_collection | Done | 2026-03-25 |

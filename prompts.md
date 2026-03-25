@@ -206,10 +206,10 @@ columnar → Row at this boundary.
 
 ### Prompt 6.1: Columnar Reduce input
 
-[ ] `render_reduce` currently calls `flat_map` to selectively unpack demanded columns and
+[*] `render_reduce` currently calls `flat_map` to selectively unpack demanded columns and
 evaluate key/value plans. Convert to accept columnar input.
 
-[ ] The reduce operator must create arrangements from its output. The key extraction and
+[*] The reduce operator must create arrangements from its output. The key extraction and
 aggregation logic operates row-at-a-time for now; the columnar input is unpacked at the
 operator boundary.
 

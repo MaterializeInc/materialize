@@ -181,3 +181,21 @@
 
 ### Issues
 - None. Minimal change since the arrangement infrastructure already works with Vec collections.
+
+## Prompt 6.1: Columnar Reduce input
+
+### What was done
+- Modified `render_reduce` in `reduce.rs` to handle columnar-only inputs.
+- After `input.enter_region(inner)`, checks if the entered bundle has only columnar (no Vec collection). If so, calls `ensure_vec_collection()` to convert before the `flat_map` call that extracts keys and values.
+- The key extraction, value extraction, and aggregation logic remain row-at-a-time. The columnar→Vec conversion happens at the operator boundary.
+
+### Key decisions
+- Same pattern as FlatMap (Prompt 4.1) and ensure_collections (Prompt 5.1): convert at the boundary, process row-at-a-time internally.
+- The conversion happens after `enter_region` since the entered bundle is what `flat_map` operates on.
+- The reduce output (arrangements) remains unchanged — reduce inherently produces arrangements which are already efficient.
+
+### Files changed
+- `src/compute/src/render/reduce.rs` — Added columnar→Vec conversion guard before `flat_map` call.
+
+### Issues
+- None. Straightforward boundary conversion.
