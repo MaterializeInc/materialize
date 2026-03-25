@@ -298,7 +298,7 @@ credential expiration, or a deliberately paused source.
 ### Check source status
 
 To check if a source or its associated subsource/table is unhealthy, query
-[`mz_internal.mz_source_statuses`](/sql/system-catalog/mz_internal/#mz_source_statuses):
+[`mz_internal.mz_source_statuses`](/reference/system-catalog/mz_internal/#mz_source_statuses):
 
 
 ```mzsql
@@ -322,7 +322,7 @@ downstream objects. If the `status` for a source shows:
 
 A spike in lag refers to a sudden increase in lag. Materialize retains wallclock
 lag history for at least 30 days in
-[`mz_internal.mz_wallclock_global_lag_history`](/sql/system-catalog/mz_internal/#mz_wallclock_global_lag_history),
+[`mz_internal.mz_wallclock_global_lag_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_history),
 binned by minute. You can use this data to find past spikes and determine their
 cause.
 
@@ -418,7 +418,7 @@ transient freshness degradation.
 When a decrease in freshness affects a single cluster but is not explained by
 [CPU or memory pressure](#check-the-cpu-or-memory-pressure), check whether DDL
 operations occurred during the spike window.
-[`mz_catalog.mz_audit_events`](/sql/system-catalog/mz_catalog/#mz_audit_events)
+[`mz_catalog.mz_audit_events`](/reference/system-catalog/mz_catalog/#mz_audit_events)
 records all `CREATE`, `DROP`, and `ALTER` operations (substitute `<spike_start>`
 and `<spike_end>` with your spike window):
 
