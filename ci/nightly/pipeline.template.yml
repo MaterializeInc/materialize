@@ -530,6 +530,18 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
+      - id: upsert-panic-repro
+        label: Upsert Panic Repro
+        depends_on: build-aarch64
+        timeout_in_minutes: 300
+        parallelism: 20
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: upsert
+              run: continual-feedback-repro
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
   - id: ssh-connection-extended
     label: Extended SSH connection
     depends_on: build-aarch64

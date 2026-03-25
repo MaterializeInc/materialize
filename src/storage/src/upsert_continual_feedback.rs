@@ -43,6 +43,33 @@ use crate::upsert::types::UpsertValueAndSize;
 use crate::upsert::types::{self as upsert_types, ValueMetadata};
 use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 
+async fn maybe_sleep_failpoint(
+    name: &'static str,
+    default_sleep_ms: u64,
+    source_config: &crate::source::SourceExportCreationConfig,
+    reason: &'static str,
+) {
+    let mut sleep_ms = None;
+    let _ = fail::eval(name, |arg| {
+        sleep_ms = Some(
+            arg.as_deref()
+                .and_then(|arg| arg.parse::<u64>().ok())
+                .unwrap_or(default_sleep_ms),
+        );
+    });
+
+    if let Some(sleep_ms) = sleep_ms {
+        tracing::info!(
+            worker_id = %source_config.worker_id,
+            source_id = %source_config.id,
+            failpoint = name,
+            sleep_ms,
+            "{reason}",
+        );
+        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+    }
+}
+
 /// An operator that transforms an input stream of upserts (updates to key-value
 /// pairs), which represents an imaginary key-value state, into a differential
 /// collection. It keeps an internal map-like state which keeps the latest value
@@ -274,20 +301,14 @@ where
                     }
 
                     if sleep_after_progress_with_output && persist_stash.is_empty() {
-                        let mut sleep = false;
-                        fail::fail_point!("upsert_sleep_after_progress_with_pending", |_| {
-                            sleep = true;
-                        });
-                        if sleep {
-                            slept_after_progress_with_output = true;
-                            tracing::info!(
-                                worker_id = %source_config.worker_id,
-                                source_id = %source_config.id,
-                                ?persist_upper,
-                                "sleeping after persist progress with locally emitted output due to failpoint",
-                            );
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                        }
+                        slept_after_progress_with_output = true;
+                        maybe_sleep_failpoint(
+                            "upsert_sleep_after_progress_with_pending",
+                            500,
+                            &source_config,
+                            "sleeping after persist progress with locally emitted output",
+                        )
+                        .await;
                     }
 
                     let last_rehydration_chunk =
@@ -338,6 +359,16 @@ where
                         }
                     }
 
+                    if !persist_stash.is_empty() {
+                        maybe_sleep_failpoint(
+                            "upsert_sleep_before_consolidate_feedback_batch",
+                            500,
+                            &source_config,
+                            "sleeping before consolidating a persist feedback batch",
+                        )
+                        .await;
+                    }
+
                     let persist_stash_iter = persist_stash
                         .drain(..)
                         .map(|(key, val, _ts, diff)| (key, val, diff));
@@ -349,7 +380,15 @@ where
                         )
                         .await
                     {
-                        Ok(_) => {}
+                        Ok(_) => {
+                            maybe_sleep_failpoint(
+                                "upsert_sleep_after_consolidate_feedback_batch",
+                                500,
+                                &source_config,
+                                "sleeping after consolidating a persist feedback batch",
+                            )
+                            .await;
+                        }
                         Err(e) => {
                             // Make sure our persist source can shut down.
                             persist_token.take();
@@ -520,6 +559,14 @@ where
                     ?stash,
                     "stashed updates");
 
+                maybe_sleep_failpoint(
+                    "upsert_sleep_before_source_drain",
+                    500,
+                    &source_config,
+                    "sleeping before draining eligible source input",
+                )
+                .await;
+
                 let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
                     &mut stash,
                     &mut commands_state,
@@ -541,11 +588,51 @@ where
                     output_updates = %output_updates.len(),
                     "output updates for complete timestamp");
 
+                let emitted_updates_this_drain = !output_updates.is_empty();
+                if emitted_updates_this_drain {
+                    let positive_updates =
+                        output_updates.iter().filter(|(_, _, diff)| diff.is_positive()).count();
+                    let negative_updates =
+                        output_updates.iter().filter(|(_, _, diff)| diff.is_negative()).count();
+                    tracing::info!(
+                        worker_id = %source_config.worker_id,
+                        source_id = %source_config.id,
+                        drain_kind = "complete",
+                        positive_updates,
+                        negative_updates,
+                        "non-empty source output batch",
+                    );
+                    if emitted_source_updates && negative_updates == 0 {
+                        tracing::warn!(
+                            worker_id = %source_config.worker_id,
+                            source_id = %source_config.id,
+                            drain_kind = "complete",
+                            positive_updates,
+                            "later source output batch emitted no retractions",
+                        );
+                    }
+                }
                 if !output_updates.is_empty() {
                     emitted_source_updates = true;
+                    maybe_sleep_failpoint(
+                        "upsert_sleep_after_source_drain_before_emit",
+                        500,
+                        &source_config,
+                        "sleeping after draining source input and before emitting output",
+                    )
+                    .await;
                 }
                 for (update, ts, diff) in output_updates.drain(..) {
                     output_handle.give(cap, (update, ts, diff));
+                }
+                if emitted_updates_this_drain {
+                    maybe_sleep_failpoint(
+                        "upsert_sleep_after_source_emit",
+                        500,
+                        &source_config,
+                        "sleeping after emitting source output",
+                    )
+                    .await;
                 }
 
                 if !stash.is_empty() {
@@ -587,6 +674,14 @@ where
                         ?stash,
                         "stashed updates");
 
+                    maybe_sleep_failpoint(
+                        "upsert_sleep_before_partial_source_drain",
+                        500,
+                        &source_config,
+                        "sleeping before partially draining source input",
+                    )
+                    .await;
+
                     let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
                         &mut stash,
                         &mut commands_state,
@@ -608,11 +703,55 @@ where
                         output_updates = %output_updates.len(),
                         "output updates for partial timestamp");
 
+                    let emitted_updates_this_partial_drain = !output_updates.is_empty();
+                    if emitted_updates_this_partial_drain {
+                        let positive_updates = output_updates
+                            .iter()
+                            .filter(|(_, _, diff)| diff.is_positive())
+                            .count();
+                        let negative_updates = output_updates
+                            .iter()
+                            .filter(|(_, _, diff)| diff.is_negative())
+                            .count();
+                        tracing::info!(
+                            worker_id = %source_config.worker_id,
+                            source_id = %source_config.id,
+                            drain_kind = "partial",
+                            positive_updates,
+                            negative_updates,
+                            "non-empty source output batch",
+                        );
+                        if emitted_source_updates && negative_updates == 0 {
+                            tracing::warn!(
+                                worker_id = %source_config.worker_id,
+                                source_id = %source_config.id,
+                                drain_kind = "partial",
+                                positive_updates,
+                                "later source output batch emitted no retractions",
+                            );
+                        }
+                    }
                     if !output_updates.is_empty() {
                         emitted_source_updates = true;
+                        maybe_sleep_failpoint(
+                            "upsert_sleep_after_partial_source_drain_before_emit",
+                            500,
+                            &source_config,
+                            "sleeping after partially draining source input and before emitting output",
+                        )
+                        .await;
                     }
                     for (update, ts, diff) in output_updates.drain(..) {
                         output_handle.give(cap, (update, ts, diff));
+                    }
+                    if emitted_updates_this_partial_drain {
+                        maybe_sleep_failpoint(
+                            "upsert_sleep_after_partial_source_emit",
+                            500,
+                            &source_config,
+                            "sleeping after emitting partial source output",
+                        )
+                        .await;
                     }
 
                     if !stash.is_empty() {
@@ -1343,5 +1482,99 @@ mod test {
         while let Ok(handle) = rx.recv() {
             handle.join().expect("threads completed successfully");
         }
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    #[should_panic(expected = "invalid upsert state: non 0/1 diff_sum: 2")]
+    fn diff_sum_two_feedback_repro() {
+        let mz_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+
+        timely::execute_directly(move |worker| {
+            let (mut input_handle, mut persist_handle) = worker.dataflow::<MzTimestamp, _, _>(
+                |scope| {
+                    scope.scoped::<(MzTimestamp, Subtime), _, _>("upsert", |scope| {
+                        let (input_handle, input) = scope.new_input();
+                        let (persist_handle, persist_input) = scope.new_input();
+                        let upsert_config = UpsertConfig {
+                            shrink_upsert_unused_buffers_by_ratio: 0,
+                        };
+                        let source_id = GlobalId::User(0);
+                        let metrics_registry = MetricsRegistry::new();
+                        let upsert_metrics_defs =
+                            UpsertMetricDefs::register_with(&metrics_registry);
+                        let upsert_metrics =
+                            UpsertMetrics::new(&upsert_metrics_defs, source_id, 0, None);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let storage_metrics = StorageMetrics::register_with(&metrics_registry);
+
+                        let metrics_registry = MetricsRegistry::new();
+                        let source_statistics_defs =
+                            SourceStatisticsMetricDefs::register_with(&metrics_registry);
+                        let envelope = SourceEnvelope::Upsert(UpsertEnvelope {
+                            source_arity: 2,
+                            style: UpsertStyle::Default(KeyEnvelope::Flattened),
+                            key_indices: vec![0],
+                        });
+                        let source_statistics = SourceStatistics::new(
+                            source_id,
+                            0,
+                            &source_statistics_defs,
+                            source_id,
+                            &ShardId::new(),
+                            envelope,
+                            Antichain::from_elem(Timestamp::minimum()),
+                        );
+
+                        let source_config = SourceExportCreationConfig {
+                            id: GlobalId::User(0),
+                            worker_id: 0,
+                            metrics: storage_metrics,
+                            source_statistics,
+                        };
+
+                        let (_output, _, _, button) = upsert_inner(
+                            input.as_collection(),
+                            vec![0],
+                            Antichain::from_elem(Timestamp::minimum()),
+                            persist_input.as_collection(),
+                            None,
+                            upsert_metrics,
+                            source_config,
+                            || async { InMemoryHashMap::default() },
+                            upsert_config,
+                            true,
+                            None,
+                        );
+                        std::mem::forget(button);
+
+                        (input_handle, persist_handle)
+                    })
+                },
+            );
+
+            let key0 = UpsertKey::from_key(Ok(&Row::pack_slice(&[Datum::Int64(0)])));
+            let value1 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(1)]);
+            let value2 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(2)]);
+            let value3 = Row::pack_slice(&[Datum::Int64(0), Datum::Int64(3)]);
+
+            // Simulate persist feedback that has already admitted two positive values
+            // for the same key before the next source update is processed.
+            persist_handle.send((Ok(value1), mz_ts(0), Diff::ONE));
+            persist_handle.send((Ok(value2), mz_ts(1), Diff::ONE));
+            persist_handle.advance_to(mz_ts(2));
+            for _ in 0..5 {
+                worker.step();
+            }
+
+            // The next source update forces `ensure_decoded` to read the invalid
+            // consolidating state and panic with `diff_sum = 2`.
+            input_handle.send(((key0, Some(Ok(value3)), 1), mz_ts(2), Diff::ONE));
+            input_handle.advance_to(mz_ts(3));
+            for _ in 0..5 {
+                worker.step();
+            }
+        });
     }
 }

@@ -394,7 +394,7 @@ def workflow_incident_49(c: Composition) -> None:
 
 
 def workflow_continual_feedback_repro(c: Composition) -> None:
-    """Exercise the stale-state gap between source output and persist feedback."""
+    """Exercise the feedback gap that can admit two positive values for one key."""
 
     dependencies = [
         "materialized",
@@ -425,13 +425,21 @@ def workflow_continual_feedback_repro(c: Composition) -> None:
             name="clusterd1",
             workers=1,
             scratch_directory="/scratch/clusterd1",
-            environment_extra=["FAILPOINTS=upsert_sleep_after_progress_with_pending=return"],
+            environment_extra=[
+                "FAILPOINTS="
+                "persist_source_sleep_before_fetch_leased_part=return(3000);"
+                "upsert_sleep_after_progress_with_pending=return(250)"
+            ],
         ),
-        Clusterd(name="clusterd2", workers=1, scratch_directory="/scratch/clusterd2"),
+        Clusterd(
+            name="clusterd2",
+            workers=1,
+            scratch_directory="/scratch/clusterd2",
+        ),
         Testdrive(no_reset=True, consistent_seed=True),
     ):
         c.rm("testdrive")
-        c.down(destroy_volumes=True)
+        c.down(destroy_volumes=True, sanity_restart_mz=False)
         c.up(*dependencies)
 
         c.run_testdrive_files("continual-feedback-repro/00-reset.td")
@@ -445,9 +453,20 @@ def workflow_continual_feedback_repro(c: Composition) -> None:
             )
             time.sleep(pause_s)
 
-        ingest(["key0:value0"], 1.0)
-        ingest(["key1:", "key0:value1"], 0.25)
-        ingest(["key0:value2"], 1.0)
+        c.run_testdrive_files("continual-feedback-repro/02-source-setup.td")
+
+        # Drive several complete-drain opportunities in a tight burst before
+        # the slow replica can fetch any feedback, then wait for the delayed
+        # feedback to land before forcing one more source read.
+        for records, pause_s in [
+            (["key0:value1"], 0.25),
+            (["key0:value2"], 0.25),
+            (["key0:value3"], 0.25),
+            (["key0:value4"], 0.25),
+            (["key0:value5"], 6.00),
+            (["key0:value6"], 0.75),
+        ]:
+            ingest(records, pause_s)
 
         c.run_testdrive_files("continual-feedback-repro/02-verify.td")
         c.run_testdrive_files("continual-feedback-repro/00-reset.td")

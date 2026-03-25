@@ -28,16 +28,3 @@ $ kafka-create-topic topic=continual-feedback-repro partitions=1
       WORKERS 1
     )
   )
-
-> BEGIN
-> CREATE SOURCE continual_feedback_repro_src
-  IN CLUSTER storage_cluster
-  FROM KAFKA CONNECTION continual_feedback_repro_conn (TOPIC
-  'testdrive-continual-feedback-repro-${testdrive.seed}'
-  )
-  WITH (TIMESTAMP INTERVAL '200ms')
-
-> CREATE TABLE continual_feedback_repro_tbl FROM SOURCE continual_feedback_repro_src (REFERENCE "testdrive-continual-feedback-repro-${testdrive.seed}")
-  KEY FORMAT TEXT VALUE FORMAT TEXT
-  ENVELOPE UPSERT
-> COMMIT

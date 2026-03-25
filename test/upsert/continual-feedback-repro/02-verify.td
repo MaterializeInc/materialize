@@ -10,4 +10,4 @@
 > SELECT * FROM continual_feedback_repro_tbl ORDER BY key, text;
 key      text
 ---------------
-key0     value2
+key0     value6

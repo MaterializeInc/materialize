@@ -7271,6 +7271,7 @@ dependencies = [
  "criterion",
  "datadriven",
  "differential-dataflow",
+ "fail",
  "futures",
  "futures-task",
  "futures-util",
