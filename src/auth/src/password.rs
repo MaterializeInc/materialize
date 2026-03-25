@@ -10,6 +10,7 @@
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
+use zeroize::Zeroize;
 
 use static_assertions::assert_not_impl_all;
 
@@ -43,6 +44,12 @@ impl From<&str> for Password {
 impl ToString for Password {
     fn to_string(&self) -> String {
         self.0.clone()
+    }
+}
+
+impl Drop for Password {
+    fn drop(&mut self) {
+        self.0.zeroize();
     }
 }
 

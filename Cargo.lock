@@ -5712,6 +5712,7 @@ dependencies = [
  "serde",
  "static_assertions",
  "workspace-hack",
+ "zeroize",
 ]
 
 [[package]]

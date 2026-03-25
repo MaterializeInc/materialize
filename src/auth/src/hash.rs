@@ -15,6 +15,7 @@ use std::num::NonZeroU32;
 
 use base64::prelude::*;
 use itertools::Itertools;
+use zeroize::Zeroize;
 
 use crate::password::Password;
 
@@ -34,6 +35,12 @@ pub struct HashOpts {
     pub salt: [u8; DEFAULT_SALT_SIZE],
 }
 
+impl Drop for HashOpts {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+    }
+}
+
 pub struct PasswordHash {
     /// The salt used for hashing
     pub salt: [u8; DEFAULT_SALT_SIZE],
@@ -42,6 +49,13 @@ pub struct PasswordHash {
     /// The hash of the password.
     /// This is the result of PBKDF2 with SHA256
     pub hash: [u8; SHA256_OUTPUT_LEN],
+}
+
+impl Drop for PasswordHash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.hash.zeroize();
+    }
 }
 
 #[derive(Debug)]
@@ -267,6 +281,14 @@ struct ScramSha256Hash {
     server_key: [u8; SHA256_OUTPUT_LEN],
     /// The stored key
     stored_key: [u8; SHA256_OUTPUT_LEN],
+}
+
+impl Drop for ScramSha256Hash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.server_key.zeroize();
+        self.stored_key.zeroize();
+    }
 }
 
 impl Display for ScramSha256Hash {
