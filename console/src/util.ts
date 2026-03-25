@@ -308,10 +308,10 @@ export function isObject(value: unknown): value is object {
 
 export function sumPostgresIntervalMs(interval: IPostgresInterval) {
   return (
-    interval.days * 24 * 60 * 60 * 1000 +
-    interval.hours * 60 * 60 * 1000 +
-    interval.minutes * 60 * 1000 +
-    interval.seconds * 1000 +
-    interval.milliseconds
+    (interval.days ?? 0) * 24 * 60 * 60 * 1000 +
+    (interval.hours ?? 0) * 60 * 60 * 1000 +
+    (interval.minutes ?? 0) * 60 * 1000 +
+    (interval.seconds ?? 0) * 1000 +
+    (interval.milliseconds ?? 0)
   );
 }
