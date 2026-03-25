@@ -313,7 +313,13 @@ impl PeekClient {
         let pcx = session.pcx();
         let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
 
-        let (select_plan, explain_ctx, copy_to_ctx) = match &plan {
+        /// What do we do with the result of the select?
+        enum OutputContext {
+            Default,
+            CopyTo(CopyToContext),
+        }
+
+        let (select_plan, explain_ctx, output_ctx) = match &plan {
             Plan::Select(select_plan) => {
                 let explain_ctx = if session.vars().emit_plan_insights_notice() {
                     let optimizer_trace = OptimizerTrace::new(ExplainStage::PlanInsights.paths());
@@ -321,11 +327,15 @@ impl PeekClient {
                 } else {
                     ExplainContext::None
                 };
-                (select_plan, explain_ctx, None)
+                (select_plan, explain_ctx, OutputContext::Default)
             }
             Plan::ShowColumns(show_columns_plan) => {
                 // ShowColumns wraps a SelectPlan, extract it and proceed as normal.
-                (&show_columns_plan.select_plan, ExplainContext::None, None)
+                (
+                    &show_columns_plan.select_plan,
+                    ExplainContext::None,
+                    OutputContext::Default,
+                )
             }
             Plan::ExplainPlan(plan::ExplainPlanPlan {
                 stage,
@@ -344,7 +354,7 @@ impl PeekClient {
                     desc: Some(desc.clone()),
                     optimizer_trace,
                 });
-                (plan, explain_ctx, None)
+                (plan, explain_ctx, OutputContext::Default)
             }
             // COPY TO S3
             Plan::CopyTo(plan::CopyToPlan {
@@ -369,7 +379,11 @@ impl PeekClient {
                     output_batch_count: None,
                 };
 
-                (select_plan, ExplainContext::None, Some(copy_to_ctx))
+                (
+                    select_plan,
+                    ExplainContext::None,
+                    OutputContext::CopyTo(copy_to_ctx),
+                )
             }
             Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee }) => {
                 // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
@@ -380,7 +394,7 @@ impl PeekClient {
                         desc: _,
                     }) => {
                         let explain_ctx = ExplainContext::Pushdown;
-                        (plan, explain_ctx, None)
+                        (plan, explain_ctx, OutputContext::Default)
                     }
                     _ => {
                         // This shouldn't happen because we already checked for this at the AST
@@ -814,8 +828,8 @@ impl PeekClient {
         let source_ids_for_closure = source_ids.clone();
         let raw_expr = select_plan.source.clone();
 
-        let optimization_future: JoinHandle<Result<_, OptimizerError>> = match copy_to_ctx {
-            Some(mut copy_to_ctx) => {
+        let optimization_future: JoinHandle<Result<_, AdapterError>> = match output_ctx {
+            OutputContext::CopyTo(mut copy_to_ctx) => {
                 // COPY TO path: calculate output_batch_count and create copy_to optimizer
                 let worker_counts = cluster.replicas().map(|r| {
                     let loc = &r.config.location;
@@ -868,7 +882,7 @@ impl PeekClient {
                     },
                 )
             }
-            None => {
+            OutputContext::Default => {
                 // SELECT/EXPLAIN path: create peek optimizer
                 let mut optimizer = optimize::peek::Optimizer::new(
                     Arc::clone(&catalog),
