@@ -3780,7 +3780,7 @@ impl<'a> Parser<'a> {
                 let key_columns = self.parse_parenthesized_column_list(Mandatory)?;
 
                 let not_enforced = if self.peek_keywords(&[NOT, ENFORCED]) {
-                    let _ = self.expect_keywords(&[NOT, ENFORCED])?;
+                    self.expect_keywords(&[NOT, ENFORCED])?;
                     true
                 } else {
                     false
@@ -4639,13 +4639,13 @@ impl<'a> Parser<'a> {
                     UNTIL => {
                         self.expect_keyword(READY)?;
                         let _ = self.consume_token(&Token::Eq);
-                        let _ = self.expect_token(&Token::LParen)?;
+                        self.expect_token(&Token::LParen)?;
                         let opts = Some(WithOptionValue::ClusterAlterStrategy(
                             ClusterAlterOptionValue::UntilReady(self.parse_comma_separated(
                                 Parser::parse_cluster_alter_until_ready_option,
                             )?),
                         ));
-                        let _ = self.expect_token(&Token::RParen)?;
+                        self.expect_token(&Token::RParen)?;
                         opts
                     }
                     _ => unreachable!(),

@@ -137,7 +137,7 @@ async fn test_no_block() {
                 ))
                 .await;
             println!("test_no_block: in thread; create CSR conn done");
-            let _ = result.unwrap();
+            result.unwrap();
 
             let admin: AdminClient<_> = ClientConfig::new()
                 .set("bootstrap.servers", &*KAFKA_ADDRS)
@@ -161,7 +161,7 @@ async fn test_no_block() {
                     ))
                     .await;
             println!("test_no_block: in thread; create Kafka conn done");
-            let _ = result.unwrap();
+            result.unwrap();
 
             let result = client
                 .batch_execute(
@@ -2994,7 +2994,7 @@ fn test_pg_cancel_backend() {
         .connect(postgres::NoTls)
         .unwrap();
 
-    let _ = client1.batch_execute("CREATE TABLE t (i INT)").unwrap();
+    client1.batch_execute("CREATE TABLE t (i INT)").unwrap();
 
     // Start a thread to perform the cancel while the SUBSCRIBE is running in this thread.
     let handle = thread::spawn(move || {

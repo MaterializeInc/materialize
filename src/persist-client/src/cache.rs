@@ -1204,7 +1204,7 @@ mod tests {
 
         // All the futures that don't themselves hang forever should resolve.
         for _ in 0..(COUNT * 2) {
-            let _ = futures.next().await.unwrap();
+            futures.next().await.unwrap();
         }
     }
 }

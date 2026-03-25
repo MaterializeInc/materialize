@@ -122,14 +122,14 @@ async fn main() -> Result<(), anyhow::Error> {
             CdcEvent::Progress { next_lsn } => {
                 tracing::info!("progress: received all data < {next_lsn}");
                 for instance in capture_instances {
-                    let result = mz_sql_server_util::inspect::cleanup_change_table(
+                    mz_sql_server_util::inspect::cleanup_change_table(
                         &mut client_2,
                         instance,
                         &next_lsn,
                         1000,
                     )
                     .await?;
-                    tracing::info!(?result, "cleanup: {instance} data < {next_lsn}");
+                    tracing::info!("cleanup: {instance} data < {next_lsn}");
                 }
             }
             CdcEvent::SchemaUpdate {
