@@ -1053,8 +1053,8 @@ pub fn eval_copy_to_uri(
     }
     let to_url = match Uri::from_str(evaled.unwrap_str()) {
         Ok(url) => {
-            if url.scheme_str() != Some("s3") {
-                coord_bail!("only 's3://...' urls are supported as COPY TO target");
+            if url.scheme_str() != Some("s3") && url.scheme_str() != Some("gs") {
+                coord_bail!("only 's3://...' and 'gs://...' urls are supported as COPY TO target");
             }
             url
         }
