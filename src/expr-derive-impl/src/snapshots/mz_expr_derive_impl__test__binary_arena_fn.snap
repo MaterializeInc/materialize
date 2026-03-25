@@ -44,6 +44,7 @@ impl crate::func::binary::EagerBinaryFunc for UnaryFn {
         output.nullable(is_null)
     }
 }
+impl crate::scalar::func::binary::VectorizedBinaryFunc for UnaryFn {}
 impl std::fmt::Display for UnaryFn {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(unary_fn))

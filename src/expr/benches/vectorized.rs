@@ -13,6 +13,7 @@
 use std::hint::black_box;
 
 use columnar::{Columnar, Index as _};
+use mz_ore::cast::CastFrom;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_expr::func::AddInt64;
 use mz_expr::vectorized::{VectorizedSafeMfpPlan, rows_to_columns};
@@ -25,7 +26,7 @@ use timely::container::PushInto;
 fn make_rows(n: usize) -> Vec<Row> {
     (0..n)
         .map(|i| {
-            let i = i as i64;
+            let i = i64::cast_from(u32::try_from(i).expect("bench size fits in u32"));
             Row::pack_slice(&[Datum::Int64(i), Datum::Int64(i * 2)])
         })
         .collect()

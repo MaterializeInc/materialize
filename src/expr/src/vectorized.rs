@@ -21,6 +21,7 @@
 
 use columnar::{Columnar, Len, Push};
 use enum_kinds::EnumKind;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 
 use crate::linear::plan::MfpPlan;
@@ -359,8 +360,8 @@ where
     // No branches — the compiler can SIMD this into a horizontal OR.
     let any_overflow = a
         .iter()
-        .zip(b.iter())
-        .zip(results.iter())
+        .zip_eq(b.iter())
+        .zip_eq(results.iter())
         .fold(T::default(), |acc, ((x, y), r)| {
             acc | ((*x ^ *r) & (*y ^ *r))
         });
@@ -387,8 +388,8 @@ where
 {
     let any_overflow = a
         .iter()
-        .zip(b.iter())
-        .zip(results.iter())
+        .zip_eq(b.iter())
+        .zip_eq(results.iter())
         .fold(T::default(), |acc, ((x, y), r)| {
             acc | ((*x ^ *y) & (*x ^ *r))
         });
@@ -410,7 +411,7 @@ fn eval_add_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
     let arith_start = std::time::Instant::now();
     let results: Vec<i64> = a
         .iter()
-        .zip(b.iter())
+        .zip_eq(b.iter())
         .map(|(x, y)| x.wrapping_add(*y))
         .collect();
     let arith_ns = arith_start.elapsed().as_nanos();
@@ -426,9 +427,9 @@ fn eval_add_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
 
     tracing::trace!(
         len = a.len(),
-        arith_ns = arith_ns as u64,
-        overflow_ns = overflow_ns as u64,
-        container_ns = container_ns as u64,
+        arith_ns = arith_ns,
+        overflow_ns = overflow_ns,
+        container_ns = container_ns,
         "int64 add breakdown"
     );
     result
@@ -439,7 +440,7 @@ fn eval_add_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
 fn eval_sub_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
     let results: Vec<i64> = a
         .iter()
-        .zip(b.iter())
+        .zip_eq(b.iter())
         .map(|(x, y)| x.wrapping_sub(*y))
         .collect();
     let errors = detect_sub_overflow(a, b, &results);
@@ -472,7 +473,7 @@ fn eval_mul_int64_vectorized(a: &[i64], b: &[i64]) -> DatumColumn {
 fn eval_add_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
     let results: Vec<i32> = a
         .iter()
-        .zip(b.iter())
+        .zip_eq(b.iter())
         .map(|(x, y)| x.wrapping_add(*y))
         .collect();
     let errors = detect_add_overflow(a, b, &results);
@@ -484,7 +485,7 @@ fn eval_add_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
 fn eval_sub_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
     let results: Vec<i32> = a
         .iter()
-        .zip(b.iter())
+        .zip_eq(b.iter())
         .map(|(x, y)| x.wrapping_sub(*y))
         .collect();
     let errors = detect_sub_overflow(a, b, &results);
@@ -514,7 +515,7 @@ fn eval_mul_int32_vectorized(a: &[i32], b: &[i32]) -> DatumColumn {
 fn eval_add_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
     let results: Vec<i16> = a
         .iter()
-        .zip(b.iter())
+        .zip_eq(b.iter())
         .map(|(x, y)| x.wrapping_add(*y))
         .collect();
     let errors = detect_add_overflow(a, b, &results);
@@ -526,7 +527,7 @@ fn eval_add_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
 fn eval_sub_int16_vectorized(a: &[i16], b: &[i16]) -> DatumColumn {
     let results: Vec<i16> = a
         .iter()
-        .zip(b.iter())
+        .zip_eq(b.iter())
         .map(|(x, y)| x.wrapping_sub(*y))
         .collect();
     let errors = detect_sub_overflow(a, b, &results);
@@ -855,7 +856,7 @@ impl VectorizedSafeMfpPlan {
             expressions: mfp
                 .expressions
                 .iter()
-                .map(|e| VectorScalarExpr::from_mir_or_scalar(e))
+                .map(VectorScalarExpr::from_mir_or_scalar)
                 .collect(),
             predicates: mfp
                 .predicates
@@ -976,7 +977,7 @@ impl VectorizedSafeMfpPlan {
         let pack_elapsed = pack_start.elapsed();
         tracing::trace!(
             batch_len,
-            pack_us = pack_elapsed.as_micros() as u64,
+            pack_us = pack_elapsed.as_micros(),
             "vectorized batch row packing"
         );
 
@@ -1087,8 +1088,8 @@ mod tests {
 
     #[mz_ore::test]
     fn test_add_int64_vectorized() {
-        let col_a = column_from_iter((0..100).map(|i| ColumnDatum::Int64(i)));
-        let col_b = column_from_iter((100..200).map(|i| ColumnDatum::Int64(i)));
+        let col_a = column_from_iter((0..100).map(ColumnDatum::Int64));
+        let col_b = column_from_iter((100..200).map(ColumnDatum::Int64));
         let columns: Vec<&DatumColumn> = vec![&col_a, &col_b];
 
         let expr = VectorScalarExpr::CallBinary {
@@ -1100,14 +1101,14 @@ mod tests {
         let result = expr.eval(&columns, 100);
         assert_eq!(result.len(), 100);
 
-        for i in 0..100 {
-            assert_eq!(get_i64(&result, i), (i as i64) + (i as i64 + 100));
+        for i in 0..100_u32 {
+            assert_eq!(get_i64(&result, usize::cast_from(i)), i64::cast_from(i) + (i64::cast_from(i) + 100));
         }
     }
 
     #[mz_ore::test]
     fn test_literal_broadcast() {
-        let col_a = column_from_iter((0..50).map(|i| ColumnDatum::Int64(i)));
+        let col_a = column_from_iter((0..50).map(ColumnDatum::Int64));
         let columns: Vec<&DatumColumn> = vec![&col_a];
 
         let expr = VectorScalarExpr::CallBinary {
@@ -1119,8 +1120,8 @@ mod tests {
         let result = expr.eval(&columns, 50);
         assert_eq!(result.len(), 50);
 
-        for i in 0..50 {
-            assert_eq!(get_i64(&result, i), i as i64 + 1000);
+        for i in 0..50_u32 {
+            assert_eq!(get_i64(&result, usize::cast_from(i)), i64::cast_from(i) + 1000);
         }
     }
 
@@ -1160,8 +1161,8 @@ mod tests {
         };
         let plan = SafeMfpPlan { mfp };
 
-        let col_a = column_from_iter((0..10).map(|i| ColumnDatum::Int64(i)));
-        let col_b = column_from_iter((10..20).map(|i| ColumnDatum::Int64(i)));
+        let col_a = column_from_iter((0..10).map(ColumnDatum::Int64));
+        let col_b = column_from_iter((10..20).map(ColumnDatum::Int64));
         let input = vec![col_a, col_b];
 
         let results = plan.evaluate_batch(&input, 10);
@@ -1170,7 +1171,8 @@ mod tests {
         for (i, result) in results.iter().enumerate() {
             let row = result.as_ref().unwrap().as_ref().unwrap();
             let datum = row.unpack_first();
-            assert_eq!(datum, mz_repr::Datum::Int64(i as i64 + (i as i64 + 10)));
+            let ii = i64::cast_from(u32::try_from(i).expect("test index fits in u32"));
+            assert_eq!(datum, mz_repr::Datum::Int64(ii + (ii + 10)));
         }
     }
 
@@ -1212,8 +1214,8 @@ mod tests {
         };
         let plan = SafeMfpPlan { mfp };
 
-        let col_a = column_from_iter((0..10).map(|i| ColumnDatum::Int64(i)));
-        let col_b = column_from_iter((10..20).map(|i| ColumnDatum::Int64(i)));
+        let col_a = column_from_iter((0..10).map(ColumnDatum::Int64));
+        let col_b = column_from_iter((10..20).map(ColumnDatum::Int64));
         let input = vec![col_a, col_b];
 
         let results = plan.evaluate_batch(&input, 10);
@@ -1228,10 +1230,10 @@ mod tests {
             );
         }
         // Rows where col0 > 5 should have the sum.
-        for i in 6..10 {
-            let row = results[i].as_ref().unwrap().as_ref().unwrap();
+        for i in 6..10_u32 {
+            let row = results[usize::cast_from(i)].as_ref().unwrap().as_ref().unwrap();
             let datum = row.unpack_first();
-            assert_eq!(datum, mz_repr::Datum::Int64(i as i64 + (i as i64 + 10)));
+            assert_eq!(datum, mz_repr::Datum::Int64(i64::cast_from(i) + (i64::cast_from(i) + 10)));
         }
     }
 
@@ -1284,11 +1286,12 @@ mod tests {
 
         // Verify values round-trip correctly.
         let arena = mz_repr::RowArena::new();
-        for i in 0..100 {
-            let d0 = index_as_datum(&columns[0].data, i, &arena).unwrap();
-            let d1 = index_as_datum(&columns[1].data, i, &arena).unwrap();
-            assert_eq!(d0, Datum::Int64(i as i64));
-            assert_eq!(d1, Datum::Int64(i as i64 * 10));
+        for i in 0..100_u32 {
+            let idx = usize::cast_from(i);
+            let d0 = index_as_datum(&columns[0].data, idx, &arena).unwrap();
+            let d1 = index_as_datum(&columns[1].data, idx, &arena).unwrap();
+            assert_eq!(d0, Datum::Int64(i64::cast_from(i)));
+            assert_eq!(d1, Datum::Int64(i64::cast_from(i) * 10));
         }
     }
 
@@ -1352,7 +1355,7 @@ mod tests {
 
         // --- Compare ---
         assert_eq!(scalar_results.len(), batch_results.len());
-        for (i, (scalar, batch)) in scalar_results.iter().zip(batch_results.iter()).enumerate() {
+        for (i, (scalar, batch)) in scalar_results.iter().zip_eq(batch_results.iter()).enumerate() {
             match (scalar, batch) {
                 (None, Ok(None)) => {} // both filtered
                 (Some(s_row), Ok(Some(b_row))) => {

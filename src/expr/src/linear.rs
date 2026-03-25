@@ -1594,6 +1594,7 @@ pub mod util {
 pub mod plan {
     use std::iter;
 
+    use itertools::Itertools;
     use mz_repr::{Datum, Diff, Row, RowArena};
     use serde::{Deserialize, Serialize};
 
@@ -1828,7 +1829,7 @@ pub mod plan {
             let pack_elapsed = pack_start.elapsed();
             tracing::trace!(
                 batch_len,
-                pack_us = pack_elapsed.as_micros() as u64,
+                pack_us = pack_elapsed.as_micros(),
                 "vectorized batch row packing"
             );
 
@@ -2156,14 +2157,14 @@ pub mod plan {
 
             tracing::trace!(
                 batch_len,
-                transpose_us = transpose_elapsed.as_micros() as u64,
-                eval_us = eval_elapsed.as_micros() as u64,
+                transpose_us = transpose_elapsed.as_micros(),
+                eval_us = eval_elapsed.as_micros(),
                 "vectorized batch evaluation (eval_us includes row packing)"
             );
 
             mfp_results
                 .into_iter()
-                .zip(rows.iter())
+                .zip_eq(rows.iter())
                 .map(|(result, (_row, time, diff))| match result {
                     Ok(Some(out_row)) => Ok(Some((out_row, *time, *diff))),
                     Ok(None) => Ok(None),

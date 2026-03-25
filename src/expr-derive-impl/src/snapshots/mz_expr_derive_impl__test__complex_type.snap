@@ -55,6 +55,7 @@ impl crate::func::binary::EagerBinaryFunc for ComplexOutputTypeFn {
         true
     }
 }
+impl crate::scalar::func::binary::VectorizedBinaryFunc for ComplexOutputTypeFn {}
 impl std::fmt::Display for ComplexOutputTypeFn {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("test")
