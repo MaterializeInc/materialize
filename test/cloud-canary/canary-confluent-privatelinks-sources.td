@@ -30,16 +30,12 @@ abc:abc
 # that the wildcard patterns match to route through the correct AZ endpoint.
 > CREATE CONNECTION confluent_privatelinks_conn TO KAFKA (
   AWS PRIVATELINKS (
-      '${arg.confluent-pl-bootstrap}' TO confluent_privatelink_conn (
-          PORT ${arg.confluent-pl-port}
-      ),
+      '${arg.confluent-pl-bootstrap}' TO confluent_privatelink_conn,
       '*.${arg.confluent-az1}.*' TO confluent_privatelink_conn (
-          AVAILABILITY ZONE = '${arg.confluent-az1}',
-          PORT ${arg.confluent-pl-port}
+          AVAILABILITY ZONE = '${arg.confluent-az1}'
       ),
       '*.${arg.confluent-az2}.*' TO confluent_privatelink_conn (
-          AVAILABILITY ZONE = '${arg.confluent-az2}',
-          PORT ${arg.confluent-pl-port}
+          AVAILABILITY ZONE = '${arg.confluent-az2}'
       )
   ),
   SECURITY PROTOCOL = 'SASL_SSL',

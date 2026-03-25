@@ -64,9 +64,6 @@ CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD")
 CONFLUENT_PRIVATELINK_SERVICE_NAME = os.getenv(
     "CONFLUENT_CLOUD_PRIVATELINK_SERVICE_NAME"
 )
-CONFLUENT_PRIVATELINK_BOOTSTRAP_PORT = os.getenv(
-    "CONFLUENT_CLOUD_PRIVATELINK_BOOTSTRAP_PORT", "9092"
-)
 CONFLUENT_PRIVATELINK_AZS = os.getenv(
     "CONFLUENT_CLOUD_PRIVATELINK_AZS", "use1-az1,use1-az4"
 ).split(",")
@@ -541,7 +538,6 @@ def td(
                 f"--var=confluent-pl-api-secret={CONFLUENT_PRIVATELINK_API_SECRET}",
                 f"--var=confluent-az1={CONFLUENT_PRIVATELINK_AZS[0]}",
                 f"--var=confluent-az2={CONFLUENT_PRIVATELINK_AZS[1]}",
-                f"--var=confluent-pl-port={CONFLUENT_PRIVATELINK_BOOTSTRAP_PORT}",
                 f"--var=confluent-pl-bootstrap={CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER}",
             ],
         )
