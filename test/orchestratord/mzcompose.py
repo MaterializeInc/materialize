@@ -1838,6 +1838,26 @@ def workflow_documentation_defaults(
         spawn.runv(["kubectl", "get", "all", "-n", "materialize"])
 
         wait_for_crd_established()
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Available",
+                "deployment/minio",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Available",
+                "deployment/postgres",
+            ]
+        )
 
         with open(os.path.join(dir, "sample-materialize.yaml")) as f:
             materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
