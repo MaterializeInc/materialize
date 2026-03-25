@@ -31,12 +31,9 @@ abc:abc
 > CREATE CONNECTION confluent_privatelinks_conn TO KAFKA (
   AWS PRIVATELINKS (
       '${arg.confluent-pl-bootstrap}' TO confluent_privatelink_conn,
-      '*.${arg.confluent-az1}.*' TO confluent_privatelink_conn (
-          AVAILABILITY ZONE = '${arg.confluent-az1}'
-      ),
-      '*.${arg.confluent-az2}.*' TO confluent_privatelink_conn (
-          AVAILABILITY ZONE = '${arg.confluent-az2}'
-      )
+      '*.use1-az1.*' TO confluent_privatelink_conn (AVAILABILITY ZONE = 'use1-az1'),
+      '*.use1-az4.*' TO confluent_privatelink_conn (AVAILABILITY ZONE = 'use1-az4'),
+      '*.use1-az6.*' TO confluent_privatelink_conn (AVAILABILITY ZONE = 'use1-az6')
   ),
   SECURITY PROTOCOL = 'SASL_SSL',
   SASL MECHANISMS = 'PLAIN',

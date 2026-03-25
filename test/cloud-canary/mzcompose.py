@@ -64,9 +64,6 @@ CONFLUENT_API_SECRET = os.getenv("CONFLUENT_CLOUD_QA_CANARY_KAFKA_PASSWORD")
 CONFLUENT_PRIVATELINK_SERVICE_NAME = os.getenv(
     "CONFLUENT_CLOUD_PRIVATELINK_SERVICE_NAME"
 )
-CONFLUENT_PRIVATELINK_AZS = os.getenv(
-    "CONFLUENT_CLOUD_PRIVATELINK_AZS", "use1-az1,use1-az4"
-).split(",")
 CONFLUENT_PRIVATELINK_API_KEY = os.getenv("CONFLUENT_CLOUD_PRIVATELINK_KAFKA_USERNAME")
 CONFLUENT_PRIVATELINK_API_SECRET = os.getenv(
     "CONFLUENT_CLOUD_PRIVATELINK_KAFKA_PASSWORD"
@@ -233,8 +230,6 @@ class ConfluentPrivateLink:
         assert CONFLUENT_PRIVATELINK_API_KEY
         assert CONFLUENT_PRIVATELINK_API_SECRET
 
-        azs = ", ".join(f"'{az}'" for az in CONFLUENT_PRIVATELINK_AZS)
-
         cloud_conn = psycopg.connect(
             host=c.cloud_hostname(),
             user=USERNAME,
@@ -248,13 +243,13 @@ class ConfluentPrivateLink:
 
         print(
             f"Creating AWS PRIVATELINK connection with service "
-            f"{CONFLUENT_PRIVATELINK_SERVICE_NAME}, AZs: {CONFLUENT_PRIVATELINK_AZS}"
+            f"{CONFLUENT_PRIVATELINK_SERVICE_NAME}"
         )
         cloud_cursor.execute(
             f"""CREATE CONNECTION IF NOT EXISTS confluent_privatelink_conn
             TO AWS PRIVATELINK (
                 SERVICE NAME '{CONFLUENT_PRIVATELINK_SERVICE_NAME}',
-                AVAILABILITY ZONES ({azs})
+                AVAILABILITY ZONES ('use1-az1', 'use1-az4', 'use1-az6')
             );""".encode()
         )
 
@@ -536,8 +531,6 @@ def td(
             entrypoint_extra=[
                 f"--var=confluent-pl-api-key={CONFLUENT_PRIVATELINK_API_KEY}",
                 f"--var=confluent-pl-api-secret={CONFLUENT_PRIVATELINK_API_SECRET}",
-                f"--var=confluent-az1={CONFLUENT_PRIVATELINK_AZS[0]}",
-                f"--var=confluent-az2={CONFLUENT_PRIVATELINK_AZS[1]}",
                 f"--var=confluent-pl-bootstrap={CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER}",
             ],
         )
