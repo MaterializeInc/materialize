@@ -125,3 +125,23 @@
 
 ### Issues
 - None. Straightforward application of the established pattern.
+
+## Prompt 3.1: Columnar `as_collection_core` with Get/Mfp wiring
+
+### What was done
+- Added `as_columnar_collection_core` method on `CollectionBundle` in `context.rs`. It delegates to the existing `as_collection_core` (row-at-a-time MFP evaluation) and converts the output to columnar via `vec_to_columnar`.
+- When the bundle has only a columnar collection (no Vec), the method converts columnar→Vec first by creating a temporary bundle with Vec populated, then delegates to `as_collection_core`.
+- Wired `render_plan_expr` in `render.rs` for `Get::Collection` and `Mfp` to check for columnar input and use `as_columnar_collection_core` when available, producing columnar-only output bundles.
+
+### Key decisions
+- When only columnar input is available (no Vec collection), a temporary `CollectionBundle` is constructed with the Vec conversion so `as_collection_core` can proceed. This avoids modifying the immutable `&self`.
+- Only `Get::Collection` and `Mfp` are wired to the columnar path. `Get::Arrangement` always uses arrangement access (key_val is Some) so columnar input is irrelevant there.
+- The `Get::PassArrangements` path is unchanged since it only passes through arrangements.
+- This is the incremental step: all MFP evaluation is still row-at-a-time. Vectorized evaluation will replace the inner loop in Prompt 3.2.
+
+### Files changed
+- `src/compute/src/render/context.rs` — Added `as_columnar_collection_core` method.
+- `src/compute/src/render.rs` — Modified `Get::Collection` and `Mfp` match arms to prefer columnar path.
+
+### Issues
+- None. The temporary bundle clone is slightly wasteful but only occurs when the bundle lacks a Vec collection (columnar-only). Arrangement clones are cheap (reference-counted).

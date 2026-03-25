@@ -856,6 +856,44 @@ where
 
         (oks, errors.concat(errs))
     }
+
+    /// Columnar variant of `as_collection_core`.
+    ///
+    /// Applies `MapFilterProject` to the bundle and returns a columnar collection.
+    /// For now, this converts to Vec internally and applies the existing row-at-a-time
+    /// MFP evaluation, then converts the result back to columnar. Vectorized evaluation
+    /// will be added in a future step.
+    pub fn as_columnar_collection_core(
+        &self,
+        mfp: MapFilterProject,
+        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        until: Antichain<mz_repr::Timestamp>,
+        config_set: &ConfigSet,
+    ) -> (
+        ColumnarCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
+        // If we only have columnar (no Vec collection), convert to Vec first so
+        // the row-at-a-time evaluation in as_collection_core can proceed.
+        if self.collection.is_none() && key_val.is_none() {
+            if let Some((col_oks, col_errs)) = &self.columnar_collection {
+                let vec_oks =
+                    crate::render::columnar::columnar_to_vec(col_oks.clone());
+                let with_vec = CollectionBundle {
+                    collection: Some((vec_oks, col_errs.clone())),
+                    columnar_collection: self.columnar_collection.clone(),
+                    arranged: self.arranged.clone(),
+                };
+                let (oks, errs) =
+                    with_vec.as_collection_core(mfp, key_val, until, config_set);
+                return (crate::render::columnar::vec_to_columnar(oks), errs);
+            }
+        }
+
+        let (oks, errs) = self.as_collection_core(mfp, key_val, until, config_set);
+        (crate::render::columnar::vec_to_columnar(oks), errs)
+    }
+
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,

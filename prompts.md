@@ -140,14 +140,14 @@ is primarily for uniformity.
 
 ### Prompt 3.1: Columnar `as_collection_core`
 
-[ ] This is the core method that applies `MapFilterProject` to collections or arrangements and
+[*] This is the core method that applies `MapFilterProject` to collections or arrangements and
 produces a `VecCollection`. Add a columnar variant `as_columnar_collection_core` that:
   - Accepts columnar input
   - For now, converts to Vec internally and applies the existing MfpPlan row-at-a-time
   - Returns a columnar collection
   - This is the incremental step; vectorized eval comes later
 
-[ ] Wire `render_plan_expr` for `Get` and `Mfp` to prefer the columnar path when available.
+[*] Wire `render_plan_expr` for `Get` and `Mfp` to prefer the columnar path when available.
 
 **Files**: `src/compute/src/render/context.rs`
 
