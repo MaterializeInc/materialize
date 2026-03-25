@@ -109,11 +109,7 @@ where
             let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
             let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
 
-            let mut entered = input.enter_region(inner);
-            // Ensure Vec collection is available for row-at-a-time key/value evaluation.
-            if entered.collection.is_none() && entered.columnar_collection.is_some() {
-                entered.ensure_vec_collection();
-            }
+            let entered = input.enter_region(inner);
             let (key_val_input, err_input) = entered.flat_map(
                 input_key.map(|k| (k, None)),
                 max_demand,

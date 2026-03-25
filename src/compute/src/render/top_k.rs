@@ -60,11 +60,6 @@ where
         input: CollectionBundle<G>,
         top_k_plan: TopKPlan,
     ) -> CollectionBundle<G> {
-        // Ensure Vec collection is available for row-at-a-time TopK processing.
-        let mut input = input;
-        if input.collection.is_none() && input.columnar_collection.is_some() {
-            input.ensure_vec_collection();
-        }
         let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
 
         // We create a new region to compartmentalize the topk logic.
