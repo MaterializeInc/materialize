@@ -1208,7 +1208,7 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
         let cluster_name = cluster_id_to_name
             .get(&replica.cluster_id)
             .cloned()
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| "<unknown>".to_string());
 
         let audit_id = txn.allocate_audit_log_id()?;
         txn.insert_audit_log_event(VersionedEvent::new(
