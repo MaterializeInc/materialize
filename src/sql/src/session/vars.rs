@@ -1457,13 +1457,12 @@ impl SystemVars {
     /// be visible because of other settings or users. Before or after accessing
     /// this method, you should call `Var::visible`.
     pub fn set_default(&mut self, name: &str, input: VarInput) -> Result<(), VarError> {
-        let result = self
-            .vars
+        self.vars
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
         self.notify_callbacks(name);
-        Ok(result)
+        Ok(())
     }
 
     /// Sets the configuration parameter named `name` to its default value.

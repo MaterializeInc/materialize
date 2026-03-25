@@ -829,7 +829,7 @@ pub(crate) fn durable_migrate(
         .is_none()
     {
         let mut nonce = [0u8; 24];
-        let _ = openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
+        openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
         let nonce = BASE64_STANDARD.encode(nonce);
         tx.set_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string(), Some(nonce))?;
     }

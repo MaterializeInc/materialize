@@ -389,7 +389,7 @@ where
         // to self-coordinate how commands and internal commands are ordered.
         //
         // TODO(guswynn): cluster-unification: consolidate this with compute.
-        let _ = match command {
+        match command {
             StorageCommand::Hello { .. } => {}
             StorageCommand::RunIngestion(ingestion) => {
                 self.insert_new_uppers(ingestion.description.collection_ids());
@@ -403,7 +403,7 @@ where
             | StorageCommand::AllowCompaction(_, _)
             | StorageCommand::RunOneshotIngestion(_)
             | StorageCommand::CancelOneshotIngestion { .. } => {}
-        };
+        }
     }
 
     /// Shared implementation for commands that install uppers with controllable behavior with

@@ -736,7 +736,7 @@ where
                         // loop if we weren't already aborted.
                         return ControlFlow::Break("sender has been dropped".to_string());
                     }
-                    let _ = self.handle_updates(&mut updates).await?;
+                    self.handle_updates(&mut updates).await?;
                 }
 
                 // If we haven't received any updates, then we'll move the upper forward.
@@ -745,7 +745,7 @@ where
                         // Not bumping uppers while in read-only mode.
                         continue;
                     }
-                    let _ = self.tick_upper().await?;
+                    self.tick_upper().await?;
                 },
             }
         }

@@ -176,6 +176,9 @@ WARN_CLIPPY_LINTS = [
     # to define global mutable values.
     "borrow_interior_mutable_const",
     "or_fun_call",
+    # Catches bindings that silently become `()` after a refactor, preventing
+    # wrong-variable bugs when a function's return type changes.
+    "let_unit_value",
 ]
 
 MESSAGE_LINT_MISSING = (

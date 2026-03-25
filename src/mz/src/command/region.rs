@@ -49,7 +49,7 @@ pub async fn enable(
 
     // Loop region creation.
     // After 6 minutes it will timeout.
-    let _ = Retry::default()
+    Retry::default()
         .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {
@@ -72,7 +72,7 @@ pub async fn enable(
 
     // Loop retrieving the region and checking the SQL connection for 6 minutes.
     // After 6 minutes it will timeout.
-    let _ = Retry::default()
+    Retry::default()
         .max_duration(Duration::from_secs(720))
         .clamp_backoff(Duration::from_secs(1))
         .retry_async(|_| async {

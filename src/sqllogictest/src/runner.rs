@@ -1305,7 +1305,7 @@ impl<'a> RunnerInner<'a> {
             internal_http_server_addr_tx
                 .send(server.http_listener_handles["internal"].local_addr)
                 .expect("receiver should not drop first");
-            let _ = runtime.block_on(shutdown_trigger_rx);
+            runtime.block_on(shutdown_trigger_rx);
         });
         let server_addr = server_addr_rx.await??;
         let internal_server_addr = internal_server_addr_rx.await?;

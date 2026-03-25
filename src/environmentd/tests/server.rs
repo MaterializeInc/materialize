@@ -2513,7 +2513,7 @@ async fn test_max_connections_limits() {
 
     {
         let client1 = connect_regular_user().await.unwrap();
-        let _ = client1.batch_execute("SELECT 1").await.unwrap();
+        client1.batch_execute("SELECT 1").await.unwrap();
 
         assert_contains!(
             connect_regular_user()
@@ -2582,7 +2582,7 @@ async fn test_max_connections_limits() {
                 }
                 Ok(client) => client,
             };
-            let _ = client.batch_execute("SELECT 1").await.unwrap();
+            client.batch_execute("SELECT 1").await.unwrap();
             Ok(())
         })
         .await

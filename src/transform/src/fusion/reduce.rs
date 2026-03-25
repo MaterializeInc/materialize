@@ -31,9 +31,9 @@ impl crate::Transform for Reduce {
         relation: &mut MirRelationExpr,
         _: &mut TransformCtx,
     ) -> Result<(), TransformError> {
-        let result = relation.visit_pre_mut(|e| self.action(e));
+        relation.visit_pre_mut(|e| self.action(e));
         mz_repr::explain::trace_plan(&*relation);
-        Ok(result)
+        Ok(())
     }
 }
 
