@@ -197,9 +197,7 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::{DispatchGuard, OptimizerTrace};
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, dataflow_import_id_bundle,
-};
+use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
@@ -2916,7 +2914,6 @@ impl Coordinator {
 
         let mut compute_collections = vec![];
         let mut collections = vec![];
-        let mut new_builtin_continual_tasks = vec![];
         for entry in catalog.entries() {
             match entry.item() {
                 CatalogItem::Source(source) => {
@@ -2984,15 +2981,8 @@ impl Coordinator {
                 CatalogItem::ContinualTask(ct) => {
                     let collection_desc =
                         CollectionDescription::for_other(ct.desc.clone(), ct.initial_as_of.clone());
-                    if ct.global_id().is_system() && collection_desc.since.is_none() {
-                        // We need a non-0 since to make as_of selection work. Fill it in below with
-                        // the `bootstrap_builtin_continual_tasks` call, which can only be run after
-                        // `create_collections_for_bootstrap`.
-                        new_builtin_continual_tasks.push((ct.global_id(), collection_desc));
-                    } else {
-                        compute_collections.push((ct.global_id(), ct.desc.clone()));
-                        collections.push((ct.global_id(), collection_desc));
-                    }
+                    compute_collections.push((ct.global_id(), ct.desc.clone()));
+                    collections.push((ct.global_id(), collection_desc));
                 }
                 CatalogItem::Sink(sink) => {
                     let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
@@ -3041,6 +3031,41 @@ impl Coordinator {
             self.get_local_write_ts().await.timestamp
         };
 
+        // New builtin storage collections are by default created with [0] since/upper frontiers. For
+        // collections that have dependencies on other collections (MVs, CTs), this can violate the
+        // frontier invariants assumed by as-of selection. For example, as-of selection expects to
+        // be able to pick up computing a materialized view from its most recent upper, but if that
+        // upper is [0] it's likely that the required times are not available anymore in the MV
+        // inputs.
+        //
+        // To avoid violating frontier invariants, we need to bump their sinces to times greater
+        // than all of their upstream storage inputs. To know the since of a storage input, it has
+        // to be registered with the storage controller first. Which means we need to split out
+        // builtin storage collections that have storage inputs here, and then process them once
+        // the input-less collections have been registered.
+        let mut derived_builtin_storage_collections: Vec<_> = collections
+            .extract_if(.., |(id, c)| {
+                // Don't silently overwrite an explicitly specified `since`.
+                if !id.is_system() || c.since.is_some() {
+                    return false;
+                }
+
+                use CatalogItem::*;
+                match &self.catalog.get_entry_by_global_id(id).item {
+                    // Not storage collections.
+                    Log(_) | View(_) | Index(_) | Type(_) | Func(_) | Secret(_) | Connection(_) => {
+                        false
+                    }
+                    // Storage collections without dependencies.
+                    Table(_) | Source(_) => false,
+                    // Storage collections with dependencies.
+                    MaterializedView(_) | ContinualTask(_) => true,
+                    // Storage collections not supported as builtin types.
+                    Sink(_) => unimplemented!(),
+                }
+            })
+            .collect();
+
         let storage_metadata = self.catalog.state().storage_metadata();
         let migrated_storage_collections = migrated_storage_collections
             .into_iter()
@@ -3068,53 +3093,39 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to create collections");
 
-        self.bootstrap_builtin_continual_tasks(new_builtin_continual_tasks)
-            .await;
+        // Bump and register the derived builtin collections, now that their (transitive) inputs
+        // have been registered.
+        for (gid, collection) in &mut derived_builtin_storage_collections {
+            let entry = self.catalog.get_entry_by_global_id(gid);
+            let mut derived_since = Antichain::from_elem(Timestamp::MIN);
+            for dep_id in self.catalog.state().transitive_uses(entry.id()) {
+                let entry = self.catalog.state().get_entry(&dep_id);
+                let dep_gid = entry.latest_global_id();
+
+                // It's fine if the storage controller doesn't know about the collection. This
+                // happens because the dependency is something else than a storage collection, or
+                // because the dependency is the current collection itself (`transitive_uses` also
+                // returns the input ID).
+                if let Ok((since, _)) = self.controller.storage.collection_frontiers(dep_gid) {
+                    derived_since.join_assign(&since);
+                }
+            }
+            collection.since = Some(derived_since);
+        }
+        self.controller
+            .storage
+            .create_collections_for_bootstrap(
+                storage_metadata,
+                Some(register_ts),
+                derived_builtin_storage_collections,
+                &migrated_storage_collections,
+            )
+            .await
+            .unwrap_or_terminate("cannot fail to create collections");
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
         }
-    }
-
-    /// Make as_of selection happy for builtin CTs. Ideally we'd write the
-    /// initial as_of down in the durable catalog, but that's hard because of
-    /// boot ordering. Instead, we set the since of the storage collection to
-    /// something that's a reasonable lower bound for the as_of. Then, if the
-    /// upper is 0, the as_of selection code will allow us to jump it forward to
-    /// this since.
-    async fn bootstrap_builtin_continual_tasks(
-        &mut self,
-        // TODO(alter_table): Switch to CatalogItemId.
-        mut collections: Vec<(GlobalId, CollectionDescription<Timestamp>)>,
-    ) {
-        for (id, collection) in &mut collections {
-            let entry = self.catalog.get_entry_by_global_id(id);
-            let ct = match &entry.item {
-                CatalogItem::ContinualTask(ct) => ct.clone(),
-                _ => unreachable!("only called with continual task builtins"),
-            };
-            let debug_name = self
-                .catalog()
-                .resolve_full_name(entry.name(), None)
-                .to_string();
-            let (_optimized_plan, physical_plan, _metainfo, _optimizer_features) = self
-                .optimize_create_continual_task(&ct, *id, self.owned_catalog(), debug_name)
-                .expect("builtin CT should optimize successfully");
-
-            // Determine an as of for the new continual task.
-            let mut id_bundle = dataflow_import_id_bundle(&physical_plan, ct.cluster_id);
-            // Can't acquire a read hold on ourselves because we don't exist yet.
-            id_bundle.storage_ids.remove(id);
-            let read_holds = self.acquire_read_holds(&id_bundle);
-            let as_of = read_holds.least_valid_read();
-
-            collection.since = Some(as_of.clone());
-        }
-        self.controller
-            .storage
-            .create_collections(self.catalog.state().storage_metadata(), None, collections)
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
     }
 
     /// Returns the current list of catalog entries, sorted into an appropriate order for
@@ -4531,9 +4542,36 @@ pub fn serve(
         };
 
         let clusters_caught_up_check =
-            clusters_caught_up_trigger.map(|trigger| CaughtUpCheckContext {
-                trigger,
-                exclude_collections: new_builtin_collections.into_iter().collect(),
+            clusters_caught_up_trigger.map(|trigger| {
+                let mut exclude_collections: BTreeSet<GlobalId> =
+                    new_builtin_collections.into_iter().collect();
+
+                // Migrated MVs can't make progress in read-only mode. Exclude them and all their
+                // transitive dependents.
+                //
+                // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
+                //       would allow them to make progress even in read-only mode. This doesn't
+                //       work for MVs based on `mz_catalog_raw`, if the leader's version is less
+                //       than v26.17, since before that version the catalog shard's frontier wasn't
+                //       kept up-to-date with the current time. So this workaround has to remain in
+                //       place upgrades from a version less than v26.17 are no longer supported.
+                let mut todo: Vec<_> = migrated_storage_collections_0dt
+                    .iter()
+                    .filter(|id| {
+                        catalog.state().get_entry(id).is_materialized_view()
+                    })
+                    .copied()
+                    .collect();
+                while let Some(item_id) = todo.pop() {
+                    let entry = catalog.state().get_entry(&item_id);
+                    exclude_collections.extend(entry.global_ids());
+                    todo.extend_from_slice(entry.used_by());
+                }
+
+                CaughtUpCheckContext {
+                    trigger,
+                    exclude_collections,
+                }
             });
 
         if let Some(TimestampOracleConfig::Postgres(pg_config)) =

@@ -906,6 +906,54 @@ impl CatalogState {
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
+            Builtin::MaterializedView(mv) => {
+                let mut acl_items = vec![rbac::owner_privilege(
+                    mz_sql::catalog::ObjectType::MaterializedView,
+                    MZ_SYSTEM_ROLE_ID,
+                )];
+                acl_items.extend_from_slice(&mv.access);
+                // Builtin materialized views can't be versioned.
+                let versions = BTreeMap::new();
+
+                let item = self
+                    .parse_item(
+                        global_id,
+                        &mv.create_sql(),
+                        &versions,
+                        None,
+                        false,
+                        None,
+                        local_expression_cache,
+                        None,
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "internal error: failed to load bootstrap materialized view:\n\
+                             {}\n\
+                             error:\n\
+                             {e:?}\n\n\
+                             make sure that the schema name is specified in the builtin \
+                             materialized view's create sql statement.",
+                            mv.name,
+                        )
+                    });
+                if !matches!(item, CatalogItem::MaterializedView(_)) {
+                    panic!(
+                        "internal error: builtin materialized view {}'s SQL does not begin \
+                         with \"CREATE MATERIALIZED VIEW\".",
+                        mv.name,
+                    );
+                };
+
+                self.insert_item(
+                    item_id,
+                    mv.oid,
+                    name,
+                    item,
+                    MZ_SYSTEM_ROLE_ID,
+                    PrivilegeMap::from_mz_acl_items(acl_items),
+                );
+            }
             Builtin::ContinualTask(ct) => {
                 let mut acl_items = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Source,
@@ -2030,7 +2078,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         }
     }
 
-    // Sort builtin item updates by dependency.
+    // Sort builtin item updates by dependency. The builtin definition order must be a dependency
+    // order, so we can use that to avoid a more expensive topo sorting.
     let builtin_item_updates = builtin_item_updates
         .into_iter()
         .map(|(system_object_mapping, ts, diff)| {
@@ -2043,41 +2092,34 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         .sorted_by_key(|(idx, _, _, _)| *idx)
         .map(|(_, system_object_mapping, ts, diff)| (system_object_mapping, ts, diff));
 
-    // Further partition builtin item updates.
+    // Partition builtins based on whether or not they should be applied before or after clusters.
+    // Clusters depend on sources (introspection logs), so sources need to be applied first.
+    // Everything else can be applied after clusters.
+    let mut builtin_source_retractions = Vec::new();
+    let mut builtin_source_additions = Vec::new();
     let mut other_builtin_retractions = Vec::new();
     let mut other_builtin_additions = Vec::new();
-    let mut builtin_index_retractions = Vec::new();
-    let mut builtin_index_additions = Vec::new();
     for (builtin_item_update, ts, diff) in builtin_item_updates {
-        match &builtin_item_update.description.object_type {
-            CatalogItemType::Index | CatalogItemType::ContinualTask => push_update(
-                StateUpdate {
-                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    ts,
-                    diff,
-                },
+        let object_type = builtin_item_update.description.object_type;
+        let update = StateUpdate {
+            kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
+            ts,
+            diff,
+        };
+        if object_type == CatalogItemType::Source {
+            push_update(
+                update,
                 diff,
-                &mut builtin_index_retractions,
-                &mut builtin_index_additions,
-            ),
-            CatalogItemType::Table
-            | CatalogItemType::Source
-            | CatalogItemType::Sink
-            | CatalogItemType::View
-            | CatalogItemType::MaterializedView
-            | CatalogItemType::Type
-            | CatalogItemType::Func
-            | CatalogItemType::Secret
-            | CatalogItemType::Connection => push_update(
-                StateUpdate {
-                    kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
-                    ts,
-                    diff,
-                },
+                &mut builtin_source_retractions,
+                &mut builtin_source_additions,
+            );
+        } else {
+            push_update(
+                update,
                 diff,
                 &mut other_builtin_retractions,
                 &mut other_builtin_additions,
-            ),
+            );
         }
     }
 
@@ -2305,14 +2347,14 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         // All retractions must be reversed.
         .chain(post_item_retractions.into_iter().rev())
         .chain(item_retractions.into_iter().rev())
-        .chain(builtin_index_retractions.into_iter().rev())
-        .chain(cluster_retractions.into_iter().rev())
         .chain(other_builtin_retractions.into_iter().rev())
+        .chain(cluster_retractions.into_iter().rev())
+        .chain(builtin_source_retractions.into_iter().rev())
         .chain(pre_cluster_retractions.into_iter().rev())
         .chain(pre_cluster_additions)
-        .chain(other_builtin_additions)
+        .chain(builtin_source_additions)
         .chain(cluster_additions)
-        .chain(builtin_index_additions)
+        .chain(other_builtin_additions)
         .chain(item_additions)
         .chain(post_item_additions)
         .collect()

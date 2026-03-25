@@ -89,6 +89,7 @@ pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
     View(&'static BuiltinView),
+    MaterializedView(&'static BuiltinMaterializedView),
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
     Source(&'static BuiltinSource),
@@ -103,6 +104,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Log(log) => log.name,
             Builtin::Table(table) => table.name,
             Builtin::View(view) => view.name,
+            Builtin::MaterializedView(mv) => mv.name,
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
             Builtin::Source(coll) => coll.name,
@@ -117,6 +119,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Log(log) => log.schema,
             Builtin::Table(table) => table.schema,
             Builtin::View(view) => view.schema,
+            Builtin::MaterializedView(mv) => mv.schema,
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::Source(coll) => coll.schema,
@@ -133,6 +136,7 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::ContinualTask(_) => CatalogItemType::ContinualTask,
             Builtin::Table(_) => CatalogItemType::Table,
             Builtin::View(_) => CatalogItemType::View,
+            Builtin::MaterializedView(_) => CatalogItemType::MaterializedView,
             Builtin::Type(_) => CatalogItemType::Type,
             Builtin::Func(_) => CatalogItemType::Func,
             Builtin::Index(_) => CatalogItemType::Index,
@@ -214,6 +218,30 @@ pub struct BuiltinView {
 impl BuiltinView {
     pub fn create_sql(&self) -> String {
         format!("CREATE VIEW {}.{} AS {}", self.schema, self.name, self.sql)
+    }
+}
+
+#[derive(Hash, Debug)]
+pub struct BuiltinMaterializedView {
+    pub name: &'static str,
+    pub schema: &'static str,
+    pub oid: u32,
+    pub desc: RelationDesc,
+    pub column_comments: BTreeMap<&'static str, &'static str>,
+    /// SQL fragment for the MV, following `CREATE MATERIALIZED VIEW [name]`
+    ///
+    /// Format: `IN CLUSTER [cluster_name] AS [query]`
+    pub sql: &'static str,
+    /// ACL items to apply to the object
+    pub access: Vec<MzAclItem>,
+}
+
+impl BuiltinMaterializedView {
+    pub fn create_sql(&self) -> String {
+        format!(
+            "CREATE MATERIALIZED VIEW {}.{} {}",
+            self.schema, self.name, self.sql
+        )
     }
 }
 
@@ -319,6 +347,7 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Log(log) => log.fingerprint(),
             Builtin::Table(table) => table.fingerprint(),
             Builtin::View(view) => view.fingerprint(),
+            Builtin::MaterializedView(mv) => mv.fingerprint(),
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
             Builtin::Source(coll) => coll.fingerprint(),
@@ -363,6 +392,12 @@ impl Fingerprint for &BuiltinView {
 impl Fingerprint for &BuiltinSource {
     fn fingerprint(&self) -> String {
         self.desc.fingerprint()
+    }
+}
+
+impl Fingerprint for &BuiltinMaterializedView {
+    fn fingerprint(&self) -> String {
+        self.create_sql()
     }
 }
 
@@ -14102,7 +14137,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CONTINUAL_TASKS),
-        Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&MZ_CLUSTER_REPLICA_NAME_HISTORY),
         Builtin::View(&MZ_TIMEZONE_NAMES),
@@ -14312,6 +14346,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT),
         Builtin::ContinualTask(&MZ_WALLCLOCK_LAG_HISTORY_CT),
         Builtin::View(&MZ_INDEX_ADVICE),
+        Builtin::View(&MZ_MCP_DATA_PRODUCTS),
     ]);
 
     builtins.extend(notice::builtins());

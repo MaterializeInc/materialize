@@ -2801,6 +2801,7 @@ mod tests {
                 let (schema, name, expected_desc) = match builtin {
                     Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
                     Builtin::View(v) => (&v.schema, &v.name, &v.desc),
+                    Builtin::MaterializedView(mv) => (&mv.schema, &mv.name, &mv.desc),
                     Builtin::Source(s) => (&s.schema, &s.name, &s.desc),
                     Builtin::Log(_)
                     | Builtin::Type(_)
