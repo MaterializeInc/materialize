@@ -19,3 +19,4 @@
 | 15 | 8.1: Columnar sink input via ensure_vec_collection | Done | 2026-03-25 |
 | 16 | 9.1: Audit Vec paths; remove redundant Vec from sources; add logging | Done | 2026-03-25 |
 | 17 | 9.2: Remove collection field and ensure_vec_collection from CollectionBundle | Done | 2026-03-25 |
+| 18 | 10.1: Investigate columnar arrangement spines — research complete | Done | 2026-03-25 |

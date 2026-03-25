@@ -308,13 +308,13 @@ Remove it and the `collection` field from `CollectionBundle`.
 
 ### Prompt 10.1: Investigate columnar arrangement spines
 
-[ ] The current `RowRowSpine` uses `DatumContainer` for dictionary-compressed row bytes. This is
+[*] The current `RowRowSpine` uses `DatumContainer` for dictionary-compressed row bytes. This is
 already reasonably cache-friendly but does not enable vectorized access by column.
 
-[ ] Investigate whether arrangement spines can store data in a column-of-datums layout for
+[*] Investigate whether arrangement spines can store data in a column-of-datums layout for
 direct vectorized evaluation from arrangements without materializing collections.
 
-[ ] This is a research/design step, not an implementation step.
+[*] This is a research/design step, not an implementation step.
 
 **Files**: `src/compute/src/row_spine.rs`, `src/compute/src/typedefs.rs`
 
