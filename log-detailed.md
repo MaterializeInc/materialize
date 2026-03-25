@@ -265,3 +265,21 @@
 
 ### Issues
 - None.
+
+## Prompt 8.1: Columnar sink input
+
+### What was done
+- Modified `export_sink` in `sinks.rs` to handle columnar-only bundles at the sink boundary.
+- Added a new branch: when `bundle.collection` is None but `bundle.columnar_collection` is Some, clones the bundle, calls `ensure_vec_collection()`, and uses the resulting Vec collection.
+- The sink/persist export boundary requires Row-format data, so columnar→Vec conversion is necessary here.
+
+### Key decisions
+- Sinks are the terminal boundary of the dataflow — no need to produce columnar output. The conversion to Vec is the correct behavior for writing to persist.
+- Clone the bundle rather than mutating in-place since `bundle` is obtained from `lookup_id` which returns an owned value but the code structure requires the `if let` pattern.
+- The arrangement fallback path (else branch) remains unchanged for bundles that have neither collection nor columnar.
+
+### Files changed
+- `src/compute/src/render/sinks.rs` — Added columnar→Vec conversion branch in `export_sink`.
+
+### Issues
+- None.
