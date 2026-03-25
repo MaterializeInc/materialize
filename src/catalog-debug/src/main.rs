@@ -70,6 +70,10 @@ use tracing::{Instrument, error};
 pub const BUILD_INFO: BuildInfo = build_info!();
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
+fn parse_json(s: &str) -> Result<serde_json::Value, serde_json::Error> {
+    serde_json::from_str(s)
+}
+
 #[derive(Parser, Debug)]
 #[clap(name = "catalog", next_line_help = true, version = VERSION.as_str())]
 pub struct Args {
@@ -139,8 +143,10 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to edit.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
         /// The new JSON-encoded value for the item.
+        #[clap(value_parser = parse_json)]
         value: serde_json::Value,
     },
     /// Deletes a single item in a collection in the catalog
@@ -148,6 +154,7 @@ enum Action {
         /// The name of the catalog collection to edit.
         collection: String,
         /// The JSON-encoded key that identifies the item to delete.
+        #[clap(value_parser = parse_json)]
         key: serde_json::Value,
     },
     /// Checks if the specified catalog could be upgraded from its state to the
