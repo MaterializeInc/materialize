@@ -5081,7 +5081,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             (
                 SELECT
                     CASE
-                        WHEN $1 IS NULL THEN NULL
+                        WHEN $1 IS NULL OR ident IS NULL THEN NULL
                         WHEN pg_catalog.array_length(ident, 1) > 3
                             THEN mz_unsafe.mz_error_if_null(
                                 NULL::pg_catalog.text[],
@@ -5106,7 +5106,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
              (
                 SELECT
                     CASE
-                        WHEN $1 IS NULL THEN NULL
+                        WHEN $1 IS NULL OR ident IS NULL THEN NULL
                         WHEN pg_catalog.array_length(ident, 1) > 2
                             THEN mz_unsafe.mz_error_if_null(
                                 NULL::pg_catalog.text[],

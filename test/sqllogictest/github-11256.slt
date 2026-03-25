@@ -1,0 +1,32 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for database-issues#11256
+# CAST to regclass/regtype on NULL values from materialized views
+# previously errored with "dimension values must not be null" during planning.
+
+statement ok
+CREATE TABLE t(c0 VARCHAR NOT NULL)
+
+statement ok
+INSERT INTO t VALUES ('')
+
+statement ok
+CREATE MATERIALIZED VIEW v(c0) AS SELECT NULL FROM t GROUP BY ((NULL)||(t.c0))
+
+query T
+SELECT v.c0 FROM v WHERE (CASE v.c0 WHEN v.c0 THEN false END) IS NULL ORDER BY CAST(v.c0 AS REGCLASS)
+----
+NULL
+
+statement ok
+DROP MATERIALIZED VIEW v
+
+statement ok
+DROP TABLE t
