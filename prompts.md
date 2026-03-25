@@ -219,7 +219,7 @@ operator boundary.
 
 ### Prompt 6.2: Columnar TopK input
 
-[ ] `render_top_k` calls `as_specific_collection` to get a Vec collection. Convert to accept
+[*] `render_top_k` calls `as_specific_collection` to get a Vec collection. Convert to accept
 columnar input, unpacking at the operator boundary.
 
 **Files**: `src/compute/src/render/top_k.rs`

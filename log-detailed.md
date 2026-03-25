@@ -199,3 +199,18 @@
 
 ### Issues
 - None. Straightforward boundary conversion.
+
+## Prompt 6.2: Columnar TopK input
+
+### What was done
+- Modified `render_topk` in `top_k.rs` to handle columnar-only inputs.
+- Before calling `as_specific_collection(None, ...)`, checks if the bundle has only columnar (no Vec). If so, calls `ensure_vec_collection()` to convert.
+
+### Key decisions
+- Same boundary conversion pattern as Reduce (6.1), FlatMap (4.1), and ensure_collections (5.1).
+
+### Files changed
+- `src/compute/src/render/top_k.rs` — Added columnar→Vec conversion guard.
+
+### Issues
+- None.
