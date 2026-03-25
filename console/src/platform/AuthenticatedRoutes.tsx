@@ -335,7 +335,7 @@ const EnvironmentRoutes = () => {
           />
         )}
         <Route
-          path="maintained-objects"
+          path="maintained-objects/*"
           element={
             <BaseLayout>
               <MaintainedObjectsRoutes />

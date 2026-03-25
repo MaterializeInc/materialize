@@ -23,6 +23,7 @@ import {
   VStack,
 } from "@chakra-ui/react";
 import React, { useMemo } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
@@ -41,16 +42,19 @@ import {
   EmptyListHeaderContents,
   EmptyListWrapper,
 } from "~/layouts/listPageComponents";
+import { SideDrawer } from "~/components/SideDrawer";
 import { TablePagination } from "~/platform/shell/SqlSelectTable";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { formatIntervalShort } from "~/utils/format";
 import { useQueryStringState } from "~/useQueryString";
 
+import { ObjectDetailPanel } from "./ObjectDetailPanel";
 import {
   useClusterUtilization,
   useMaintainedObjectsList,
 } from "./queries";
+import { MaintainedObjectListRow } from "./types";
 
 const PAGE_SIZE = 15;
 
@@ -77,6 +81,9 @@ const MaintainedObjects = () => {
   const { data: objects, isLoading: objectsLoading } =
     useMaintainedObjectsList({ lookbackMinutes: timePeriodMinutes });
   const { data: utilization } = useClusterUtilization();
+
+  const { objectId } = useParams<{ objectId: string }>();
+  const navigate = useNavigate();
 
   const [nameFilter, setNameFilter] = useQueryStringState("name");
   const [typeFilter, setTypeFilter] = useQueryStringState("type");
@@ -128,6 +135,29 @@ const MaintainedObjects = () => {
     setClusterFilter(undefined);
   };
 
+  // Store the clicked object directly so we don't depend on the list's
+  // polling cycle for the drawer's data. This prevents re-renders when
+  // the list query refetches and creates new object references.
+  const [selectedObject, setSelectedObject] =
+    React.useState<MaintainedObjectListRow | null>(null);
+
+  React.useEffect(() => {
+    if (objectId && objects) {
+      // Only set if we don't already have one, or the ID changed
+      setSelectedObject((prev) => {
+        if (prev?.id === objectId) return prev;
+        return objects.find((obj) => obj.id === objectId) ?? prev;
+      });
+    } else if (!objectId) {
+      setSelectedObject(null);
+    }
+  }, [objectId, objects]);
+
+  const handleRowClick = (obj: MaintainedObjectListRow) => {
+    setSelectedObject(obj);
+    navigate(obj.id);
+  };
+
   if (objectsLoading) {
     return (
       <MainContentContainer>
@@ -140,6 +170,7 @@ const MaintainedObjects = () => {
   }
 
   return (
+    <>
     <MainContentContainer>
       <PageHeader boxProps={{ mb: "4" }}>
         <PageHeading>Maintained Objects</PageHeading>
@@ -212,6 +243,7 @@ const MaintainedObjects = () => {
           <MaintainedObjectsTable
             rows={paginatedRows}
             utilization={utilization}
+            onRowClick={handleRowClick}
           />
 
           <TablePagination
@@ -236,17 +268,30 @@ const MaintainedObjects = () => {
         </VStack>
       )}
     </MainContentContainer>
+
+      <SideDrawer
+        isOpen={!!objectId}
+        onClose={() => navigate("..", { relative: "path" })}
+        title={selectedObject?.name}
+        width="66%"
+        trapFocus={false}
+      >
+        {selectedObject && <ObjectDetailPanel object={selectedObject} />}
+      </SideDrawer>
+    </>
   );
 };
 
 interface MaintainedObjectsTableProps {
   rows: ReturnType<typeof useMaintainedObjectsList>["data"];
   utilization: ReturnType<typeof useClusterUtilization>["data"];
+  onRowClick: (obj: MaintainedObjectListRow) => void;
 }
 
 const MaintainedObjectsTable = ({
   rows,
   utilization,
+  onRowClick,
 }: MaintainedObjectsTableProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -263,8 +308,8 @@ const MaintainedObjectsTable = ({
           <Th>Object Name</Th>
           <Th>Object Type</Th>
           <Th>Freshness (pMAX)</Th>
-          <Th>Memory</Th>
-          <Th>CPU</Th>
+          <Th>Cluster Memory</Th>
+          <Th>Cluster CPU</Th>
           <Th>Cluster</Th>
         </Tr>
       </Thead>
@@ -279,6 +324,7 @@ const MaintainedObjectsTable = ({
               key={obj.id}
               cursor="pointer"
               _hover={{ bg: colors.background.secondary }}
+              onClick={() => onRowClick(obj)}
             >
               <Td {...truncateMaxWidth} py="2">
                 <Text
