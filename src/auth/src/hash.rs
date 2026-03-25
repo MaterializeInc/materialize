@@ -382,24 +382,6 @@ mod tests {
         assert!(scram256_verify(&"wrong".into(), &hash).is_err());
     }
 
-    // THROWAWAY: verify Password zeroizes its inner String
-    #[mz_ore::test]
-    fn throwaway_password_zeroize_trait() {
-        use mz_ore::secure::Zeroize;
-        let mut p = Password::from("secret");
-        p.0.zeroize();
-        assert_eq!(p.0, "");
-    }
-
-    // THROWAWAY: verify salt array can be zeroized
-    #[mz_ore::test]
-    fn throwaway_salt_zeroize() {
-        use mz_ore::secure::Zeroize;
-        let mut salt = [0xFFu8; 32];
-        salt.zeroize();
-        assert_eq!(salt, [0u8; 32]);
-    }
-
     // -------------------------------------------------------
     // Existing tests
     // -------------------------------------------------------
