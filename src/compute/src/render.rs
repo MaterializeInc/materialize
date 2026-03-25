@@ -1272,13 +1272,23 @@ where
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            None,
-                            self.until.clone(),
-                            &self.config_set,
-                        );
-                        CollectionBundle::from_collections(oks, errs)
+                        if collection.columnar_collection.is_some() {
+                            let (oks, errs) = collection.as_columnar_collection_core(
+                                mfp,
+                                None,
+                                self.until.clone(),
+                                &self.config_set,
+                            );
+                            CollectionBundle::from_columnar_collections(oks, errs)
+                        } else {
+                            let (oks, errs) = collection.as_collection_core(
+                                mfp,
+                                None,
+                                self.until.clone(),
+                                &self.config_set,
+                            );
+                            CollectionBundle::from_collections(oks, errs)
+                        }
                     }
                 }
             }
@@ -1291,6 +1301,14 @@ where
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 if mfp.is_identity() {
                     input
+                } else if input.columnar_collection.is_some() {
+                    let (oks, errs) = input.as_columnar_collection_core(
+                        mfp,
+                        input_key_val,
+                        self.until.clone(),
+                        &self.config_set,
+                    );
+                    CollectionBundle::from_columnar_collections(oks, errs)
                 } else {
                     let (oks, errs) = input.as_collection_core(
                         mfp,
