@@ -228,10 +228,10 @@ columnar input, unpacking at the operator boundary.
 
 ### Prompt 6.3: Columnar Threshold input
 
-[ ] Threshold works directly on arrangements (`arrangement(&key)`), not on unarranged
+[*] Threshold works directly on arrangements (`arrangement(&key)`), not on unarranged
 collections. No changes needed for the main path.
 
-[ ] Verify that threshold continues to work when upstream operators produce columnar collections
+[*] Verify that threshold continues to work when upstream operators produce columnar collections
 (it should, since it only uses arrangements).
 
 **Files**: `src/compute/src/render/threshold.rs` (verification only)
