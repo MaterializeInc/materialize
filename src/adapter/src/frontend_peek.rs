@@ -428,15 +428,17 @@ impl PeekClient {
         // We have checked the plan kind above.
         assert!(plan.allowed_in_read_only());
 
-        let target_cluster = match session.transaction().cluster() {
-            // Use the current transaction's cluster.
-            Some(cluster_id) => TargetCluster::Transaction(cluster_id),
-            // If there isn't a current cluster set for a transaction, then try to auto route.
-            None => {
-                coord::catalog_serving::auto_run_on_catalog_server(&conn_catalog, session, &plan)
-            }
-        };
         let (cluster, target_cluster_id, target_cluster_name) = {
+            let target_cluster = match session.transaction().cluster() {
+                // Use the current transaction's cluster.
+                Some(cluster_id) => TargetCluster::Transaction(cluster_id),
+                // If there isn't a current cluster set for a transaction, then try to auto route.
+                None => coord::catalog_serving::auto_run_on_catalog_server(
+                    &conn_catalog,
+                    session,
+                    &plan,
+                ),
+            };
             let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
             (cluster, cluster.id, &cluster.name)
         };
@@ -1012,12 +1014,13 @@ impl PeekClient {
                             })
                         }
                         Err(err) => {
-                            if optimizer.is_right() {
+                            let optimizer = if let Either::Left(optimizer) = optimizer {
+                                optimizer
+                            } else {
                                 // COPY TO has no EXPLAIN BROKEN support
                                 return Err(err);
-                            }
+                            };
                             // SELECT/EXPLAIN error handling
-                            let optimizer = optimizer.expect_left("checked above");
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 if explain_ctx.broken {
                                     // EXPLAIN BROKEN: log error and continue with defaults

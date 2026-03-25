@@ -1160,16 +1160,6 @@ impl SessionClient {
         self.timeouts.recv().await
     }
 
-    /// Returns a reference to the PeekClient used for frontend peek sequencing.
-    pub fn peek_client(&self) -> &PeekClient {
-        &self.peek_client
-    }
-
-    /// Returns a reference to the PeekClient used for frontend peek sequencing.
-    pub fn peek_client_mut(&mut self) -> &mut PeekClient {
-        &mut self.peek_client
-    }
-
     /// Attempt to sequence a peek from the session task.
     ///
     /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
