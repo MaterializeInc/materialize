@@ -248,3 +248,20 @@
 
 ### Issues
 - None.
+
+## Prompt 7.2: Columnar Delta Join output
+
+### What was done
+- Modified `render_delta_join` in `delta_join.rs` to produce columnar output when any input has a columnar collection.
+- Delta joins operate entirely on arrangements for both inputs and join stages, so no input conversion is needed.
+- At the output boundary, if any input had columnar, converts the Vec ok collection to columnar via `vec_to_columnar`.
+
+### Key decisions
+- Used "any input has columnar" as the heuristic for producing columnar output, maintaining columnar flow through the dataflow graph.
+- No changes to join internals — closure application is inherently per-result-tuple and stays Vec-based.
+
+### Files changed
+- `src/compute/src/render/join/delta_join.rs` — Added columnar output conversion at the end of `render_delta_join`.
+
+### Issues
+- None.
