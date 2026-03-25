@@ -16,3 +16,4 @@
 | 12 | 6.3: Columnar Threshold input — verified, no changes needed | Done | 2026-03-25 |
 | 13 | 7.1: Columnar Linear Join input via ensure_vec_collection | Done | 2026-03-25 |
 | 14 | 7.2: Columnar Delta Join output when inputs have columnar | Done | 2026-03-25 |
+| 15 | 8.1: Columnar sink input via ensure_vec_collection | Done | 2026-03-25 |

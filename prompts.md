@@ -270,9 +270,9 @@ within the join itself, but the output stream should be columnar.
 
 ### Prompt 8.1: Columnar sink input
 
-[ ] Sinks receive data via `as_collection_core`. Convert to accept columnar input.
+[*] Sinks receive data via `as_collection_core`. Convert to accept columnar input.
 
-[ ] The sink export boundary (writing to persist) may need Row-format data. Unpack columnar
+[*] The sink export boundary (writing to persist) may need Row-format data. Unpack columnar
 at this boundary.
 
 **Files**: `src/compute/src/render/sinks.rs`
