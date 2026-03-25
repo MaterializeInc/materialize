@@ -1233,7 +1233,13 @@ where
                     .to_stream(&mut self.scope)
                     .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                // Also produce a columnar collection for downstream operators.
+                let columnar_oks =
+                    crate::render::columnar::vec_to_columnar(ok_collection.clone());
+                let mut bundle =
+                    CollectionBundle::from_collections(ok_collection, err_collection.clone());
+                bundle.columnar_collection = Some((columnar_oks, err_collection));
+                bundle
             }
             Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
