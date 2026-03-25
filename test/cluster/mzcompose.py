@@ -5439,6 +5439,121 @@ def workflow_test_zero_downtime_reconfigure(
         )
 
 
+def workflow_test_pending_replica_audit_events(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Regression test: when envd is killed while an ALTER CLUSTER ... WAIT FOR
+    is in progress, pending replicas are cleaned up on restart.  The drop
+    must be recorded in mz_audit_events so that every "create" for a
+    cluster-replica has a matching "drop" (unless the replica still exists).
+    """
+    c.up("materialized")
+
+    # Enable the feature flag and create a managed cluster.
+    c.sql(
+        """
+        ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
+        CREATE CLUSTER test_audit (SIZE = 'scale=1,workers=1');
+        GRANT ALL ON CLUSTER test_audit TO materialize;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+    # Kick off an ALTER that creates a pending replica, but will
+    # block waiting for it to hydrate (with a long timeout so it
+    # doesn't finish before we kill envd).
+    def zero_downtime_alter():
+        try:
+            c.sql(
+                """
+                ALTER CLUSTER test_audit SET (SIZE = 'scale=1,workers=2')
+                WITH (WAIT FOR '300s')
+                """,
+                port=6877,
+                user="mz_system",
+            )
+        except (OperationalError, DatabaseError):
+            pass
+
+    thread = Thread(target=zero_downtime_alter)
+    thread.start()
+
+    # Wait until the pending replica appears.
+    for _ in range(60):
+        pending = c.sql_query(
+            """
+            SELECT cr.name
+            FROM mz_internal.mz_pending_cluster_replicas pr
+            JOIN mz_cluster_replicas cr ON cr.id = pr.id
+            JOIN mz_clusters c ON c.id = cr.cluster_id
+            WHERE c.name = 'test_audit';
+            """
+        )
+        if len(pending) > 0:
+            break
+        time.sleep(0.5)
+    else:
+        raise RuntimeError("Pending replica never appeared")
+
+    # Kill envd while the ALTER is still in progress.
+    c.kill("materialized")
+    thread.join(timeout=10)
+
+    # Restart envd — the pending replica should be cleaned up and
+    # an audit log drop event should be emitted.
+    c.up("materialized")
+
+    # Verify that the pending replica was removed.
+    replicas = c.sql_query(
+        """
+        SELECT cr.name FROM mz_cluster_replicas cr
+        JOIN mz_clusters c ON c.id = cr.cluster_id
+        WHERE c.name = 'test_audit';
+        """
+    )
+    assert replicas == [
+        ("r1",)
+    ], f"Expected only the original replica, found {replicas}"
+
+    # Verify that every 'create' of a cluster-replica in
+    # mz_audit_events has a matching 'drop' (or the replica still
+    # exists).  We check specifically for cluster 'test_audit'.
+    unmatched = c.sql_query(
+        """
+        SELECT details::json->>'replica_name'
+        FROM mz_audit_events
+        WHERE object_type = 'cluster-replica'
+          AND event_type = 'create'
+          AND details::json->>'cluster_name' = 'test_audit'
+          AND details::json->>'replica_name' NOT IN (
+              SELECT cr.name FROM mz_cluster_replicas cr
+              JOIN mz_clusters c ON c.id = cr.cluster_id
+              WHERE c.name = 'test_audit'
+          )
+          AND details::json->>'replica_name' NOT IN (
+              SELECT details::json->>'replica_name'
+              FROM mz_audit_events
+              WHERE object_type = 'cluster-replica'
+                AND event_type = 'drop'
+                AND details::json->>'cluster_name' = 'test_audit'
+          );
+        """
+    )
+    assert unmatched == [], f"Found create events without matching drop: {unmatched}"
+
+    # Clean up.
+    c.sql(
+        """
+        DROP CLUSTER test_audit CASCADE;
+        ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
+        """,
+        port=6877,
+        user="mz_system",
+    )
+
+
 def workflow_crash_on_replica_expiration_mv(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
