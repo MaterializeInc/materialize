@@ -283,12 +283,12 @@ at this boundary.
 
 ### Prompt 9.1: Audit and remove dead Vec paths
 
-[ ] Once all operators produce and consume columnar collections, the `collection` field in
+[*] Once all operators produce and consume columnar collections, the `collection` field in
 `CollectionBundle` (the Vec variant) should be unused for the unarranged data path.
 
-[ ] Add metrics/logging to track how often the Vec fallback is used.
+[*] Add metrics/logging to track how often the Vec fallback is used.
 
-[ ] Gradually remove the Vec paths, starting with operators where the columnar path is proven
+[*] Gradually remove the Vec paths, starting with operators where the columnar path is proven
 stable.
 
 **Files**: All render files

@@ -379,18 +379,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                     let oks_entered = oks.enter(region);
                     let errs_entered = errs.enter(region);
                     let columnar_oks =
-                        crate::render::columnar::vec_to_columnar(oks_entered.clone());
-                    let bundle = crate::render::CollectionBundle {
-                        collection: Some((
-                            oks_entered,
-                            errs_entered.clone(),
-                        )),
-                        columnar_collection: Some((
-                            columnar_oks,
-                            errs_entered,
-                        )),
-                        arranged: BTreeMap::default(),
-                    };
+                        crate::render::columnar::vec_to_columnar(oks_entered);
+                    let bundle = CollectionBundle::from_columnar_collections(
+                        columnar_oks,
+                        errs_entered,
+                    );
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
                 }
@@ -500,18 +493,11 @@ pub fn build_compute_dataflow<A: Allocate>(
                     let oks_entered = oks.enter_region(region);
                     let errs_entered = errs.enter_region(region);
                     let columnar_oks =
-                        crate::render::columnar::vec_to_columnar(oks_entered.clone());
-                    let bundle = crate::render::CollectionBundle {
-                        collection: Some((
-                            oks_entered,
-                            errs_entered.clone(),
-                        )),
-                        columnar_collection: Some((
-                            columnar_oks,
-                            errs_entered,
-                        )),
-                        arranged: BTreeMap::default(),
-                    };
+                        crate::render::columnar::vec_to_columnar(oks_entered);
+                    let bundle = CollectionBundle::from_columnar_collections(
+                        columnar_oks,
+                        errs_entered,
+                    );
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
                 }
@@ -1233,13 +1219,10 @@ where
                     .to_stream(&mut self.scope)
                     .as_collection();
 
-                // Also produce a columnar collection for downstream operators.
+                // Produce a columnar-only collection for downstream operators.
                 let columnar_oks =
-                    crate::render::columnar::vec_to_columnar(ok_collection.clone());
-                let mut bundle =
-                    CollectionBundle::from_collections(ok_collection, err_collection.clone());
-                bundle.columnar_collection = Some((columnar_oks, err_collection));
-                bundle
+                    crate::render::columnar::vec_to_columnar(ok_collection);
+                CollectionBundle::from_columnar_collections(columnar_oks, err_collection)
             }
             Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
@@ -1255,7 +1238,7 @@ where
                                 .iter()
                                 .all(|(key, _, _)| collection.arranged.contains_key(key))
                         );
-                        assert!(keys.raw <= collection.collection.is_some());
+                        assert!(keys.raw <= (collection.collection.is_some() || collection.columnar_collection.is_some()));
                         // Retain only those keys we want to import.
                         collection.arranged.retain(|key, _value| {
                             keys.arranged.iter().any(|(key2, _, _)| key2 == key)

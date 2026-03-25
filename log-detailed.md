@@ -283,3 +283,24 @@
 
 ### Issues
 - None.
+
+## Prompt 9.1: Audit and remove dead Vec paths
+
+### What was done
+- **Audit**: Identified all 19 `.collection` accesses across render modules. Found that all operators now handle columnar-only bundles via `ensure_vec_collection()` guards (Reduce, TopK, FlatMap, Linear Join, Sinks, ensure_collections).
+- **Logging**: Added `tracing::debug!` in `ensure_vec_collection` to track when the Vec fallback is used at runtime.
+- **Removed redundant Vec from persist source imports**: Both import loops (recursive and non-recursive) now produce columnar-only bundles via `from_columnar_collections` instead of setting both Vec and columnar. The Vec stream is still created (needed as input to `vec_to_columnar`) but not retained in the bundle.
+- **Removed redundant Vec from Constant operator**: Now produces columnar-only bundle instead of both Vec and columnar.
+- **Fixed assertion**: Updated `Get::PassArrangements` assertion to accept columnar collections as valid raw collections (line 1244: `keys.raw <= (collection.is_some() || columnar_collection.is_some())`).
+
+### Key decisions
+- Source operators (persist, constant) now produce **columnar-only** bundles. All downstream operators already handle this via `ensure_vec_collection()` guards added in earlier prompts.
+- The `collection` field in `CollectionBundle` is NOT removed yet — it's still needed as a transient state (populated by `ensure_vec_collection()` and used by arrangement creation, sinks, etc.). Removal is Prompt 9.2.
+- Used `tracing::debug!` rather than metrics counters for simplicity. This can be upgraded to proper metrics if needed.
+
+### Files changed
+- `src/compute/src/render/context.rs` — Added debug logging in `ensure_vec_collection`.
+- `src/compute/src/render.rs` — Removed redundant Vec from persist source imports (both loops) and Constant operator; fixed PassArrangements assertion.
+
+### Issues
+- The `Get::PassArrangements` assertion `keys.raw <= collection.collection.is_some()` would have panicked with columnar-only bundles. Fixed to also accept `columnar_collection.is_some()`.
