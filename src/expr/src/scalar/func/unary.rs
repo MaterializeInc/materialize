@@ -461,6 +461,8 @@ derive_unary!(
     JsonbTypeof,
     JsonbStripNulls,
     JsonbPretty,
+    ParseCatalogId,
+    ParseCatalogPrivileges,
     RoundFloat32,
     RoundFloat64,
     RoundNumeric,

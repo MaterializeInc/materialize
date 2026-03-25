@@ -5979,6 +5979,7 @@ dependencies = [
  "mz-audit-log",
  "mz-compute-types",
  "mz-controller-types",
+ "mz-expr",
  "mz-ore",
  "mz-proto",
  "mz-repr",

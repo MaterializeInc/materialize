@@ -7,11 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::prelude::*;
 use maplit::btreeset;
-use mz_catalog::builtin::BuiltinTable;
+use mz_catalog::builtin::{BUILTINS, BuiltinTable};
+use mz_catalog::durable::objects::{SystemObjectDescription, SystemObjectMapping};
 use mz_catalog::durable::{MOCK_AUTHENTICATION_NONCE_KEY, Transaction};
 use mz_catalog::memory::objects::{BootstrapStateUpdateKind, StateUpdate};
 use mz_ore::collections::CollectionExt;
@@ -24,7 +25,7 @@ use mz_sql::ast::{
     CreateSinkOptionName, CreateViewStatement, CteBlock, DeferredItemName, IfExistsBehavior, Query,
     SetExpr, SqlServerConfigOptionName, ViewDefinition,
 };
-use mz_sql::catalog::SessionCatalog;
+use mz_sql::catalog::{CatalogItemType, SessionCatalog};
 use mz_sql::names::{FullItemName, QualifiedItemName};
 use mz_sql::normalize;
 use mz_sql::session::vars::{FORCE_SOURCE_TABLE_SYNTAX, Var, VarInput};
@@ -832,6 +833,52 @@ pub(crate) fn durable_migrate(
         openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
         let nonce = BASE64_STANDARD.encode(nonce);
         tx.set_setting(MOCK_AUTHENTICATION_NONCE_KEY.to_string(), Some(nonce))?;
+    }
+
+    migrate_builtin_tables_to_mvs(tx)?;
+
+    Ok(())
+}
+
+/// Update system object mappings for builtins whose type changed from table to materialized view.
+///
+/// Required for the work of making builtin tables views over `mz_catalog_raw`.
+fn migrate_builtin_tables_to_mvs(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+    // Collect `(schema, name)` of all builtin MVs.
+    let expected_mvs: BTreeSet<_> = BUILTINS::materialized_views()
+        .map(|mv| (mv.schema, mv.name))
+        .collect();
+
+    // Find persisted mappings for builtin tables that must be migrated.
+    let mut to_remove = BTreeSet::new();
+    let mut to_add = Vec::new();
+    for mapping in tx.get_system_object_mappings() {
+        let desc = &mapping.description;
+        if desc.object_type != CatalogItemType::Table {
+            continue;
+        }
+
+        let key = (&*desc.schema_name, &*desc.object_name);
+        if expected_mvs.contains(&key) {
+            info!(
+                "migrate: builtin {}.{} changed type from table to MV",
+                desc.schema_name, desc.object_name,
+            );
+            to_remove.insert(desc.clone());
+            to_add.push(SystemObjectMapping {
+                description: SystemObjectDescription {
+                    schema_name: desc.schema_name.clone(),
+                    object_type: CatalogItemType::MaterializedView,
+                    object_name: desc.object_name.clone(),
+                },
+                unique_identifier: mapping.unique_identifier,
+            });
+        }
+    }
+
+    if !to_remove.is_empty() {
+        tx.remove_system_object_mappings(to_remove)?;
+        tx.set_system_object_mappings(to_add)?;
     }
 
     Ok(())

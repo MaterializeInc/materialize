@@ -4293,17 +4293,22 @@ def workflow_test_refresh_mv_restart(
                 true
 
                 # Check that no MV is missing from any of the introspection objects.
-                # Note that only REFRESH MVs show up in `mz_materialized_view_refreshes`, which is ok, because we are
-                # creating only REFRESH MVs in these tests.
                 > SELECT *
+                  FROM mz_materialized_views as mv
+                  FULL OUTER JOIN mz_internal.mz_materialized_view_refresh_strategies mvrs ON (mv.id = mvrs.materialized_view_id)
+                  WHERE mv.id IS NULL OR mvrs.materialized_view_id IS NULL;
+
+                # Note that only REFRESH MVs show up in `mz_materialized_view_refreshes`.
+                > WITH refresh_mvs AS (
+                    SELECT materialized_view_id
+                    FROM mz_internal.mz_materialized_view_refresh_strategies
+                    WHERE type != 'on-commit'
+                  )
+                  SELECT *
                   FROM
-                    mz_catalog.mz_materialized_views mv
-                    FULL OUTER JOIN mz_internal.mz_materialized_view_refreshes mvr ON (mv.id = mvr.materialized_view_id)
-                    FULL OUTER JOIN mz_internal.mz_materialized_view_refresh_strategies mvrs ON (mv.id = mvrs.materialized_view_id)
-                  WHERE
-                    mv.id IS NULL OR
-                    mvr.materialized_view_id IS NULL OR
-                    mvrs.materialized_view_id IS NULL;
+                    refresh_mvs rmv
+                    FULL OUTER JOIN mz_internal.mz_materialized_view_refreshes mvr ON (rmv.materialized_view_id = mvr.materialized_view_id)
+                  WHERE rmv.materialized_view_id IS NULL OR mvr.materialized_view_id IS NULL;
                 """
             )
         )

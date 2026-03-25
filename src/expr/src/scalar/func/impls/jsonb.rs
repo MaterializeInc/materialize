@@ -12,8 +12,10 @@ use std::fmt;
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
+use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::{Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_repr::role_id::RoleId;
+use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
 use crate::EvalError;
@@ -229,4 +231,126 @@ fn jsonb_pretty<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();
     strconv::format_jsonb_pretty(&mut buf, a);
     buf
+}
+
+/// Converts a JSONB `Datum` into a `u64`.
+fn jsonb_datum_to_u64<'a>(d: Datum<'a>) -> Result<u64, String> {
+    let Datum::Numeric(n) = d else {
+        return Err("expected numeric value".into());
+    };
+
+    let mut cx = numeric::cx_datum();
+    cx.try_into_u64(n.0)
+        .map_err(|_| format!("number out of u64 range: {n}"))
+}
+
+/// Converts a JSONB `Datum` into a `RoleId`.
+fn jsonb_datum_to_role_id(d: Datum) -> Result<RoleId, String> {
+    match d {
+        Datum::String("Public") => Ok(RoleId::Public),
+        Datum::String(other) => Err(format!("unexpected role ID variant: {other}")),
+        Datum::Map(dict) => {
+            let (key, val) = dict.iter().next().ok_or_else(|| "empty".to_string())?;
+            let n = jsonb_datum_to_u64(val)?;
+            match key {
+                "User" => Ok(RoleId::User(n)),
+                "System" => Ok(RoleId::System(n)),
+                "Predefined" => Ok(RoleId::Predefined(n)),
+                other => Err(format!("unexpected role ID variant: {other}")),
+            }
+        }
+        _ => Err("expected string or object".into()),
+    }
+}
+
+/// Converts a catalog JSON-serialized ID value into the appropriate string format.
+///
+/// Supports all of Materialize's various ID types of the form `<prefix><u64>`.
+#[sqlfunc]
+fn parse_catalog_id<'a>(a: JsonbRef<'a>) -> Result<String, EvalError> {
+    let parse = || match a.into_datum() {
+        // Unit variant, e.g. "Public"
+        Datum::String(variant) => match variant {
+            "Explain" => Ok("e".to_string()),
+            "Public" => Ok("p".to_string()),
+            other => Err(format!("unexpected ID variant: {other}")),
+        },
+        // Newtype variant, e.g. {"User": 1}
+        Datum::Map(dict) => {
+            let (key, val) = dict.iter().next().ok_or_else(|| "empty".to_string())?;
+            let prefix = match key {
+                "IntrospectionSourceIndex" => "si",
+                "Predefined" => "g",
+                "System" => "s",
+                "Transient" => "t",
+                "User" => "u",
+                other => return Err(format!("unexpected ID variant: {other}")),
+            };
+            let n = jsonb_datum_to_u64(val)?;
+            Ok(format!("{prefix}{n}"))
+        }
+        _ => Err("expected string or object".into()),
+    };
+
+    parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))
+}
+
+/// Converts a catalog JSON-serialized privilege array into an `mz_aclitem[]`.
+#[sqlfunc]
+fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclItem>, EvalError> {
+    let parse_one = |datum| match datum {
+        Datum::Map(dict) => {
+            let mut grantee = None;
+            let mut grantor = None;
+            let mut acl_mode = None;
+            for (key, val) in dict.iter() {
+                match key {
+                    "grantee" => {
+                        let id = jsonb_datum_to_role_id(val)?;
+                        grantee = Some(id);
+                    }
+                    "grantor" => {
+                        let id = jsonb_datum_to_role_id(val)?;
+                        grantor = Some(id);
+                    }
+                    "acl_mode" => {
+                        let Datum::Map(mode_dict) = val else {
+                            return Err(format!("unexpected acl_mode: {val}"));
+                        };
+                        let (key, val) = mode_dict.iter().next().ok_or("empty acl_mode")?;
+                        if key != "bitflags" {
+                            return Err(format!("unexpected acl_mode field: {key}"));
+                        }
+                        let bits = jsonb_datum_to_u64(val)?;
+                        let Some(mode) = AclMode::from_bits(bits) else {
+                            return Err(format!("invalid acl_mode bitflags: {bits}"));
+                        };
+                        acl_mode = Some(mode);
+                    }
+                    other => return Err(format!("unexpected privilege field: {other}")),
+                }
+            }
+            Ok(MzAclItem {
+                grantee: grantee.ok_or_else(|| format!("missing grantee: {dict:?}"))?,
+                grantor: grantor.ok_or_else(|| "missing grantor in privilege".to_string())?,
+                acl_mode: acl_mode.ok_or_else(|| "missing acl_mode in privilege".to_string())?,
+            })
+        }
+        other => Err(format!("expected object in array, found: {other}")),
+    };
+
+    let parse = || match a.into_datum() {
+        Datum::List(list) => {
+            let mut result = Vec::new();
+            for item in list.iter() {
+                result.push(parse_one(item)?);
+            }
+            Ok(result)
+        }
+        _ => Err("expected array".to_string()),
+    };
+
+    parse()
+        .map(ArrayRustType)
+        .map_err(|e| EvalError::InvalidCatalogJson(e.into()))
 }

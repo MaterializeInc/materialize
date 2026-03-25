@@ -915,7 +915,7 @@ impl CatalogState {
                 // Builtin materialized views can't be versioned.
                 let versions = BTreeMap::new();
 
-                let item = self
+                let mut item = self
                     .parse_item(
                         global_id,
                         &mv.create_sql(),
@@ -937,13 +937,22 @@ impl CatalogState {
                             mv.name,
                         )
                     });
-                if !matches!(item, CatalogItem::MaterializedView(_)) {
+                let CatalogItem::MaterializedView(catalog_mv) = &mut item else {
                     panic!(
                         "internal error: builtin materialized view {}'s SQL does not begin \
                          with \"CREATE MATERIALIZED VIEW\".",
                         mv.name,
                     );
                 };
+
+                // The optimizer can only infer keys from MV definitions, but cannot infer
+                // uniqueness present in the input data. Extend with the keys declared in the
+                // builtin definition, to allow supplying additional key knowledge.
+                let mut desc = catalog_mv.desc.latest();
+                for key in &mv.desc.typ().keys {
+                    desc = desc.with_key(key.clone());
+                }
+                catalog_mv.desc = VersionedRelationDesc::new(desc);
 
                 self.insert_item(
                     item_id,
@@ -1404,8 +1413,9 @@ impl CatalogState {
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
             }
-            StateUpdateKind::Database(database) => {
-                vec![self.pack_database_update(&database.id, diff)]
+            StateUpdateKind::Database(_database) => {
+                // mz_databases is a materialized view over mz_catalog_raw.
+                vec![]
             }
             StateUpdateKind::Schema(schema) => {
                 let db_spec = schema.database_id.into();

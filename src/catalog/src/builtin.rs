@@ -2351,35 +2351,53 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATABASES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_databases",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_DATABASES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the database."),
-        ("oid", "A PostgreSQL-compatible OID for the database."),
-        ("name", "The name of the database."),
-        (
-            "owner_id",
-            "The role ID of the owner of the database. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges belonging to the database."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
+pub static MZ_DATABASES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_databases",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_DATABASES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the database."),
+            ("oid", "A PostgreSQL-compatible OID for the database."),
+            ("name", "The name of the database."),
+            (
+                "owner_id",
+                "The role ID of the owner of the database. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the database."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Database'",
+        access: vec![PUBLIC_SELECT],
+    });
+
 pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_schemas",
     schema: MZ_CATALOG_SCHEMA,
@@ -14009,7 +14027,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_KAFKA_SOURCES),
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_ICEBERG_SINKS),
-        Builtin::Table(&MZ_DATABASES),
+        Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::Table(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
         Builtin::Table(&MZ_INDEXES),
@@ -14396,6 +14414,13 @@ pub mod BUILTINS {
     pub fn views() -> impl Iterator<Item = &'static BuiltinView> {
         BUILTINS_STATIC.iter().filter_map(|b| match b {
             Builtin::View(view) => Some(*view),
+            _ => None,
+        })
+    }
+
+    pub fn materialized_views() -> impl Iterator<Item = &'static BuiltinMaterializedView> {
+        BUILTINS_STATIC.iter().filter_map(|b| match b {
+            Builtin::MaterializedView(mv) => Some(*mv),
             _ => None,
         })
     }

@@ -2698,6 +2698,7 @@ pub enum EvalError {
     InvalidRange(InvalidRangeError),
     InvalidRoleId(Box<str>),
     InvalidPrivileges(Box<str>),
+    InvalidCatalogJson(Box<str>),
     LetRecLimitExceeded(Box<str>),
     MultiDimensionalArraySearch,
     MustNotBeNull(Box<str>),
@@ -2894,6 +2895,9 @@ impl fmt::Display for EvalError {
             EvalError::InvalidRoleId(msg) => write!(f, "{msg}"),
             EvalError::InvalidPrivileges(privilege) => {
                 write!(f, "unrecognized privilege type: {privilege}")
+            }
+            EvalError::InvalidCatalogJson(msg) => {
+                write!(f, "invalid catalog JSON: {msg}")
             }
             EvalError::LetRecLimitExceeded(max_iters) => {
                 write!(
@@ -3163,6 +3167,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::InvalidRange(error) => InvalidRange(error.into_proto()),
             EvalError::InvalidRoleId(v) => InvalidRoleId(v.into_proto()),
             EvalError::InvalidPrivileges(v) => InvalidPrivileges(v.into_proto()),
+            EvalError::InvalidCatalogJson(v) => InvalidCatalogJson(v.into_proto()),
             EvalError::LetRecLimitExceeded(v) => WmrRecursionLimitExceeded(v.into_proto()),
             EvalError::MultiDimensionalArraySearch => MultiDimensionalArraySearch(()),
             EvalError::MustNotBeNull(v) => MustNotBeNull(v.into_proto()),
@@ -3291,6 +3296,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 InvalidRange(e) => Ok(EvalError::InvalidRange(e.into_rust()?)),
                 InvalidRoleId(v) => Ok(EvalError::InvalidRoleId(v.into())),
                 InvalidPrivileges(v) => Ok(EvalError::InvalidPrivileges(v.into())),
+                InvalidCatalogJson(v) => Ok(EvalError::InvalidCatalogJson(v.into())),
                 WmrRecursionLimitExceeded(v) => Ok(EvalError::LetRecLimitExceeded(v.into())),
                 MultiDimensionalArraySearch(()) => Ok(EvalError::MultiDimensionalArraySearch),
                 MustNotBeNull(v) => Ok(EvalError::MustNotBeNull(v.into())),

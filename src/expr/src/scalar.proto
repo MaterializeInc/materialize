@@ -162,5 +162,6 @@ message ProtoEvalError {
     string pretty_error = 78;
     google.protobuf.Empty neg_limit = 79;
     google.protobuf.Empty key_cannot_be_null = 80;
+    string invalid_catalog_json = 81;
   }
 }
