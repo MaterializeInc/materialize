@@ -246,7 +246,19 @@ where
             (_, initial_closure) => {
                 // TODO: extract closure from the first stage in the join plan, should it exist.
                 // TODO: apply that closure in `flat_map_ref` rather than calling `.collection`.
-                let (joined, errs) = inputs[linear_plan.source_relation]
+                // Ensure Vec collection is available for row-at-a-time join processing.
+                let source = &inputs[linear_plan.source_relation];
+                let source = if source.collection.is_none()
+                    && source.columnar_collection.is_some()
+                    && linear_plan.source_key.is_none()
+                {
+                    let mut s = source.clone();
+                    s.ensure_vec_collection();
+                    s
+                } else {
+                    source.clone()
+                };
+                let (joined, errs) = source
                     .as_specific_collection(linear_plan.source_key.as_deref(), &self.config_set);
                 errors.push(errs.enter_region(inner));
                 let mut joined = joined.enter_region(inner);
