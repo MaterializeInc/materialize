@@ -2524,7 +2524,7 @@ def setup(c: Composition, args) -> dict[str, Any]:
             "clusterd",
             "balancerd",
         ]
-        c.up(*[Service(service, idle=True) for service in services])
+        c.pull_images(*services)
         for service in services:
             spawn.runv(
                 [

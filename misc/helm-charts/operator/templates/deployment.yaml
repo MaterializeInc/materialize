@@ -25,10 +25,12 @@ spec:
       labels:
         {{- include "materialize-operator.selectorLabels" . | nindent 8 }}
     spec:
+      shareProcessNamespace: true
       securityContext:
-        fsGroup: 999
-        runAsGroup: 999
-        runAsUser: 999
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsUser: 65532
+        runAsNonRoot: true
       serviceAccountName: {{ include "materialize-operator.serviceAccountName" . }}
       {{- if .Values.operator.nodeSelector }}
       nodeSelector:

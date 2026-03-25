@@ -7,10 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM distroless-prod-base
+# This is a separate mzimage so that we don't have to re-install the apt things
+# every time we get a CI builder with a cold cache.
 
-COPY orchestratord /usr/local/bin/
-
+FROM gcr.io/distroless/cc-debian13:nonroot-28078d2e5e77671d2046dcc9e2c75334e31efa4d
 USER nonroot
-
-ENTRYPOINT ["orchestratord"]
+ENV HOME=/home/nonroot
+ENTRYPOINT []
