@@ -20,6 +20,9 @@ use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
+use mz_audit_log::{
+    CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
+};
 use mz_auth::hash::scram256_hash;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
@@ -224,7 +227,7 @@ impl Catalog {
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            remove_pending_cluster_replicas_migration(&mut txn)?;
+            remove_pending_cluster_replicas_migration(&mut txn, config.boot_ts)?;
 
             new_builtin_collections
         };
@@ -1201,13 +1204,51 @@ fn remove_invalid_config_param_role_defaults_migration(
 }
 
 /// Cluster Replicas may be created ephemerally during an alter statement, these replicas
-/// are marked as pending and should be cleaned up on catalog opsn.
-fn remove_pending_cluster_replicas_migration(tx: &mut Transaction) -> Result<(), anyhow::Error> {
+/// are marked as pending and should be cleaned up on catalog open.
+fn remove_pending_cluster_replicas_migration(
+    tx: &mut Transaction,
+    boot_ts: mz_repr::Timestamp,
+) -> Result<(), anyhow::Error> {
+    // Build a map of cluster_id -> cluster_name for audit events.
+    let cluster_names: BTreeMap<_, _> = tx.get_clusters().map(|c| (c.id, c.name)).collect();
+
+    let occurred_at = boot_ts.into();
+
     for replica in tx.get_cluster_replicas().collect::<Vec<_>>() {
         if let mz_catalog::durable::ReplicaLocation::Managed { pending: true, .. } =
             replica.config.location
         {
+            let cluster_name = cluster_names
+                .get(&replica.cluster_id)
+                .cloned()
+                .unwrap_or_else(|| "<unknown>".to_string());
+
+            info!(
+                "removing pending cluster replica '{}' from cluster '{}'",
+                replica.name, cluster_name,
+            );
+
             tx.remove_cluster_replica(replica.replica_id)?;
+
+            // Emit an audit log event so that the drop is visible in
+            // mz_audit_events, matching the create event that was
+            // recorded when the pending replica was first created.
+            let audit_id = tx.allocate_audit_log_id()?;
+            tx.insert_audit_log_event(VersionedEvent::new(
+                audit_id,
+                EventType::Drop,
+                ObjectType::ClusterReplica,
+                EventDetails::DropClusterReplicaV3(mz_audit_log::DropClusterReplicaV3 {
+                    cluster_id: replica.cluster_id.to_string(),
+                    cluster_name,
+                    replica_id: Some(replica.replica_id.to_string()),
+                    replica_name: replica.name,
+                    reason: CreateOrDropClusterReplicaReasonV1::System,
+                    scheduling_policies: None,
+                }),
+                None,
+                occurred_at,
+            ));
         }
     }
     Ok(())
