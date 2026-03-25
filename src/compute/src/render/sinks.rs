@@ -71,16 +71,8 @@ where
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
-            collection.clone()
-        } else if bundle.columnar_collection.is_some() {
-            // Columnar-only bundle: convert to Vec for the sink boundary.
-            let mut bundle_mut = bundle.clone();
-            bundle_mut.ensure_vec_collection();
-            bundle_mut
-                .collection
-                .clone()
-                .expect("ensure_vec_collection should populate collection")
+        let (ok_collection, mut err_collection) = if bundle.columnar_collection.is_some() {
+            bundle.as_vec_collection()
         } else {
             let (key, _arrangement) = bundle
                 .arranged

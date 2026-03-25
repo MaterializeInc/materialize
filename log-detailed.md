@@ -304,3 +304,37 @@
 
 ### Issues
 - The `Get::PassArrangements` assertion `keys.raw <= collection.collection.is_some()` would have panicked with columnar-only bundles. Fixed to also accept `columnar_collection.is_some()`.
+
+## Prompt 9.2: Remove `collection` field and `ensure_vec_collection`
+
+### What was done
+- **Removed `collection` field** from `CollectionBundle` struct. Data now flows exclusively through `columnar_collection`.
+- **Removed `ensure_vec_collection`** method entirely.
+- **Modified `from_collections`** to automatically convert Vec→columnar via `vec_to_columnar`, so callers producing Vec output (TopK, Linear Join, LetRec, etc.) seamlessly convert to columnar.
+- **Added `as_vec_collection`** method that converts columnar→Vec on demand, replacing the role of `ensure_vec_collection` + `.collection.clone()`.
+- **Updated `as_specific_collection(None)`** and `flat_map(None, ...)` to use `as_vec_collection()` internally.
+- **Simplified `as_columnar_collection_core`** — no longer needs special-case handling since there's only one collection type.
+- **Rewrote `ensure_collections`** (ArrangeBy) to use a local `cached_vec` variable instead of `self.collection` for arrangement creation. After the loop, stores the passthrough as columnar if `collections.raw` is demanded.
+- **Updated all callers**: removed `ensure_vec_collection()` calls from flat_map.rs, top_k.rs, reduce.rs, sinks.rs, linear_join.rs.
+- **Fixed LetRec** code in render.rs to use `as_vec_collection()` instead of `.collection.unwrap()`.
+- **Fixed hydration logging** to operate on `columnar_collection` instead of `collection`.
+- **Updated `enter_region`/`leave_region`/`scope`/`update_id`** to only handle `columnar_collection`.
+
+### Key decisions
+- `from_collections` auto-converts Vec→columnar, making the transition invisible to callers. This means operators that produce Vec output (TopK, reduce, join) don't need individual changes.
+- `as_vec_collection()` converts on every call (no caching). This is acceptable because the conversion is only used at operator boundaries (arrangements, sinks, etc.) where the cost is amortized.
+- The `from_expressions` constructor (arrangement-only bundles) sets `columnar_collection: None`, which is correct since arrangement-only bundles have no unarranged collection.
+
+### Files changed
+- `src/compute/src/render/context.rs` — Struct field removal, method updates, new `as_vec_collection`.
+- `src/compute/src/render.rs` — Fixed LetRec, PassArrangements assertion, hydration logging, debug prints.
+- `src/compute/src/render/flat_map.rs` — Removed `ensure_vec_collection` call.
+- `src/compute/src/render/top_k.rs` — Removed `ensure_vec_collection` call.
+- `src/compute/src/render/reduce.rs` — Removed `ensure_vec_collection` call.
+- `src/compute/src/render/sinks.rs` — Simplified to use `as_vec_collection`.
+- `src/compute/src/render/join/linear_join.rs` — Removed `ensure_vec_collection` guard.
+
+### Issues
+- The LetRec code (`render.rs` ~line 956, 1007) directly accessed `.collection.unwrap()` — needed conversion to `as_vec_collection()`.
+- Hydration logging (`render.rs` ~line 1481) modified `.collection` in-place — updated to modify `columnar_collection` instead.
+- `ensure_collections` loop used `self.collection.take()`/`self.collection = Some(...)` pattern — replaced with local `cached_vec` variable.

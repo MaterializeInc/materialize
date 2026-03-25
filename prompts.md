@@ -297,7 +297,7 @@ stable.
 
 ### Prompt 9.2: Remove `ensure_vec_collection` calls
 
-[ ] Once all operators are converted, `ensure_vec_collection` should have zero callers.
+[*] Once all operators are converted, `ensure_vec_collection` should have zero callers.
 Remove it and the `collection` field from `CollectionBundle`.
 
 **Files**: `src/compute/src/render/context.rs`, all render files

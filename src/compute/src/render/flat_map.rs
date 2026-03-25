@@ -42,11 +42,6 @@ where
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let has_columnar = input.columnar_collection.is_some();
-        // Ensure Vec collection is available for row-at-a-time table function evaluation.
-        let mut input = input;
-        if input.collection.is_none() {
-            input.ensure_vec_collection();
-        }
         let (ok_collection, err_collection) =
             input.as_specific_collection(input_key.as_deref(), &self.config_set);
         let stream = ok_collection.inner;

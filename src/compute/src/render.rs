@@ -760,7 +760,7 @@ where
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
-                println!("collection available: {:?}", bundle.collection.is_none());
+                println!("columnar_collection available: {:?}", bundle.columnar_collection.is_some());
                 println!(
                     "keys available: {:?}",
                     bundle.arranged.keys().collect::<Vec<_>>()
@@ -856,7 +856,7 @@ where
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
-                println!("collection available: {:?}", bundle.collection.is_none());
+                println!("columnar_collection available: {:?}", bundle.columnar_collection.is_some());
                 println!(
                     "keys available: {:?}",
                     bundle.arranged.keys().collect::<Vec<_>>()
@@ -951,9 +951,8 @@ where
                 let last = rec_iter.peek().is_none();
                 let binding = BindingInfo::LetRec { id, last };
                 let bundle = self.render_recursive_plan(object_id, level + 1, value, binding);
-                // We need to ensure that the raw collection exists, but do not have enough information
-                // here to cause that to happen.
-                let (oks, mut err) = bundle.collection.clone().unwrap();
+                // Extract the raw collection as Vec for consolidation and variable setting.
+                let (oks, mut err) = bundle.as_vec_collection();
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -1005,7 +1004,7 @@ where
             // Now extract each of the rec bindings into the outer scope.
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
-                let (oks, err) = bundle.collection.unwrap();
+                let (oks, err) = bundle.as_vec_collection();
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_collections(
@@ -1238,7 +1237,7 @@ where
                                 .iter()
                                 .all(|(key, _, _)| collection.arranged.contains_key(key))
                         );
-                        assert!(keys.raw <= (collection.collection.is_some() || collection.columnar_collection.is_some()));
+                        assert!(keys.raw <= collection.columnar_collection.is_some());
                         // Retain only those keys we want to import.
                         collection.arranged.retain(|key, _value| {
                             keys.arranged.iter().any(|(key2, _, _)| key2 == key)
@@ -1480,12 +1479,10 @@ where
                 }
             }
             None => {
-                let (oks, _) = bundle
-                    .collection
-                    .as_mut()
-                    .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
-                *oks = stream.as_collection();
+                if let Some((oks, _)) = bundle.columnar_collection.as_mut() {
+                    let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
+                    *oks = stream.as_collection();
+                }
             }
         }
     }
