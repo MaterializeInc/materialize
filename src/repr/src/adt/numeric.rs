@@ -503,26 +503,23 @@ fn test_twos_comp_numeric_primitive() {
 
         // Ensure extended version of `to_be_bytes` generates same `i128`.
         let e_numeric = twos_complement_be_to_numeric(&mut e, 0).unwrap();
-        let e_p: P = match e_numeric.try_into() {
-            Ok(e_p) => e_p,
-            Err(_) => panic!(),
-        };
+        let e_p: P = e_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, e_p, "expected val of {:?}, got {:?}", i, e_p);
 
         // Wide representation produces same result.
         let w_numeric = twos_complement_be_to_numeric(&mut w, 0).unwrap();
-        let w_p: P = match w_numeric.try_into() {
-            Ok(w_p) => w_p,
-            Err(_) => panic!(),
-        };
+        let w_p: P = w_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, w_p, "expected val of {:?}, got {:?}", i, e_p);
 
         // Bytes do not need to be in `Numeric`-specific format
         let p_numeric = twos_complement_be_to_numeric(i_be_bytes, 0).unwrap();
-        let p_p: P = match p_numeric.try_into() {
-            Ok(p_p) => p_p,
-            Err(_) => panic!(),
-        };
+        let p_p: P = p_numeric
+            .try_into()
+            .unwrap_or_else(|_e| panic!("try_into failed"));
         assert_eq!(i, p_p, "expected val of {:?}, got {:?}", i, p_p);
     }
 

@@ -1027,7 +1027,7 @@ where
                 }
                 snapshot
             }
-            Err(_) => panic!("read before since"),
+            Err(e) => panic!("read before since: {e:?}"),
         };
 
         self.to_write.clear();

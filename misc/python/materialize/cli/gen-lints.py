@@ -179,6 +179,10 @@ WARN_CLIPPY_LINTS = [
     # Catches bindings that silently become `()` after a refactor, preventing
     # wrong-variable bugs when a function's return type changes.
     "let_unit_value",
+    # Require binding the error variable in Err arms (e.g., `Err(_e)` instead
+    # of `Err(_)`). This makes discarded errors visible and prevents bugs
+    # where errors are silently swallowed (e.g., converted to NULL).
+    "match_wild_err_arm",
 ]
 
 MESSAGE_LINT_MISSING = (

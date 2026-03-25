@@ -490,7 +490,7 @@ impl<'ast> VisitMut<'ast, Raw> for CreateSqlIdReplacer<'_> {
             RawItemName::Id(id, _, _) => {
                 let old_id = match id.parse() {
                     Ok(old_id) => old_id,
-                    Err(_) => panic!("invalid persisted global id {id}"),
+                    Err(e) => panic!("invalid persisted global id {id}: {e}"),
                 };
                 if let Some(new_id) = self.ids.get(&old_id) {
                     *id = new_id.to_string();
