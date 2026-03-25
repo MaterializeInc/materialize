@@ -10321,10 +10321,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"kysely@npm:0.27.4":
-  version: 0.27.4
-  resolution: "kysely@npm:0.27.4"
-  checksum: 10c0/05d223dca3f69778e28511d30cfff485e8e035a43fb01b24f1624b87f850cd6f87e33dcc04e752f7454ac8aed2743d982dabe3be6bc402c63568d020d5b0dd1d
+"kysely@npm:0.28.14":
+  version: 0.28.14
+  resolution: "kysely@npm:0.28.14"
+  checksum: 10c0/0d6aad119660ddf7dc12ecbfc0a33ab0333af53aea350aabf55a0b7978e6b69aba246727738f5462f4633aedbed2106f13e58acc2bdb490845f7b7c869871e97
   languageName: node
   linkType: hard
 
@@ -10766,7 +10766,7 @@ __metadata:
     jsdom: "npm:^25.0.1"
     jsonwebtoken: "npm:^9.0.2"
     jwt-decode: "npm:^4.0.0"
-    kysely: "npm:0.27.4"
+    kysely: "npm:0.28.14"
     kysely-codegen: "npm:^0.17.0"
     launchdarkly-js-client-sdk: "npm:^3.9.0"
     lint-staged: "npm:^16.2.7"

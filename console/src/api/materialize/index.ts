@@ -185,7 +185,7 @@ export function formatFullyQualifiedObjectName(
  * Escapes a string to be used as a SQL literal and returns a Kysely RawBuilder.
  */
 export function escapedLiteral(literal: string) {
-  return sql.lit(literal.replace(/'/g, "''"));
+  return sql.lit(literal);
 }
 
 /**
