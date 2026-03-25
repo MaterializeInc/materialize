@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/lib.rs
-revision: 52af3ba2a1
+revision: de1872534e
 ---
 
 # mz-transform
@@ -12,6 +12,7 @@ Provides semantics-preserving transformations of `MirRelationExpr` that improve 
 * `analysis` — bottom-up lattice analyses (`Arity`, `Cardinality`, `NonNegative`, `UniqueKeys`, `Equivalences`, `Monotonic`, …) queried by other transforms.
 * `canonicalization` — structural normalization: `ReduceScalars`, `FlatMapElimination`, `ProjectionExtraction`, `TopKElision`.
 * `canonicalize_mfp` — MFP canonicalization and CSE.
+* `case_literal` — rewrites If-chains matching a single expression against literals into `CaseLiteral` variadic functions with O(log n) BTreeMap lookup.
 * `collect_notices` — collects optimizer notices that do not fit other transforms.
 * `column_knowledge` — per-column literal/nullability propagation.
 * `compound` — staging area for `UnionNegateFusion`.

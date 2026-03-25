@@ -1,9 +1,11 @@
 ---
 source: src/expr/src/scalar/func/impls/string.rs
-revision: 703a0c27c8
+revision: 61475c0097
 ---
 
 # mz-expr::scalar::func::impls::string
 
-Provides scalar function implementations for `text` datums: case transformation (`upper`, `lower`), `substring`, `length`, `char_length`, `ltrim`/`rtrim`/`btrim`, `lpad`/`rpad`, `replace`, `split_part`, `regexp_match`, `regexp_replace`, `ascii`, `chr`, `repeat`, `concat`, type casts to/from all other supported types, and string formatting.
-This is the largest impls file, as text manipulation is central to SQL.
+The largest impls file, providing scalar function implementations for `text` datums.
+Includes type-cast functions from string to nearly every other scalar type (`CastStringToBool`, `CastStringToInt16/32/64`, `CastStringToFloat32/64`, `CastStringToUint16/32/64`, `CastStringToOid`, `CastStringToNumeric`, `CastStringToDate`, `CastStringToTimestamp/Tz`, `CastStringToTime`, `CastStringToInterval`, `CastStringToUuid`, `CastStringToChar`, `CastStringToVarChar`, `CastStringToInt2Vector`, `CastStringToPgLegacyChar`, `CastStringToPgLegacyName`, `CastStringToBytes`).
+Also provides `Reverse`, `IsLikeMatch`, `IsRegexpMatch`, `RegexpSplitToArray`, and various parameterized casts that manually implement `EagerUnaryFunc` or `LazyUnaryFunc`.
+Text manipulation is central to SQL, making this the broadest single-type impl module.

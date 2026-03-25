@@ -1,9 +1,14 @@
 ---
 source: src/expr/src/scalar/func/impls/array.rs
-revision: 703a0c27c8
+revision: 61475c0097
 ---
 
 # mz-expr::scalar::func::impls::array
 
-Provides scalar function implementations operating on array datums, such as casting arrays to lists, subscripting, slicing, computing array length/lower bound, and array-to-string conversion.
-Functions are defined using `#[sqlfunc]` and are re-exported into `UnaryFunc`/`BinaryFunc`/`VariadicFunc` via the parent `impls` module.
+Provides scalar function implementations for array datums.
+Key types:
+- `CastArrayToListOneDim` -- casts a 1-D array to a list (errors on multi-dimensional input), generated via `#[sqlfunc]`.
+- `CastArrayToString` -- converts an array to text via `stringify_datum`, parameterized by `SqlScalarType`.
+- `CastArrayToJsonb` -- converts an array (including multi-dimensional) to a JSONB value, applying a per-element `cast_element` expression.
+- `CastArrayToArray` -- element-wise cast between two array types using a `cast_expr` and `return_ty`.
+All manual structs implement `LazyUnaryFunc` directly.

@@ -1,6 +1,6 @@
 ---
 source: src/server-core/src/listeners.rs
-revision: 047cb5995c
+revision: 964fd6a0ab
 ---
 
 # mz-server-core::listeners
@@ -8,5 +8,7 @@ revision: 047cb5995c
 Defines the configuration types used to describe named network listeners for both SQL and HTTP protocols.
 
 `ListenersConfig` holds two `BTreeMap`s mapping listener names to `SqlListenerConfig` and `HttpListenerConfig` respectively.
-`BaseListenerConfig` captures the common properties—bind address, `AuthenticatorKind`, `AllowedRoles`, and TLS flag—while `HttpListenerConfig` adds `HttpRoutesEnabled` to control which HTTP route groups are active.
+`BaseListenerConfig` captures the common properties — bind address, `AuthenticatorKind`, `AllowedRoles`, and TLS flag — while `HttpListenerConfig` adds `HttpRoutesEnabled` to control which HTTP route groups are active (base, webhook, internal, metrics, profiling, `mcp_agents`, `mcp_observatory`, and `console_config`).
+`AuthenticatorKind` enumerates the supported authentication modes: `Frontegg`, `Password`, `Sasl`, `Oidc`, and `None`.
+`AllowedRoles` controls whether normal users, internal users, or both may connect.
 The `ListenerConfig` trait provides a uniform accessor interface over both listener variants and includes a `validate` method (HTTP rejects SASL authentication, SQL accepts any combination).

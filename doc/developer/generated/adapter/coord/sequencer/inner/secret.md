@@ -1,8 +1,10 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/secret.rs
-revision: 5b9fb22e87
+revision: a29f0a64ed
 ---
 
 # adapter::coord::sequencer::inner::secret
 
-Implements `sequence_create_secret` and `sequence_alter_secret`, which write the secret value to the secrets controller and then persist the catalog entry; also implements `sequence_drop_secrets` which removes secret values from the secrets controller during DROP.
+Implements the staged sequencing pipeline for secret and SSH key operations via the `SecretStage` enum and its `Staged` trait implementation.
+`sequence_create_secret` validates, writes the secret value to the secrets controller, then persists the catalog entry; `sequence_alter_secret` updates an existing secret's value; `sequence_rotate_keys` reads the current SSH key pair, rotates it, writes the new keys to the secrets controller, and updates the owning connection's `create_sql` in the catalog.
+Cancellation is disabled for all secret stages because they call external services and transact the catalog separately.

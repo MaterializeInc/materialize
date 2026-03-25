@@ -1,9 +1,10 @@
 ---
 source: src/adapter/src/catalog/open/builtin_schema_migration.rs
-revision: 2c413b395c
+revision: b00f8bffd2
 ---
 
 # adapter::catalog::open::builtin_schema_migration
 
-Implements the logic for migrating existing user-created objects that depend on built-in catalog objects whose definitions have changed between versions.
-When a built-in table, view, or source is altered (e.g. columns added or types changed), this module re-plans all dependent user objects so they reference the updated built-in, emitting `Op::ReplaceItem` catalog operations to update stored SQL and optimizer hints.
+Implements schema migration for builtin storage collections whose persist shard schemas change between versions.
+Two migration mechanisms are provided: `Mechanism::Evolution` uses persist's schema evolution to evolve a shard in-place (backward-compatible changes only), and `Mechanism::Replacement` creates a new shard (works for all changes but discards data).
+The `MIGRATIONS` list declares per-version migration steps; `Migration::run` applies outstanding steps, coordinating shard creation, schema registration, fingerprint updates, and cleanup across 0dt-compatible read-only and leader environments.

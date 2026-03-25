@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/lowering.rs
-revision: 703a0c27c8
+revision: 61475c0097
 ---
 
 # mz-sql::plan::lowering

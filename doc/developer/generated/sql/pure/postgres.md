@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/pure/postgres.rs
-revision: 47bd985ddd
+revision: 3af9082af6
 ---
 
 # mz-sql::pure::postgres
