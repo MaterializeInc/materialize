@@ -106,3 +106,22 @@
 
 ### Issues
 - None. `concatenate` worked out of the box with columnar collections since `Column` implements the required `Container` trait.
+
+## Prompt 2.3: Constant operator emits columnar collections
+
+### What was done
+- Modified the `Constant` match arm in `render.rs` to also produce a columnar collection alongside the existing Vec collection.
+- After creating the `ok_collection` (Vec-based), clones it and converts via `vec_to_columnar` to produce a columnar variant.
+- Sets both `collection` and `columnar_collection` fields on the resulting `CollectionBundle`, so downstream operators can use either path.
+- Added unit test `constant_rows_to_columnar` that simulates the Constant operator pattern: creates rows from an iterator, converts to stream, then round-trips through columnar.
+
+### Key decisions
+- Set **both** Vec and columnar fields (same pattern as persist source in Prompt 1.1) rather than columnar-only, since downstream operators may still need the Vec path.
+- Constants are typically small, so the `vec_to_columnar` overhead is negligible. This change is primarily for uniformity so that all source operators produce columnar collections.
+
+### Files changed
+- `src/compute/src/render.rs` — Modified Constant match arm to also produce columnar collection.
+- `src/compute/src/render/columnar.rs` — Added `constant_rows_to_columnar` test.
+
+### Issues
+- None. Straightforward application of the established pattern.

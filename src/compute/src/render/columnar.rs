@@ -352,4 +352,65 @@ mod tests {
             assert!(actual.iter().any(|(r, _, d)| *r == row3 && *d == one));
         });
     }
+
+    /// Verify that constant rows can be packed into a columnar collection and read back.
+    /// This simulates the Constant operator's columnar path.
+    #[mz_ore::test]
+    fn constant_rows_to_columnar() {
+        use timely::dataflow::operators::ToStream;
+
+        timely::execute_directly(|worker| {
+            let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> =
+                Rc::new(RefCell::new(Vec::new()));
+            let results_capture = results.clone();
+
+            let probe = worker.dataflow::<u64, _, _>(|scope| {
+                // Simulate the Constant operator: create rows from an iterator,
+                // convert to a stream, then to columnar, then back to Vec.
+                let row1 = Row::pack_slice(&[Datum::Int32(42)]);
+                let row2 = Row::pack_slice(&[Datum::String("constant")]);
+                let row3 = Row::default();
+
+                let one = Diff::from(1);
+                let two = Diff::from(2);
+
+                let constant_data: Vec<(Row, u64, Diff)> =
+                    vec![(row1, 0, one), (row2, 0, two), (row3, 0, one)];
+
+                let vec_collection = constant_data
+                    .into_iter()
+                    .to_stream(scope)
+                    .as_collection();
+
+                let columnar = vec_to_columnar(vec_collection);
+                let result = columnar_to_vec(columnar);
+
+                let (probe, _stream) = result
+                    .inner
+                    .inspect(move |item: &(Row, u64, Diff)| {
+                        results_capture
+                            .borrow_mut()
+                            .push((item.0.clone(), item.1, item.2));
+                    })
+                    .probe();
+
+                probe
+            });
+
+            worker.step_while(|| probe.less_than(&1));
+
+            let actual = results.borrow().clone();
+            assert_eq!(actual.len(), 3, "Should have 3 constant rows");
+
+            let row1 = Row::pack_slice(&[Datum::Int32(42)]);
+            let row2 = Row::pack_slice(&[Datum::String("constant")]);
+            let row3 = Row::default();
+            let one = Diff::from(1);
+            let two = Diff::from(2);
+
+            assert!(actual.iter().any(|(r, t, d)| *r == row1 && *t == 0 && *d == one));
+            assert!(actual.iter().any(|(r, t, d)| *r == row2 && *t == 0 && *d == two));
+            assert!(actual.iter().any(|(r, t, d)| *r == row3 && *t == 0 && *d == one));
+        });
+    }
 }

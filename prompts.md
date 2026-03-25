@@ -127,10 +127,10 @@ either convert them or fall back to Vec for all.
 
 ### Prompt 2.3: Constant
 
-[ ] Convert the `Constant` operator to emit columnar collections. Constants are small, so this
+[*] Convert the `Constant` operator to emit columnar collections. Constants are small, so this
 is primarily for uniformity.
 
-[ ] Pack the constant rows into a columnar container and set the `columnar_collection` field.
+[*] Pack the constant rows into a columnar container and set the `columnar_collection` field.
 
 **Files**: `src/compute/src/render.rs` (the Constant match arm)
 
