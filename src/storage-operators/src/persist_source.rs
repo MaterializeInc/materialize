@@ -19,6 +19,7 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
+use itertools::Itertools;
 use mz_expr::{ColumnSpecs, Interpreter, MfpEval, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -842,13 +843,13 @@ impl PendingWork {
 
             tracing::trace!(
                 batch_len,
-                transpose_us = transpose_elapsed.as_micros() as u64,
-                eval_us = eval_elapsed.as_micros() as u64,
+                transpose_us = transpose_elapsed.as_micros(),
+                eval_us = eval_elapsed.as_micros(),
                 "vectorized batch evaluation (eval_us includes row packing)"
             );
 
             // Zip results with the original time/diff and emit.
-            for (result, (_row, time, diff)) in mfp_results.into_iter().zip(batch.iter()) {
+            for (result, (_row, time, diff)) in mfp_results.into_iter().zip_eq(batch.iter()) {
                 match result {
                     Ok(Some(out_row)) => {
                         if let Some(stats) = &is_filter_pushdown_audit {

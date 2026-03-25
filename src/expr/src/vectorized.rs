@@ -109,7 +109,7 @@ impl DatumColumn {
     }
 }
 
-/// Convert an iterator of [`Row`] references into columnar form.
+/// Convert an iterator of [`mz_repr::Row`] references into columnar form.
 ///
 /// Each row is unpacked into datums, and the datums at each position are
 /// collected into a [`DatumColumn`]. The result has one `DatumColumn` per
@@ -1102,7 +1102,10 @@ mod tests {
         assert_eq!(result.len(), 100);
 
         for i in 0..100_u32 {
-            assert_eq!(get_i64(&result, usize::cast_from(i)), i64::cast_from(i) + (i64::cast_from(i) + 100));
+            assert_eq!(
+                get_i64(&result, usize::cast_from(i)),
+                i64::cast_from(i) + (i64::cast_from(i) + 100)
+            );
         }
     }
 
@@ -1121,7 +1124,10 @@ mod tests {
         assert_eq!(result.len(), 50);
 
         for i in 0..50_u32 {
-            assert_eq!(get_i64(&result, usize::cast_from(i)), i64::cast_from(i) + 1000);
+            assert_eq!(
+                get_i64(&result, usize::cast_from(i)),
+                i64::cast_from(i) + 1000
+            );
         }
     }
 
@@ -1231,9 +1237,16 @@ mod tests {
         }
         // Rows where col0 > 5 should have the sum.
         for i in 6..10_u32 {
-            let row = results[usize::cast_from(i)].as_ref().unwrap().as_ref().unwrap();
+            let row = results[usize::cast_from(i)]
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap();
             let datum = row.unpack_first();
-            assert_eq!(datum, mz_repr::Datum::Int64(i64::cast_from(i) + (i64::cast_from(i) + 10)));
+            assert_eq!(
+                datum,
+                mz_repr::Datum::Int64(i64::cast_from(i) + (i64::cast_from(i) + 10))
+            );
         }
     }
 
@@ -1355,7 +1368,11 @@ mod tests {
 
         // --- Compare ---
         assert_eq!(scalar_results.len(), batch_results.len());
-        for (i, (scalar, batch)) in scalar_results.iter().zip_eq(batch_results.iter()).enumerate() {
+        for (i, (scalar, batch)) in scalar_results
+            .iter()
+            .zip_eq(batch_results.iter())
+            .enumerate()
+        {
             match (scalar, batch) {
                 (None, Ok(None)) => {} // both filtered
                 (Some(s_row), Ok(Some(b_row))) => {

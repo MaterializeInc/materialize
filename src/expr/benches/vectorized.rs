@@ -13,11 +13,11 @@
 use std::hint::black_box;
 
 use columnar::{Columnar, Index as _};
-use mz_ore::cast::CastFrom;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use mz_expr::func::AddInt64;
 use mz_expr::vectorized::{VectorizedSafeMfpPlan, rows_to_columns};
 use mz_expr::{MapFilterProject, MirScalarExpr};
+use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Row, RowArena, Timestamp};
 use mz_timely_util::columnar::Column;
 use timely::container::PushInto;
