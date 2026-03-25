@@ -1,9 +1,10 @@
 ---
 source: src/expr/src/scalar/func/variadic.rs
-revision: 9c1e2767b0
+revision: de1872534e
 ---
 
 # mz-expr::scalar::func::variadic
 
-Implements variadic scalar functions (those taking a variable number of arguments) using `#[sqlfunc]`-annotated functions, and defines the `LazyVariadicFunc` trait.
-Includes functions such as `coalesce`, `greatest`/`least`, `concat`, `make_timestamp`, array/list/map constructors, cryptographic digest functions (`md5`, `sha256`, etc.), `jsonb_build_object`, `regexp_match`, and date/time formatting.
+Defines the `LazyVariadicFunc` and `EagerVariadicFunc` traits, and uses `derive_variadic\!` to generate the `VariadicFunc` enum.
+`LazyVariadicFunc` requires `eval`, `output_type`, `propagates_nulls`, `introduces_nulls`, and optionally `could_error`, `is_monotone`, `is_associative`, and `is_infix_op`.
+Implements variadic scalar functions (those taking a variable number of arguments) including `And`, `Or`, `Coalesce`, `Greatest`, `Least`, `ArrayCreate`, `ArrayFill`, `ArrayIndex`, `ArrayToString`, `ListCreate`, `ListIndex`, `RecordCreate`, `MapBuild`, `RangeCreate`, `ErrorIfNull`, `CaseLiteral`, `Concat`, `MakeTimestamp`, `RegexpMatch`, `RegexpReplace`, `RegexpSplitToArray`, `JsonbBuildArray`, `JsonbBuildObject`, `DateBin`, cryptographic digest/HMAC functions, and date/time formatting.

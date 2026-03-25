@@ -1,9 +1,12 @@
 ---
 source: src/compute/src/sink/correction_v2.rs
-revision: f13235ce64
+revision: b7426255ce
 ---
 
 # mz-compute::sink::correction_v2
 
-An alternative implementation of the `Correction` buffer with a more structured design that separately manages compaction (`since`), revelation (`upper`), and storage of updates bucketed by time.
-Provides amortized-efficient insertion, compaction, and iteration over consolidated updates below an `upper` frontier, designed to handle large volumes of future-timestamped retractions from temporal filters without re-sorting on every write.
+An alternative implementation of the correction buffer (`CorrectionV2`) with a chain-based design for amortized-efficient insertion, compaction, and iteration.
+
+Updates are stored as sorted, consolidated `Chunk`s grouped into `Chain`s. A "chain invariant" ensures each chain has at least `CHAIN_PROPORTIONALITY` times as many chunks as the next, producing a logarithmic hierarchy similar to an LSM tree. New updates are first accumulated in a `Stage` buffer; once a full chunk is ready it is sorted and merged into the chain list, restoring the invariant via k-way merges.
+
+Retrieving consolidated updates before a given `upper` merges only the relevant prefixes of each chain, leaving future-timestamped data untouched. Compaction respects the `since` frontier by merging per-time sub-chains separately to preserve sort order after time advancement. Insert has amortized O(log N) complexity; retrieval is O(U log K) where U is the number of updates before `upper` and K is the number of chains.

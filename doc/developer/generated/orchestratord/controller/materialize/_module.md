@@ -1,10 +1,15 @@
 ---
 source: src/orchestratord/src/controller/materialize.rs
-revision: 82d92a7fad
+revision: c6a0fb357c
 ---
 
 # mz-orchestratord::controller::materialize
 
 Main reconciliation controller for `Materialize` custom resources.
-`Config` captures all operator-level configuration (cloud provider, region, image pull policy, feature flags, TLS specs, resource limits, etc.).
-The reconciler coordinates `global` resources (RBAC, network policies, certificates) with per-generation `environmentd` StatefulSet deployments, applies rollout strategies, tracks update status, and optionally creates companion `Balancer` and `Console` CRs.
+`Config` captures all operator-level configuration (cloud provider, region, image pull policy, feature flags, TLS specs, resource limits, network policies, cluster sizing, console image tags, etc.).
+`Context` implements the `k8s_controller::Context` trait: the `apply` method coordinates `global` resources (RBAC, network policies, certificates) with per-generation `environmentd` StatefulSet deployments, applies rollout strategies (immediate promotion or manual), validates license keys and environment ID uniqueness, enforces upgrade windows, tracks update status via Kubernetes conditions, and optionally creates companion `Balancer` and `Console` CRs.
+
+Submodules:
+
+* `generation` — per-generation Kubernetes resource construction and version-gated configuration.
+* `global` — cluster-wide resources (RBAC, network policies, certificates) shared across generations.

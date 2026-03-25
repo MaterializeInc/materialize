@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/lib.rs
-revision: 85fd84fde9
+revision: fe91a762d1
 ---
 
 # mz-repr
@@ -9,18 +9,19 @@ The lingua franca of Materialize: defines the core data types that all layers of
 
 ## Module structure
 
-* `scalar` — `Datum` (value enum), `ScalarType`, `DatumKind`, and proptest strategies
-* `relation` — `RelationDesc`, `ColumnName`, `ColumnType`, schema evolution (`RelationDescDiff`, `VersionedRelationDesc`)
-* `row` — `Row`, `RowPacker`, `RowRef`, `RowArena`, `DatumList`, `DatumMap`, `SharedRow`; Arrow columnar encoding (`encode`); abstract iteration (`iter`)
+* `scalar` — `Datum` (value enum), `DatumKind`, and a dual-type system: `SqlScalarType` (SQL-level, with modifiers like `VarChar`, `Char`, `Oid`) and `ReprScalarType` (repr-level, collapsed variants); `SqlScalarBaseType`/`ReprScalarBaseType` enum-kind tags; `SqlContainerType` trait; proptest strategies
+* `relation` — `RelationDesc`, `ColumnName`, and a matching dual-type split: `SqlColumnType`/`SqlRelationType` (SQL-level) and `ReprColumnType`/`ReprRelationType` (repr-level); schema evolution (`RelationDescDiff`, `VersionedRelationDesc`); `backport_nullability` for reconciling nullability across the two type layers
+* `relation_and_scalar` — shared protobuf definitions bridging the `relation` and `scalar` modules
+* `row` — `Row`, `RowPacker`, `RowRef`, `RowArena`, `DatumList<'a, T>` (now generic over `T`, defaulting to `Datum<'a>`), `DatumMap`, `SharedRow`; Arrow columnar encoding (`encode`); abstract iteration (`iter`)
 * `adt` — PostgreSQL-compatible ADTs: arrays, char, date, datetime, interval, JSONB, ACL items, numeric, range, regex, system OIDs, timestamps, varchar
 * `timestamp` — `Timestamp` (system-wide `u64` millisecond type implementing Timely/differential traits)
 * `diff` — `Diff` type alias (`Overflowing<i64>`)
-* `strconv` — string ↔ value conversion matching PostgreSQL text format
+* `strconv` — string-to-value conversion matching PostgreSQL text format
 * `explain` — `Explain` trait and text/JSON/DOT/tracing format implementations
 * `stats` — persist pushdown statistics for complex types
 * `global_id` / `catalog_item_id` / `role_id` / `network_policy_id` — identifier types
 * `namespaces` — well-known schema name constants
-* `optimize` — optimizer feature flags
+* `optimize` — `OptimizerFeatures`, `OptimizerFeatureOverrides`, and `OverrideFrom` trait
 * `refresh_schedule` — REFRESH EVERY/AT schedule representation
 * `fixed_length` — `ToDatumIter` abstraction
 * `datum_vec` — reusable `Datum` scratch buffer

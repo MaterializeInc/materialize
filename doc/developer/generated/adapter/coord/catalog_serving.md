@@ -1,9 +1,10 @@
 ---
 source: src/adapter/src/coord/catalog_serving.rs
-revision: f2656c001e
+revision: 67adf54488
 ---
 
 # adapter::coord::catalog_serving
 
-Provides coordinator methods for serving catalog-related queries: `dump`, `catalog_snapshot`, and helpers for assembling `CatalogSnapshot` responses.
-These are invoked by the `CatalogSnapshot` and `Dump` commands to give external callers a consistent point-in-time view of the catalog without holding coordinator locks.
+Provides logic for the `mz_catalog_server` system cluster and the `mz_support` role.
+`auto_run_on_catalog_server` determines whether a query should be transparently routed to the `mz_catalog_server` cluster based on whether it depends only on system-schema objects, does not reference per-replica introspection sources, and the session has auto-routing enabled.
+`check_cluster_restrictions` enforces that queries running on the `mz_catalog_server` cluster do not reference user-defined objects.

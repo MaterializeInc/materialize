@@ -1,10 +1,12 @@
 ---
 source: src/expr-derive-impl/src/sqlfunc.rs
-revision: 9c1e2767b0
+revision: 61475c0097
 ---
 
 # mz-expr-derive-impl::sqlfunc
 
 Implements the `#[sqlfunc]` proc-macro expansion.
-Classifies annotated functions by arity (unary, binary, variadic) and generates the corresponding `EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc` trait impl, a unit struct (or method impl for `&self` receivers), `Display`, and derives, all driven by the `Modifiers` struct parsed from macro attributes.
-Helper functions handle type patching, nullability inference, and `SqlName` parsing; snapshot tests exercise each arity pattern.
+Classifies annotated functions by arity (unary, binary, variadic) via `determine_arity` and generates the corresponding `EagerUnaryFunc`, `EagerBinaryFunc`, or `EagerVariadicFunc` trait impl, a unit struct (or method impl for `&self` receivers), `Display`, and standard derives, all driven by the `Modifiers` struct parsed via `darling::FromMeta` from macro attributes.
+`Modifiers` fields include: `sqlname`, `is_monotone`, `preserves_uniqueness`, `inverse`, `negate`, `is_infix_op`, `output_type`, `output_type_expr`, `could_error`, `propagates_nulls`, `introduces_nulls`, `is_associative`, `is_eliminable_cast`, and `test`.
+The `SqlName` helper enum supports both literal strings and macro expressions for function display names.
+Helper functions handle type patching, nullability inference, arena detection, and optional `insta` snapshot test generation for each arity pattern.

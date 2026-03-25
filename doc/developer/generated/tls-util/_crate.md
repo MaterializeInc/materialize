@@ -1,6 +1,6 @@
 ---
 source: src/tls-util/src/lib.rs
-revision: ca42a663e0
+revision: 0258aa4f51
 ---
 
 # mz-tls-util

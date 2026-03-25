@@ -1,7 +1,9 @@
 ---
 source: src/avro/src/encode.rs
-revision: 4db966dfbb
+revision: c169d1585a
 ---
+
+# mz-avro::encode
 
 Provides low-level, schema-guided encoding of `Value` trees into the Avro binary format.
 The public entry points are `encode` (writes into a caller-supplied `Vec<u8>`), `encode_ref` (takes a `SchemaNode` rather than a `&Schema`), and `encode_to_vec` (returns a freshly allocated buffer).
