@@ -428,6 +428,10 @@ impl<'a> mz_avro::types::ToAvro for TypedDatum<'a> {
                 }
                 SqlScalarType::Range { .. } => Value::String(datum.unwrap_range().to_string()),
                 SqlScalarType::MzAclItem => Value::String(datum.unwrap_mz_acl_item().to_string()),
+                // IRI is stored as String.
+                SqlScalarType::Iri => Value::String(datum.unwrap_str().to_owned()),
+                // RDF: serialize as string representation.
+                SqlScalarType::Rdf => Value::String(format!("{}", datum)),
             };
             if typ.nullable {
                 val = Value::Union {

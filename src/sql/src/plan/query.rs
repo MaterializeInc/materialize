@@ -95,10 +95,12 @@ use crate::plan::PlanError::InvalidWmrRecursionLimit;
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
     AbstractColumnType, AbstractExpr, AggregateExpr, AggregateFunc, AggregateWindowExpr,
-    BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder, ColumnRef, Hir,
-    HirRelationExpr, HirScalarExpr, JoinKind, ScalarWindowExpr, ScalarWindowFunc, UnaryFunc,
-    ValueWindowExpr, ValueWindowFunc, VariadicFunc, WindowExpr, WindowExprType,
+    BinaryFunc, CoercibleScalarExpr, CoercibleScalarExprExt, CoercibleScalarType, ColumnOrder,
+    ColumnRef, Hir, HirRelationExpr, HirRelationExprExt, HirScalarExpr, HirScalarExprExt, JoinKind,
+    ScalarWindowExpr, ScalarWindowFunc, UnaryFunc, ValueWindowExpr, ValueWindowFunc, VariadicFunc,
+    WindowExpr, WindowExprType,
 };
+use crate::plan::lowering::HirScalarExprLowering;
 use crate::plan::plan_utils::{self, GroupSizeHints, JoinSide};
 use crate::plan::scope::{Scope, ScopeItem, ScopeUngroupedColumn};
 use crate::plan::statement::{StatementContext, StatementDesc, show};

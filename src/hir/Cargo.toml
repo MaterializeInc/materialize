@@ -1,0 +1,27 @@
+[package]
+name = "mz-hir"
+description = "High-level Intermediate Representation (HIR) types for Materialize query planning."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+itertools = "0.14.0"
+mz-expr = { path = "../expr" }
+mz-ore = { path = "../ore", features = ["panic"] }
+mz-repr = { path = "../repr", features = ["tracing"] }
+serde = { version = "1.0.219", features = ["derive"] }
+tracing = "0.1.41"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+
+[features]
+default = ["workspace-hack"]
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]

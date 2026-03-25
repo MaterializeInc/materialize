@@ -163,6 +163,11 @@ pub enum Type {
     /// A list of privileges granted to a user that uses [`mz_repr::adt::system::Oid`]s for role
     /// references. This type is used primarily for compatibility with PostgreSQL.
     AclItem,
+    /// An IRI (Internationalized Resource Identifier) for RDF.
+    /// Transmitted as TEXT over pgwire.
+    Iri,
+    /// A polymorphic RDF term. Transmitted as TEXT over pgwire.
+    Rdf,
 }
 
 /// An unpacked [`typmod`](Type::typmod) for a [`Type`].
@@ -746,6 +751,9 @@ impl Type {
                     _ => unreachable!(),
                 },
                 Type::MzAclItem => &MZ_ACL_ITEM_ARRAY,
+                // IRI and RDF are TEXT arrays when nested in Array.
+                Type::Iri => &postgres_types::Type::TEXT_ARRAY,
+                Type::Rdf => &postgres_types::Type::TEXT_ARRAY,
             },
             Type::Bool => &postgres_types::Type::BOOL,
             Type::Bytea => &postgres_types::Type::BYTEA,
@@ -791,6 +799,9 @@ impl Type {
                 t => unreachable!("{t:?} is not a range element type"),
             },
             Type::MzAclItem => &MZ_ACL_ITEM,
+            // IRI and RDF are transmitted as TEXT over pgwire.
+            Type::Iri => &postgres_types::Type::TEXT,
+            Type::Rdf => &postgres_types::Type::TEXT,
         }
     }
 
@@ -922,7 +933,9 @@ impl Type {
             | Type::MzTimestamp
             | Type::VarChar { max_length: None }
             | Type::Range { .. }
-            | Type::MzAclItem => None,
+            | Type::MzAclItem
+            | Type::Iri
+            | Type::Rdf => None,
         }
     }
 
@@ -972,6 +985,8 @@ impl Type {
             Type::Range { .. } => -1,
             Type::MzAclItem => MzAclItem::binary_size().try_into().expect("must fit"),
             Type::AclItem => AclItem::binary_size().try_into().expect("must fit"),
+            Type::Iri => -1, // variable-length (TEXT)
+            Type::Rdf => -1, // variable-length (TEXT)
         }
     }
 
@@ -1104,6 +1119,8 @@ impl TryFrom<&Type> for SqlScalarType {
                 element_type: Box::new(TryFrom::try_from(&**element_type)?),
             }),
             Type::MzAclItem => Ok(SqlScalarType::MzAclItem),
+            Type::Iri => Ok(SqlScalarType::Iri),
+            Type::Rdf => Ok(SqlScalarType::Rdf),
         }
     }
 }
@@ -1272,6 +1289,8 @@ impl From<&SqlScalarType> for Type {
                 element_type: Box::new(From::from(&**element_type)),
             },
             SqlScalarType::MzAclItem => Type::MzAclItem,
+            SqlScalarType::Iri => Type::Iri,
+            SqlScalarType::Rdf => Type::Rdf,
         }
     }
 }

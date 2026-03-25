@@ -45,6 +45,7 @@ mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
+mz-hir = { path = "../hir" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-orchestrator = { path = "../orchestrator" }
@@ -59,6 +60,8 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
+mz-sparql = { path = "../sparql" }
+mz-sparql-parser = { path = "../sparql-parser" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
 mz-sql-lexer = { path = "../sql-lexer" }

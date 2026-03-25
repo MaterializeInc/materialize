@@ -74,12 +74,12 @@ use mz_sql_parser::ast::{
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
     MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
     NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RdfFormat,
+    RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition,
+    ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy,
+    SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName, Statement,
+    TableConstraint, TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName,
+    TableOption, TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
@@ -136,6 +136,8 @@ use crate::names::{
 };
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
+use crate::plan::hir::{CoercibleScalarExprExt, HirRelationExprExt, HirScalarExprExt};
+use crate::plan::lowering::HirScalarExprLowering;
 use crate::plan::query::{
     CteDesc, ExprContext, QueryLifetime, cast_relation, plan_expr, scalar_type_from_catalog,
     scalar_type_from_sql,
@@ -171,6 +173,8 @@ use crate::session::vars::{
     ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
 };
 use crate::{names, parse};
+
+use super::dml;
 
 mod connection;
 
@@ -2482,6 +2486,17 @@ fn get_encoding_inner(
         Format::Json { array: false } => DataEncoding::Json,
         Format::Json { array: true } => bail_unsupported!("JSON ARRAY format in sources"),
         Format::Text => DataEncoding::Text,
+        Format::Rdf { format } => {
+            use mz_storage_types::sources::encoding::RdfEncodingFormat;
+            let rdf_format = match format {
+                RdfFormat::NTriples => RdfEncodingFormat::NTriples,
+                RdfFormat::Turtle => RdfEncodingFormat::Turtle,
+                RdfFormat::RdfXml => RdfEncodingFormat::RdfXml,
+            };
+            DataEncoding::Rdf(mz_storage_types::sources::encoding::RdfEncoding {
+                format: rdf_format,
+            })
+        }
     };
     Ok(SourceDataEncoding { key: None, value })
 }
@@ -2532,7 +2547,8 @@ fn get_unnamed_key_envelope(
             DataEncoding::Avro(_)
             | DataEncoding::Csv(_)
             | DataEncoding::Protobuf(_)
-            | DataEncoding::Regex { .. },
+            | DataEncoding::Regex { .. }
+            | DataEncoding::Rdf(_),
         ) => true,
         None => false,
     };
@@ -2556,6 +2572,17 @@ pub fn plan_view(
     def: &mut ViewDefinition<Aug>,
     temporary: bool,
 ) -> Result<(QualifiedItemName, View), PlanError> {
+    // For SPARQL views, resolve the quad table reference before
+    // normalization so the [id AS db.schema.item] reference gets
+    // persisted in create_sql. This ensures catalog rehydration works
+    // even with the system session's empty search path.
+    if let Some(ref mut sparql_stmt) = def.sparql {
+        if sparql_stmt.quad_table.is_none() {
+            let (_, resolved_name) = dml::resolve_quad_table(scx, None)?;
+            sparql_stmt.quad_table = Some(resolved_name);
+        }
+    }
+
     let create_sql = normalize::create_statement(
         scx,
         Statement::CreateView(CreateViewStatement {
@@ -2569,26 +2596,40 @@ pub fn plan_view(
         name,
         columns,
         query,
+        sparql,
     } = def;
 
-    let query::PlannedRootQuery {
-        expr,
-        mut desc,
-        finishing,
-        scope: _,
-    } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
-    // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
-    // Note: Earlier, we were thinking to maybe persist the finishing information with the view
-    // here to help with database-issues#236. However, in the meantime, there might be a better
-    // approach to solve database-issues#236:
-    // https://github.com/MaterializeInc/database-issues/issues/236#issuecomment-1688293709
-    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
-        &finishing,
-        expr.arity()
-    ));
-    if expr.contains_parameters()? {
-        return Err(PlanError::ParameterNotAllowed("views".to_string()));
-    }
+    let (expr, mut desc) = if let Some(sparql_stmt) = sparql {
+        // Compile SPARQL directly to HIR at plan time.
+        let (quad_table_id, _) = dml::resolve_quad_table(scx, sparql_stmt.quad_table.as_ref())?;
+        let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+        let desc = dml::sparql_query_desc(&sparql_query);
+
+        let catalog_triples_id = dml::resolve_catalog_triples(scx);
+        let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+        let planned = planner
+            .plan(&sparql_query)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
+
+        (planned.expr, desc)
+    } else {
+        let query::PlannedRootQuery {
+            expr,
+            desc,
+            finishing,
+            scope: _,
+        } = query::plan_root_query(scx, query.clone(), QueryLifetime::View)?;
+        // We get back a trivial finishing, because `plan_root_query` applies the given finishing.
+        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+            &finishing,
+            expr.arity()
+        ));
+        if expr.contains_parameters()? {
+            return Err(PlanError::ParameterNotAllowed("views".to_string()));
+        }
+        (expr, desc)
+    };
 
     let dependencies = expr
         .depends_on()
@@ -2785,28 +2826,53 @@ pub fn plan_create_materialized_view(
         None => None,
     };
 
+    // For SPARQL materialized views, resolve quad table before normalization.
+    if let Some(ref mut sparql_stmt) = stmt.sparql {
+        if sparql_stmt.quad_table.is_none() {
+            let (_, resolved_name) = dml::resolve_quad_table(scx, None)?;
+            sparql_stmt.quad_table = Some(resolved_name);
+        }
+    }
+
     let create_sql =
         normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
 
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
-    let query::PlannedRootQuery {
-        expr,
-        mut desc,
-        finishing,
-        scope: _,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
-    // We get back a trivial finishing, see comment in `plan_view`.
-    assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
-        &finishing,
-        expr.arity()
-    ));
-    if expr.contains_parameters()? {
-        return Err(PlanError::ParameterNotAllowed(
-            "materialized views".to_string(),
+    let (expr, mut desc) = if let Some(sparql_stmt) = &stmt.sparql {
+        // Compile SPARQL directly to HIR at plan time.
+        let (quad_table_id, _) = dml::resolve_quad_table(scx, sparql_stmt.quad_table.as_ref())?;
+        let sparql_query = mz_sparql_parser::parser::parse(&sparql_stmt.body)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+        let desc = dml::sparql_query_desc(&sparql_query);
+
+        let catalog_triples_id = dml::resolve_catalog_triples(scx);
+        let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+        let planned = planner
+            .plan(&sparql_query)
+            .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
+
+        (planned.expr, desc)
+    } else {
+        let query::PlannedRootQuery {
+            expr,
+            desc,
+            finishing,
+            scope: _,
+        } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+        // We get back a trivial finishing, see comment in `plan_view`.
+        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
+            &finishing,
+            expr.arity()
         ));
-    }
+        if expr.contains_parameters()? {
+            return Err(PlanError::ParameterNotAllowed(
+                "materialized views".to_string(),
+            ));
+        }
+        (expr, desc)
+    };
 
     plan_utils::maybe_rename_columns(
         format!("materialized view {}", scx.catalog.resolve_full_name(&name)),

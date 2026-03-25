@@ -49,7 +49,8 @@ use mz_repr::*;
 
 use crate::optimizer_metrics::OptimizerMetrics;
 use crate::plan::hir::{
-    AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, JoinKind, WindowExprType,
+    AggregateExpr, ColumnOrder, ColumnRef, HirRelationExpr, HirScalarExpr, HirScalarExprExt,
+    JoinKind, WindowExprType,
 };
 use crate::plan::{PlanError, transform_hir};
 use crate::session::vars::SystemVars;
@@ -65,7 +66,7 @@ mod variadic_left;
 /// and column references at level zero simply start at the first column
 /// after all prior references.
 #[derive(Debug, Clone)]
-struct ColumnMap {
+pub struct ColumnMap {
     inner: BTreeMap<ColumnRef, usize>,
 }
 
@@ -118,11 +119,11 @@ impl ColumnMap {
 }
 
 /// Map with the CTEs currently in scope.
-type CteMap = BTreeMap<mz_expr::LocalId, CteDesc>;
+pub type CteMap = BTreeMap<mz_expr::LocalId, CteDesc>;
 
 /// Information about needed when finding a reference to a CTE in scope.
-#[derive(Clone)]
-struct CteDesc {
+#[derive(Debug, Clone)]
+pub struct CteDesc {
     /// The new ID assigned to the lowered version of the CTE, which may not match
     /// the ID of the input CTE.
     new_id: mz_expr::LocalId,
@@ -166,7 +167,8 @@ impl From<&SystemVars> for Config {
 }
 
 /// Context passed to the lowering. This is wired to most parts of the lowering.
-pub(crate) struct Context<'a> {
+#[derive(Debug)]
+pub struct Context<'a> {
     /// Feature flags affecting the behavior of lowering.
     pub config: &'a Config,
     /// Optional, because some callers don't have an `OptimizerMetrics` handy. When it's None, we
@@ -174,11 +176,42 @@ pub(crate) struct Context<'a> {
     pub metrics: Option<&'a OptimizerMetrics>,
 }
 
-impl HirRelationExpr {
+pub trait HirRelationExprLowering {
+    /// Rewrite `self` into a `MirRelationExpr`.
+    /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
+    fn lower<C: Into<Config>>(
+        self,
+        config: C,
+        metrics: Option<&OptimizerMetrics>,
+    ) -> Result<MirRelationExpr, PlanError>;
+
+    /// Return a `MirRelationExpr` which evaluates `self` once for each row of `get_outer`.
+    ///
+    /// For uncorrelated `self`, this should be the cross-product between `get_outer` and `self`.
+    /// When `self` references columns of `get_outer`, much more work needs to occur.
+    ///
+    /// The `col_map` argument contains mappings to some of the columns of `get_outer`, though
+    /// perhaps not all of them. It should be used as the basis of resolving column references,
+    /// but care must be taken when adding new columns that `get_outer.arity()` is where they
+    /// will start, rather than any function of `col_map`.
+    ///
+    /// The `get_outer` expression should be a `Get` with no duplicate rows, describing the distinct
+    /// assignment of values to outer rows.
+    fn applied_to(
+        self,
+        id_gen: &mut mz_ore::id_gen::IdGen,
+        get_outer: MirRelationExpr,
+        col_map: &ColumnMap,
+        cte_map: &mut CteMap,
+        context: &Context,
+    ) -> Result<MirRelationExpr, PlanError>;
+}
+
+impl HirRelationExprLowering for HirRelationExpr {
     /// Rewrite `self` into a `MirRelationExpr`.
     /// This requires rewriting all correlated subqueries (nested `HirRelationExpr`s) into flat queries
     #[mz_ore::instrument(target = "optimizer", level = "trace", name = "hir_to_mir")]
-    pub fn lower<C: Into<Config>>(
+    fn lower<C: Into<Config>>(
         self,
         config: C,
         metrics: Option<&OptimizerMetrics>,
@@ -945,7 +978,79 @@ impl HirRelationExpr {
     }
 }
 
-impl HirScalarExpr {
+pub trait HirScalarExprLowering {
+    /// Rewrite `self` into a `mz_expr::ScalarExpr` which can be applied to the modified `inner`.
+    ///
+    /// This method is responsible for decorrelating subqueries in `self` by introducing further columns
+    /// to `inner`, and rewriting `self` to refer to its physical columns (specified by `usize` positions).
+    /// The most complicated logic is for the scalar expressions that involve subqueries, each of which are
+    /// documented in more detail closer to their logic.
+    ///
+    /// This process presumes that `inner` is the result of decorrelation, meaning its first several columns
+    /// may be inherited from outer relations. The `col_map` column map should provide specific offsets where
+    /// each of these references can be found.
+    fn applied_to(
+        self,
+        id_gen: &mut mz_ore::id_gen::IdGen,
+        col_map: &ColumnMap,
+        cte_map: &mut CteMap,
+        inner: &mut MirRelationExpr,
+        subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
+        context: &Context,
+    ) -> Result<MirScalarExpr, PlanError>;
+
+    fn window_func_applied_to<F>(
+        id_gen: &mut mz_ore::id_gen::IdGen,
+        col_map: &ColumnMap,
+        cte_map: &mut CteMap,
+        inner: &mut MirRelationExpr,
+        subquery_map: &Option<&BTreeMap<HirScalarExpr, usize>>,
+        partition_by: Vec<HirScalarExpr>,
+        order_by: Vec<HirScalarExpr>,
+        mir_aggr_func: AggregateFunc,
+        lower_args: F,
+        context: &Context,
+    ) -> Result<MirScalarExpr, PlanError>
+    where
+        F: FnOnce(
+            &mut mz_ore::id_gen::IdGen,
+            &ColumnMap,
+            &mut CteMap,
+            &mut MirRelationExpr,
+            &Option<&BTreeMap<HirScalarExpr, usize>>,
+            Vec<MirScalarExpr>,
+            MirScalarExpr,
+            SqlScalarType,
+        ) -> Result<(MirScalarExpr, SqlColumnType), PlanError>;
+
+    /// Applies the subqueries in the given list of scalar expressions to every distinct
+    /// value of the given relation and returns a join of the given relation with all
+    /// the subqueries found, and the mapping of scalar expressions with columns projected
+    /// by the returned join that will hold their results.
+    fn lower_subqueries(
+        exprs: &[Self],
+        id_gen: &mut mz_ore::id_gen::IdGen,
+        col_map: &ColumnMap,
+        cte_map: &mut CteMap,
+        inner: MirRelationExpr,
+        context: &Context,
+    ) -> Result<(MirRelationExpr, BTreeMap<HirScalarExpr, usize>), PlanError>
+    where
+        Self: Sized;
+
+    /// Lowering of a [`HirScalarExpr`] that does not contain any subqueries, nor any references to
+    /// - a subquery
+    /// - a column reference to an outer level
+    /// - a parameter
+    /// - a window function call
+    ///
+    /// Should succeed if [`HirScalarExpr::is_constant`] would return true on `self`.
+    ///
+    /// Set `enable_cast_elimination` to remove casts that are noops in MIR.
+    fn lower_uncorrelated<C: Into<Config>>(self, config: C) -> Result<MirScalarExpr, PlanError>;
+}
+
+impl HirScalarExprLowering for HirScalarExpr {
     /// Rewrite `self` into a `mz_expr::ScalarExpr` which can be applied to the modified `inner`.
     ///
     /// This method is responsible for decorrelating subqueries in `self` by introducing further columns
@@ -1679,10 +1784,7 @@ impl HirScalarExpr {
     /// Should succeed if [`HirScalarExpr::is_constant`] would return true on `self`.
     ///
     /// Set `enable_cast_elimination` to remove casts that are noops in MIR.
-    pub fn lower_uncorrelated<C: Into<Config>>(
-        self,
-        config: C,
-    ) -> Result<MirScalarExpr, PlanError> {
+    fn lower_uncorrelated<C: Into<Config>>(self, config: C) -> Result<MirScalarExpr, PlanError> {
         let config = config.into();
 
         use MirScalarExpr as SS;
@@ -2068,7 +2170,18 @@ fn apply_existential_subquery(
     )
 }
 
-impl AggregateExpr {
+pub trait AggregateExprLowering {
+    fn applied_to(
+        self,
+        id_gen: &mut mz_ore::id_gen::IdGen,
+        col_map: &ColumnMap,
+        cte_map: &mut CteMap,
+        inner: &mut MirRelationExpr,
+        context: &Context,
+    ) -> Result<mz_expr::AggregateExpr, PlanError>;
+}
+
+impl AggregateExprLowering for AggregateExpr {
     fn applied_to(
         self,
         id_gen: &mut mz_ore::id_gen::IdGen,

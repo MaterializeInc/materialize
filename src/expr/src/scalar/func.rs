@@ -2571,6 +2571,10 @@ where
             None => Ok::<_, EvalError>(buf.write_null()),
         }),
         MzAclItem => Ok(strconv::format_mz_acl_item(buf, d.unwrap_mz_acl_item())),
+        // IRI is stored as String.
+        Iri => Ok(strconv::format_string(buf, d.unwrap_str())),
+        // RDF: format as string representation of the datum.
+        Rdf => Ok(strconv::format_string(buf, &format!("{}", d))),
     }
 }
 

@@ -213,6 +213,7 @@ pub(crate) enum PreDelimitedFormat {
     Json,
     Regex(Regex, Row),
     Protobuf(ProtobufDecoderState),
+    Rdf(Row),
 }
 
 impl PreDelimitedFormat {
@@ -248,7 +249,115 @@ impl PreDelimitedFormat {
                 Ok(Some(row_buf.clone()))
             }
             PreDelimitedFormat::Protobuf(pb) => pb.get_value(bytes).transpose(),
+            PreDelimitedFormat::Rdf(row_buf) => {
+                let s = std::str::from_utf8(bytes)
+                    .map_err(|_| DecodeErrorKind::Text("Failed to decode UTF-8".into()))?;
+                let s = s.trim();
+                // Skip empty lines and comments (lines starting with #).
+                if s.is_empty() || s.starts_with('#') {
+                    return Ok(None);
+                }
+                // Parse N-Triples line: <subject> <predicate> <object> .
+                // Supported term forms: <IRI>, _:blanknode, "literal", "literal"@lang,
+                // "literal"^^<datatype>
+                match parse_ntriples_line(s) {
+                    Some((subj, pred, obj)) => {
+                        let mut packer = row_buf.packer();
+                        packer.push(Datum::String(&subj));
+                        packer.push(Datum::String(&pred));
+                        packer.push(Datum::String(&obj));
+                        packer.push(Datum::Null); // graph column (N-Triples has no graph)
+                        Ok(Some(row_buf.clone()))
+                    }
+                    None => Err(DecodeErrorKind::Text(
+                        format!("Failed to parse N-Triples line: {}", s).into(),
+                    )),
+                }
+            }
         }
+    }
+}
+
+/// Parse a single N-Triples line into (subject, predicate, object) strings.
+///
+/// N-Triples format: each line is `subject predicate object .`
+/// where terms are IRIs (`<...>`), blank nodes (`_:...`), or literals (`"..."`, with optional
+/// language tag `@lang` or datatype `^^<type>`).
+fn parse_ntriples_line(line: &str) -> Option<(String, String, String)> {
+    let mut rest = line;
+
+    let (subject, r) = parse_ntriples_term(rest)?;
+    rest = r.trim_start();
+
+    let (predicate, r) = parse_ntriples_term(rest)?;
+    rest = r.trim_start();
+
+    let (object, r) = parse_ntriples_term(rest)?;
+    rest = r.trim_start();
+
+    // Expect trailing '.'
+    if rest.starts_with('.') {
+        Some((subject, predicate, object))
+    } else {
+        None
+    }
+}
+
+/// Parse a single N-Triples term and return (term_string, remaining_input).
+fn parse_ntriples_term(input: &str) -> Option<(String, &str)> {
+    let input = input.trim_start();
+    if input.starts_with('<') {
+        // IRI reference: <...>
+        let end = input.find('>')?;
+        let iri = &input[1..end];
+        Some((iri.to_string(), &input[end + 1..]))
+    } else if input.starts_with("_:") {
+        // Blank node: _:label
+        let rest = &input[2..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '.')
+            .unwrap_or(rest.len());
+        let label = &rest[..end];
+        Some((format!("_:{}", label), &rest[end..]))
+    } else if input.starts_with('"') {
+        // Literal: "value" with optional @lang or ^^<datatype>
+        let mut i = 1;
+        let bytes = input.as_bytes();
+        // Find closing quote, handling escape sequences
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i += 2; // skip escaped character
+            } else if bytes[i] == b'"' {
+                break;
+            } else {
+                i += 1;
+            }
+        }
+        if i >= bytes.len() {
+            return None;
+        }
+        // i points to closing quote
+        let value_part = &input[..=i]; // includes both quotes
+        let after_quote = &input[i + 1..];
+        if let Some(rest) = after_quote.strip_prefix("^^<") {
+            // Typed literal: "value"^^<datatype>
+            let dt_end = rest.find('>')?;
+            let full = format!("{}^^<{}>", value_part, &rest[..dt_end]);
+            Some((full, &rest[dt_end + 1..]))
+        } else if after_quote.starts_with('@') {
+            // Language-tagged literal: "value"@lang
+            let lang_rest = &after_quote[1..];
+            let end = lang_rest
+                .find(|c: char| c.is_whitespace() || c == '.')
+                .unwrap_or(lang_rest.len());
+            let full = format!("{}@{}", value_part, &lang_rest[..end]);
+            Some((full, &lang_rest[end..]))
+        } else {
+            // Plain literal
+            Some((value_part.to_string(), after_quote))
+        }
+    } else {
+        None
     }
 }
 
@@ -378,7 +487,8 @@ async fn get_decoder(
         | DataEncoding::Bytes
         | DataEncoding::Json
         | DataEncoding::Protobuf(_)
-        | DataEncoding::Regex(_) => {
+        | DataEncoding::Regex(_)
+        | DataEncoding::Rdf(_) => {
             let after_delimiting = match encoding {
                 DataEncoding::Regex(RegexEncoding { regex }) => {
                     PreDelimitedFormat::Regex(regex.regex, Default::default())
@@ -392,6 +502,7 @@ async fn get_decoder(
                 DataEncoding::Bytes => PreDelimitedFormat::Bytes,
                 DataEncoding::Json => PreDelimitedFormat::Json,
                 DataEncoding::Text => PreDelimitedFormat::Text,
+                DataEncoding::Rdf(_) => PreDelimitedFormat::Rdf(Default::default()),
                 _ => unreachable!(),
             };
             let inner = if is_connection_delimited {
@@ -586,4 +697,98 @@ pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
     });
 
     (output.as_collection(), health)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_iri_triple() {
+        let line = r#"<http://example.org/alice> <http://xmlns.com/foaf/0.1/knows> <http://example.org/bob> ."#;
+        let (s, p, o) = parse_ntriples_line(line).unwrap();
+        assert_eq!(s, "http://example.org/alice");
+        assert_eq!(p, "http://xmlns.com/foaf/0.1/knows");
+        assert_eq!(o, "http://example.org/bob");
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_literal_object() {
+        let line = r#"<http://example.org/alice> <http://xmlns.com/foaf/0.1/name> "Alice" ."#;
+        let (s, p, o) = parse_ntriples_line(line).unwrap();
+        assert_eq!(s, "http://example.org/alice");
+        assert_eq!(p, "http://xmlns.com/foaf/0.1/name");
+        assert_eq!(o, r#""Alice""#);
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_typed_literal() {
+        let line = r#"<http://example.org/alice> <http://example.org/age> "30"^^<http://www.w3.org/2001/XMLSchema#integer> ."#;
+        let (s, p, o) = parse_ntriples_line(line).unwrap();
+        assert_eq!(s, "http://example.org/alice");
+        assert_eq!(p, "http://example.org/age");
+        assert_eq!(o, r#""30"^^<http://www.w3.org/2001/XMLSchema#integer>"#);
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_language_tagged() {
+        let line = r#"<http://example.org/alice> <http://www.w3.org/2000/01/rdf-schema#label> "Alice"@en ."#;
+        let (s, p, o) = parse_ntriples_line(line).unwrap();
+        assert_eq!(s, "http://example.org/alice");
+        assert_eq!(p, "http://www.w3.org/2000/01/rdf-schema#label");
+        assert_eq!(o, r#""Alice"@en"#);
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_blank_node() {
+        let line = r#"_:b1 <http://example.org/name> "Bob" ."#;
+        let (s, p, o) = parse_ntriples_line(line).unwrap();
+        assert_eq!(s, "_:b1");
+        assert_eq!(p, "http://example.org/name");
+        assert_eq!(o, r#""Bob""#);
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_escaped_quote() {
+        let line = r#"<http://example.org/x> <http://example.org/val> "say \"hello\"" ."#;
+        let (s, p, o) = parse_ntriples_line(line).unwrap();
+        assert_eq!(s, "http://example.org/x");
+        assert_eq!(p, "http://example.org/val");
+        assert_eq!(o, r#""say \"hello\"""#);
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_comment_line() {
+        assert!(parse_ntriples_line("# this is a comment").is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_empty_line() {
+        assert!(parse_ntriples_line("").is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_parse_ntriples_invalid() {
+        assert!(parse_ntriples_line("not valid ntriples").is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_rdf_decoder_basic() {
+        let mut format = PreDelimitedFormat::Rdf(Default::default());
+        let line = b"<http://ex.org/s> <http://ex.org/p> <http://ex.org/o> .";
+        let result = format.decode(line).unwrap().unwrap();
+        let datums: Vec<Datum> = result.iter().collect();
+        assert_eq!(datums[0], Datum::String("http://ex.org/s"));
+        assert_eq!(datums[1], Datum::String("http://ex.org/p"));
+        assert_eq!(datums[2], Datum::String("http://ex.org/o"));
+        assert_eq!(datums[3], Datum::Null); // graph
+    }
+
+    #[mz_ore::test]
+    fn test_rdf_decoder_skip_comment() {
+        let mut format = PreDelimitedFormat::Rdf(Default::default());
+        let line = b"# comment line";
+        let result = format.decode(line).unwrap();
+        assert!(result.is_none());
+    }
 }

@@ -509,6 +509,20 @@ pub enum Format<T: AstInfo> {
         array: bool,
     },
     Text,
+    Rdf {
+        format: RdfFormat,
+    },
+}
+
+/// The specific RDF serialization format.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum RdfFormat {
+    /// N-Triples: one triple per line, `<s> <p> <o> .`
+    NTriples,
+    /// Turtle: compact triple notation with prefixes
+    Turtle,
+    /// RDF/XML: XML-based RDF serialization
+    RdfXml,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -786,10 +800,25 @@ impl<T: AstInfo> AstDisplay for Format<T> {
                 }
             }
             Self::Text => f.write_str("TEXT"),
+            Self::Rdf { format } => {
+                f.write_str("RDF ");
+                f.write_node(format);
+            }
         }
     }
 }
 impl_display_t!(Format);
+
+impl AstDisplay for RdfFormat {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            RdfFormat::NTriples => f.write_str("NTRIPLES"),
+            RdfFormat::Turtle => f.write_str("TURTLE"),
+            RdfFormat::RdfXml => f.write_str("RDFXML"),
+        }
+    }
+}
+impl_display!(RdfFormat);
 
 // All connection options are bundled together to allow us to parse `ALTER
 // CONNECTION` without specifying the type of connection we're altering. Il faut

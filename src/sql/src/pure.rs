@@ -342,7 +342,8 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
         | Format::Json { .. }
         | Format::Protobuf(..)
         | Format::Regex(..)
-        | Format::Text => (),
+        | Format::Text
+        | Format::Rdf { .. } => (),
         Format::Avro(AvroSchema::Csr {
             csr_connection: CsrConnectionAvro { connection, .. },
         }) => {
@@ -621,7 +622,8 @@ async fn purify_create_sink(
         | Format::Json { .. }
         | Format::Protobuf(ProtobufSchema::InlineSchema { .. })
         | Format::Regex(..)
-        | Format::Text => (),
+        | Format::Text
+        | Format::Rdf { .. } => (),
         Format::Avro(AvroSchema::Csr {
             csr_connection: CsrConnectionAvro { connection, .. },
         })
@@ -2285,7 +2287,8 @@ async fn purify_source_format_single(
         | Format::Regex(_)
         | Format::Json { .. }
         | Format::Text
-        | Format::Csv { .. } => (),
+        | Format::Csv { .. }
+        | Format::Rdf { .. } => (),
     }
     Ok(())
 }

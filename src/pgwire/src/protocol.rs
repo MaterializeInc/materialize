@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{iter, mem};
 
+use crate::sparql_format as sfmt;
 use base64::prelude::*;
 use byteorder::{ByteOrder, NetworkEndian};
 use csv_core::ReadRecordResult;
@@ -2558,6 +2559,17 @@ where
         row_desc: RelationDesc,
         mut stream: RecordFirstRowStream,
     ) -> Result<(State, SendRowsEndedReason), io::Error> {
+        // For SPARQL formats, we use text-mode CopyOut framing and handle
+        // serialization ourselves via sparql_format helpers.
+        let is_sparql_format = matches!(
+            format,
+            CopyFormat::SparqlJson
+                | CopyFormat::SparqlXml
+                | CopyFormat::NTriples
+                | CopyFormat::Turtle
+                | CopyFormat::JsonLd
+        );
+
         let (row_format, encode_format) = match format {
             CopyFormat::Text => (
                 CopyFormatParams::Text(CopyTextFormatParams::default()),
@@ -2578,7 +2590,27 @@ where
                     .await
                     .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
             }
+            // SPARQL formats use text framing.
+            CopyFormat::SparqlJson
+            | CopyFormat::SparqlXml
+            | CopyFormat::NTriples
+            | CopyFormat::Turtle
+            | CopyFormat::JsonLd => (
+                CopyFormatParams::Text(CopyTextFormatParams::default()),
+                Format::Text,
+            ),
         };
+
+        // Collect column names for SPARQL JSON/XML headers.
+        let var_names: Vec<String> = if is_sparql_format {
+            row_desc
+                .iter_names()
+                .map(|n| n.as_str().to_string())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let var_refs: Vec<&str> = var_names.iter().map(|s| s.as_str()).collect();
 
         let encode_fn = |row: &RowRef, typ: &SqlRelationType, out: &mut Vec<u8>| {
             mz_pgcopy::encode_copy_format(&row_format, row, typ, out)
@@ -2609,6 +2641,26 @@ where
             out.extend([0, 0, 0, 0]);
         }
 
+        // Emit SPARQL format headers.
+        match format {
+            CopyFormat::SparqlJson => {
+                sfmt::sparql_json_header(&var_refs, &mut out);
+                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                    .await?;
+            }
+            CopyFormat::SparqlXml => {
+                sfmt::sparql_xml_header(&var_refs, &mut out);
+                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                    .await?;
+            }
+            CopyFormat::JsonLd => {
+                sfmt::jsonld_header(&mut out);
+                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                    .await?;
+            }
+            _ => {}
+        }
+
         let mut count = 0;
         let mut total_sent_bytes = 0;
         loop {
@@ -2632,12 +2684,39 @@ where
                             .await.map(|state| (state, SendRowsEndedReason::Canceled));
                     }
                     Some(PeekResponseUnary::Rows(mut rows)) => {
-                        count += rows.count();
-                        while let Some(row) = rows.next() {
-                            total_sent_bytes += row.byte_len();
-                            encode_fn(row, typ, &mut out)?;
-                            self.send(BackendMessage::CopyData(mem::take(&mut out)))
-                                .await?;
+                        if is_sparql_format {
+                            while let Some(row) = rows.next() {
+                                total_sent_bytes += row.byte_len();
+                                match format {
+                                    CopyFormat::SparqlJson => {
+                                        sfmt::sparql_json_row(row, &var_refs, count, &mut out);
+                                    }
+                                    CopyFormat::SparqlXml => {
+                                        sfmt::sparql_xml_row(row, &var_refs, &mut out);
+                                    }
+                                    CopyFormat::NTriples => {
+                                        sfmt::ntriples_row(row, &mut out);
+                                    }
+                                    CopyFormat::Turtle => {
+                                        sfmt::turtle_row(row, &mut out);
+                                    }
+                                    CopyFormat::JsonLd => {
+                                        sfmt::jsonld_row(row, count, &mut out);
+                                    }
+                                    _ => unreachable!(),
+                                }
+                                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                                    .await?;
+                                count += 1;
+                            }
+                        } else {
+                            count += rows.count();
+                            while let Some(row) = rows.next() {
+                                total_sent_bytes += row.byte_len();
+                                encode_fn(row, typ, &mut out)?;
+                                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                                    .await?;
+                            }
                         }
                     }
                 },
@@ -2650,12 +2729,31 @@ where
 
             self.conn.flush().await?;
         }
+
         // Send required trailers.
-        if let CopyFormat::Binary = format {
-            let trailer: i16 = -1;
-            out.extend(trailer.to_be_bytes());
-            self.send(BackendMessage::CopyData(mem::take(&mut out)))
-                .await?;
+        match format {
+            CopyFormat::Binary => {
+                let trailer: i16 = -1;
+                out.extend(trailer.to_be_bytes());
+                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                    .await?;
+            }
+            CopyFormat::SparqlJson => {
+                sfmt::sparql_json_footer(&mut out);
+                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                    .await?;
+            }
+            CopyFormat::SparqlXml => {
+                sfmt::sparql_xml_footer(&mut out);
+                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                    .await?;
+            }
+            CopyFormat::JsonLd => {
+                sfmt::jsonld_footer(&mut out);
+                self.send(BackendMessage::CopyData(mem::take(&mut out)))
+                    .await?;
+            }
+            _ => {}
         }
 
         let tag = format!("COPY {}", count);

@@ -6777,6 +6777,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-hir"
+version = "0.0.0"
+dependencies = [
+ "itertools 0.14.0",
+ "mz-expr",
+ "mz-ore",
+ "mz-repr",
+ "serde",
+ "tracing",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
@@ -7893,6 +7906,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-sparql"
+version = "0.0.0"
+dependencies = [
+ "mz-expr",
+ "mz-hir",
+ "mz-ore",
+ "mz-repr",
+ "mz-sparql-parser",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-sparql-parser"
+version = "0.0.0"
+dependencies = [
+ "mz-ore",
+ "workspace-hack",
+]
+
+[[package]]
 name = "mz-sql"
 version = "0.0.0"
 dependencies = [
@@ -7928,6 +7961,7 @@ dependencies = [
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-expr",
+ "mz-hir",
  "mz-interchange",
  "mz-kafka-util",
  "mz-lowertest",
@@ -7943,6 +7977,8 @@ dependencies = [
  "mz-repr",
  "mz-rocksdb-types",
  "mz-secrets",
+ "mz-sparql",
+ "mz-sparql-parser",
  "mz-sql-lexer",
  "mz-sql-parser",
  "mz-sql-pretty",

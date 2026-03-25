@@ -200,20 +200,27 @@ pub fn create_stmt_rename_refs(
             maybe_update_item_name(from.name_mut());
         }
         Statement::CreateView(CreateViewStatement {
-            definition: ViewDefinition { query, .. },
+            definition: ViewDefinition { query, sparql, .. },
             ..
         }) => {
-            rewrite_query(from_name, to_item_name, query)?;
+            // Skip query rewriting for SPARQL views — the query is a dummy.
+            if sparql.is_none() {
+                rewrite_query(from_name, to_item_name, query)?;
+            }
         }
         Statement::CreateMaterializedView(CreateMaterializedViewStatement {
             replacement_for,
             query,
+            sparql,
             ..
         }) => {
             if let Some(target) = replacement_for {
                 maybe_update_item_name(target.name_mut());
             }
-            rewrite_query(from_name, to_item_name, query)?;
+            // Skip query rewriting for SPARQL views.
+            if sparql.is_none() {
+                rewrite_query(from_name, to_item_name, query)?;
+            }
         }
         Statement::CreateSource(_)
         | Statement::CreateSubsource(_)

@@ -33,6 +33,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, Timestamp};
 use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
+use mz_sql::plan::HirScalarExprLowering;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
     CreateSourcePlanBundle, FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind,

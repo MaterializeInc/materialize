@@ -138,5 +138,7 @@ message ProtoScalarType {
     google.protobuf.Empty MzAclItem = 34;
     google.protobuf.Empty PgLegacyName = 35;
     google.protobuf.Empty AclItem = 36;
+    google.protobuf.Empty Iri = 39;
+    google.protobuf.Empty Rdf = 40;
   }
 }

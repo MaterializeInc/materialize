@@ -28,6 +28,7 @@ use crate::plan::error::PlanError;
 use crate::plan::hir::{
     AbstractColumnType, CoercibleScalarExpr, CoercibleScalarType, HirScalarExpr, UnaryFunc,
 };
+use crate::plan::lowering::HirScalarExprLowering;
 use crate::plan::query::{ExprContext, QueryContext};
 use crate::plan::scope::Scope;
 
@@ -1263,7 +1264,9 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
         | MzTimestamp
         | Range { .. }
         | MzAclItem
-        | AclItem => to_string(ecx, expr)
+        | AclItem
+        | Iri
+        | Rdf => to_string(ecx, expr)
             .call_unary(UnaryFunc::CastJsonbableToJsonb(func::CastJsonbableToJsonb)),
     }
 }

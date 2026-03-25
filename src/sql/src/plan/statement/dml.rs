@@ -28,7 +28,7 @@ use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::bytes::ByteSize;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
-use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlRelationType, SqlScalarType};
+use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::{
     CteBlock, ExplainAnalyzeClusterStatement, ExplainAnalyzeComputationProperties,
     ExplainAnalyzeComputationProperty, ExplainAnalyzeObjectStatement, ExplainAnalyzeProperty,
@@ -46,12 +46,14 @@ use crate::ast::display::AstDisplay;
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
-    SelectStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation, SubscribeStatement,
-    UpdateStatement,
+    SelectStatement, SparqlStatement, SubscribeOption, SubscribeOptionName, SubscribeRelation,
+    SubscribeStatement, UpdateStatement,
 };
 use crate::catalog::CatalogItemType;
 use crate::names::{Aug, ResolvedItemName};
 use crate::normalize;
+use crate::plan::hir::{CoercibleScalarExprExt, HirRelationExprExt, HirScalarExprExt};
+use crate::plan::lowering::{HirRelationExprLowering, HirScalarExprLowering};
 use crate::plan::query::{
     ExprContext, QueryLifetime, offset_into_value, plan_as_of_or_up_to, plan_expr,
 };
@@ -302,6 +304,186 @@ fn plan_select_inner(
     };
 
     Ok((plan, desc))
+}
+
+pub fn describe_sparql(
+    _scx: &StatementContext,
+    stmt: SparqlStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    let desc = sparql_desc(&stmt)?;
+    Ok(StatementDesc::new(Some(desc)))
+}
+
+pub fn plan_sparql(scx: &StatementContext, stmt: SparqlStatement<Aug>) -> Result<Plan, PlanError> {
+    let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+
+    let (quad_table_id, _) = resolve_quad_table(scx, stmt.quad_table.as_ref())?;
+    let catalog_triples_id = resolve_catalog_triples(scx);
+
+    // Compile SPARQL directly to HIR at plan time.
+    let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+    let planned = planner
+        .plan(&sparql_query)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
+
+    let arity = planned.var_map.len();
+    let finishing = RowSetFinishing {
+        limit: None,
+        offset: 0,
+        project: (0..arity).collect(),
+        order_by: vec![],
+    };
+
+    Ok(Plan::Select(plan::SelectPlan {
+        select: None,
+        source: planned.expr,
+        when: plan::QueryWhen::Immediately,
+        finishing,
+        copy_to: None,
+    }))
+}
+
+/// Build a [`RelationDesc`] for the output of a SPARQL query.
+/// Parse a SPARQL statement and return its output [`RelationDesc`].
+fn sparql_desc(stmt: &SparqlStatement<Aug>) -> Result<RelationDesc, PlanError> {
+    let query = mz_sparql_parser::parser::parse(&stmt.body)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+    Ok(sparql_query_desc(&query))
+}
+
+/// Build a [`RelationDesc`] for the output of a parsed SPARQL query.
+pub(crate) fn sparql_query_desc(query: &mz_sparql_parser::ast::SparqlQuery) -> RelationDesc {
+    use mz_sparql_parser::ast::{QueryForm, SelectClause};
+
+    let mut desc = RelationDesc::builder();
+    match &query.form {
+        QueryForm::Select { projection, .. } => match projection {
+            SelectClause::Wildcard => {
+                // For SELECT *, we don't know variable names ahead of time.
+                // Return a single column as placeholder; the actual columns come from planning.
+                desc = desc.with_column("result", SqlScalarType::String.nullable(true));
+            }
+            SelectClause::Variables(vars) => {
+                for var in vars {
+                    let name = match var {
+                        mz_sparql_parser::ast::SelectVariable::Variable(v) => v.name.clone(),
+                        mz_sparql_parser::ast::SelectVariable::Expression(_, alias) => {
+                            alias.name.clone()
+                        }
+                    };
+                    desc = desc.with_column(name.as_str(), SqlScalarType::String.nullable(true));
+                }
+            }
+        },
+        QueryForm::Construct { .. } | QueryForm::Describe { .. } => {
+            desc = desc
+                .with_column("subject", SqlScalarType::String.nullable(true))
+                .with_column("predicate", SqlScalarType::String.nullable(true))
+                .with_column("object", SqlScalarType::String.nullable(true));
+        }
+        QueryForm::Ask => {
+            desc = desc.with_column("result", SqlScalarType::String.nullable(true));
+        }
+    }
+    desc.finish()
+}
+
+/// Resolve the `rdf_quads` table and return its [`GlobalId`] and a
+/// [`ResolvedItemName`] suitable for persisting in `create_sql`.
+///
+/// If the SPARQL statement already carries a resolved `quad_table`
+/// (from a persisted `create_sql` with `[id AS db.schema.item]` syntax),
+/// use it directly. Otherwise, resolve `rdf_quads` by partial name and
+/// construct a `ResolvedItemName` for normalization.
+pub(crate) fn resolve_quad_table(
+    scx: &StatementContext,
+    resolved: Option<&ResolvedItemName>,
+) -> Result<(GlobalId, ResolvedItemName), PlanError> {
+    use crate::names::ResolvedItemName;
+
+    if let Some(name) = resolved {
+        // Already resolved (rehydration path or re-planning persisted SQL).
+        let item = scx.catalog.get_item(name.item_id());
+        let gid = item
+            .at_version(mz_repr::RelationVersionSelector::Latest)
+            .global_id();
+        Ok((gid, name.clone()))
+    } else {
+        // First-time resolution by partial name.
+        use crate::names::PartialItemName;
+        let quad_table_name = PartialItemName {
+            database: None,
+            schema: None,
+            item: "rdf_quads".into(),
+        };
+        let item = scx
+            .catalog
+            .resolve_item(&quad_table_name)
+            .map_err(|e| PlanError::Unstructured(format!("failed to resolve rdf_quads: {e}")))?;
+        let gid = item
+            .at_version(mz_repr::RelationVersionSelector::Latest)
+            .global_id();
+        let resolved_name = ResolvedItemName::Item {
+            id: item.id(),
+            qualifiers: item.name().qualifiers.clone(),
+            full_name: scx.catalog.resolve_full_name(item.name()),
+            print_id: true,
+            version: mz_repr::RelationVersionSelector::Latest,
+        };
+        Ok((gid, resolved_name))
+    }
+}
+
+/// Try to resolve `mz_internal.mz_rdf_catalog_triples` from the catalog.
+/// Returns `None` if the view does not exist (e.g., in tests).
+pub(crate) fn resolve_catalog_triples(scx: &StatementContext) -> Option<GlobalId> {
+    use crate::names::PartialItemName;
+    let name = PartialItemName {
+        database: None,
+        schema: Some("mz_internal".into()),
+        item: "mz_rdf_catalog_triples".into(),
+    };
+    scx.catalog.resolve_item(&name).ok().map(|item| {
+        item.at_version(mz_repr::RelationVersionSelector::Latest)
+            .global_id()
+    })
+}
+
+/// Plan a SPARQL subscribe. Compiles SPARQL to HIR, lowers to MIR, and
+/// returns a [`SubscribeFrom::Query`].
+fn plan_sparql_subscribe(
+    scx: &StatementContext,
+    stmt: &SparqlStatement<Aug>,
+) -> Result<(SubscribeFrom, RelationDesc, Scope), PlanError> {
+    let sparql_query = mz_sparql_parser::parser::parse(&stmt.body)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL parse error: {e}")))?;
+
+    let (quad_table_id, _) = resolve_quad_table(scx, stmt.quad_table.as_ref())?;
+    let catalog_triples_id = resolve_catalog_triples(scx);
+    let desc = sparql_query_desc(&sparql_query);
+
+    // Compile SPARQL to HIR and lower to MIR.
+    let planner = mz_sparql::plan::SparqlPlanner::new(quad_table_id, catalog_triples_id);
+    let planned = planner
+        .plan(&sparql_query)
+        .map_err(|e| PlanError::Unstructured(format!("SPARQL plan error: {}", e.message)))?;
+    let mir = planned
+        .expr
+        .lower(scx.catalog.system_vars(), None)
+        .map_err(|e| PlanError::Unstructured(format!("{e}")))?;
+
+    // Build scope from the output column names.
+    let scope = Scope::from_source(
+        None::<crate::names::PartialItemName>,
+        (0..desc.arity()).map(|i| desc.get_name(i).clone()),
+    );
+
+    let from = SubscribeFrom::Query {
+        expr: mir,
+        desc: desc.clone(),
+    };
+    Ok((from, desc, scope))
 }
 
 pub fn describe_explain_plan(
@@ -1559,6 +1741,7 @@ pub fn describe_subscribe(
                 query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             desc
         }
+        SubscribeRelation::Sparql(sparql_stmt) => sparql_desc(&sparql_stmt)?,
     };
     let SubscribeOptionExtracted { progress, .. } = stmt.options.try_into()?;
     let progress = progress.unwrap_or(false);
@@ -1687,6 +1870,7 @@ pub fn plan_subscribe(
                 query.scope,
             )
         }
+        SubscribeRelation::Sparql(sparql_stmt) => plan_sparql_subscribe(scx, &sparql_stmt)?,
     };
 
     let when = query::plan_as_of(scx, as_of)?;
@@ -1888,6 +2072,13 @@ fn plan_copy_to_expr(
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
         CopyFormat::Text => bail_unsupported!("FORMAT TEXT"),
+        CopyFormat::SparqlJson
+        | CopyFormat::SparqlXml
+        | CopyFormat::NTriples
+        | CopyFormat::Turtle
+        | CopyFormat::JsonLd => {
+            sql_bail!("SPARQL output formats are only supported with COPY TO STDOUT")
+        }
     };
 
     // Converting the to expr to a HirScalarExpr
@@ -2019,6 +2210,13 @@ fn plan_copy_from(
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
         CopyFormat::Parquet => CopyFormatParams::Parquet,
+        CopyFormat::SparqlJson
+        | CopyFormat::SparqlXml
+        | CopyFormat::NTriples
+        | CopyFormat::Turtle
+        | CopyFormat::JsonLd => {
+            sql_bail!("SPARQL output formats are not supported with COPY FROM")
+        }
     };
 
     let filter = match (options.files, options.pattern) {
@@ -2094,6 +2292,11 @@ pub fn plan_copy(
             "csv" => Ok(CopyFormat::Csv),
             "binary" => Ok(CopyFormat::Binary),
             "parquet" => Ok(CopyFormat::Parquet),
+            "sparql_json" | "sparql-json" => Ok(CopyFormat::SparqlJson),
+            "sparql_xml" | "sparql-xml" => Ok(CopyFormat::SparqlXml),
+            "ntriples" | "n-triples" | "n_triples" => Ok(CopyFormat::NTriples),
+            "turtle" | "ttl" => Ok(CopyFormat::Turtle),
+            "jsonld" | "json-ld" | "json_ld" => Ok(CopyFormat::JsonLd),
             _ => sql_bail!("unknown FORMAT: {}", format),
         })
         .transpose()?;

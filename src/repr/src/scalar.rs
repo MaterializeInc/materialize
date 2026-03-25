@@ -1017,6 +1017,23 @@ impl<'a> Datum<'a> {
                         .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
                     _ => false,
                 }
+            } else if let ReprScalarType::Rdf = scalar_type {
+                // RDF type checking — accepts all datum variants that RdfRef::kind() handles
+                matches!(
+                    datum,
+                    Datum::String(_)
+                        | Datum::Int64(_)
+                        | Datum::Float32(_)
+                        | Datum::Float64(_)
+                        | Datum::Numeric(_)
+                        | Datum::True
+                        | Datum::False
+                        | Datum::Date(_)
+                        | Datum::TimestampTz(_)
+                        | Datum::Time(_)
+                        | Datum::Interval(_)
+                        | Datum::List(_)
+                )
             } else {
                 // general scalar repr type checking
                 match (datum, scalar_type) {
@@ -1057,6 +1074,7 @@ impl<'a> Datum<'a> {
                     (Datum::Bytes(_), ReprScalarType::Bytes) => true,
                     (Datum::Bytes(_), _) => false,
                     (Datum::String(_), ReprScalarType::String) => true,
+                    (Datum::String(_), ReprScalarType::Iri) => true,
                     (Datum::String(_), _) => false,
                     (Datum::Uuid(_), ReprScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
@@ -1148,6 +1166,23 @@ impl<'a> Datum<'a> {
                         .all(|(_key, val)| is_instance_of_scalar(val, scalar_type)),
                     _ => false,
                 }
+            } else if let SqlScalarType::Rdf = scalar_type {
+                // RDF type checking — accepts all datum variants that RdfRef::kind() handles
+                matches!(
+                    datum,
+                    Datum::String(_)
+                        | Datum::Int64(_)
+                        | Datum::Float32(_)
+                        | Datum::Float64(_)
+                        | Datum::Numeric(_)
+                        | Datum::True
+                        | Datum::False
+                        | Datum::Date(_)
+                        | Datum::TimestampTz(_)
+                        | Datum::Time(_)
+                        | Datum::Interval(_)
+                        | Datum::List(_)
+                )
             } else {
                 // sql type checking
                 match (datum, scalar_type) {
@@ -1194,7 +1229,8 @@ impl<'a> Datum<'a> {
                     (Datum::String(_), SqlScalarType::String)
                     | (Datum::String(_), SqlScalarType::VarChar { .. })
                     | (Datum::String(_), SqlScalarType::Char { .. })
-                    | (Datum::String(_), SqlScalarType::PgLegacyName) => true,
+                    | (Datum::String(_), SqlScalarType::PgLegacyName)
+                    | (Datum::String(_), SqlScalarType::Iri) => true,
                     (Datum::String(_), _) => false,
                     (Datum::Uuid(_), SqlScalarType::Uuid) => true,
                     (Datum::Uuid(_), _) => false,
@@ -1751,6 +1787,31 @@ pub enum SqlScalarType {
     MzAclItem,
     /// The type of [`Datum::AclItem`]
     AclItem,
+    /// An IRI (Internationalized Resource Identifier) for RDF.
+    ///
+    /// Stored as [`Datum::String`] under the hood (zero encoding overhead),
+    /// but provides type safety: can't pass a plain string where an IRI is
+    /// expected. Follows the same pattern as [`SqlScalarType::PgLegacyName`].
+    Iri,
+    /// A polymorphic RDF term (the object column of an RDF quad table).
+    ///
+    /// Valid datum variants for this type are all variants that
+    /// [`crate::adt::rdf::RdfRef::kind`] handles:
+    ///
+    ///   * [`Datum::String`] (xsd:string)
+    ///   * [`Datum::Int64`] (xsd:integer)
+    ///   * [`Datum::Float32`] (xsd:float)
+    ///   * [`Datum::Float64`] (xsd:double)
+    ///   * [`Datum::Numeric`] (xsd:decimal)
+    ///   * [`Datum::True`] / [`Datum::False`] (xsd:boolean)
+    ///   * [`Datum::Date`] (xsd:date)
+    ///   * [`Datum::TimestampTz`] (xsd:dateTime)
+    ///   * [`Datum::Time`] (xsd:time)
+    ///   * [`Datum::Interval`] (xsd:duration)
+    ///   * [`Datum::List`] (compound RDF terms: IRIs, blank nodes, lang strings, typed literals)
+    ///
+    /// Follows the [`SqlScalarType::Jsonb`] pattern.
+    Rdf,
 }
 
 impl RustType<ProtoRecordField> for (ColumnName, SqlColumnType) {
@@ -1843,6 +1904,8 @@ impl RustType<ProtoScalarType> for SqlScalarType {
                 })),
                 SqlScalarType::MzAclItem => MzAclItem(()),
                 SqlScalarType::AclItem => AclItem(()),
+                SqlScalarType::Iri => Iri(()),
+                SqlScalarType::Rdf => Rdf(()),
             }),
         }
     }
@@ -1929,6 +1992,8 @@ impl RustType<ProtoScalarType> for SqlScalarType {
             }),
             MzAclItem(()) => Ok(SqlScalarType::MzAclItem),
             AclItem(()) => Ok(SqlScalarType::AclItem),
+            Iri(()) => Ok(SqlScalarType::Iri),
+            Rdf(()) => Ok(SqlScalarType::Rdf),
         }
     }
 }
@@ -4321,6 +4386,10 @@ impl SqlScalarType {
             SqlScalarType::Range { .. } => Box::new((*RANGE).iter()),
             SqlScalarType::MzAclItem { .. } => Box::new((*MZACLITEM).iter()),
             SqlScalarType::AclItem { .. } => Box::new((*ACLITEM).iter()),
+            // IRI uses same interesting datums as String (it's String under the hood).
+            SqlScalarType::Iri => Box::new((*STRING).iter()),
+            // RDF uses String datums as a baseline for interesting values.
+            SqlScalarType::Rdf => Box::new((*STRING).iter()),
         };
 
         iter
@@ -4379,6 +4448,8 @@ impl SqlScalarType {
             SqlScalarType::Int2Vector,
             SqlScalarType::MzTimestamp,
             SqlScalarType::MzAclItem,
+            SqlScalarType::Iri,
+            SqlScalarType::Rdf,
             // TODO: Fill in some variants of these.
             /*
             SqlScalarType::AclItem,
@@ -4439,7 +4510,9 @@ impl SqlScalarType {
             | SqlScalarType::Int2Vector
             | SqlScalarType::MzTimestamp
             | SqlScalarType::Range { .. }
-            | SqlScalarType::MzAclItem { .. }) => Ok(t),
+            | SqlScalarType::MzAclItem { .. }
+            | SqlScalarType::Iri
+            | SqlScalarType::Rdf) => Ok(t),
 
             SqlScalarType::Array(elem) => Ok(elem.array_of_self_elem_type()?),
 
@@ -4502,6 +4575,8 @@ impl Arbitrary for SqlScalarType {
             Just(SqlScalarType::RegType).boxed(),
             Just(SqlScalarType::RegClass).boxed(),
             Just(SqlScalarType::Int2Vector).boxed(),
+            Just(SqlScalarType::Iri).boxed(),
+            Just(SqlScalarType::Rdf).boxed(),
         ])
         // None of the leaf SqlScalarTypes types are really "simpler" than others
         // so don't waste time trying to shrink.
@@ -4729,6 +4804,8 @@ pub enum ReprScalarType {
     Range { element_type: Box<ReprScalarType> },
     MzAclItem,
     AclItem,
+    Iri, // stored as String datum, like PgLegacyName
+    Rdf, // polymorphic RDF term, like Jsonb
 }
 
 impl PartialEq for ReprScalarType {
@@ -4852,6 +4929,8 @@ impl std::fmt::Display for ReprScalarType {
             ReprScalarType::Range { element_type } => write!(f, "r_range({element_type})"),
             ReprScalarType::MzAclItem => write!(f, "r_mz_acl_item"),
             ReprScalarType::AclItem => write!(f, "r_acl_item"),
+            ReprScalarType::Iri => write!(f, "r_iri"),
+            ReprScalarType::Rdf => write!(f, "r_rdf"),
         }
     }
 }
@@ -4947,6 +5026,8 @@ impl ReprScalarType {
             ) => Ok(ReprScalarType::Range {
                 element_type: Box::new(element_type.union(other_element_type)?),
             }),
+            (ReprScalarType::Iri, ReprScalarType::Iri) => Ok(ReprScalarType::Iri),
+            (ReprScalarType::Rdf, ReprScalarType::Rdf) => Ok(ReprScalarType::Rdf),
             (_, _) => bail!("Can't union scalar types: {:?} and {:?}", self, scalar_type),
         }
     }
@@ -5042,6 +5123,8 @@ impl From<&SqlScalarType> for ReprScalarType {
             },
             SqlScalarType::MzAclItem => ReprScalarType::MzAclItem,
             SqlScalarType::AclItem => ReprScalarType::AclItem,
+            SqlScalarType::Iri => ReprScalarType::Iri,
+            SqlScalarType::Rdf => ReprScalarType::Rdf,
         }
     }
 }
@@ -5120,6 +5203,8 @@ impl SqlScalarType {
             },
             ReprScalarType::MzAclItem => SqlScalarType::MzAclItem,
             ReprScalarType::AclItem => SqlScalarType::AclItem,
+            ReprScalarType::Iri => SqlScalarType::Iri,
+            ReprScalarType::Rdf => SqlScalarType::Rdf,
         }
     }
 }
@@ -5389,6 +5474,18 @@ pub fn arb_datum_for_scalar(scalar_type: SqlScalarType) -> impl Strategy<Value =
                 )
             });
             arb_record(field_strats).prop_map(PropDatum::Record).boxed()
+        }
+        SqlScalarType::Iri => ".*".prop_map(PropDatum::String).boxed(),
+        SqlScalarType::Rdf => {
+            // Generate any of the datum variants that RdfRef::kind() handles.
+            Union::new(vec![
+                ".*".prop_map(PropDatum::String).boxed(),
+                any::<i64>().prop_map(PropDatum::Int64).boxed(),
+                any::<f32>().prop_map(PropDatum::Float32).boxed(),
+                any::<f64>().prop_map(PropDatum::Float64).boxed(),
+                any::<bool>().prop_map(PropDatum::Bool).boxed(),
+            ])
+            .boxed()
         }
         SqlScalarType::Jsonb => {
             let int_value = any::<i128>()

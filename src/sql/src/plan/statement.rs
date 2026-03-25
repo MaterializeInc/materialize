@@ -242,6 +242,7 @@ pub fn describe(
         Statement::ExplainSinkSchema(stmt) => dml::describe_explain_schema(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
         Statement::Select(stmt) => dml::describe_select(&scx, stmt)?,
+        Statement::Sparql(stmt) => dml::describe_sparql(&scx, stmt)?,
         Statement::Subscribe(stmt) => dml::describe_subscribe(&scx, stmt)?,
         Statement::Update(stmt) => dml::describe_update(&scx, stmt)?,
 
@@ -388,6 +389,7 @@ pub fn plan(
         Statement::ExplainSinkSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
         Statement::Select(stmt) => dml::plan_select(scx, stmt, params, None),
+        Statement::Sparql(stmt) => dml::plan_sparql(scx, stmt),
         Statement::Subscribe(stmt) => dml::plan_subscribe(scx, stmt, params, None),
         Statement::Update(stmt) => dml::plan_update(scx, stmt, params),
 
@@ -1108,6 +1110,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::ExplainSinkSchema(_) => DML,
             Statement::Insert(_) => DML,
             Statement::Select(_) => DML,
+            Statement::Sparql(_) => DML,
             Statement::Subscribe(_) => DML,
             Statement::Update(_) => DML,
 

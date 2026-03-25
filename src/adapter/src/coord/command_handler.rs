@@ -1124,7 +1124,8 @@ impl Coordinator {
                     | Statement::ResetVariable(_)
                     | Statement::StartTransaction(_)
                     | Statement::Subscribe(_)
-                    | Statement::Raise(_) => {
+                    | Statement::Raise(_)
+                    | Statement::Sparql(_) => {
                         // Always safe.
                     }
 
@@ -1410,6 +1411,7 @@ impl Coordinator {
                         query: cmvs.query,
                         with_options: cmvs.with_options,
                         as_of: None,
+                        sparql: cmvs.sparql,
                     });
 
                 // (Purifying CreateMaterializedView doesn't happen async, so no need to send

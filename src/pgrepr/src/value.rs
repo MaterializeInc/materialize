@@ -628,6 +628,8 @@ impl Value {
                 .iter()
                 .all(|(_, ty)| Self::can_encode_binary(&ty.scalar_type)),
             SqlScalarType::Range { element_type } => Self::can_encode_binary(element_type),
+            SqlScalarType::Iri => true, // transmitted as TEXT
+            SqlScalarType::Rdf => true, // transmitted as TEXT
         }
     }
 
@@ -715,6 +717,9 @@ impl Value {
             })?),
             Type::MzAclItem => Value::MzAclItem(strconv::parse_mz_acl_item(s)?),
             Type::AclItem => Value::AclItem(strconv::parse_acl_item(s)?),
+            // IRI and RDF are decoded as plain text.
+            Type::Iri => Value::Text(s.to_owned()),
+            Type::Rdf => Value::Text(s.to_owned()),
         })
     }
 
@@ -832,6 +837,9 @@ impl Value {
             }
             Type::MzAclItem => packer.push(Datum::MzAclItem(strconv::parse_mz_acl_item(s)?)),
             Type::AclItem => packer.push(Datum::AclItem(strconv::parse_acl_item(s)?)),
+            // IRI and RDF are decoded as plain text strings.
+            Type::Iri => packer.push(Datum::String(s)),
+            Type::Rdf => packer.push(Datum::String(s)),
         })
     }
 
@@ -902,6 +910,9 @@ impl Value {
                 Ok(Value::MzAclItem(mz_acl_item))
             }
             Type::AclItem => Err("aclitem has no binary encoding".into()),
+            // IRI and RDF are decoded as TEXT (binary encoding uses TEXT wire format).
+            Type::Iri => String::from_sql(ty.inner(), raw).map(Value::Text),
+            Type::Rdf => String::from_sql(ty.inner(), raw).map(Value::Text),
         }
     }
 }

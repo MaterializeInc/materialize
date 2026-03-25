@@ -629,6 +629,9 @@ impl Pretty {
         let doc = match &v.relation {
             SubscribeRelation::Name(name) => nest_title("SUBSCRIBE", self.doc_display_pass(name)),
             SubscribeRelation::Query(query) => bracket("SUBSCRIBE (", self.doc_query(query), ")"),
+            SubscribeRelation::Sparql(stmt) => {
+                nest_title("SUBSCRIBE SPARQL", self.doc_display_pass(stmt))
+            }
         };
         let mut docs = vec![doc];
         if !v.options.is_empty() {
@@ -767,7 +770,11 @@ impl Pretty {
                 ")",
             ));
         }
-        docs.push(nest_title("AS", self.doc_query(&v.query)));
+        if let Some(sparql) = &v.sparql {
+            docs.push(nest_title("AS", RcDoc::text(sparql.to_ast_string_simple())));
+        } else {
+            docs.push(nest_title("AS", self.doc_query(&v.query)));
+        }
         intersperse_line_nest(docs)
     }
 
@@ -780,7 +787,11 @@ impl Pretty {
                 ")",
             ));
         }
-        docs.push(nest_title("AS", self.doc_query(&v.query)));
+        if let Some(sparql) = &v.sparql {
+            docs.push(nest_title("AS", RcDoc::text(sparql.to_ast_string_simple())));
+        } else {
+            docs.push(nest_title("AS", self.doc_query(&v.query)));
+        }
         RcDoc::intersperse(docs, Doc::line()).group()
     }
 

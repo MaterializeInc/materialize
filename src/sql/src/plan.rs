@@ -107,10 +107,12 @@ use crate::plan::with_options::OptionalDuration;
 pub use error::PlanError;
 pub use explain::normalize_subqueries;
 pub use hir::{
-    AggregateExpr, CoercibleScalarExpr, Hir, HirRelationExpr, HirScalarExpr, JoinKind,
-    WindowExprType,
+    AggregateExpr, AggregateFunc, CoercibleScalarExpr, CoercibleScalarExprExt, ColumnRef, Hir,
+    HirRelationExpr, HirRelationExprExt, HirScalarExpr, HirScalarExprExt, JoinKind, WindowExprType,
 };
-pub use lowering::Config as HirToMirConfig;
+pub use lowering::{
+    AggregateExprLowering, Config as HirToMirConfig, HirRelationExprLowering, HirScalarExprLowering,
+};
 pub use notice::PlanNotice;
 pub use query::{ExprContext, QueryContext, QueryLifetime};
 pub use scope::Scope;
@@ -314,6 +316,7 @@ impl Plan {
             StatementKind::RevokeRole => &[PlanKind::RevokeRole],
             StatementKind::Rollback => &[PlanKind::AbortTransaction],
             StatementKind::Select => &[PlanKind::Select, PlanKind::SideEffectingFunc],
+            StatementKind::Sparql => &[PlanKind::Select],
             StatementKind::SetTransaction => &[PlanKind::SetTransaction],
             StatementKind::SetVariable => &[PlanKind::SetVariable],
             StatementKind::Show => &[
@@ -2001,6 +2004,21 @@ pub enum CopyFormat {
     Csv,
     Binary,
     Parquet,
+    /// SPARQL Query Results JSON (application/sparql-results+json).
+    /// W3C standard format for SELECT and ASK results.
+    SparqlJson,
+    /// SPARQL Query Results XML (application/sparql-results+xml).
+    /// W3C standard format for SELECT and ASK results.
+    SparqlXml,
+    /// N-Triples (application/n-triples).
+    /// Line-based RDF serialization for CONSTRUCT and DESCRIBE results.
+    NTriples,
+    /// Turtle (text/turtle).
+    /// Compact RDF serialization for CONSTRUCT and DESCRIBE results.
+    Turtle,
+    /// JSON-LD (application/ld+json).
+    /// JSON-based RDF serialization for CONSTRUCT and DESCRIBE results.
+    JsonLd,
 }
 
 #[derive(Debug, Copy, Clone)]

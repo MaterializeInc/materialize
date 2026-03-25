@@ -319,6 +319,7 @@ Nosuperuser
 Not
 Notice
 Notices
+Ntriples
 Null
 Nullif
 Nulls
@@ -373,6 +374,8 @@ Raise
 Range
 Rate
 Raw
+Rdf
+Rdfxml
 Read
 Ready
 Real
@@ -443,6 +446,7 @@ Snapshot
 Some
 Source
 Sources
+Sparql
 Sql
 Ssh
 Ssl
@@ -492,6 +496,7 @@ Transform
 Trim
 True
 Tunnel
+Turtle
 Type
 Types
 Unbounded

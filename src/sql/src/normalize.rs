@@ -382,6 +382,7 @@ pub fn create_statement(
                     name,
                     query,
                     columns: _,
+                    sparql,
                 },
         }) => {
             *name = if *temporary {
@@ -389,7 +390,9 @@ pub fn create_statement(
             } else {
                 allocate_name(name)?
             };
-            {
+            // Skip query normalization for SPARQL views — the query field is a
+            // dummy placeholder.
+            if sparql.is_none() {
                 let mut normalizer = QueryNormalizer::new();
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
@@ -409,9 +412,11 @@ pub fn create_statement(
             query,
             with_options: _,
             as_of: _,
+            sparql,
         }) => {
             *name = allocate_name(name)?;
-            {
+            // Skip query normalization for SPARQL views.
+            if sparql.is_none() {
                 let mut normalizer = QueryNormalizer::new();
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {

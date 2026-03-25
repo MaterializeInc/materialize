@@ -29,9 +29,9 @@ use crate::catalog::{CatalogType, TypeCategory, TypeReference};
 use crate::names::{self, ResolvedItemName};
 use crate::plan::error::PlanError;
 use crate::plan::hir::{
-    AggregateFunc, BinaryFunc, CoercibleScalarExpr, CoercibleScalarType, ColumnOrder,
-    HirRelationExpr, HirScalarExpr, ScalarWindowFunc, TableFunc, UnaryFunc, UnmaterializableFunc,
-    ValueWindowFunc, VariadicFunc,
+    AggregateFunc, BinaryFunc, CoercibleScalarExpr, CoercibleScalarExprExt, CoercibleScalarType,
+    ColumnOrder, HirRelationExpr, HirScalarExpr, HirScalarExprExt, ScalarWindowFunc, TableFunc,
+    UnaryFunc, UnmaterializableFunc, ValueWindowFunc, VariadicFunc,
 };
 use crate::plan::query::{self, ExprContext, QueryContext};
 use crate::plan::scope::Scope;
@@ -114,6 +114,7 @@ impl TypeCategory {
             SqlScalarType::Map { .. } => Self::Pseudo,
             SqlScalarType::MzTimestamp => Self::Numeric,
             SqlScalarType::Range { .. } => Self::Range,
+            SqlScalarType::Iri | SqlScalarType::Rdf => Self::UserDefined,
         }
     }
 
@@ -908,6 +909,8 @@ impl From<SqlScalarBaseType> for ParamType {
             Int2Vector => SqlScalarType::Int2Vector,
             MzTimestamp => SqlScalarType::MzTimestamp,
             MzAclItem => SqlScalarType::MzAclItem,
+            Iri => SqlScalarType::Iri,
+            Rdf => SqlScalarType::Rdf,
         };
         ParamType::Plain(s)
     }

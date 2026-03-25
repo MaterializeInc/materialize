@@ -22,6 +22,7 @@ use mz_repr::explain::trace_plan;
 use mz_repr::{GlobalId, ReprRelationType, SqlRelationType, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
+use mz_sql::plan::HirRelationExprLowering;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
