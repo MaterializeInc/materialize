@@ -62,6 +62,7 @@
 //! ```
 //!
 
+use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
@@ -1069,7 +1070,11 @@ impl From<reqwest::header::ToStrError> for StorageErrorXKind {
 
 impl From<aws_smithy_types::byte_stream::error::Error> for StorageErrorXKind {
     fn from(err: aws_smithy_types::byte_stream::error::Error) -> Self {
-        StorageErrorXKind::AwsS3Request(err.to_string())
+        if let Some(err_source) = err.source() {
+            StorageErrorXKind::AwsS3Request(format!("{err}, source: {err_source}"))
+        } else {
+            StorageErrorXKind::AwsS3Request(err.to_string())
+        }
     }
 }
 

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use aws_sdk_s3::error::DisplayErrorContext;
+use aws_sdk_s3::error::{DisplayErrorContext, SdkError};
 use derivative::Derivative;
 use futures::StreamExt;
 use futures::stream::{BoxStream, TryStreamExt};
@@ -91,7 +91,13 @@ impl AwsS3Source {
             .connection
             .load_sdk_config(&self.context, self.connection_id, InTask::Yes)
             .await?;
-        let s3_client = mz_aws_util::s3::new_client(&sdk_config);
+
+        let s3_config = aws_sdk_s3::config::Builder::from(&sdk_config)
+            .response_checksum_validation(
+                aws_smithy_types::checksum_config::ResponseChecksumValidation::WhenRequired,
+            )
+            .build();
+        let s3_client = aws_sdk_s3::Client::from_conf(s3_config);
 
         Ok(s3_client)
     }
@@ -201,7 +207,6 @@ impl OneshotSource for AwsS3Source {
     ) -> BoxStream<'s, Result<bytes::Bytes, StorageErrorX>> {
         let initial_response = async move {
             tracing::info!(name = %object.name(), ?range, "fetching object");
-
             // TODO(cf1): Validate our checksum.
             let client = self.client().await.map_err(StorageErrorXKind::generic)?;
 
@@ -210,9 +215,22 @@ impl OneshotSource for AwsS3Source {
                 let value = range.into_range_header_value();
                 request = request.range(value);
             }
+            let object = request.send().await.map_err(|err| match err {
+                SdkError::ServiceError(serv_err) => {
+                    tracing::warn!("aws service error: {:?}", &serv_err.raw().body());
+                    StorageErrorXKind::AwsS3Request(
+                        DisplayErrorContext(SdkError::ServiceError(serv_err)).to_string(),
+                    )
+                }
+                SdkError::TimeoutError(_) => {
+                    tracing::warn!("aws timeout error: {}", DisplayErrorContext(&err));
+                    StorageErrorXKind::AwsS3Request(DisplayErrorContext(&err).to_string())
+                }
 
-            let object = request.send().await.map_err(|err| {
-                StorageErrorXKind::AwsS3Request(DisplayErrorContext(err).to_string())
+                _ => {
+                    tracing::warn!("error fetching object: {}", DisplayErrorContext(&err));
+                    StorageErrorXKind::AwsS3Request(DisplayErrorContext(&err).to_string())
+                }
             })?;
             // AWS's ByteStream doesn't implement the Stream trait.
             let stream = mz_aws_util::s3::ByteStreamAdapter::new(object.body)
