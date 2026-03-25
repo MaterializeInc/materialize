@@ -11,9 +11,11 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 cd console
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack enable
-yarn install --immutable --network-timeout 30000
+retry yarn install --immutable --network-timeout 30000
 yarn lint
 yarn typecheck

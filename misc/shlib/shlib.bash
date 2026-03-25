@@ -218,6 +218,28 @@ white() {
     echo -ne "\e[97m$*\e[0m"
 }
 
+# retry [N] COMMAND [ARGS...]
+#
+# Runs COMMAND up to N times (default 3), waiting 10 seconds between attempts.
+# Returns the exit status of the last attempt.
+retry() {
+    local max=3
+    if [[ "$1" =~ ^[0-9]+$ ]]; then
+        max=$1
+        shift
+    fi
+    local attempts=0
+    until "$@"; do
+        attempts=$((attempts + 1))
+        if [[ $attempts -ge $max ]]; then
+            echo "$(basename "$1") failed after $max attempts" >&2
+            return 1
+        fi
+        echo "$(basename "$1") attempt $((attempts)) failed, retrying in 10s..." >&2
+        sleep 10
+    done
+}
+
 # in_ci
 #
 # Returns 0 if in CI and 1 otherwise

@@ -11,12 +11,14 @@
 
 set -euo pipefail
 
+. misc/shlib/shlib.bash
+
 cd console
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 export VERCEL_ENVIRONMENT=preview
 export SENTRY_RELEASE="$BUILDKITE_COMMIT"
 corepack enable
-yarn install --immutable --network-timeout 30000
+retry yarn install --immutable --network-timeout 30000
 
 npx vercel@latest pull --yes --environment="$VERCEL_ENVIRONMENT" --token="$VERCEL_TOKEN"
 npx vercel@latest build --token="$VERCEL_TOKEN"
