@@ -8,15 +8,23 @@
 // by the Apache License, Version 2.0.
 
 use maplit::btreemap;
+use mz_adapter_types::connection::ConnectionId;
+use mz_cluster_client::ReplicaId;
+use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan;
+use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
 use mz_repr::GlobalId;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_sql::plan::{self, QueryWhen, SubscribeFrom};
 use mz_sql::session::metadata::SessionMetadata;
+use std::collections::BTreeSet;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use tracing::Span;
+use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
@@ -31,7 +39,9 @@ use crate::error::AdapterError;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::Optimize;
 use crate::session::{Session, TransactionOps};
-use crate::{AdapterNotice, ExecuteContext, TimelineContext, optimize};
+use crate::{
+    AdapterNotice, ExecuteContext, ExecuteContextGuard, ReadHolds, TimelineContext, optimize,
+};
 
 impl Staged for SubscribeStage {
     type Ctx = ExecuteContext;
@@ -428,41 +438,75 @@ impl Coordinator {
         SubscribeFinish {
             validity: _,
             cluster_id,
-            plan:
-                plan::SubscribePlan {
-                    copy_to,
-                    emit_progress,
-                    output,
-                    ..
-                },
+            plan,
             global_lir_plan,
             dependency_ids,
             replica_id,
         }: SubscribeFinish,
     ) -> Result<StageResult<Box<SubscribeStage>>, AdapterError> {
-        let sink_id = global_lir_plan.sink_id();
+        let (df_desc, df_meta) = global_lir_plan.unapply();
+        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
+        let conn_id = ctx.session.conn_id().clone();
+        let session_uuid = ctx.session().uuid();
+        let txn_read_holds = self
+            .txn_read_holds
+            .remove(&conn_id)
+            .expect("must have previously installed read holds");
+        let resp = self
+            .implement_subscribe(
+                ctx.extra_mut(),
+                df_desc,
+                dependency_ids,
+                cluster_id,
+                replica_id,
+                conn_id,
+                session_uuid,
+                txn_read_holds,
+                plan,
+            )
+            .await?;
+        Ok(StageResult::Response(resp))
+    }
+
+    #[instrument]
+    pub(crate) async fn implement_subscribe(
+        &mut self,
+        ctx_extra: &mut ExecuteContextGuard,
+        df_desc: DataflowDescription<Plan>,
+        dependency_ids: BTreeSet<GlobalId>,
+        cluster_id: ComputeInstanceId,
+        replica_id: Option<ReplicaId>,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        read_holds: ReadHolds<mz_repr::Timestamp>,
+        plan: plan::SubscribePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
-            conn_id: ctx.session().conn_id().clone(),
-            session_uuid: ctx.session().uuid(),
+            conn_id: conn_id.clone(),
+            session_uuid,
             channel: tx,
-            emit_progress,
-            as_of: global_lir_plan
-                .as_of()
+            emit_progress: plan.emit_progress,
+            as_of: df_desc
+                .as_of
+                .as_ref()
+                .and_then(|t| t.as_option())
+                .copied()
                 .expect("set to Some in an earlier stage"),
-            arity: global_lir_plan.sink_desc().from_desc.arity(),
+            arity: df_desc
+                .sink_exports
+                .values()
+                .into_element()
+                .from_desc
+                .arity(),
             cluster_id,
             depends_on: dependency_ids,
             start_time: self.now(),
-            output,
+            output: plan.output,
         };
         active_subscribe.initialize();
-
-        let (df_desc, df_meta) = global_lir_plan.unapply();
-
-        // Emit notices.
-        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
 
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self
@@ -475,28 +519,22 @@ impl Coordinator {
         // requests to external services, which can take time, so we run them concurrently.
         let ((), ()) = futures::future::join(write_notify_fut, ship_dataflow_fut).await;
 
-        // Release the pre-optimization read holds because the controller is now handling those.
-        let txn_read_holds = self
-            .txn_read_holds
-            .remove(ctx.session().conn_id())
-            .expect("must have previously installed read holds");
-
         // Explicitly drop read holds, just to make it obvious what's happening.
-        drop(txn_read_holds);
+        drop(read_holds);
 
         let resp = ExecuteResponse::Subscribing {
             rx,
-            ctx_extra: std::mem::take(ctx.extra_mut()),
+            ctx_extra: std::mem::take(ctx_extra),
             instance_id: cluster_id,
         };
-        let resp = match copy_to {
+        let resp = match plan.copy_to {
             None => resp,
             Some(format) => ExecuteResponse::CopyTo {
                 format,
                 resp: Box::new(resp),
             },
         };
-        Ok(StageResult::Response(resp))
+        Ok(resp)
     }
 
     #[instrument]
