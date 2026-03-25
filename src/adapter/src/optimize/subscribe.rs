@@ -17,11 +17,10 @@ use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
-use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::{HirToMirConfig, SubscribeFrom, SubscribePlan};
+use mz_sql::plan::SubscribeFrom;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
@@ -124,7 +123,7 @@ impl Optimizer {
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
 #[derive(Clone, Debug)]
 pub struct GlobalMirPlan<T: Clone> {
-    df_desc: MirDataflowDescription,
+    pub df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
     phantom: PhantomData<T>,
 }
@@ -152,21 +151,6 @@ impl GlobalLirPlan {
     /// Panics if the dataflow has no sink exports or has more than one.
     pub fn sink_id(&self) -> GlobalId {
         self.df_desc.sink_id()
-    }
-
-    pub fn as_of(&self) -> Option<Timestamp> {
-        self.df_desc.as_of.clone().map(|as_of| as_of.into_element())
-    }
-
-    /// Returns the description of the dataflow's sink export.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the dataflow has no sink exports or has more than one.
-    pub fn sink_desc(&self) -> &ComputeSinkDesc {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink_desc = sink_exports.values().into_element();
-        sink_desc
     }
 }
 

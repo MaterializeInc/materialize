@@ -445,6 +445,7 @@ impl Message {
                 }
                 Command::StoreTransactionReadHolds { .. } => "store-transaction-read-holds",
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
+                Command::ExecuteSubscribe { .. } => "execute-subscribe",
                 Command::CopyToPreflight { .. } => "copy-to-preflight",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",

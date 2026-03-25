@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -25,15 +26,18 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
-use mz_sql::plan::Params;
-use mz_sql::plan::{self, Explainee, ExplaineeStatement, Plan, QueryWhen};
+use mz_sql::plan::{self, Explainee, ExplaineeStatement, Plan, QueryWhen, SubscribePlan};
+use mz_sql::plan::{Params, SubscribeFrom};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::{CopyDirection, CopyRelation, ExplainStage, ShowStatement, Statement};
+use mz_sql_parser::ast::{
+    CopyDirection, CopyRelation, ExplainStage, ShowStatement, Statement, SubscribeRelation,
+};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
+use timely::progress::Antichain;
 use tracing::{Span, debug, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
@@ -180,6 +184,13 @@ impl PeekClient {
                         }
                     }
                 }
+                Statement::Subscribe(subscribe) => {
+                    if let SubscribeRelation::Query(_) = &subscribe.relation {
+                        // We have a select statement to process; continue.
+                    } else {
+                        return Ok(None);
+                    }
+                }
                 _ => {
                     debug!(
                         "Bailing out from try_frontend_peek, because statement type is not supported"
@@ -228,16 +239,20 @@ impl PeekClient {
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
                 // Streaming results are handled asynchronously by the coordinator
-                Ok(Some(ExecuteResponse::SendingRowsStreaming { .. })) => {
-                    // Don't log here - the peek is still executing.
+                Ok(Some(
+                    ExecuteResponse::SendingRowsStreaming { .. }
+                    | ExecuteResponse::Subscribing { .. },
+                )) => {
+                    // Don't log here - the peek or subscribe is still executing.
                     // It will be logged when handle_peek_notification is called.
                     return result;
                 }
                 // COPY TO needs to check its inner response
                 Ok(Some(resp @ ExecuteResponse::CopyTo { resp: inner, .. })) => {
                     match inner.as_ref() {
-                        ExecuteResponse::SendingRowsStreaming { .. } => {
-                            // Don't log here - the peek is still executing.
+                        ExecuteResponse::SendingRowsStreaming { .. }
+                        | ExecuteResponse::Subscribing { .. } => {
+                            // Don't log here - the peek or subscribe is still executing.
                             // It will be logged when handle_peek_notification is called.
                             return result;
                         }
@@ -317,6 +332,7 @@ impl PeekClient {
         enum OutputContext {
             Default,
             CopyTo(CopyToContext),
+            Subscribe { plan: SubscribePlan },
         }
 
         let (select_plan, explain_ctx, output_ctx) = match &plan {
@@ -423,6 +439,27 @@ impl PeekClient {
                     })
                     .await?;
                 return Ok(Some(response));
+            }
+            Plan::Subscribe(subscribe) => {
+                let select = match &subscribe.from {
+                    SubscribeFrom::Id(_) => {
+                        // This shouldn't happen because we already checked for this at the AST
+                        // level before calling `try_frontend_peek_inner`.
+                        soft_panic_or_log!(
+                            "Unexpected plan kind in frontend peek sequencing: {:?}",
+                            subscribe
+                        );
+                        return Ok(None);
+                    }
+                    SubscribeFrom::Query { select, .. } => select,
+                };
+                (
+                    select,
+                    ExplainContext::None,
+                    OutputContext::Subscribe {
+                        plan: subscribe.clone(),
+                    },
+                )
             }
             _ => {
                 // This shouldn't happen because we already checked for this at the AST
@@ -598,7 +635,8 @@ impl PeekClient {
         // it would be the cleanest to just simply disallow AS OF queries inside transactions.
         let in_immediate_multi_stmt_txn = session
             .transaction()
-            .in_immediate_multi_stmt_txn(&select_plan.when);
+            .in_immediate_multi_stmt_txn(&select_plan.when)
+            && !matches!(output_ctx, OutputContext::Subscribe { .. });
 
         // Fetch or generate a timestamp for this query and fetch or acquire read holds.
         let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
@@ -764,7 +802,9 @@ impl PeekClient {
         // depend on whether or not reads have occurred in the txn.
         let requires_linearization = (&explain_ctx).into();
         let mut transaction_determination = determination.clone();
-        if select_plan.when.is_transactional() {
+        if matches!(output_ctx, OutputContext::Subscribe { .. }) {
+            session.add_transaction_ops(TransactionOps::Subscribe)?;
+        } else if select_plan.when.is_transactional() {
             session.add_transaction_ops(TransactionOps::Peeks {
                 determination: transaction_determination,
                 cluster_id: target_cluster_id,
@@ -1049,6 +1089,58 @@ impl PeekClient {
                     },
                 )
             }
+            OutputContext::Subscribe { plan } => {
+                let catalog: Arc<Catalog> = Arc::clone(&catalog);
+                let mut optimizer = optimize::subscribe::Optimizer::new(
+                    catalog,
+                    compute_instance_snapshot.clone(),
+                    view_id,
+                    index_id,
+                    plan.with_snapshot,
+                    plan.up_to,
+                    "TODO".to_string(),
+                    optimizer_config,
+                    self.optimizer_metrics.clone(),
+                );
+                mz_ore::task::spawn_blocking(
+                    || "optimize subscribe",
+                    move || {
+                        span.in_scope(|| {
+                            let _dispatch_guard = explain_ctx.dispatch_guard();
+
+                            // SELECT/EXPLAIN path
+                            // HIR ⇒ MIR lowering and MIR optimization (local)
+                            let global_mir_plan =
+                                optimizer.catch_unwind_optimize(plan.from.clone())?;
+                            let as_of = timestamp_context.timestamp_or_default();
+
+                            // Attach resolved context required to continue the pipeline.
+                            if let Some(up_to) = optimizer.up_to() {
+                                if as_of > up_to {
+                                    return Err(AdapterError::AbsurdSubscribeBounds {
+                                        as_of,
+                                        up_to,
+                                    });
+                                }
+                            }
+                            let local_mir_plan =
+                                global_mir_plan.resolve(Antichain::from_elem(as_of));
+
+                            let global_lir_plan =
+                                optimizer.catch_unwind_optimize(local_mir_plan)?;
+                            let optimization_finished_at = now();
+
+                            let (df_desc, df_meta) = global_lir_plan.unapply();
+                            Ok(Execution::Subscribe {
+                                subscribe_plan: plan,
+                                df_desc,
+                                df_meta,
+                                optimization_finished_at,
+                            })
+                        })
+                    },
+                )
+            }
         };
 
         let optimization_timeout = *session.vars().statement_timeout();
@@ -1293,6 +1385,39 @@ impl PeekClient {
                     },
                 }))
             }
+            Execution::Subscribe {
+                subscribe_plan,
+                df_desc,
+                df_meta,
+                optimization_finished_at: _optimization_finished_at,
+            } => {
+                if df_desc.as_of.as_ref().expect("as of set") == &df_desc.until {
+                    session.add_notice(AdapterNotice::EqualSubscribeBounds {
+                        bound: *df_desc.until.as_option().expect("as of set"),
+                    });
+                }
+                coord::sequencer::emit_optimizer_notices(
+                    &*catalog,
+                    session,
+                    &df_meta.optimizer_notices,
+                );
+
+                let response = self
+                    .call_coordinator(|tx| Command::ExecuteSubscribe {
+                        df_desc,
+                        dependency_ids: subscribe_plan.from.depends_on(),
+                        cluster_id: target_cluster_id,
+                        replica_id: target_replica,
+                        conn_id: session.conn_id().clone(),
+                        session_uuid: session.uuid(),
+                        read_holds,
+                        plan: subscribe_plan,
+                        statement_logging_id,
+                        tx,
+                    })
+                    .await?;
+                Ok(Some(response))
+            }
             Execution::CopyToS3 {
                 global_lir_plan,
                 source_ids,
@@ -1514,6 +1639,19 @@ impl PeekClient {
                 // No read holds assertions needed for EXPLAIN variants
                 return;
             }
+            Execution::Subscribe { df_desc, .. } => {
+                let as_of = df_desc
+                    .as_of
+                    .clone()
+                    .expect("dataflow has an as_of")
+                    .into_element();
+                (
+                    df_desc.source_imports.keys().cloned().collect(),
+                    df_desc.index_imports.keys().cloned().collect(),
+                    as_of,
+                    "Subscribe",
+                )
+            }
         };
 
         // Assert that we have some read holds for all the imports of the dataflow.
@@ -1582,6 +1720,12 @@ enum Execution {
         optimization_finished_at: EpochMillis,
         plan_insights_optimizer_trace: Option<OptimizerTrace>,
         insights_ctx: Option<Box<PlanInsightsContext>>,
+    },
+    Subscribe {
+        subscribe_plan: SubscribePlan,
+        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        df_meta: DataflowMetainfo,
+        optimization_finished_at: EpochMillis,
     },
     CopyToS3 {
         global_lir_plan: optimize::copy_to::GlobalLirPlan,
