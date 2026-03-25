@@ -2367,7 +2367,8 @@ fn test_max_connections_on_all_interfaces() {
         .batch_execute("ALTER SYSTEM SET max_connections = 10")
         .unwrap();
 
-    // Open a few connections.
+    // Open a few connections (kept alive to test connection limits).
+    #[allow(clippy::collection_is_never_read)]
     let mut clients = Vec::new();
     for _ in 0..5 {
         let client = server
@@ -2593,7 +2594,8 @@ async fn test_max_connections_limits() {
         .await
         .unwrap();
 
-    // We can create lots of clients now
+    // We can create lots of clients now (kept alive to test connection limits).
+    #[allow(clippy::collection_is_never_read)]
     let mut clients = Vec::new();
     for _ in 0..10 {
         let client = connect_regular_user().await.unwrap();

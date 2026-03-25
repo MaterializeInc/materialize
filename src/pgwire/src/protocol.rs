@@ -2743,13 +2743,7 @@ where
                     },
                 );
             }
-            Ok(state) if matches!(state, State::Drain) => {}
-            other => {
-                mz_ore::soft_panic_or_log!(
-                    "unexpected COPY FROM state in copy_from: {other:?}; \
-                     relying on ExecuteContextGuard::drop to retire as Aborted"
-                );
-            }
+            Ok(State::Drain) => {}
         }
         res
     }

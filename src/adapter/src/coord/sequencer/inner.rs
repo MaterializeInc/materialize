@@ -4031,15 +4031,15 @@ impl Coordinator {
                 catalog.mark_id_unresolvable_for_replanning(cur_entry.id());
 
                 // Re-define our source in terms of the amended statement
-                let plan = match mz_sql::plan::plan(
+                let planned = mz_sql::plan::plan(
                     None,
                     &catalog,
                     Statement::CreateSource(create_source_stmt),
                     &Params::empty(),
                     &resolved_ids,
                 )
-                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?
-                {
+                .map_err(|e| AdapterError::internal(ALTER_SOURCE, e))?;
+                let plan = match planned {
                     Plan::CreateSource(plan) => plan,
                     _ => unreachable!("create source plan is only valid response"),
                 };

@@ -451,6 +451,7 @@ mod tests {
         // by one. Lost notifications would cause this test to time out.
         let mut set = JoinSet::new();
         let state = AwaitableState::new(0);
+        #[allow(clippy::collection_is_never_read)]
         let mut tasks = (0..TASKS).collect_vec();
         let mut rng = rand::rng();
         tasks.shuffle(&mut rng);

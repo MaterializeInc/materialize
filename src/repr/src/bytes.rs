@@ -68,7 +68,7 @@ impl ByteSize {
 
     fn format_string(&self) -> String {
         match self.0 {
-            zero if zero == 0 => "0".to_string(),
+            0 => "0".to_string(),
             tb if tb % BytesUnit::Tb.value() == 0 => {
                 format!("{}{}", tb / BytesUnit::Tb.value(), BytesUnit::Tb)
             }

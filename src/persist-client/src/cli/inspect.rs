@@ -600,11 +600,7 @@ pub async fn unreferenced_blobs(args: &StateArgs) -> Result<impl serde::Serializ
 
     let mut known_parts = BTreeSet::new();
     let mut known_rollups = BTreeSet::new();
-    let mut known_writers = BTreeSet::new();
     while let Some(v) = state_iter.next(|_| {}) {
-        for writer_id in v.collections.writers.keys() {
-            known_writers.insert(writer_id.clone());
-        }
         for batch in v.collections.trace.batches() {
             // TODO: this may end up refetching externally-stored runs once per batch...
             // but if we have enough parts for this to be a problem, we may need to track a more

@@ -894,9 +894,7 @@ where
         // Statistics need a level of indirection so we can mutably borrow
         // `self` when registering collections and when we are inserting
         // statistics.
-        let mut new_source_statistic_entries = BTreeSet::new();
         let mut new_webhook_statistic_entries = BTreeSet::new();
-        let mut new_sink_statistic_entries = BTreeSet::new();
 
         for (id, description, write, metadata) in to_register {
             let is_in_txns = |id, metadata: &CollectionMetadata| {
@@ -1010,7 +1008,6 @@ where
                         ?data_source, meta = ?metadata,
                         "registering {id} with persist monotonic worker",
                     );
-                    new_source_statistic_entries.insert(id);
                     // This collection of statistics is periodically aggregated into
                     // `source_statistics`.
                     new_webhook_statistic_entries.insert(id);
@@ -1075,8 +1072,6 @@ where
 
                     extra_state = CollectionStateExtra::Ingestion(ingestion_state);
                     maybe_instance_id = Some(instance_id);
-
-                    new_source_statistic_entries.insert(id);
                 }
                 DataSource::Table => {
                     debug!(
@@ -1114,8 +1109,6 @@ where
 
                     extra_state = CollectionStateExtra::Ingestion(ingestion_state);
                     maybe_instance_id = Some(ingestion_desc.instance_id);
-
-                    new_source_statistic_entries.insert(id);
                 }
                 DataSource::Sink { desc } => {
                     let mut dependency_since = Antichain::from_elem(T::minimum());
@@ -1135,8 +1128,6 @@ where
                     );
                     maybe_instance_id = Some(state.cluster_id);
                     extra_state = CollectionStateExtra::Export(state);
-
-                    new_sink_statistic_entries.insert(id);
                 }
             }
 

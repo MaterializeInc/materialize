@@ -283,6 +283,7 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
 
         // Perform writes.
         let mut txn = state.transaction().await.unwrap();
+        #[allow(clippy::collection_is_never_read)]
         let mut ids = Vec::new();
         let mut db_schemas = Vec::new();
         for i in 0..10 {

@@ -67,7 +67,7 @@ pub(super) fn map_column_refs(
 
     for name in columns {
         let (qual, col) = match name.0.split_last().expect("must have at least one element") {
-            (col, qual) if qual.is_empty() => {
+            (col, []) => {
                 return Err(PlanError::InvalidOptionValue {
                     option_name: option_type.to_ast_string_simple(),
                     err: Box::new(PlanError::UnderqualifiedColumnName(

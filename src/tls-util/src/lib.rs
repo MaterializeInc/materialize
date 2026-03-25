@@ -18,9 +18,6 @@ use postgres_openssl::MakeTlsConnector;
 use tokio_postgres::config::SslMode;
 
 macro_rules! bail_generic {
-    ($fmt:expr, $($arg:tt)*) => {
-        return Err(TlsError::Generic(anyhow::anyhow!($fmt, $($arg)*)))
-    };
     ($err:expr $(,)?) => {
         return Err(TlsError::Generic(anyhow::anyhow!($err)))
     };

@@ -168,9 +168,10 @@ impl AzureBlobConfig {
         let container_name = match std::env::var(Self::EXTERNAL_TESTS_AZURE_CONTAINER) {
             Ok(container) => container,
             Err(_) => {
-                if mz_ore::env::is_var_truthy("CI") {
-                    panic!("CI is supposed to run this test but something has gone wrong!");
-                }
+                assert!(
+                    !mz_ore::env::is_var_truthy("CI"),
+                    "CI is supposed to run this test but something has gone wrong!"
+                );
                 return Ok(None);
             }
         };

@@ -1775,12 +1775,13 @@ impl Coordinator {
         let mut maybe_ctx = None;
 
         // Cancel pending writes. There is at most one pending write per session.
-        if let Some(idx) = self.pending_writes.iter().position(|pending_write_txn| {
+        let pending_write_idx = self.pending_writes.iter().position(|pending_write_txn| {
             matches!(pending_write_txn, PendingWriteTxn::User {
                 pending_txn: PendingTxn { ctx, .. },
                 ..
             } if *ctx.session().conn_id() == conn_id)
-        }) {
+        });
+        if let Some(idx) = pending_write_idx {
             if let PendingWriteTxn::User {
                 pending_txn: PendingTxn { ctx, .. },
                 ..
@@ -1796,11 +1797,11 @@ impl Coordinator {
         }
 
         // Cancel deferred statements.
-        if let Some(idx) = self
+        let deferred_ddl_idx = self
             .serialized_ddl
             .iter()
-            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id)
-        {
+            .position(|deferred| *deferred.ctx.session().conn_id() == conn_id);
+        if let Some(idx) = deferred_ddl_idx {
             let deferred = self
                 .serialized_ddl
                 .remove(idx)
@@ -1835,13 +1836,14 @@ impl Coordinator {
     /// This cleans up any state in the coordinator associated with the session.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
-        if !self.active_conns.contains_key(&conn_id) {
-            // If the session doesn't exist in `active_conns`, then this method will panic later on.
-            // Instead we explicitly panic here while dumping the entire Coord to the logs to help
-            // debug. This panic is very infrequent so we want as much information as possible.
-            // See https://github.com/MaterializeInc/database-issues/issues/5627.
-            panic!("unknown connection: {conn_id:?}\n\n{self:?}")
-        }
+        // If the session doesn't exist in `active_conns`, then this method will panic later on.
+        // Instead we explicitly panic here while dumping the entire Coord to the logs to help
+        // debug. This panic is very infrequent so we want as much information as possible.
+        // See https://github.com/MaterializeInc/database-issues/issues/5627.
+        assert!(
+            self.active_conns.contains_key(&conn_id),
+            "unknown connection: {conn_id:?}\n\n{self:?}"
+        );
 
         // We do not need to call clear_transaction here because there are no side effects to run
         // based on any session transaction state.
