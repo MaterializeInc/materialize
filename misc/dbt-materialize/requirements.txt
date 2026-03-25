@@ -8,7 +8,7 @@ click==8.3.1
 colorama==0.4.6
 daff==1.4.2
 dbt-adapters==1.22.6
-dbt-common==1.37.2
+dbt-common==1.37.3
 dbt-core==1.11.6
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
