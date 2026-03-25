@@ -230,3 +230,21 @@
 
 ### Issues
 - None.
+
+## Prompt 7.1: Columnar Linear Join input
+
+### What was done
+- Modified `render_join_inner` in `linear_join.rs` to handle columnar-only inputs in the fallback path (no matching arrangement or initial closure present).
+- Before calling `as_specific_collection`, checks if the source bundle has only columnar (no Vec) and `source_key` is None (no arrangement path). If so, clones the bundle, calls `ensure_vec_collection()`, and uses the converted bundle.
+- Join stages continue to operate on arrangements unchanged. The columnar→Vec conversion only affects the initial collection extraction.
+
+### Key decisions
+- Since `inputs` is borrowed by index (`&inputs[linear_plan.source_relation]`), we clone when conversion is needed rather than mutating in-place. The clone is cheap (stream handles are reference-counted).
+- Only convert when `source_key` is None, because when a source_key is present, `as_specific_collection` uses the arrangement path which doesn't need `self.collection`.
+- Did not implement columnar output accumulation for `LinearJoinImpl` — join stages inherently produce row-at-a-time output via closure application, and the existing Vec output path is sufficient. Columnar output can be added when downstream operators specifically benefit.
+
+### Files changed
+- `src/compute/src/render/join/linear_join.rs` — Added columnar→Vec conversion guard in the fallback path of `render_join_inner`.
+
+### Issues
+- None.

@@ -242,13 +242,13 @@ collections. No changes needed for the main path.
 
 ### Prompt 7.1: Columnar Linear Join input
 
-[ ] `render_linear_join` gets its initial input via `as_specific_collection`. Convert to accept
+[*] `render_linear_join` gets its initial input via `as_specific_collection`. Convert to accept
 columnar input for the initial collection.
 
-[ ] Join stages operate on arrangements, which remain unchanged. The initial closure application
+[*] Join stages operate on arrangements, which remain unchanged. The initial closure application
 and the final output can use columnar.
 
-[ ] Update `LinearJoinImpl` to support columnar output accumulation.
+[*] Update `LinearJoinImpl` to support columnar output accumulation.
 
 **Files**: `src/compute/src/render/join/linear_join.rs`
 
