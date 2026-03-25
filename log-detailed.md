@@ -163,3 +163,21 @@
 
 ### Issues
 - None. Straightforward boundary conversion.
+
+## Prompt 5.1: Columnar input to arrangements
+
+### What was done
+- Modified `ensure_collections` in `context.rs` to handle columnar-only inputs when creating arrangements.
+- When the method needs a Vec collection (`form_raw_collection && self.collection.is_none()`) and the non-arrangement path is used (`input_key.is_none()`), it now calls `ensure_vec_collection()` to convert columnar→Vec before delegating to `as_collection_core`.
+- This prevents a panic in `as_collection_core`/`as_specific_collection` when only columnar is available and no arrangement key is provided.
+
+### Key decisions
+- Only convert columnar→Vec when `input_key.is_none()`, because when `input_key` is Some, `as_collection_core` uses the arrangement path which doesn't need `self.collection`.
+- The arrangement spines (`RowRowSpine`) use `DatumContainer` which accepts Row input, so unpacking columnar→Row at this boundary is required regardless. The existing `arrange_collection` method works on the Vec collection unchanged.
+- No changes needed to `extensions/arrange.rs` — the plumbing is entirely in `ensure_collections`.
+
+### Files changed
+- `src/compute/src/render/context.rs` — Added columnar→Vec conversion guard in `ensure_collections`.
+
+### Issues
+- None. Minimal change since the arrangement infrastructure already works with Vec collections.

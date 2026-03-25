@@ -189,14 +189,14 @@ columnar output if practical.
 
 ### Prompt 5.1: Columnar input to arrangements
 
-[ ] The `ensure_collections` method in `CollectionBundle` arranges data by key expressions. It
+[*] The `ensure_collections` method in `CollectionBundle` arranges data by key expressions. It
 currently calls `as_specific_collection` to get a `VecCollection` and then arranges it.
 
-[ ] When columnar input is available, use it to feed into arrangement creation. The arrangement
+[*] When columnar input is available, use it to feed into arrangement creation. The arrangement
 spines (`RowRowSpine`) use `DatumContainer` which accepts `Row` input, so we need to unpack
 columnar → Row at this boundary.
 
-[ ] This is primarily a plumbing step: accept columnar, unpack to Row for arrangement.
+[*] This is primarily a plumbing step: accept columnar, unpack to Row for arrangement.
 
 **Files**: `src/compute/src/render/context.rs`, `src/compute/src/extensions/arrange.rs`
 
