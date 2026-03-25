@@ -18,8 +18,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 
 use mz_arrow_util::builder::ArrowBuilder;
+use mz_expr::RowSetFinishing;
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -1620,6 +1620,8 @@ pub fn plan_subscribe(
     params: &Params,
     copy_to: Option<CopyFormat>,
 ) -> Result<Plan, PlanError> {
+    let when = query::plan_as_of(scx, as_of)?;
+
     let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
@@ -1651,7 +1653,7 @@ pub fn plan_subscribe(
             } = query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             expr.bind_parameters(scx, QueryLifetime::Subscribe, params)?;
             let query = query::PlannedRootQuery {
-                expr: expr.lower(scx.catalog.system_vars(), None)?,
+                expr,
                 desc,
                 finishing,
                 scope,
@@ -1663,11 +1665,23 @@ pub fn plan_subscribe(
                 &query.finishing,
                 query.desc.arity()
             ));
+            let finishing = RowSetFinishing {
+                order_by: vec![],
+                limit: None,
+                offset: 0,
+                project: query.finishing.project,
+            };
             let desc = query.desc.clone();
             (
                 SubscribeFrom::Query {
-                    expr: query.expr,
-                    desc: query.desc,
+                    select: SelectPlan {
+                        select: None,
+                        source: query.expr,
+                        when: when.clone(),
+                        finishing,
+                        copy_to: None,
+                    },
+                    desc: desc.clone(),
                 },
                 desc,
                 query.scope,
@@ -1675,7 +1689,6 @@ pub fn plan_subscribe(
         }
     };
 
-    let when = query::plan_as_of(scx, as_of)?;
     let up_to = up_to
         .map(|up_to| plan_as_of_or_up_to(scx, up_to))
         .transpose()?;

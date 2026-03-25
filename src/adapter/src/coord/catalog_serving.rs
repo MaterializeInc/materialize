@@ -27,6 +27,7 @@ use mz_sql::plan::{
     SubscribePlan,
 };
 use smallvec::SmallVec;
+use std::collections::BTreeSet;
 
 use crate::AdapterError;
 use crate::catalog::ConnCatalog;
@@ -47,7 +48,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
             plan.from.depends_on(),
             match &plan.from {
                 SubscribeFrom::Id(_) => false,
-                SubscribeFrom::Query { expr, desc: _ } => expr.could_run_expensive_function(),
+                SubscribeFrom::Query { select, .. } => select.source.could_run_expensive_function(),
             },
         )
     };
@@ -234,18 +235,16 @@ pub fn check_cluster_restrictions(
     //
     // Note: Creating other objects like Materialized Views is prevented elsewhere. We define the
     // 'mz_catalog_server' cluster to be "read-only", which restricts these actions.
-    let depends_on: Box<dyn Iterator<Item = GlobalId>> = match plan {
-        Plan::ReadThenWrite(plan) => Box::new(plan.selection.depends_on().into_iter()),
-        Plan::Subscribe(plan) => match plan.from {
-            SubscribeFrom::Id(id) => Box::new(std::iter::once(id)),
-            SubscribeFrom::Query { ref expr, .. } => Box::new(expr.depends_on().into_iter()),
-        },
-        Plan::Select(plan) => Box::new(plan.source.depends_on().into_iter()),
+    let depends_on: BTreeSet<GlobalId> = match plan {
+        Plan::ReadThenWrite(plan) => plan.selection.depends_on(),
+        Plan::Subscribe(plan) => plan.from.depends_on(),
+        Plan::Select(plan) => plan.source.depends_on(),
         _ => return Ok(()),
     };
 
     // Collect any items that are not allowed to be run on the catalog server cluster.
     let unallowed_dependents: SmallVec<[String; 2]> = depends_on
+        .into_iter()
         .filter_map(|id| {
             let item = catalog.get_item_by_global_id(&id);
             let full_name = catalog.resolve_full_name(item.name());

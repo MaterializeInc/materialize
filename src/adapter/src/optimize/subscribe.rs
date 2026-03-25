@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::SubscribeFrom;
+use mz_sql::plan::{HirToMirConfig, SubscribeFrom, SubscribePlan};
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
@@ -222,7 +222,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
             }
-            SubscribeFrom::Query { expr, desc } => {
+            SubscribeFrom::Query { select, desc } => {
                 // TODO: Change the `expr` type to be `HirRelationExpr` and run
                 // HIR ⇒ MIR lowering and decorrelation here. This would allow
                 // us implement something like `EXPLAIN RAW PLAN FOR SUBSCRIBE.`
@@ -238,6 +238,9 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     Some(&mut self.metrics),
                     Some(self.view_id),
                 );
+                let expr = select
+                    .source
+                    .lower(HirToMirConfig::from(&self.config), None)?;
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
                 df_builder.import_view_into_dataflow(
