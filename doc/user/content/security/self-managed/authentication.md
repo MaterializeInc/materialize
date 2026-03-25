@@ -51,7 +51,7 @@ The following example Kubernetes manifest includes configuration for
 SASL/SCRAM-SHA-256 authentication:
 
 {{< tabs >}}
-{{< tab "v1alpha2 (v26.17+)" >}}
+{{< tab "v1alpha2 (v26.18+)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1
@@ -82,7 +82,7 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.17)" >}}
+{{< tab "v1alpha1 (before v26.18)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1
@@ -135,7 +135,7 @@ The following example Kubernetes manifest includes configuration for password
 authentication:
 
 {{< tabs >}}
-{{< tab "v1alpha2 (v26.17+)" >}}
+{{< tab "v1alpha2 (v26.18+)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1
@@ -166,7 +166,7 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.17)" >}}
+{{< tab "v1alpha1 (before v26.18)" >}}
 
 ```hc {hl_lines="15 25"}
 apiVersion: v1

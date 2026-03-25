@@ -68,7 +68,7 @@ Reference the ConfigMap in your Materialize custom resource by setting the
 `systemParameterConfigmapName` field to the name of your ConfigMap:
 
 {{< tabs >}}
-{{< tab "v1alpha2 (v26.17+)" >}}
+{{< tab "v1alpha2 (v26.18+)" >}}
 
 ```yaml {hl_lines="9"}
 apiVersion: materialize.cloud/v1alpha2
@@ -83,7 +83,7 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.17)" >}}
+{{< tab "v1alpha1 (before v26.18)" >}}
 
 ```yaml {hl_lines="9"}
 apiVersion: materialize.cloud/v1alpha1
@@ -147,7 +147,7 @@ Materialize custom resource YAML and update it whenever you need to force a
 ConfigMap reload:
 
 {{< tabs >}}
-{{< tab "v1alpha2 (v26.17+)" >}}
+{{< tab "v1alpha2 (v26.18+)" >}}
 
 ```yaml
 apiVersion: materialize.cloud/v1alpha2
@@ -162,7 +162,7 @@ spec:
 ```
 
 {{< /tab >}}
-{{< tab "v1alpha1 (before v26.17)" >}}
+{{< tab "v1alpha1 (before v26.18)" >}}
 
 ```yaml
 apiVersion: materialize.cloud/v1alpha1

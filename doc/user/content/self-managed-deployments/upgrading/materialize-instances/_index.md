@@ -18,5 +18,5 @@ Operator first. See [Upgrading the Helm Chart and Materialize Operator](/self-ma
 
 Select the instructions for your CRD API version:
 
-- [v1alpha2 (v26.17+)](/self-managed-deployments/upgrading/materialize-instances/v1alpha2/)
-- [v1alpha1 (before v26.17)](/self-managed-deployments/upgrading/materialize-instances/v1alpha1/)
+- [v1alpha2 (v26.18+)](/self-managed-deployments/upgrading/materialize-instances/v1alpha2/)
+- [v1alpha1 (before v26.18)](/self-managed-deployments/upgrading/materialize-instances/v1alpha1/)
