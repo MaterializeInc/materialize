@@ -439,4 +439,5 @@ needless_pass_by_ref_mut = "warn"
 borrow_interior_mutable_const = "warn"
 or_fun_call = "warn"
 let_unit_value = "warn"
+match_wild_err_arm = "warn"
 # END LINT CONFIG
