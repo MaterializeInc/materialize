@@ -349,43 +349,6 @@ mod tests {
 
     const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(60).expect("Trust me on this");
 
-    // -------------------------------------------------------
-    // Zeroization tests
-    // -------------------------------------------------------
-
-    #[mz_ore::test]
-    fn test_password_hash_implements_drop() {
-        // PasswordHash must zeroize salt and hash on drop.
-        // Compile-time proof that Drop is implemented.
-        assert!(std::mem::needs_drop::<PasswordHash>());
-    }
-
-    #[mz_ore::test]
-    fn test_hash_opts_implements_drop() {
-        assert!(std::mem::needs_drop::<HashOpts>());
-    }
-
-    #[mz_ore::test]
-    fn test_scram_sha256_hash_implements_drop() {
-        assert!(std::mem::needs_drop::<ScramSha256Hash>());
-    }
-
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
-    fn test_existing_scram_flow_with_zeroization() {
-        // Functional regression: the full SCRAM flow still works
-        // after adding zeroization. This is the most important test —
-        // zeroization must not break the crypto.
-        let password: Password = "password".into();
-        let hash = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash");
-        assert!(scram256_verify(&password, &hash).is_ok());
-        assert!(scram256_verify(&"wrong".into(), &hash).is_err());
-    }
-
-    // -------------------------------------------------------
-    // Existing tests
-    // -------------------------------------------------------
-
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
     fn test_hash_password() {

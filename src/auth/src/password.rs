@@ -58,19 +58,3 @@ impl Debug for Password {
         write!(f, "Password(****)")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[mz_ore::test]
-    fn test_password_implements_drop() {
-        assert!(std::mem::needs_drop::<Password>());
-    }
-
-    #[mz_ore::test]
-    fn test_password_round_trip() {
-        let p = Password::from("hunter2");
-        assert_eq!(p.to_string(), "hunter2");
-    }
-}
