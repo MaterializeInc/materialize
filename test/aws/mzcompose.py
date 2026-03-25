@@ -18,6 +18,7 @@ To run these tests locally:
 import codecs
 import json
 import random
+import time
 
 import boto3
 from psycopg.errors import InternalError_, SystemError
