@@ -256,10 +256,10 @@ and the final output can use columnar.
 
 ### Prompt 7.2: Columnar Delta Join input
 
-[ ] Delta joins build update streams from arrangements. The join output is accumulated in
+[*] Delta joins build update streams from arrangements. The join output is accumulated in
 collections. Convert the output path to produce columnar collections.
 
-[ ] The join closure application happens per-result-tuple and may not benefit from columnar
+[*] The join closure application happens per-result-tuple and may not benefit from columnar
 within the join itself, but the output stream should be columnar.
 
 **Files**: `src/compute/src/render/join/delta_join.rs`
