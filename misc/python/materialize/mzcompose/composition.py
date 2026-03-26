@@ -132,6 +132,7 @@ class Composition:
         self.silent = silent
         self.workflows: dict[str, Callable[..., None]] = {}
         self.test_results: OrderedDict[str, TestResult] = OrderedDict()
+        self.has_testdrive_junit: bool = False
         self.files = {}
         self.sources_and_sinks_ignored_from_validation = set()
         self.is_sanity_restart_mz = sanity_restart_mz
@@ -955,8 +956,14 @@ class Composition:
         """Wraps a testdrive invocation to capture per-file error details via
         testdrive's own --junit-report, replacing generic docker compose
         failures with specific testdrive errors when available."""
-        use_junit = not any(
-            "--rewrite-results" in a or "--junit-report" in a for a in args
+        caller_junit_path: Path | None = None
+        for a in args:
+            if "--junit-report" in a and "=" in a:
+                caller_junit_path = self.path / Path(a.split("=", 1)[1]).name
+                break
+
+        use_junit = caller_junit_path is None and not any(
+            "--rewrite-results" in a for a in args
         )
         junit_filename = f".td_junit_{os.getpid()}_{_threading.get_ident()}.xml"
         # Write to /share/tmp inside the container (Docker-managed volume,
@@ -975,6 +982,11 @@ class Composition:
                 errors = self._read_testdrive_junit_errors(host_junit_path)
                 if errors:
                     raise FailedTestExecutionError(errors)
+            elif caller_junit_path is not None:
+                # Testdrive failed and was invoked with its own --junit-report.
+                # Signal that the mzcompose-level junit should be skipped
+                # to avoid duplicate annotations.
+                self.has_testdrive_junit = True
             raise
         finally:
             if use_junit:

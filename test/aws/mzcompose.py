@@ -22,6 +22,7 @@ import random
 import boto3
 from psycopg.errors import InternalError_, SystemError
 
+from materialize.cloudtest.util.common import retry
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.testdrive import Testdrive
@@ -302,10 +303,15 @@ def test_s3tablesrest_connection(c: Composition, ctx: TestContext):
             PolicyDocument=json.dumps(trust_policy),
         )
 
-        c.sleep(ctx.iam_propagation_seconds)
-
         c.sql(
-            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role_s3tablesrest)"
+            f"CREATE CONNECTION s3tables TO ICEBERG CATALOG (CATALOG TYPE = 's3tablesrest', URL = 'https://s3tables.us-east-1.amazonaws.com/iceberg', WAREHOUSE = '{bucket['arn']}', AWS CONNECTION = aws_assume_role_s3tablesrest) WITH (VALIDATE = false)"
+        )
+
+        retry(
+            lambda: c.sql("VALIDATE CONNECTION s3tables"),
+            max_attempts=3,
+            exception_types=[SystemError, InternalError_],
+            sleep_secs=ctx.iam_propagation_seconds,
         )
     finally:
         if bucket is not None:

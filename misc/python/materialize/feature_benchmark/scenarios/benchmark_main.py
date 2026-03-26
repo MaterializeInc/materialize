@@ -1777,7 +1777,7 @@ class PgCdc(Scenario):
 
 
 class PgCdcInitialLoad(PgCdc):
-    """Measure the time it takes to read 1M existing records from Postgres
+    """Measure the time it takes to read 2M existing records from Postgres
     when creating a materialized source"""
 
     def shared(self) -> Action:
@@ -1792,7 +1792,7 @@ DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
-INSERT INTO pk_table SELECT x, x*2 FROM generate_series(1, {self.n()}) as x;
+INSERT INTO pk_table SELECT x, x*2 FROM generate_series(1, {2 * self.n()}) as x;
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
 """
         )
@@ -1828,7 +1828,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 
 > SELECT count(*) FROM pk_table
   /* B */
-{self.n()}
+{2 * self.n()}
             """
         )
 
@@ -2232,7 +2232,7 @@ class ConnectionLatency(Coordinator):
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 SELECT 1;
 """
-            for i in range(0, self.n())
+            for i in range(0, 2 * self.n())
         )
 
         return Td(
