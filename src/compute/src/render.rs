@@ -296,6 +296,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                         compute_state.dataflow_max_inflight_bytes(),
                         start_signal.clone(),
                         ErrorHandler::Halt("compute_import"),
+                        persist_source::SourceConsolidation::BestEffort,
                     );
 
                     // If `mfp` is non-identity, we need to apply what remains.

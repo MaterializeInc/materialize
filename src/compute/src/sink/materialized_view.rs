@@ -412,6 +412,7 @@ where
         compute_state.dataflow_max_inflight_bytes(),
         start_signal,
         ErrorHandler::Halt("compute persist sink"),
+        mz_storage_operators::persist_source::SourceConsolidation::BestEffort,
     );
 
     let streams = OkErr::new(ok_stream, err_stream);

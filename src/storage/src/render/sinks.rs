@@ -73,6 +73,7 @@ where
             None,
             async {},
             error_handler,
+            persist_source::SourceConsolidation::BestEffort,
         );
         tokens.extend(persist_tokens);
 

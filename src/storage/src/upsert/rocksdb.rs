@@ -14,8 +14,8 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use super::UpsertKey;
 use super::types::{
-    GetStats, MergeStats, MergeValue, PutStats, PutValue, StateValue, UpsertStateBackend,
-    UpsertValueAndSize, ValueMetadata,
+    GetStats, PutStats, PutValue, StateValue, UpsertStateBackend, UpsertValueAndSize,
+    ValueMetadata,
 };
 
 /// A `UpsertStateBackend` implementation backed by RocksDB.
@@ -36,10 +36,6 @@ where
     O: Send + Sync + Serialize + DeserializeOwned + 'static,
     T: Send + Sync + Serialize + DeserializeOwned + 'static,
 {
-    fn supports_merge(&self) -> bool {
-        self.rocksdb.supports_merges
-    }
-
     async fn multi_put<P>(&mut self, puts: P) -> Result<PutStats, anyhow::Error>
     where
         P: IntoIterator<Item = (UpsertKey, PutValue<StateValue<T, O>>)>,
@@ -69,25 +65,6 @@ where
         p_stats.size_diff += size;
 
         Ok(p_stats)
-    }
-
-    async fn multi_merge<M>(&mut self, merges: M) -> Result<MergeStats, anyhow::Error>
-    where
-        M: IntoIterator<Item = (UpsertKey, MergeValue<StateValue<T, O>>)>,
-    {
-        let mut m_stats = MergeStats::default();
-        let stats =
-            self.rocksdb
-                .multi_update(merges.into_iter().map(|(k, MergeValue { value, diff })| {
-                    (k, KeyUpdate::Merge(value), Some(diff))
-                }))
-                .await?;
-        m_stats.written_merge_operands += stats.processed_updates;
-        m_stats.size_written += stats.size_written;
-        if let Some(diff) = stats.size_diff {
-            m_stats.size_diff += diff.into_inner();
-        }
-        Ok(m_stats)
     }
 
     async fn multi_get<'r, G, R>(

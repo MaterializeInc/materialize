@@ -311,6 +311,11 @@ where
                             false.then_some(|| unreachable!()),
                             async {},
                             error_handler,
+                            // Use Full consolidation so the upsert operator
+                            // receives consolidated feedback. This reduces
+                            // the work in consolidate_chunk and ensures each
+                            // key appears at most once per batch.
+                            persist_source::SourceConsolidation::Full,
                         );
                         (
                             stream.as_collection(),

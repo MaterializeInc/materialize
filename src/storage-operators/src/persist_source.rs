@@ -53,7 +53,7 @@ use timely::dataflow::ScopeParent;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
-use timely::dataflow::operators::{Capability, Leave, OkErr};
+use timely::dataflow::operators::{Capability, Enter, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream, StreamVec};
@@ -89,6 +89,18 @@ use crate::metrics::BackpressureMetrics;
 )]
 pub struct Subtime(u64);
 
+/// How the persist source should consolidate its output.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum SourceConsolidation {
+    /// Best-effort consolidation within parts. Current behavior.
+    #[default]
+    BestEffort,
+    /// Fully consolidated, snapshot-monotonic output.
+    /// Enables sorted part assignment and (in future phases)
+    /// streaming merge and fine-grained-timestamp-based consolidation.
+    Full,
+}
+
 impl PartialOrder for Subtime {
     fn less_equal(&self, other: &Self) -> bool {
         self.0.less_equal(&other.0)
@@ -115,10 +127,77 @@ impl TimelyTimestamp for Subtime {
     }
 }
 
+impl Lattice for Subtime {
+    fn join(&self, other: &Self) -> Self {
+        Subtime(std::cmp::max(self.0, other.0))
+    }
+    fn meet(&self, other: &Self) -> Self {
+        Subtime(std::cmp::min(self.0, other.0))
+    }
+}
+
+impl differential_dataflow::lattice::Maximum for Subtime {
+    fn maximum() -> Self {
+        Subtime(u64::MAX)
+    }
+}
+
 impl Subtime {
     /// The smallest non-zero summary for the opaque timestamp type.
     pub const fn least_summary() -> Self {
         Subtime(1)
+    }
+}
+
+/// Tracks progress through the keyspace within a batch. Used as the innermost
+/// timestamp in the consolidation scope to enable smooth frontier advancement
+/// during snapshot consolidation.
+///
+/// Values are monotonically increasing counters maintained by
+/// [`SourcePartMerger`], incremented on each distinct key emitted.
+/// The merge iterates in `ArrayOrd` order (matching persist's
+/// `RunOrder::Structured`), so the counter is naturally monotonic.
+#[derive(
+    Copy, Clone, PartialEq, Default, Eq, PartialOrd, Ord, Debug, Serialize, Deserialize, Hash,
+)]
+pub struct KeyProgress(u64);
+
+impl PartialOrder for KeyProgress {
+    fn less_equal(&self, other: &Self) -> bool {
+        self.0.less_equal(&other.0)
+    }
+}
+
+impl TotalOrder for KeyProgress {}
+
+impl PathSummary<KeyProgress> for KeyProgress {
+    fn results_in(&self, src: &KeyProgress) -> Option<KeyProgress> {
+        self.0.results_in(&src.0).map(KeyProgress)
+    }
+    fn followed_by(&self, other: &Self) -> Option<Self> {
+        self.0.followed_by(&other.0).map(KeyProgress)
+    }
+}
+
+impl TimelyTimestamp for KeyProgress {
+    type Summary = KeyProgress;
+    fn minimum() -> Self {
+        KeyProgress(0)
+    }
+}
+
+impl Lattice for KeyProgress {
+    fn join(&self, other: &Self) -> Self {
+        KeyProgress(std::cmp::max(self.0, other.0))
+    }
+    fn meet(&self, other: &Self) -> Self {
+        KeyProgress(std::cmp::min(self.0, other.0))
+    }
+}
+
+impl differential_dataflow::lattice::Maximum for KeyProgress {
+    fn maximum() -> Self {
+        KeyProgress(u64::MAX)
     }
 }
 
@@ -158,6 +237,7 @@ pub fn persist_source<G>(
     max_inflight_bytes: Option<usize>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    consolidation: SourceConsolidation,
 ) -> (
     StreamVec<G, (Row, Timestamp, Diff)>,
     StreamVec<G, (DataflowError, Timestamp, Diff)>,
@@ -223,6 +303,7 @@ where
             subscribe_sleep,
             start_signal,
             error_handler,
+            consolidation,
         );
         tokens.extend(source_tokens);
 
@@ -294,6 +375,7 @@ pub fn persist_source_core<'g, G>(
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
+    consolidation: SourceConsolidation,
 ) -> (
     Stream<
         RefinedScope<'g, G>,
@@ -382,8 +464,16 @@ where
         listen_sleep,
         start_signal,
         error_handler,
+        matches!(consolidation, SourceConsolidation::Full),
     );
-    let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
+    let rows = match consolidation {
+        SourceConsolidation::BestEffort => {
+            decode_and_mfp(cfg, fetched, &name, until, map_filter_project)
+        }
+        SourceConsolidation::Full => {
+            decode_and_mfp_consolidating(cfg, fetched, &name, until, map_filter_project)
+        }
+    };
     (rows, token)
 }
 
@@ -686,6 +776,262 @@ impl PendingWork {
         }
         true
     }
+}
+
+/// A variant of [`decode_and_mfp`] that performs a streaming merge across all
+/// fetched parts at the same timestamp, consolidating updates with identical
+/// key-value-time before applying MFP.
+///
+/// Opens a nested scope with [`KeyProgress`] timestamps derived from key
+/// prefixes. This allows a `consolidate` operator to make incremental progress
+/// as the merge moves through the keyspace, enabling smooth "time-to-first-byte"
+/// for queries like `SELECT ... LIMIT k`.
+///
+/// Used when [`SourceConsolidation::Full`] is requested.
+pub fn decode_and_mfp_consolidating<G>(
+    cfg: PersistConfig,
+    fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    name: &str,
+    until: Antichain<Timestamp>,
+    mut map_filter_project: Option<&mut MfpPlan>,
+) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+where
+    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
+{
+    use differential_dataflow::AsCollection;
+
+    let name_owned = name.to_owned();
+    let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
+    fetched
+        .scope()
+        .scoped::<((mz_repr::Timestamp, Subtime), KeyProgress), _, _>(
+            &format!("persist_source::consolidation({})", name),
+            move |inner| {
+                // Move the fetched stream into the inner scope. Data arrives at
+                // ((T, S), KeyProgress::minimum()).
+                let fetched_inner = fetched.enter(inner);
+
+                // Build the streaming merge decode operator in the inner scope.
+                // It manages KeyProgress capabilities based on the key prefix.
+                let decoded = decode_with_key_progress(
+                    cfg,
+                    fetched_inner,
+                    &name_owned,
+                    until,
+                    map_filter_project,
+                );
+
+                // Consolidate across workers in the inner scope. Because
+                // KeyProgress advances smoothly, the consolidation processes
+                // data in keyspace chunks rather than buffering the entire batch.
+                let consolidated = decoded.as_collection().consolidate().inner;
+
+                // Leave the inner scope, stripping KeyProgress from data
+                // timestamps. Use a simple unary to map the tuples.
+                use timely::dataflow::operators::Operator;
+                consolidated
+                    .unary(Pipeline, "StripKeyProgress", |_, _| {
+                        move |input, output| {
+                            input.for_each(|time, data| {
+                                let mut session = output.session(&time);
+                                for (d, t, r) in data.drain(..) {
+                                    session.give((d, t.0, r));
+                                }
+                            });
+                        }
+                    })
+                    .leave()
+            },
+        )
+}
+
+/// Decode operator for the consolidation inner scope. Processes fetched parts
+/// one at a time (like [`decode_and_mfp`]), but emits rows with monotonically
+/// increasing [`KeyProgress`] timestamps so the downstream `consolidate` can
+/// make incremental progress.
+///
+/// Cross-part consolidation is handled by the `consolidate()` operator in the
+/// enclosing scope, not by merging here.
+fn decode_with_key_progress<G>(
+    cfg: PersistConfig,
+    fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    name: &str,
+    until: Antichain<Timestamp>,
+    map_filter_project: Option<MfpPlan>,
+) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+where
+    G: Scope<Timestamp = ((mz_repr::Timestamp, Subtime), KeyProgress)>,
+{
+    let scope = fetched.scope();
+    let mut builder = OperatorBuilder::new(
+        format!("persist_source::decode_with_key_progress({})", name),
+        scope.clone(),
+    );
+    let operator_info = builder.operator_info();
+
+    let mut fetched_input = builder.new_input(fetched, Pipeline);
+    let (updates_output, updates_stream) = builder.new_output();
+    let mut updates_output: OutputBuilder<
+        _,
+        ConsolidatingContainerBuilder<
+            Vec<(
+                Result<Row, DataflowError>,
+                ((mz_repr::Timestamp, Subtime), KeyProgress),
+                Diff,
+            )>,
+        >,
+    > = OutputBuilder::from(updates_output);
+
+    // Re-used state for processing and building rows.
+    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut row_builder = Row::default();
+
+    let panic_on_audit_failure = STATS_AUDIT_PANIC.handle(&cfg);
+
+    type InnerTime = ((mz_repr::Timestamp, Subtime), KeyProgress);
+
+    builder.build(move |_caps| {
+        let name = name.to_owned();
+        let activations = scope.activations();
+        let activator = Activator::new(operator_info.address, activations);
+
+        // Pending parts, each with its own capability and a row counter for
+        // KeyProgress. Processed front-to-back, one part at a time.
+        let mut pending_work: std::collections::VecDeque<(
+            Capability<InnerTime>,
+            ShardSourcePart<SourceData, (), Timestamp, StorageDiff>,
+            u64, // row counter for KeyProgress
+        )> = std::collections::VecDeque::new();
+
+        move |_frontier| {
+            fetched_input.for_each(|time, data| {
+                let capability = time.retain(0);
+                for fetched_blob in data.drain(..) {
+                    pending_work.push_back((capability.clone(), fetched_blob.parse(), 0));
+                }
+            });
+
+            let yield_fuel = cfg.storage_source_decode_fuel();
+            let yield_fn = |_, work| work >= yield_fuel;
+            let panic_on_audit = panic_on_audit_failure.get();
+
+            let mut work = 0;
+            let start_time = Instant::now();
+            let mut output = updates_output.activate();
+            let mut row_buf = None;
+
+            while !pending_work.is_empty() && !yield_fn(start_time, work) {
+                let exhausted = {
+                    let (cap, part, row_counter) = pending_work.front_mut().unwrap();
+                    let is_filter_pushdown_audit = part.part.is_filter_pushdown_audit();
+
+                    while let Some(((key, val), time, diff)) =
+                        part.part.next_with_storage(&mut row_buf, &mut None)
+                    {
+                        if until.less_equal(&time) {
+                            continue;
+                        }
+
+                        *row_counter += 1;
+                        let key_progress = KeyProgress(*row_counter);
+                        let emit_time: InnerTime = ((time, cap.time().0 .1), key_progress);
+                        cap.downgrade(&emit_time);
+
+                        match (key, val) {
+                            (SourceData(Ok(row)), ()) => {
+                                if let Some(mfp) = map_filter_project.as_ref() {
+                                    work += 1;
+                                    let arena = RowArena::new();
+                                    let mut datums_local = datum_vec.borrow_with(&row);
+                                    for result in mfp.evaluate(
+                                        &mut datums_local,
+                                        &arena,
+                                        time,
+                                        diff.into(),
+                                        |time| !until.less_equal(time),
+                                        &mut row_builder,
+                                    ) {
+                                        if is_filter_pushdown_audit.is_some() {
+                                            report_pushdown_audit(&name, panic_on_audit);
+                                        }
+                                        match result {
+                                            Ok((row, time, diff)) => {
+                                                if !until.less_equal(&time) {
+                                                    let et = ((time, emit_time.0 .1), key_progress);
+                                                    let mut session =
+                                                        output.session_with_builder(cap);
+                                                    session.give((Ok(row), et, diff));
+                                                    work += 1;
+                                                }
+                                            }
+                                            Err((err, time, diff)) => {
+                                                if !until.less_equal(&time) {
+                                                    let et = ((time, emit_time.0 .1), key_progress);
+                                                    let mut session =
+                                                        output.session_with_builder(cap);
+                                                    session.give((Err(err), et, diff));
+                                                    work += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    drop(datums_local);
+                                    row_buf.replace(SourceData(Ok(row)));
+                                } else {
+                                    let mut session = output.session_with_builder(cap);
+                                    session.give((Ok(row.clone()), emit_time, diff.into()));
+                                    row_buf.replace(SourceData(Ok(row)));
+                                    work += 1;
+                                }
+                            }
+                            (SourceData(Err(err)), ()) => {
+                                let mut session = output.session_with_builder(cap);
+                                session.give((Err(err), emit_time, diff.into()));
+                                work += 1;
+                            }
+                        }
+                        if yield_fn(start_time, work) {
+                            break;
+                        }
+                    }
+
+                    // Part is exhausted if the while loop ended without a yield break.
+                    !yield_fn(start_time, work)
+                };
+                if exhausted {
+                    pending_work.pop_front();
+                } else {
+                    break;
+                }
+            }
+
+            if !pending_work.is_empty() {
+                activator.activate();
+            }
+        }
+    });
+
+    updates_stream
+}
+
+/// Reports a filter pushdown audit violation. Extracted to keep the main
+/// decode loops readable.
+fn report_pushdown_audit(name: &str, panic_on_failure: bool) {
+    sentry::with_scope(
+        |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+        || {
+            error!(
+                name,
+                "persist filter pushdown correctness violation (consolidating path)!"
+            );
+            if panic_on_failure {
+                panic!(
+                    "persist filter pushdown correctness violation! {}",
+                    name
+                );
+            }
+        },
+    );
 }
 
 /// A trait representing a type that can be used in `backpressure`.
