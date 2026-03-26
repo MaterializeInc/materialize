@@ -1336,8 +1336,8 @@ fn create_connection_info(
                     internal: false,
                     metrics: false,
                     profiling: false,
-                    mcp_agents: false,
-                    mcp_observatory: false,
+                    mcp_agents: true,
+                    mcp_observatory: true,
                     console_config: true,
                 }
             },
@@ -1358,8 +1358,8 @@ fn create_connection_info(
                     internal: true,
                     metrics: true,
                     profiling: true,
-                    mcp_agents: false,
-                    mcp_observatory: false,
+                    mcp_agents: true,
+                    mcp_observatory: true,
                     console_config: false,
                 }
             },

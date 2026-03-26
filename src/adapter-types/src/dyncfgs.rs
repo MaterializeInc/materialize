@@ -156,7 +156,7 @@ pub const ENABLE_S3_TABLES_REGION_CHECK: Config<bool> = Config::new(
 /// Whether the MCP agents endpoint is enabled.
 pub const ENABLE_MCP_AGENTS: Config<bool> = Config::new(
     "enable_mcp_agents",
-    true,
+    false,
     "Whether the MCP agents HTTP endpoint is enabled. When false, requests to /api/mcp/agents return 503 Service Unavailable.",
 );
 
@@ -172,7 +172,7 @@ pub const ENABLE_MCP_AGENTS_QUERY_TOOL: Config<bool> = Config::new(
 /// Whether the MCP observatory endpoint is enabled.
 pub const ENABLE_MCP_OBSERVATORY: Config<bool> = Config::new(
     "enable_mcp_observatory",
-    true,
+    false,
     "Whether the MCP observatory HTTP endpoint is enabled. When false, requests to /api/mcp/observatory return 503 Service Unavailable.",
 );
 
