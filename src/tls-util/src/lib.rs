@@ -9,6 +9,7 @@
 
 //! A tiny utility library for making TLS connectors.
 
+use mz_ore::secure::{Zeroize, Zeroizing};
 use openssl::pkcs12::Pkcs12;
 use openssl::pkey::PKey;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
@@ -100,12 +101,25 @@ pub struct Pkcs12Archive {
     pub pass: String,
 }
 
+impl Zeroize for Pkcs12Archive {
+    fn zeroize(&mut self) {
+        self.der.zeroize();
+        self.pass.zeroize();
+    }
+}
+
+impl Drop for Pkcs12Archive {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
 /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
 pub fn pkcs12der_from_pem(
     key: &[u8],
     cert: &[u8],
 ) -> Result<Pkcs12Archive, openssl::error::ErrorStack> {
-    let mut buf = Vec::new();
+    let mut buf = Zeroizing::new(Vec::new());
     buf.extend(key);
     buf.push(b'\n');
     buf.extend(cert);
@@ -143,4 +157,33 @@ pub fn pkcs12der_from_pem(
         .build2(&pass)?
         .to_der()?;
     Ok(Pkcs12Archive { der, pass })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pkcs12_archive_needs_drop() {
+        assert!(std::mem::needs_drop::<Pkcs12Archive>());
+    }
+
+    #[test]
+    fn pkcs12_archive_zeroize_clears_fields() {
+        let mut archive = Pkcs12Archive {
+            der: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            pass: String::from("hunter2"),
+        };
+
+        archive.zeroize();
+
+        assert!(archive.der.is_empty(), "der was not zeroed");
+        assert!(archive.pass.is_empty(), "pass was not zeroed");
+    }
+
+    #[test]
+    fn pkcs12_archive_implements_zeroize() {
+        fn assert_zeroize<T: mz_ore::secure::Zeroize>() {}
+        assert_zeroize::<Pkcs12Archive>();
+    }
 }
