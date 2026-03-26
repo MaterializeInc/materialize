@@ -8,27 +8,50 @@ menu:
     weight: 23
 ---
 
-Materialize includes built-in [Model Context Protocol
+{{< private-preview />}}
+
+Materialize provides built-in [Model Context Protocol
 (MCP)](https://modelcontextprotocol.io/) endpoints that let AI agents discover
-and query your real-time data products over HTTP. No sidecar process or external
-server is required — the MCP interface is served directly by the database.
+and query your real-time data products over HTTP. The MCP interface is served
+directly by the database; no sidecar process or external server is required.
 
-Two endpoints are available:
+## MCP endpoints overview
 
-| Endpoint | Path | Purpose |
-|----------|------|---------|
-| **Agents** | `/api/mcp/agents` | Discover and read data products (indexed views with comments). Designed for customer-facing AI agents. |
-| **Observatory** | `/api/mcp/observatory` | Query `mz_*` system catalog tables for troubleshooting and observability. |
+| Endpoint | Path | Description |
+|----------|------|-------------|
+| **Agents** | `/api/mcp/agents` | Discover and read data products (indexed views with comments). Designed for customer-facing AI agents. Available on the HTTP port (default `6876`). |
+| **Observatory** | `/api/mcp/observatory` | Query `mz_*` system catalog tables for troubleshooting and observability. Available on the HTTP port (default `6876`). |
 
-Both endpoints speak [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over
+The endpoints use [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over
 HTTP POST and support the MCP `initialize`, `tools/list`, and `tools/call`
 methods.
 
-## Authentication
+### Enabling / Disabling the MCP endpoints
+
+MCP endpoints can be toggled at runtime using system parameters:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_mcp_agents` | `false` | Enable or disable the `/api/mcp/agents` endpoint. |
+| `enable_mcp_observatory` | `false` | Enable or disable the `/api/mcp/observatory` endpoint. |
+| `enable_mcp_agents_query_tool` | `false` | Show or hide the `query` tool on the agents endpoint. |
+| `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
+
+```mzsql
+-- Disable the agents endpoint
+ALTER SYSTEM SET enable_mcp_agents = false;
+
+-- Enable the query tool
+ALTER SYSTEM SET enable_mcp_agents_query_tool = true;
+```
+
+When an endpoint is disabled, requests return HTTP 503 (Service Unavailable).
+
+## Authentication and access control {#rbac}
 
 Accessing the MCP endpoints requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme),
 just as connecting via a SQL client (e.g. `psql`). The authenticated role
-determines which data products are visible based on [RBAC privileges](#rbac).
+determines which data products are visible based on RBAC privileges.
 
 {{< tabs >}}
 
@@ -40,28 +63,23 @@ Use the credentials of a Materialize user or
 * **User ID:** Your email address or service account name.
 * **Password:** An [app password](/security/cloud/users-service-accounts/create-service-accounts/).
 
-```
-https://<region-host>/api/mcp/agents
-```
-
 For production use, we recommend creating a dedicated service account and
-granting it a role with [limited privileges](#rbac).
+granting it a role with limited privileges (see below).
 
 {{< /tab >}}
 
 {{< tab "Self-Managed" >}}
 
-Use the credentials of a Materialize role with `LOGIN`:
+Create a functional role for MCP privileges, then assign it to a login role:
 
 ```mzsql
-CREATE ROLE mcp_agent LOGIN PASSWORD 'secret';
+CREATE ROLE mcp_agent;
+CREATE ROLE my_agent LOGIN PASSWORD 'secret';
+GRANT mcp_agent TO my_agent;
 ```
 
-The MCP endpoints are available on the HTTP listener port (default `6876`):
-
-```
-http://<host>:6876/api/mcp/agents
-```
+Authenticate using the login role credentials (`my_agent`). You can create
+additional login roles and grant them the same `mcp_agent` role as needed.
 
 {{< /tab >}}
 
@@ -100,17 +118,17 @@ CREATE MATERIALIZED VIEW mcp_schema.payment_status AS
   FROM orders
   JOIN payments USING (order_id);
 
-CREATE INDEX ON mcp_schema.payment_status (order_id);
+CREATE INDEX payment_status_order_id_idx ON mcp_schema.payment_status (order_id);
 ```
 
 ### 3. Add a comment
 
-The top-level comment becomes the tool's description. Column comments become
-parameter descriptions. Write comments that help a language model understand
-**when** and **how** to use the tool.
+The comment on the **index** becomes the data product's description. Column
+comments on the underlying view become parameter descriptions. Write comments
+that help a language model understand **when** and **how** to use the tool.
 
 ```mzsql
-COMMENT ON MATERIALIZED VIEW mcp_schema.payment_status IS
+COMMENT ON INDEX mcp_schema.payment_status_order_id_idx IS
   'Given an order ID, return the current payment status and last update time.
    Use this tool to drive user-facing payment tracking.';
 
@@ -118,7 +136,7 @@ COMMENT ON COLUMN mcp_schema.payment_status.order_id IS
   'The unique identifier for the order';
 ```
 
-### 4. Create a role and permissions for your agent {#rbac}
+### Required privileges
 
 The role used to authenticate with the MCP endpoint must have:
 
@@ -190,17 +208,55 @@ following tools:
 
 ### `get_data_products`
 
-Discover all available data products. Returns a list of names and descriptions.
+Discover all available data products. Returns a lightweight list with name,
+cluster, and description for each product.
 
 **Parameters:** None.
 
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"\\\"materialize\\\".\\\"mcp_schema\\\".\\\"payment_status\\\"\",\n    \"mcp_cluster\",\n    \"Given an order ID, return the current payment status.\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
 ### `get_data_product_details`
 
-Get the full schema (columns, types, index keys) for a specific data product.
+Get the full details for a specific data product, including its JSON schema
+with column names, types, and descriptions.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | Yes | Exact name from the `get_data_products` list. |
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"\\\"materialize\\\".\\\"mcp_schema\\\".\\\"payment_status\\\"\",\n    \"mcp_cluster\",\n    \"Given an order ID, return the current payment status.\",\n    \"{\\\"order_id\\\": {\\\"type\\\": \\\"integer\\\", \\\"position\\\": 1}, \\\"status\\\": {\\\"type\\\": \\\"text\\\", \\\"position\\\": 3}}\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
 
 ### `read_data_product`
 
@@ -211,6 +267,24 @@ Read rows from a data product.
 | `name` | string | Yes | Fully-qualified name, e.g. `"materialize"."public"."payment_status"`. |
 | `limit` | integer | No | Maximum rows to return. Default: 500, max: 1000. |
 | `cluster` | string | No | Cluster override. If omitted, uses the cluster from the catalog. |
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    1001,\n    42,\n    \"shipped\",\n    \"2026-03-26T10:30:00Z\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
 
 ### `query`
 
@@ -226,6 +300,24 @@ Execute a SQL `SELECT` statement against your data products.
 | `cluster` | string | Yes | Exact cluster name from the data product details. |
 | `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
 
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    42,\n    \"shipped\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
+
 ## Observatory endpoint
 
 **`POST /api/mcp/observatory`**
@@ -240,6 +332,24 @@ Execute a SQL query restricted to `mz_*` system tables.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `sql_query` | string | Yes | `SELECT` query using only `mz_*` system tables. |
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"quickstart\",\n    \"ready\"\n  ],\n  [\n    \"mcp_cluster\",\n    \"ready\"\n  ]\n]"
+      }
+    ],
+    "isError": false
+  }
+}
+```
 
 ## Client configuration
 
@@ -443,29 +553,9 @@ curl -X POST http://<host>:6876/api/mcp/agents \
 
 {{< /tabs >}}
 
-## Enabling / Disabling the MCP endpoints
-
-MCP endpoints can be toggled at runtime using system parameters:
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enable_mcp_agents` | `true` | Enable or disable the `/api/mcp/agents` endpoint. |
-| `enable_mcp_observatory` | `true` | Enable or disable the `/api/mcp/observatory` endpoint. |
-| `enable_mcp_agents_query_tool` | `false` | Show or hide the `query` tool on the agents endpoint. |
-
-```mzsql
--- Disable the agents endpoint
-ALTER SYSTEM SET enable_mcp_agents = false;
-
--- Enable the query tool
-ALTER SYSTEM SET enable_mcp_agents_query_tool = true;
-```
-
-When an endpoint is disabled, requests return HTTP 503 (Service Unavailable).
-
 ## Related Pages
 
-- [MCP Server (Python)](/integrations/llm/) — standalone Python MCP server
+- [MCP Server (Python)](/integrations/llm/): standalone Python MCP server
   for `stdio` and `sse` transports
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 - [CREATE INDEX](/sql/create-index)
