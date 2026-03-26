@@ -85,6 +85,8 @@ TODO:
 - Parquet has an interval type - can materialize import it?
   {{< /comment >}}
 
+#### Supported Parquet types
+
 | [Arrow type](https://github.com/apache/arrow/blob/main/format/Schema.fbs) | [Parquet primitive type](https://parquet.apache.org/docs/file-format/types/) | [Parquet logical type](https://github.com/apache/parquet-format/blob/master/LogicalTypes.md) | Materialize type                                                                  |
 | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | `bool`                                                                    | `BOOLEAN`                                                                    |                                                                                              | [`boolean`](/sql/types/boolean/)                                                  |
@@ -107,8 +109,13 @@ TODO:
 | `uint32`                                                                  | `INT32`                                                                      | `INT(32, false)`                                                                             | [`uint4`](/sql/types/uint/#uint4-info)                                            |
 | `uint64`                                                                  | `INT64`                                                                      | `INT(64, false)`                                                                             | [`uint8`](/sql/types/uint/#uint8-info)                                            |
 | `utf8` or `large_utf8`                                                    | `BYTE_ARRAY`                                                                 | `STRING`                                                                                     | [`text`](/sql/types/text/)                                                        |
-|                                                                           |                                                                              | `map`                                                                                        | unsupported                                                                       |
-|                                                                           |                                                                              | `interval`                                                                                   | unsupported                                                                       |
+
+#### Unsupported Parquet types
+
+The following Parquet logical types are not currently supported:
+
+- `map`
+- `interval`
 
 ### Limits
 
