@@ -24,6 +24,7 @@ $ set-sql-timeout duration=1s
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
+SET GLOBAL binlog_row_metadata = FULL;
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;

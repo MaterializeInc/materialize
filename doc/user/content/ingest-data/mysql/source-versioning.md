@@ -7,7 +7,6 @@ menu:
     parent: "mysql"
     identifier: "mysql-source-versioning"
     weight: 85
-
 ---
 
 {{< private-preview />}}
@@ -178,18 +177,11 @@ In your upstream MySQL database, drop column `b` from table `t1`:
 ALTER TABLE t1 DROP COLUMN b;
 ```
 
-{{< warning >}}
-In MySQL, dropping a column that is referenced by an existing Materialize table
-— including columns that are in `EXCLUDE COLUMNS` — will stall that table with
-an incompatible schema change error. Always create the new table version with
-`EXCLUDE COLUMNS` **before** dropping the column upstream.
-{{< /warning >}}
-
 Dropping column `b` will have no effect on `v3.t1` in Materialize, provided
-you completed step A before dropping the column. However, the drop will stall
-`v2.t1` and `v2.matview` from our earlier examples. When you attempt to read
-from either, Materialize will report an error that the source table schema has
-been altered.
+you completed step A before dropping the column. However, the drop affects
+`v2.T` and `v2.matview` from our earlier examples. When the user attempts to
+read from either, Materialize will report an error that the source table schema
+has been altered.
 
 Once you have finished migrating any views and queries from `v2` to `v3`, you
 can clean up the old objects:
