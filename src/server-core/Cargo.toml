@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 async-trait = { version = "0.1.89" }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 openssl = { version = "0.10.76", features = ["vendored"] }
@@ -22,7 +22,7 @@ socket2 = "0.6.0"
 tokio-stream = "0.1.18"
 proxy-header = "0.1.2"
 tracing = "0.1.44"
-futures = "0.3.31"
+futures = "0.3.32"
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
 tokio = "1.49.0"

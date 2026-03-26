@@ -3796,12 +3796,9 @@ fn test_webhook_url_notice() {
         )
         .expect("failed to create source");
 
-    let url_notice = rx
-        .try_next()
-        .expect("contains notice")
-        .expect("contains message");
+    let url_notice = rx.try_recv().expect("contains notice");
     // We should only get the one notice.
-    assert_err!(rx.try_next());
+    assert_err!(rx.try_recv());
 
     // Print the notice to stderr for future debug-ability.
     eprintln!("notice: {}", url_notice.message());

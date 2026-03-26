@@ -466,8 +466,12 @@ async fn test_empty_subscribe_notice() {
     Retry::default()
         .max_duration(Duration::from_secs(10))
         .retry(|_| {
-            let Some(e) = rx.try_next().unwrap() else {
-                return Err("No notice received".to_string());
+            let e = match rx.try_recv() {
+                Ok(e) => e,
+                Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                    panic!("unexpected channel close")
+                }
+                Err(_) => return Err("No notice received".to_string()),
             };
             if e.message().contains("guaranteed to be empty") {
                 Ok(())
@@ -2335,15 +2339,17 @@ fn test_emit_timestamp_notice() {
     let first_timestamp = Retry::default()
         .retry(|_| {
             loop {
-                match rx.try_next() {
-                    Ok(Some(msg)) => {
+                match rx.try_recv() {
+                    Ok(msg) => {
                         if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
                         {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
                             return Ok(mz_repr::Timestamp::from(ts));
                         }
                     }
-                    Ok(None) => panic!("unexpected channel close"),
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
                     Err(e) => return Err(e),
                 }
             }
@@ -2355,8 +2361,8 @@ fn test_emit_timestamp_notice() {
         .retry(|_| {
             client.batch_execute("SELECT * FROM t").unwrap();
             loop {
-                match rx.try_next() {
-                    Ok(Some(msg)) => {
+                match rx.try_recv() {
+                    Ok(msg) => {
                         if let Some(caps) = timestamp_re.captures(msg.detail().unwrap_or_default())
                         {
                             let ts: u64 = caps.get(1).unwrap().as_str().parse().unwrap();
@@ -2367,7 +2373,9 @@ fn test_emit_timestamp_notice() {
                             return Err("not yet advanced");
                         }
                     }
-                    Ok(None) => panic!("unexpected channel close"),
+                    Err(futures::channel::mpsc::TryRecvError::Closed) => {
+                        panic!("unexpected channel close")
+                    }
                     Err(_) => return Err("no messages available"),
                 }
             }
@@ -2399,12 +2407,12 @@ fn test_isolation_level_notice() {
 
     Retry::default()
         .max_duration(Duration::from_secs(10))
-        .retry(|_| match rx.try_next() {
-            Ok(Some(msg)) => notice_re
+        .retry(|_| match rx.try_recv() {
+            Ok(msg) => notice_re
                 .captures(msg.message())
                 .ok_or("wrong message")
                 .map(|_| ()),
-            Ok(None) => panic!("unexpected channel close"),
+            Err(futures::channel::mpsc::TryRecvError::Closed) => panic!("unexpected channel close"),
             Err(_) => Err("no messages available"),
         })
         .unwrap();
@@ -2436,8 +2444,8 @@ fn test_emit_tracing_notice() {
     let _row = client.query_one("SELECT 1;", &[]).unwrap();
 
     let tracing_re = Regex::new("trace id: (.*)").unwrap();
-    match rx.try_next() {
-        Ok(Some(msg)) => {
+    match rx.try_recv() {
+        Ok(msg) => {
             // assert the NOTICE we recieved contained a trace_id
             let captures = tracing_re.captures(msg.message()).expect("no matches?");
             let trace_id = captures.get(1).expect("trace_id not captured?").as_str();
@@ -2738,8 +2746,8 @@ fn test_auto_run_on_introspection_feature_enabled() {
         .unwrap();
 
     let mut assert_catalog_server_notice = |expected| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), true) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), true) => {
                 let msg = notice.message();
                 let expected = "query was automatically run on the \"mz_catalog_server\" cluster";
                 assert_eq!(msg, expected);
@@ -2749,7 +2757,7 @@ fn test_auto_run_on_introspection_feature_enabled() {
             (res, false) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2832,8 +2840,8 @@ fn test_auto_run_on_introspection_feature_disabled() {
         .unwrap();
 
     let mut assert_notice = |expected: Option<&str>| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), Some(expected)) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), Some(expected)) => {
                 let msg = notice.message();
                 assert!(msg.contains(expected));
             }
@@ -2842,7 +2850,7 @@ fn test_auto_run_on_introspection_feature_disabled() {
             (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
@@ -2908,8 +2916,8 @@ fn test_auto_run_on_introspection_per_replica_relations() {
         .unwrap();
 
     let mut assert_notice = |expected: Option<&str>| {
-        match (rx.try_next(), expected) {
-            (Ok(Some(notice)), Some(expected)) => {
+        match (rx.try_recv(), expected) {
+            (Ok(notice), Some(expected)) => {
                 let msg = notice.message();
                 assert!(msg.contains(expected));
             }
@@ -2918,7 +2926,7 @@ fn test_auto_run_on_introspection_per_replica_relations() {
             (res, None) => panic!("Got a notice, but it wasn't expected! {:?}", res),
         }
         // Drain the channel of any other notices
-        while let Ok(Some(_)) = rx.try_next() {}
+        while let Ok(_) = rx.try_recv() {}
     };
 
     // The notice we assert on only gets emitted at the DEBUG level
