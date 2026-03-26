@@ -110,7 +110,7 @@ while true; do
 done
 ```
 
-If a flake cannot be reproduced locally, suggest the user trigger CI runs manually via https://trigger-ci.dev.materialize.com/.
+If a flake cannot be reproduced locally, suggest the user trigger CI runs manually via https://ci.dev.materialize.com/#trigger
 Removing the "Target Branch" generates a random identifier, allowing parallel runs.
 10-20 runs to reproduce a flake is fine.
 

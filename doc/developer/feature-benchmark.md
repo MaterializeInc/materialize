@@ -59,7 +59,7 @@ interference of any defaults that may be in effect and that can change over time
 
 ## Running manually in Buildkite
 
-Go to [Trigger CI](https://trigger-ci.dev.materialize.com/) and enter your pull request, select Feature Benchmark to only run that test.
+Go to [Trigger CI](https://ci.dev.materialize.com/#trigger) and enter your pull request, select Feature Benchmark to only run that test.
 If you want to run a specific senario only, enter a Feature Benchmark Scenario in the extra args.
 For example, to run all scenarios that are subclasses of `Kafka`, use `--scenario=Kafka`.
 
