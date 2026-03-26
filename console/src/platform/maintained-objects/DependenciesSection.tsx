@@ -225,7 +225,17 @@ const UpstreamRow = ({
   const delayMs = isNaN(delay) ? 0 : delay;
   const delaySeconds = delayMs / 1000;
 
-  const isActualBottleneck = dep.isBottleneck && delayMs > 0 && delaySeconds >= OUTDATED_THRESHOLD_SECONDS / 2;
+  // Show bottleneck badge using Frank's self-delay concept:
+  // An input is a bottleneck if IT is behind (high lag), not just because there's
+  // a gap between it and the probe. Sources at 2s lag delivering data fine shouldn't
+  // be badged even if the probe is 600s behind.
+  //
+  // self-delay ≈ input's own lag. If the input's lag is significant (>= threshold),
+  // it means the input itself isn't keeping up.
+  const inputLagMs = dep.lag ? sumPostgresIntervalMs(dep.lag as IPostgresInterval) : 0;
+  const isActualBottleneck =
+    dep.isBottleneck &&
+    inputLagMs >= OUTDATED_THRESHOLD_SECONDS * 1000;
   const rowBg = isActualBottleneck ? `${colors.accent.red}08` : undefined;
 
   return (

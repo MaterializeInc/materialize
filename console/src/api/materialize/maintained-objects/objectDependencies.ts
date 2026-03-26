@@ -201,7 +201,14 @@ export interface CriticalPathEdge {
   sourceType: string;
   targetName: string;
   targetType: string;
-  delay: number;
+  /** Frontier gap: source.frontier - target.frontier */
+  edgeDelay: number;
+  /** Self delay for target: min(input_frontiers) - target.frontier. Positive = target is bottleneck */
+  targetSelfDelay: number;
+  /** Wallclock distance for source node */
+  sourceFrontierLag: number;
+  /** Wallclock distance for target node */
+  targetFrontierLag: number;
 }
 
 export async function fetchCriticalPath({
@@ -255,12 +262,21 @@ SELECT DISTINCT
   os.type AS "sourceType",
   ot.name AS "targetName",
   ot.type AS "targetType",
-  fs.write_frontier::text::numeric - ft.write_frontier::text::numeric AS "delay"
+  -- Edge delay: frontier gap between source and target
+  fs.write_frontier::text::numeric - ft.write_frontier::text::numeric AS "edgeDelay",
+  -- Self delay for the TARGET node: min(input frontiers) - output frontier
+  -- Positive means the target node itself is the bottleneck
+  COALESCE(i_f_t.frontier::text::numeric - ft.write_frontier::text::numeric, 0) AS "targetSelfDelay",
+  -- Frontier lag for source: wallclock distance
+  mz_now()::text::numeric - fs.write_frontier::text::numeric AS "sourceFrontierLag",
+  -- Frontier lag for target: wallclock distance
+  mz_now()::text::numeric - ft.write_frontier::text::numeric AS "targetFrontierLag"
 FROM delayed_by db
 JOIN mz_internal.mz_frontiers fs ON db.source = fs.object_id
 JOIN mz_internal.mz_frontiers ft ON db.target = ft.object_id
 JOIN mz_catalog.mz_objects os ON db.source = os.id
 JOIN mz_catalog.mz_objects ot ON db.target = ot.id
+LEFT JOIN input_frontier i_f_t ON i_f_t.target = db.target
 WHERE db.source != db.target
 ORDER BY fs.write_frontier::text::numeric - ft.write_frontier::text::numeric DESC
   `.compile(rawQueryBuilder);

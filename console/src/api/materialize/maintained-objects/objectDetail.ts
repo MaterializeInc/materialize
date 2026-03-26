@@ -8,13 +8,16 @@
 // by the Apache License, Version 2.0.
 
 import { QueryKey } from "@tanstack/react-query";
-import { InferResult, sql } from "kysely";
+import { InferResult, sql, SqlBool } from "kysely";
+
+const lit = sql.lit;
 
 import {
   buildSessionVariables,
   executeSqlV2,
   queryBuilder,
 } from "~/api/materialize";
+import { queryBuilder as rawQueryBuilder } from "~/api/materialize/db";
 
 /**
  * Fetches detailed metadata for a single maintained object,
@@ -105,25 +108,45 @@ export async function fetchObjectDetail({
 }
 
 /**
- * Fetches per-object memory usage from mz_dataflow_arrangement_sizes.
+ * Fetches per-object memory usage using optimized raw tables.
+ *
+ * Reads only mz_arrangement_heap_size_raw + mz_arrangement_batcher_size_raw
+ * instead of the full mz_dataflow_arrangement_sizes (10-way CTE).
+ * Returns the same `size` value but skips records, batches, capacity, allocations.
+ *
  * Requires cluster + cluster_replica session variables.
  * Only works for compute objects (indexes, MVs).
  */
 export function buildObjectMemoryQuery(objectId: string) {
-  return queryBuilder
-    .selectFrom("mz_dataflow_arrangement_sizes as s")
-    .innerJoin("mz_compute_exports as ce", "ce.dataflow_id", "s.id")
-    .select([
-      "ce.export_id as objectId",
-      sql<string>`s.size::text`.as("memoryBytes"),
-      sql<string>`s.records::text`.as("records"),
-    ])
-    .where("ce.export_id", "=", objectId);
+  return sql<{
+    objectId: string;
+    memoryBytes: string;
+  }>`
+    SELECT
+      ce.export_id AS "objectId",
+      (COALESCE(SUM(hs.size), 0) + COALESCE(SUM(bs.size), 0))::text AS "memoryBytes"
+    FROM mz_compute_exports AS ce
+    JOIN mz_dataflow_operator_dataflows AS dod
+      ON dod.dataflow_id = ce.dataflow_id
+    LEFT JOIN (
+      SELECT operator_id, COUNT(*) AS size
+      FROM mz_arrangement_heap_size_raw
+      GROUP BY operator_id
+    ) AS hs ON hs.operator_id = dod.id
+    LEFT JOIN (
+      SELECT operator_id, COUNT(*) AS size
+      FROM mz_arrangement_batcher_size_raw
+      GROUP BY operator_id
+    ) AS bs ON bs.operator_id = dod.id
+    WHERE ce.export_id = ${lit(objectId)}
+    GROUP BY ce.export_id
+  `;
 }
 
-export type ObjectMemoryRow = InferResult<
-  ReturnType<typeof buildObjectMemoryQuery>
->[0];
+export type ObjectMemoryRow = {
+  objectId: string;
+  memoryBytes: string;
+};
 
 export async function fetchObjectMemory({
   objectId,
@@ -138,15 +161,19 @@ export async function fetchObjectMemory({
   queryKey: QueryKey;
   requestOptions?: RequestInit;
 }) {
-  const compiledQuery = buildObjectMemoryQuery(objectId).compile();
+  const compiledQuery = buildObjectMemoryQuery(objectId).compile(rawQueryBuilder);
   return executeSqlV2({
-    sessionVariables: buildSessionVariables({
-      cluster: clusterName,
-      cluster_replica: replicaName,
-    }),
+    sessionVariables: {
+      ...buildSessionVariables({
+        cluster: clusterName,
+        cluster_replica: replicaName,
+      }),
+      transaction_isolation: "serializable",
+    },
     queries: compiledQuery,
     queryKey,
     requestOptions,
+    requestTimeoutMs: 60_000,
   });
 }
 
