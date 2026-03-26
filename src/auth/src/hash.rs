@@ -15,6 +15,7 @@ use std::num::NonZeroU32;
 
 use base64::prelude::*;
 use itertools::Itertools;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::password::Password;
 
@@ -34,6 +35,12 @@ pub struct HashOpts {
     pub salt: [u8; DEFAULT_SALT_SIZE],
 }
 
+impl Drop for HashOpts {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+    }
+}
+
 pub struct PasswordHash {
     /// The salt used for hashing
     pub salt: [u8; DEFAULT_SALT_SIZE],
@@ -42,6 +49,13 @@ pub struct PasswordHash {
     /// The hash of the password.
     /// This is the result of PBKDF2 with SHA256
     pub hash: [u8; SHA256_OUTPUT_LEN],
+}
+
+impl Drop for PasswordHash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.hash.zeroize();
+    }
 }
 
 #[derive(Debug)]
@@ -70,28 +84,28 @@ pub fn hash_password(
     password: &Password,
     iterations: &NonZeroU32,
 ) -> Result<PasswordHash, HashError> {
-    let mut salt = [0u8; DEFAULT_SALT_SIZE];
-    openssl::rand::rand_bytes(&mut salt).map_err(HashError::Openssl)?;
+    let mut salt = Zeroizing::new([0u8; DEFAULT_SALT_SIZE]);
+    openssl::rand::rand_bytes(&mut *salt).map_err(HashError::Openssl)?;
 
     let hash = hash_password_inner(
         &HashOpts {
             iterations: iterations.to_owned(),
-            salt,
+            salt: *salt,
         },
         password.to_string().as_bytes(),
     )?;
 
     Ok(PasswordHash {
-        salt,
+        salt: *salt,
         iterations: iterations.to_owned(),
         hash,
     })
 }
 
 pub fn generate_nonce(client_nonce: &str) -> Result<String, HashError> {
-    let mut nonce = [0u8; 24];
-    openssl::rand::rand_bytes(&mut nonce).map_err(HashError::Openssl)?;
-    let nonce = BASE64_STANDARD.encode(&nonce);
+    let mut nonce = Zeroizing::new([0u8; 24]);
+    openssl::rand::rand_bytes(&mut *nonce).map_err(HashError::Openssl)?;
+    let nonce = BASE64_STANDARD.encode(&*nonce);
     let new_nonce = format!("{}{}", client_nonce, nonce);
     Ok(new_nonce)
 }
@@ -157,42 +171,50 @@ pub fn sasl_verify(
         return Err(VerifyError::MalformedHash);
     }
 
-    let stored_key = BASE64_STANDARD
-        .decode(auth_value[0])
-        .map_err(|_| VerifyError::MalformedHash)?;
-    let server_key = BASE64_STANDARD
-        .decode(auth_value[1])
-        .map_err(|_| VerifyError::MalformedHash)?;
+    let stored_key = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(auth_value[0])
+            .map_err(|_| VerifyError::MalformedHash)?,
+    );
+    let server_key = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(auth_value[1])
+            .map_err(|_| VerifyError::MalformedHash)?,
+    );
 
     // Compute client signature: HMAC(stored_key, auth_message)
-    let client_signature = generate_signature(&stored_key, auth_message)?;
+    let client_signature = Zeroizing::new(generate_signature(&stored_key, auth_message)?);
 
     // Decode provided proof
-    let provided_client_proof = BASE64_STANDARD
-        .decode(proof)
-        .map_err(|_| VerifyError::InvalidPassword)?;
+    let provided_client_proof = Zeroizing::new(
+        BASE64_STANDARD
+            .decode(proof)
+            .map_err(|_| VerifyError::InvalidPassword)?,
+    );
 
     if provided_client_proof.len() != client_signature.len() {
         return Err(VerifyError::InvalidPassword);
     }
 
     // Recover client_key = proof XOR client_signature
-    let client_key: Vec<u8> = provided_client_proof
-        .iter()
-        .zip_eq(client_signature.iter())
-        .map(|(p, s)| p ^ s)
-        .collect();
+    let client_key: Zeroizing<Vec<u8>> = Zeroizing::new(
+        provided_client_proof
+            .iter()
+            .zip_eq(client_signature.iter())
+            .map(|(p, s)| p ^ s)
+            .collect(),
+    );
 
     if !constant_time_compare(&openssl::sha::sha256(&client_key), &stored_key) {
         return Err(VerifyError::InvalidPassword);
     }
 
     // Compute server verifier: HMAC(server_key, auth_message)
-    let verifier = generate_signature(&server_key, auth_message)?;
-    Ok(BASE64_STANDARD.encode(&verifier))
+    let verifier = Zeroizing::new(generate_signature(&server_key, auth_message)?);
+    Ok(BASE64_STANDARD.encode(&*verifier))
 }
 
-fn generate_signature(key: &[u8], message: &str) -> Result<Vec<u8>, VerifyError> {
+fn generate_signature(key: &[u8], message: &str) -> Result<Zeroizing<Vec<u8>>, VerifyError> {
     let signing_key =
         openssl::pkey::PKey::hmac(key).map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
     let mut signer =
@@ -204,7 +226,7 @@ fn generate_signature(key: &[u8], message: &str) -> Result<Vec<u8>, VerifyError>
     let signature = signer
         .sign_to_vec()
         .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
-    Ok(signature)
+    Ok(Zeroizing::new(signature))
 }
 
 // Generate a mock challenge based on the username and client nonce
@@ -269,6 +291,14 @@ struct ScramSha256Hash {
     stored_key: [u8; SHA256_OUTPUT_LEN],
 }
 
+impl Drop for ScramSha256Hash {
+    fn drop(&mut self) {
+        self.salt.zeroize();
+        self.server_key.zeroize();
+        self.stored_key.zeroize();
+    }
+}
+
 impl Display for ScramSha256Hash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -287,18 +317,18 @@ fn scram256_hash_inner(hashed_password: PasswordHash) -> ScramSha256Hash {
     let mut signer =
         openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
     signer.update(b"Client Key").unwrap();
-    let client_key = signer.sign_to_vec().unwrap();
+    let client_key = Zeroizing::new(signer.sign_to_vec().unwrap());
     let stored_key = openssl::sha::sha256(&client_key);
     let mut signer =
         openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
     signer.update(b"Server Key").unwrap();
-    let mut server_key: [u8; SHA256_OUTPUT_LEN] = [0; SHA256_OUTPUT_LEN];
+    let mut server_key = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
     signer.sign(server_key.as_mut()).unwrap();
 
     ScramSha256Hash {
         iterations: hashed_password.iterations,
         salt: hashed_password.salt,
-        server_key,
+        server_key: *server_key,
         stored_key,
     }
 }
@@ -307,16 +337,16 @@ fn hash_password_inner(
     opts: &HashOpts,
     password: &[u8],
 ) -> Result<[u8; SHA256_OUTPUT_LEN], HashError> {
-    let mut salted_password = [0u8; SHA256_OUTPUT_LEN];
+    let mut salted_password = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
     openssl::pkcs5::pbkdf2_hmac(
         password,
         &opts.salt,
         opts.iterations.get().try_into().unwrap(),
         openssl::hash::MessageDigest::sha256(),
-        &mut salted_password,
+        &mut *salted_password,
     )
     .map_err(HashError::Openssl)?;
-    Ok(salted_password)
+    Ok(*salted_password)
 }
 
 #[cfg(test)]
