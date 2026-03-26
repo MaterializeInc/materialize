@@ -1828,6 +1828,7 @@ def workflow_documentation_defaults(
 
         with open(os.path.join(dir, "sample-values.yaml")) as f:
             sample_values = yaml.load(f, Loader=yaml.Loader)
+        sample_values["operator"]["image"]["tag"] = str(current_version)
         helm_install_operator(sample_values, upgrade=False)
 
         spawn.runv(
@@ -1837,6 +1838,26 @@ def workflow_documentation_defaults(
         spawn.runv(["kubectl", "get", "all", "-n", "materialize"])
 
         wait_for_crd_established()
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Available",
+                "deployment/minio",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "wait",
+                "-n",
+                "materialize",
+                "--for=condition=Available",
+                "deployment/postgres",
+            ]
+        )
 
         with open(os.path.join(dir, "sample-materialize.yaml")) as f:
             materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
