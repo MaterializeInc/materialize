@@ -20,6 +20,7 @@ INSERT INTO insert_multi_table1 VALUES (0);
 CREATE TABLE insert_multi_table2 (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_multi_table2 REPLICA IDENTITY FULL;
 INSERT INTO insert_multi_table2 VALUES (0);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.insert_multi_table1
 

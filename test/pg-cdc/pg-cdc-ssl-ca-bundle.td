@@ -26,6 +26,8 @@ DROP PUBLICATION IF EXISTS mz_source;
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 INSERT INTO numbers VALUES (1, true, 'one');
 
+ANALYZE;
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE SECRET ssl_ca AS '${arg.ssl-ca}'
 

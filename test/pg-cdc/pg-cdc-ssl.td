@@ -54,6 +54,8 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 INSERT INTO numbers VALUES (1, true, 'one');
 
+ANALYZE;
+
 $ set-regex match=(\d{1,3}\.){3}\d{1,3} replacement=(HOST)
 
 # server: host, client: disable => OK

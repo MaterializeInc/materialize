@@ -107,6 +107,8 @@ CREATE TABLE drop_table (f1 int, f2 int);
 ALTER TABLE drop_table REPLICA IDENTITY FULL;
 INSERT INTO drop_table (f1, f2) VALUES (1, 1);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 

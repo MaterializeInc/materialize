@@ -397,6 +397,18 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
         batch_num = min(batch_size, num_rows - i)
         make_inserts(c, i, batch_num)
 
+    # Update pg_class.relpages so Materialize's ctid-based parallel snapshot
+    # can partition across workers from the first read.
+    c.testdrive(
+        args=["--no-reset"],
+        input=dedent(
+            """
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ANALYZE products;
+        """
+        ),
+    )
+
     c.testdrive(
         args=["--no-reset"],
         input=dedent(
