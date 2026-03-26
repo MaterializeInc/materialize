@@ -339,9 +339,6 @@ where
                             previous,
                             previous_token,
                             export_config,
-                            &storage_state.instance_context,
-                            &storage_state.storage_configuration,
-                            &storage_state.dataflow_parameters,
                             backpressure_metrics,
                         );
 
