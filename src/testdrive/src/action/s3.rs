@@ -21,10 +21,11 @@ use anyhow::bail;
 use arrow::array::{
     ArrayRef, BinaryBuilder, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryBuilder,
     Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, Int64Builder,
-    ListBuilder, StringArray, StructArray, Time32SecondArray, TimestampMillisecondArray,
-    UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    IntervalDayTimeArray, IntervalYearMonthArray, ListBuilder, MapBuilder, StringArray,
+    StringBuilder, StructArray, Time32SecondArray, TimestampMillisecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array,
 };
-use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use arrow::datatypes::{DataType, Field, IntervalDayTime, IntervalUnit, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::util::display::ArrayFormatter;
 use arrow::util::display::FormatOptions;
@@ -459,6 +460,38 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
     binary_builder.append_value(b"raw3");
     let binary_array = Arc::new(binary_builder.finish());
 
+    // interval(year-month): stored as i32 months
+    let interval_ym_array = Arc::new(IntervalYearMonthArray::from(vec![1i32, 13, -2]));
+
+    // interval(day-time): stored as (days: i32, milliseconds: i32)
+    let interval_dt_array = Arc::new(IntervalDayTimeArray::from(vec![
+        IntervalDayTime {
+            days: 1,
+            milliseconds: 500,
+        },
+        IntervalDayTime {
+            days: 30,
+            milliseconds: 0,
+        },
+        IntervalDayTime {
+            days: -1,
+            milliseconds: -1000,
+        },
+    ]));
+
+    // map<utf8, utf8>: {"k1": "v1", "k2": "v2"}, {"k3": "v3"}, {}
+    let mut map_builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+    map_builder.keys().append_value("k1");
+    map_builder.values().append_value("v1");
+    map_builder.keys().append_value("k2");
+    map_builder.values().append_value("v2");
+    map_builder.append(true).context("appending map row 0")?;
+    map_builder.keys().append_value("k3");
+    map_builder.values().append_value("v3");
+    map_builder.append(true).context("appending map row 1")?;
+    map_builder.append(true).context("appending map row 2")?; // empty map
+    let map_array = Arc::new(map_builder.finish());
+
     let mut uuid_metadata = HashMap::new();
     uuid_metadata.insert("ARROW:extension:name".to_string(), "arrow.uuid".to_string());
 
@@ -503,6 +536,34 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
             true,
         ),
         Field::new("uuid_col", DataType::FixedSizeBinary(16), false).with_metadata(uuid_metadata),
+        Field::new(
+            "interval_ym_col",
+            DataType::Interval(IntervalUnit::YearMonth),
+            true,
+        ),
+        Field::new(
+            "interval_dt_col",
+            DataType::Interval(IntervalUnit::DayTime),
+            true,
+        ),
+        Field::new(
+            "map_col",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        ),
     ]));
 
     let batch = RecordBatch::try_new(
@@ -541,6 +602,9 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
             ])),
             struct_array,
             uuid_array,
+            interval_ym_array,
+            interval_dt_array,
+            map_array,
         ],
     )
     .context("building record batch")?;

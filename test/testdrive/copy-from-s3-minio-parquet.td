@@ -31,6 +31,8 @@ $ s3-upload-parquet-types bucket=copyfroms3 key-prefix=parquet/types.parquet
 > CREATE TYPE record_type AS (name text, age int, avg double precision);
 
 # Prepare the table we want to COPY INTO.
+# List and map types are not implemented in pgwire, so those columns
+# cant be verified here.
 > CREATE TABLE types (
   int8_col smallint,
   uint8_col uint2,
@@ -53,7 +55,10 @@ $ s3-upload-parquet-types bucket=copyfroms3 key-prefix=parquet/types.parquet
   decimal_col decimal,
   json_col jsonb,
   record_col record_type,
-  uuid_col uuid
+  uuid_col uuid,
+  interval_ym_col interval,
+  interval_dt_col interval,
+  map_col map[text => text]
   );
 
 $ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet var-name=types_url
@@ -74,6 +79,16 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet var-name=type
 Burger
 SlimJim
 Taco
+
+> SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
+"-2 months"
+"1 year 1 month"
+"1 month"
+
+> SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
+"-1 days -00:00:01"
+"30 days"
+"1 day 00:00:00.5"
 
 > DELETE FROM types;
 > SELECT count(*) FROM types;
@@ -100,6 +115,16 @@ Burger
 SlimJim
 Taco
 
+> SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
+"-2 months"
+"1 year 1 month"
+"1 month"
+
+> SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
+"-1 days -00:00:01"
+"30 days"
+"1 day 00:00:00.5"
+
 > DELETE FROM types;
 > SELECT count(*) FROM types;
 0
@@ -123,6 +148,16 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.snappy var-na
 Burger
 SlimJim
 Taco
+
+> SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
+"-2 months"
+"1 year 1 month"
+"1 month"
+
+> SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
+"-1 days -00:00:01"
+"30 days"
+"1 day 00:00:00.5"
 
 > DELETE FROM types;
 > SELECT count(*) FROM types;
@@ -148,6 +183,16 @@ Burger
 SlimJim
 Taco
 
+> SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
+"-2 months"
+"1 year 1 month"
+"1 month"
+
+> SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
+"-1 days -00:00:01"
+"30 days"
+"1 day 00:00:00.5"
+
 > DELETE FROM types;
 > SELECT count(*) FROM types;
 0
@@ -172,6 +217,16 @@ Burger
 SlimJim
 Taco
 
+> SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
+"-2 months"
+"1 year 1 month"
+"1 month"
+
+> SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
+"-1 days -00:00:01"
+"30 days"
+"1 day 00:00:00.5"
+
 > DELETE FROM types;
 > SELECT count(*) FROM types;
 0
@@ -195,6 +250,16 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet.lz4 var-name=
 Burger
 SlimJim
 Taco
+
+> SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
+"-2 months"
+"1 year 1 month"
+"1 month"
+
+> SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
+"-1 days -00:00:01"
+"30 days"
+"1 day 00:00:00.5"
 
 > DELETE FROM types;
 > SELECT count(*) FROM types;
@@ -270,5 +335,85 @@ Taco
 Taco
 Taco
 Taco
+
+> SELECT interval_ym_col FROM types ORDER BY int8_col DESC;
+"-2 months"
+"-2 months"
+"-2 months"
+"-2 months"
+"-2 months"
+"-2 months"
+"1 year 1 month"
+"1 year 1 month"
+"1 year 1 month"
+"1 year 1 month"
+"1 year 1 month"
+"1 year 1 month"
+"1 month"
+"1 month"
+"1 month"
+"1 month"
+"1 month"
+"1 month"
+
+> SELECT interval_dt_col FROM types ORDER BY int8_col DESC;
+"-1 days -00:00:01"
+"-1 days -00:00:01"
+"-1 days -00:00:01"
+"-1 days -00:00:01"
+"-1 days -00:00:01"
+"-1 days -00:00:01"
+"30 days"
+"30 days"
+"30 days"
+"30 days"
+"30 days"
+"30 days"
+"1 day 00:00:00.5"
+"1 day 00:00:00.5"
+"1 day 00:00:00.5"
+"1 day 00:00:00.5"
+"1 day 00:00:00.5"
+"1 day 00:00:00.5"
+
+> SELECT list_col::text FROM types ORDER BY int8_col DESC;
+{-1,2}
+{-1,2}
+{-1,2}
+{-1,2}
+{-1,2}
+{-1,2}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{}
+{}
+{}
+{}
+{}
+{}
+
+> SELECT map_col::text FROM types ORDER BY int8_col DESC;
+{}
+{}
+{}
+{}
+{}
+{}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
 
 # Test explicit file lists.
