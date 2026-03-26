@@ -772,6 +772,20 @@ impl ArrowColumn {
             (ColBuilder::UInt64Builder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(ts.into())
             }
+            // Lossless unsigned-to-signed promotions for destinations that don't
+            // support unsigned types (e.g., Iceberg).
+            (ColBuilder::Int32Builder(builder), Datum::UInt16(i)) => {
+                builder.append_value(i32::from(i))
+            }
+            (ColBuilder::Int64Builder(builder), Datum::UInt32(i)) => {
+                builder.append_value(i64::from(i))
+            }
+            (ColBuilder::Decimal128Builder(builder), Datum::UInt64(i)) => {
+                builder.append_value(i128::from(i))
+            }
+            (ColBuilder::Decimal128Builder(builder), Datum::MzTimestamp(ts)) => {
+                builder.append_value(i128::from(u64::from(ts)))
+            }
             (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
                 if dec.0.is_special() {
                     anyhow::bail!("Cannot represent special numeric value {} in parquet", dec)
