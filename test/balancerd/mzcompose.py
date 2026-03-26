@@ -18,6 +18,7 @@ import json
 import socket
 import ssl
 import struct
+import subprocess
 import time
 import uuid
 from collections.abc import Callable
@@ -375,18 +376,18 @@ def workflow_ip_forwarding(c: Composition) -> None:
 
     # We want to make sure the request we're making through the balancer does not use the balancers
     # ip for the sessions.
-    # https://stackoverflow.com/questions/5281341/get-local-network-interface-addresses-using-only-proc
-    balancer_ip = [
-        ip
-        for ip in c.exec(
-            "balancerd",
-            "awk",
-            r"/32 host/ { print i } {i=$2}",
-            "/proc/net/fib_trie",
-            capture=True,
-        ).stdout.split("\n")
-        if ip != "127.0.0.1"
-    ][0]
+    container_id = c.container_id("balancerd")
+    assert container_id is not None
+    balancer_ip = subprocess.check_output(
+        [
+            "docker",
+            "inspect",
+            "-f",
+            "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}",
+            container_id,
+        ],
+        text=True,
+    ).strip()
 
     r = requests.post(
         f"https://localhost:{balancer_port}/api/sql",

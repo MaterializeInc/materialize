@@ -58,6 +58,7 @@ class Balancerd(Service):
             s: {"condition": "service_started"} for s in depends_on
         }
         config: ServiceConfig = {
+            "init": True,
             "mzbuild": mzbuild,
             "command": command,
             "ports": [6875, 6876, 6877, 6878],
