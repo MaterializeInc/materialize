@@ -29,7 +29,7 @@ export const showCreateQueryKey = (params: ShowCreateStatementParameters) =>
  * Exectues a `SHOW CREATE` statement.
  */
 export function useShowCreate(params: ShowCreateStatementParameters) {
-  const { data, ...rest } = useSuspenseQuery({
+  const { data } = useSuspenseQuery({
     refetchInterval: 5000,
     queryKey: showCreateQueryKey(params),
     queryFn: async ({ queryKey, signal }) => {
@@ -40,5 +40,5 @@ export function useShowCreate(params: ShowCreateStatementParameters) {
       return result;
     },
   });
-  return { data: data.rows[0], ...rest };
+  return { data: data.rows[0] };
 }

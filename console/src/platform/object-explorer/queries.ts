@@ -80,7 +80,7 @@ export const objectExplorerQueryKeys = {
 };
 
 export const useDatabaseDetails = (params: DatabaseDetailsParameters) => {
-  const { data, ...rest } = useSuspenseQuery({
+  const { data } = useSuspenseQuery({
     queryKey: objectExplorerQueryKeys.databaseDetails(params),
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
@@ -94,11 +94,11 @@ export const useDatabaseDetails = (params: DatabaseDetailsParameters) => {
       return result;
     },
   });
-  return { data: data.rows[0], ...rest };
+  return { data: data.rows[0] };
 };
 
 export const useSchemaDetails = (params: SchemaDetailsParameters) => {
-  const { data, ...rest } = useSuspenseQuery({
+  const { data } = useSuspenseQuery({
     queryKey: objectExplorerQueryKeys.schemaDetails(params),
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
@@ -112,11 +112,11 @@ export const useSchemaDetails = (params: SchemaDetailsParameters) => {
       return result;
     },
   });
-  return { data: data.rows[0], ...rest };
+  return { data: data.rows[0] };
 };
 
 export const useObjectDetails = (params: ObjectExplorerDetailsParameters) => {
-  const { data, ...rest } = useSuspenseQuery({
+  const { data } = useSuspenseQuery({
     queryKey: objectExplorerQueryKeys.objectDetails(params),
     queryFn: async ({ queryKey, signal }) => {
       const [, parameters] = queryKey;
@@ -130,7 +130,7 @@ export const useObjectDetails = (params: ObjectExplorerDetailsParameters) => {
       return result;
     },
   });
-  return { data: data.rows[0], ...rest };
+  return { data: data.rows[0] };
 };
 
 export const useObjectColumns = (params: ObjectExplorerColumnsParameters) => {
