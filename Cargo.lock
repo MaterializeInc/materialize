@@ -7283,6 +7283,8 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-credential-types",
+ "aws-lc-rs",
+ "aws-sdk-kms",
  "aws-sdk-s3",
  "aws-types",
  "azure_core",
@@ -7330,6 +7332,7 @@ dependencies = [
  "urlencoding",
  "uuid",
  "workspace-hack",
+ "zeroize",
 ]
 
 [[package]]
