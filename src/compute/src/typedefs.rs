@@ -15,7 +15,8 @@ use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
-use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::implementations::merge_batcher::container::ColInternalMerger;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
@@ -119,8 +120,11 @@ pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
 
 // Batchers for consolidation
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
-pub type KeyValBatcher<K, V, T, D> =
-    MergeBatcher<Vec<((K, V), T, D)>, ColumnationChunker<((K, V), T, D)>, ColMerger<(K, V), T, D>>;
+pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
+    Vec<((K, V), T, D)>,
+    ColumnationChunker<((K, V), T, D)>,
+    ColInternalMerger<(K, V), T, D>,
+>;
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
 pub trait MzTimestamp:

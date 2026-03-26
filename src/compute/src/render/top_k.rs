@@ -20,7 +20,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
-use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
+use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::plan::top_k::{
@@ -542,7 +542,7 @@ where
     G::Timestamp: MzTimestamp,
     Bu: Builder<
             Time = G::Timestamp,
-            Input: Container + MergerChunk + PushInto<((Row, Tr::ValOwn), G::Timestamp, Diff)>,
+            Input: Container + InternalMerge + PushInto<((Row, Tr::ValOwn), G::Timestamp, Diff)>,
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<

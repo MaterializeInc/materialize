@@ -182,6 +182,7 @@ use timely::dataflow::operators::vec::{Filter, Map};
 use timely::dataflow::operators::{FrontierNotificator, Operator};
 use timely::dataflow::{ProbeHandle, Scope};
 use timely::progress::frontier::AntichainRef;
+use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp as _};
 use tracing::debug;
 
@@ -797,7 +798,7 @@ where
             Pipeline,
             [(0, Antichain::from_elem(step_forward_summary))],
         );
-        builder.set_notify(false);
+        builder.set_notify_for(0, FrontierInterest::Never);
         builder.build(move |_caps| {
             move |_frontiers| {
                 let mut output = output.activate();
@@ -845,7 +846,7 @@ where
         let (times, times_stream) = builder.new_output();
         let mut times = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(times);
         let mut input = builder.new_input(self.inner, Pipeline);
-        builder.set_notify(false);
+        builder.set_notify_for(0, FrontierInterest::Never);
         builder.build(|_caps| {
             move |_frontiers| {
                 let mut passthrough = passthrough.activate();

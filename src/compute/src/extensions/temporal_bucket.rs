@@ -16,7 +16,8 @@ use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
-use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::implementations::merge_batcher::container::ColInternalMerger;
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::PushInto;
@@ -169,13 +170,13 @@ where
 /// A wrapper around `MergeBatcher` that implements the `Storage` trait for bucketing.
 struct MergeBatcherWrapper<D, T, R>
 where
-    D: MzData + Ord,
+    D: MzData + Ord + Clone,
     T: MzData + Ord + PartialOrder + Clone,
     R: MzData + Semigroup + Default,
 {
     logger: Option<differential_dataflow::logging::Logger>,
     operator_id: usize,
-    inner: MergeBatcher<Vec<(D, T, R)>, ColumnationChunker<(D, T, R)>, ColMerger<D, T, R>>,
+    inner: MergeBatcher<Vec<(D, T, R)>, ColumnationChunker<(D, T, R)>, ColInternalMerger<D, T, R>>,
 }
 
 impl<D, T, R> MergeBatcherWrapper<D, T, R>

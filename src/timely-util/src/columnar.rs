@@ -23,13 +23,14 @@ pub mod builder;
 use std::hash::Hash;
 
 use columnar::Borrow;
-use columnar::bytes::{EncodeDecode, Indexed};
+use columnar::bytes::indexed;
 use columnar::common::IterOwn;
 use columnar::{Columnar, Ref};
 use columnar::{FromBytes, Index, Len};
 use differential_dataflow::Hashable;
 use differential_dataflow::containers::TimelyStack;
-use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::implementations::merge_batcher::container::ColInternalMerger;
 use mz_ore::region::Region;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
@@ -40,7 +41,7 @@ use timely::dataflow::channels::ContainerBytes;
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
     Column<((K, V), T, R)>,
     batcher::Chunker<TimelyStack<((K, V), T, R)>>,
-    ColMerger<(K, V), T, R>,
+    ColInternalMerger<(K, V), T, R>,
 >;
 /// A batcher for columnar storage with unit values.
 pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
@@ -69,10 +70,10 @@ impl<C: Columnar> Column<C> {
         match self {
             Column::Typed(t) => t.borrow(),
             Column::Bytes(b) => <<C::Container as Borrow>::Borrowed<'_>>::from_bytes(
-                &mut Indexed::decode(bytemuck::cast_slice(b)),
+                &mut indexed::decode(bytemuck::cast_slice(b)),
             ),
             Column::Align(a) => {
-                <<C::Container as Borrow>::Borrowed<'_>>::from_bytes(&mut Indexed::decode(a))
+                <<C::Container as Borrow>::Borrowed<'_>>::from_bytes(&mut indexed::decode(a))
             }
         }
     }
@@ -165,7 +166,7 @@ impl<C: Columnar> ContainerBytes for Column<C> {
     #[inline]
     fn length_in_bytes(&self) -> usize {
         match self {
-            Column::Typed(t) => Indexed::length_in_bytes(&t.borrow()),
+            Column::Typed(t) => indexed::length_in_bytes(&t.borrow()),
             Column::Bytes(b) => b.len(),
             Column::Align(a) => 8 * a.len(),
         }
@@ -174,7 +175,7 @@ impl<C: Columnar> ContainerBytes for Column<C> {
     #[inline]
     fn into_bytes<W: ::std::io::Write>(&self, writer: &mut W) {
         match self {
-            Column::Typed(t) => Indexed::write(writer, &t.borrow()).unwrap(),
+            Column::Typed(t) => indexed::write(writer, &t.borrow()).unwrap(),
             Column::Bytes(b) => writer.write_all(b).unwrap(),
             Column::Align(a) => writer.write_all(bytemuck::cast_slice(a)).unwrap(),
         }

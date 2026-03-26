@@ -17,7 +17,7 @@ use differential_dataflow::Data;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
+use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use timely::Container;
 use timely::container::PushInto;
@@ -42,7 +42,7 @@ where
             > + 'static,
         Bu: Builder<Time = G::Timestamp, Output = T2::Batch>,
         Bu::Input:
-            Container + MergerChunk + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>,
+            Container + InternalMerge + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>,
         L: FnMut(T1::Key<'_>, &[(T1::Val<'_>, T1::Diff)], &mut Vec<(T2::ValOwn, T2::Diff)>)
             + 'static,
         Arranged<G, TraceAgent<T2>>: ArrangementSize;
@@ -67,7 +67,7 @@ where
         Bu: Builder<
                 Time = G::Timestamp,
                 Input: Container
-                           + MergerChunk
+                           + InternalMerge
                            + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>,
                 Output = T2::Batch,
             >,
@@ -112,7 +112,7 @@ where
         Bu1: Builder<
                 Time = G::Timestamp,
                 Input: Container
-                           + MergerChunk
+                           + InternalMerge
                            + PushInto<((T1::KeyOwn, T1::ValOwn), T1::Time, T1::Diff)>,
                 Output = T1::Batch,
             >,
@@ -128,7 +128,7 @@ where
         Bu2: Builder<
                 Time = G::Timestamp,
                 Input: Container
-                           + MergerChunk
+                           + InternalMerge
                            + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>,
                 Output = T2::Batch,
             >,
@@ -162,7 +162,7 @@ where
         Bu1: Builder<
                 Time = G::Timestamp,
                 Input: Container
-                           + MergerChunk
+                           + InternalMerge
                            + PushInto<((T1::KeyOwn, T1::ValOwn), T1::Time, T1::Diff)>,
                 Output = T1::Batch,
             >,
@@ -178,7 +178,7 @@ where
         Bu2: Builder<
                 Time = G::Timestamp,
                 Input: Container
-                           + MergerChunk
+                           + InternalMerge
                            + PushInto<((T1::KeyOwn, T2::ValOwn), T2::Time, T2::Diff)>,
                 Output = T2::Batch,
             >,
