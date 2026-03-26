@@ -408,9 +408,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             let contains_addition = parsed_updates.iter().any(|(update, diff)| {
                 matches!(update, StateUpdateKind::FenceToken(..)) && *diff == Diff::ONE
             });
-            contains_retraction && contains_addition
+            Some(contains_retraction && contains_addition)
         } else {
-            false
+            None
         };
 
         let updates = updates.into_iter().map(|(kind, diff)| {
@@ -429,10 +429,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                 // catalog. We expect to have been fenced out, since writing to the catalog without
                 // fencing other catalogs should be impossible. The one exception is if we are
                 // trying to fence other catalogs with this write.
-                soft_assert_or_log!(
-                    matches!(e, CompareAndAppendError::Fence(_)) || contains_fence,
-                    "encountered an upper mismatch on a non-fencing write"
-                );
+                if let Some(contains_fence) = contains_fence {
+                    soft_assert_or_log!(
+                        matches!(e, CompareAndAppendError::Fence(_)) || contains_fence,
+                        "encountered an upper mismatch on a non-fencing write"
+                    );
+                }
             })?;
 
         self.sync(next_upper).await?;
