@@ -8,13 +8,13 @@
 // by the Apache License, Version 2.0.
 
 import { defineConfig, devices } from "@playwright/test";
-import moduleAlias from "module-alias";
+import { addAliases } from "module-alias";
 
 // HACK (SangJunBak):
 // This is a workaround to allow Playwright to resolve the importAppConfig file to the stub implementation in /e2e-tests/importAppConfig.ts.
 // This is necessary because Playwright requires CommonJS (which doesn't support top-level await), while our main appConfig uses ESM with top-level await.
 // We use module-alias rather than tsconfig.json's compilerOptions.paths because I couldn't get it to resolve correctly.
-moduleAlias.addAliases({
+addAliases({
   "~/config/importAppConfig": "__mocks__/importAppConfig",
 });
 
