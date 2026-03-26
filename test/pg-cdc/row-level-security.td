@@ -28,6 +28,8 @@ INSERT INTO foo (val, visible) VALUES ('a', true), ('b', false);
 
 CREATE POLICY restrict_mzuser ON foo FOR SELECT TO mz_user USING (visible = TRUE);
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE CLUSTER rls SIZE = 'scale=1,workers=1', REPLICATION FACTOR = 1;

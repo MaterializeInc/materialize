@@ -20,6 +20,7 @@ INSERT INTO concurrent_delete VALUES (3);
 INSERT INTO concurrent_delete VALUES (4);
 INSERT INTO concurrent_delete VALUES (5);
 INSERT INTO concurrent_delete VALUES (6);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.concurrent_delete
 

@@ -56,6 +56,8 @@ class TableFromPgSource(TableFromSourceBase):
                 CREATE TABLE pg_table_2 (a INTEGER);
                 INSERT INTO pg_table_2 VALUES (1000), (2000);
                 ALTER TABLE pg_table_2 REPLICA IDENTITY FULL;
+                ANALYZE pg_table_1;
+                ANALYZE pg_table_2;
 
                 > CREATE SOURCE pg_source_{self.suffix} FROM POSTGRES CONNECTION pg_conn_{self.suffix} (PUBLICATION 'mz_source_{self.suffix}');
 

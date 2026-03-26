@@ -14,6 +14,7 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_precise (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_precise VALUES (1234567.890);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.decimal_handling_mode_precise
 
@@ -64,6 +65,7 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_double (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_double VALUES (2234567.890);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.decimal_handling_mode_double
 
@@ -107,6 +109,7 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_handling_mode_string (f1 DECIMAL(10,3) PRIMARY KEY);
 INSERT INTO decimal_handling_mode_string VALUES (3234567.890);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.decimal_handling_mode_string
 
