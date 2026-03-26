@@ -115,14 +115,14 @@
 //! fetch a portion of the table.
 //!
 //! The partitioning works as follows:
-//! 1. The snapshot leader queries `pg_class.relpages` to estimate the number of blocks for each
-//!    table. This is much faster than querying `max(ctid)` which would require a sequential scan.
-//! 2. The leader broadcasts the block count estimates along with the snapshot transaction ID
-//!    to all workers, ensuring all workers use consistent estimates for partitioning.
+//! 1. The snapshot leader queries `pg_relation_size / block_size` to get the number of blocks
+//!    for each table. This is O(1) and always accurate regardless of whether ANALYZE has run.
+//! 2. The leader broadcasts the block counts along with the snapshot transaction ID
+//!    to all workers, ensuring all workers use consistent counts for partitioning.
 //! 3. Each worker calculates its assigned block range and fetches rows using a `COPY` query
 //!    with a `SELECT` that filters by `ctid >= start AND ctid < end`.
-//! 4. The last worker uses an open-ended range (`ctid >= start`) to capture any rows beyond
-//!    the estimated block count (handles cases where statistics are stale or table has grown).
+//! 4. The last worker uses an open-ended range (`ctid >= start`) to capture any rows inserted
+//!    after the block count was read (the table may grow during the snapshot).
 //!
 //! This approach efficiently parallelizes large table snapshots while maintaining the benefits
 //! of the `COPY` protocol for bulk data transfer.
@@ -208,15 +208,15 @@ use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 /// Information broadcasted from the snapshot leader to all workers.
-/// This includes the transaction snapshot ID, LSN, and estimated block counts for each table.
+/// This includes the transaction snapshot ID, LSN, and block counts for each table.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SnapshotInfo {
     /// The exported transaction snapshot identifier.
     snapshot_id: String,
     /// The LSN at which the snapshot was taken.
     snapshot_lsn: MzOffset,
-    /// Estimated number of blocks (pages) for each table, keyed by OID.
-    /// This is derived from `pg_class.relpages` and used to partition ctid ranges.
+    /// Number of blocks (pages) for each table, keyed by OID.
+    /// Derived from `pg_relation_size / block_size` and used to partition ctid ranges.
     table_block_counts: BTreeMap<u32, u64>,
     /// The current upstream schema of each table.
     upstream_info: BTreeMap<u32, PostgresTableDesc>,
@@ -232,30 +232,28 @@ struct CtidRange {
     end_block: Option<u64>,
 }
 
-/// Calculate the ctid range for a given worker based on estimated block count.
+/// Calculate the ctid range for a given worker based on block count.
 ///
 /// The table is partitioned by block number across all workers. Each worker gets a contiguous
-/// range of blocks. The last worker gets an open-ended range to handle any rows beyond the
-/// estimated block count.
+/// range of blocks. The last worker gets an open-ended range to capture any rows inserted
+/// after the block count was read.
 ///
-/// When `estimated_blocks` is 0 (either because statistics are unavailable, the table appears
-/// empty, or PostgreSQL version < 14 doesn't support ctid range scans), the table is assigned
-/// to a single worker determined by `config.responsible_for(oid)` and that worker scans the
-/// full table.
+/// When `block_count` is 0 (either because the table is empty or PostgreSQL version < 14
+/// doesn't support ctid range scans), the table is assigned to a single worker determined
+/// by `config.responsible_for(oid)` and that worker scans the full table.
 ///
 /// Returns None if this worker has no work to do.
 fn worker_ctid_range(
     config: &RawSourceCreationConfig,
-    estimated_blocks: u64,
+    block_count: u64,
     oid: u32,
 ) -> Option<CtidRange> {
-    // If estimated_blocks is 0, fall back to single-worker mode for this table.
+    // If block_count is 0, fall back to single-worker mode for this table.
     // This handles:
     // - PostgreSQL < 14 (ctid range scans not supported)
-    // - Tables that appear empty in statistics
-    // - Tables with stale/missing statistics
+    // - Genuinely empty tables
     // The responsible worker scans the full table with an open-ended range.
-    if estimated_blocks == 0 {
+    if block_count == 0 {
         let fallback = if config.responsible_for(oid) {
             Some(CtidRange {
                 start_block: 0,
@@ -270,9 +268,9 @@ fn worker_ctid_range(
     let worker_id = u64::cast_from(config.worker_id);
     let worker_count = u64::cast_from(config.worker_count);
 
-    // If there are more workers than blocks, only assign work to workers with id < estimated_blocks
+    // If there are more workers than blocks, only assign work to workers with id < block_count
     // The last assigned worker still gets an open range.
-    let effective_worker_count = std::cmp::min(worker_count, estimated_blocks);
+    let effective_worker_count = std::cmp::min(worker_count, block_count);
 
     if worker_id >= effective_worker_count {
         // This worker has no work to do
@@ -280,7 +278,7 @@ fn worker_ctid_range(
     }
 
     // Calculate start block for this worker (integer division distributes blocks evenly)
-    let start_block = worker_id * estimated_blocks / effective_worker_count;
+    let start_block = worker_id * block_count / effective_worker_count;
 
     // The last effective worker gets an open-ended range
     let is_last_effective_worker = worker_id == effective_worker_count - 1;
@@ -290,7 +288,7 @@ fn worker_ctid_range(
             end_block: None,
         })
     } else {
-        let end_block = (worker_id + 1) * estimated_blocks / effective_worker_count;
+        let end_block = (worker_id + 1) * block_count / effective_worker_count;
         Some(CtidRange {
             start_block,
             end_block: Some(end_block),
@@ -298,9 +296,9 @@ fn worker_ctid_range(
     }
 }
 
-/// Estimate the number of blocks for each table from pg_class statistics.
+/// Get the number of blocks for each table via `pg_relation_size / block_size`.
 /// This is used to partition ctid ranges across workers.
-async fn estimate_table_block_counts(
+async fn get_table_block_counts(
     client: &Client,
     table_oids: &[u32],
 ) -> Result<BTreeMap<u32, u64>, TransientError> {
@@ -308,14 +306,20 @@ async fn estimate_table_block_counts(
         return Ok(BTreeMap::new());
     }
 
-    // Query relpages for all tables at once
+    // Use pg_relation_size / block_size to get accurate block counts. Unlike
+    // pg_class.relpages, this is always up to date because it reads the actual
+    // file size from the OS, regardless of whether ANALYZE has run. This
+    // ensures ctid-based parallel snapshots work correctly even for freshly
+    // loaded tables where relpages would still be 0.
     let oid_list = table_oids
         .iter()
         .map(|oid| oid.to_string())
         .collect::<Vec<_>>()
         .join(",");
     let query = format!(
-        "SELECT oid, relpages FROM pg_class WHERE oid IN ({})",
+        "SELECT oid, \
+                pg_relation_size(oid) / current_setting('block_size')::bigint AS blocks \
+         FROM pg_class WHERE oid IN ({})",
         oid_list
     );
 
@@ -330,10 +334,9 @@ async fn estimate_table_block_counts(
     for msg in rows {
         if let tokio_postgres::SimpleQueryMessage::Row(row) = msg {
             let oid: u32 = row.get("oid").unwrap().parse().unwrap();
-            let relpages: i64 = row.get("relpages").unwrap().parse().unwrap_or(0);
-            // relpages can be -1 if never analyzed, treat as 0
-            let relpages = std::cmp::max(0, relpages).try_into().unwrap();
-            block_counts.insert(oid, relpages);
+            let blocks: i64 = row.get("blocks").unwrap().parse().unwrap_or(0);
+            let blocks = std::cmp::max(0, blocks).try_into().unwrap();
+            block_counts.insert(oid, blocks);
         }
     }
 
@@ -475,7 +478,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 statistics.set_snapshot_records_staged(0);
             }
 
-            // Collect table OIDs for block count estimation
+            // Collect table OIDs for block count lookup
             let table_oids: Vec<u32> = tables_to_snapshot.keys().copied().collect();
 
             // replication client is only set if this worker is the snapshot leader
@@ -489,14 +492,14 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     // due to improvements in TID range scan support.
                     let pg_version = get_pg_major_version(&client).await?;
 
-                    // Estimate block counts for all tables from pg_class statistics.
+                    // Get block counts for all tables via pg_relation_size.
                     // This must be done by the leader and broadcasted to ensure all workers
-                    // use the same estimates for ctid range partitioning.
+                    // use the same counts for ctid range partitioning.
                     //
                     // For PostgreSQL < 14, we set all block counts to 0 to fall back to
                     // single-worker-per-table mode, as ctid range scans are not well supported.
                     let table_block_counts = if pg_version >= 14 {
-                        estimate_table_block_counts(&client, &table_oids).await?
+                        get_table_block_counts(&client, &table_oids).await?
                     } else {
                         trace!(
                             %id,
@@ -639,11 +642,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                         continue;
                     }
 
-                    // Get estimated block count from the broadcasted table statistics
+                    // Get block count from the broadcasted table info
                     let block_count = table_block_counts.get(&oid).copied().unwrap_or(0);
 
-                    // Calculate this worker's ctid range based on estimated blocks.
-                    // When estimated_blocks is 0 (PG < 14 or empty table), fall back to
+                    // Calculate this worker's ctid range based on block count.
+                    // When block_count is 0 (PG < 14 or empty table), fall back to
                     // single-worker mode using responsible_for to pick the worker.
                     let Some(ctid_range) = worker_ctid_range(&config, block_count, oid) else {
                         // This worker has no work for this table (more workers than blocks)
