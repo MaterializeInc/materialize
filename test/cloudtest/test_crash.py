@@ -21,8 +21,7 @@ from materialize.cloudtest.util.wait import wait
 
 def populate(mz: MaterializeApplication, seed: int) -> None:
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE TABLE t1 (f1 INTEGER);
 
             > INSERT INTO t1 VALUES (123);
@@ -55,16 +54,14 @@ def populate(mz: MaterializeApplication, seed: int) -> None:
 
             > SELECT COUNT(*) > 0 FROM s1_tbl;
             true
-            """
-        ),
+            """),
         seed=seed,
     )
 
 
 def validate(mz: MaterializeApplication, seed: int) -> None:
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > INSERT INTO t1 VALUES (345);
 
             $ kafka-ingest format=bytes topic=crash
@@ -79,8 +76,7 @@ def validate(mz: MaterializeApplication, seed: int) -> None:
             > SELECT * FROM v1;
             3
             3
-            """
-        ),
+            """),
         no_reset=True,
         seed=seed,
     )
@@ -146,12 +142,10 @@ def test_crash_environmentd(mz: MaterializeApplication) -> None:
 def test_crash_clusterd(mz: MaterializeApplication) -> None:
     populate(mz, 3)
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             $[version>=5500] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true;
-            """
-        ),
+            """),
         no_reset=True,
     )
     mz.environmentd.sql("CREATE TABLE crash_table (f1 TEXT)")
@@ -161,11 +155,9 @@ def test_crash_clusterd(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("INSERT INTO crash_table VALUES ('forced panic')")
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             > DROP MATERIALIZED VIEW crash_view
-            """
-        ),
+            """),
         no_reset=True,
         seed=3,
     )

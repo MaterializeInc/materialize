@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """Build context providing a partial facade to git utilities and buildkite utilities."""
+
 import os
 
 from materialize import buildkite, git

@@ -21,7 +21,6 @@ or execution, the entire query will start producing a different result.
 Such queries are suitable for inclusion in regression tests
 """
 
-
 from pg8000.dbapi import DatabaseError
 
 from materialize.query_fitness.fitness_function import FitnessFunction

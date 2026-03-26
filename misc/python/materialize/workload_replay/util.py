@@ -273,7 +273,7 @@ def get_kafka_topic(source: dict[str, Any]) -> str:
 
 
 def get_postgres_reference_db_schema_table(
-    child: dict[str, Any]
+    child: dict[str, Any],
 ) -> tuple[str, str, str]:
     """Extract database, schema, and table from a Postgres source child."""
     if child["type"] == "table":
@@ -315,7 +315,7 @@ def get_mysql_reference_db_table(child: dict[str, Any]) -> tuple[str, str]:
 
 
 def get_sql_server_reference_db_schema_table(
-    child: dict[str, Any]
+    child: dict[str, Any],
 ) -> tuple[str, str, str]:
     """Extract database, schema, and table from a SQL Server source child."""
     if child["type"] == "table":

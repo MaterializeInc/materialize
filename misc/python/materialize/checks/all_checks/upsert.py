@@ -21,10 +21,7 @@ class UpsertInsert(Check):
     """Test that repeated inserts of the same record are properly handled"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 $ kafka-create-topic topic=upsert-insert
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-insert key-schema=${keyschema} schema=${schema} repeat=10000
@@ -37,9 +34,7 @@ class UpsertInsert(Check):
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_insert_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -57,25 +52,18 @@ class UpsertInsert(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert
                 10000 10000 10000
 
                 > SELECT * FROM upsert_insert_view;
                 10000
-           """
-            )
-        )
+           """))
 
 
 class UpsertUpdate(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 $ kafka-create-topic topic=upsert-update
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-update key-schema=${keyschema} schema=${schema} repeat=10000
@@ -88,9 +76,7 @@ class UpsertUpdate(Check):
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_update_view AS SELECT LEFT(f1, 1), COUNT(*) AS c1, COUNT(DISTINCT key1) AS c2, COUNT(DISTINCT f1) AS c3 FROM upsert_update GROUP BY LEFT(f1, 1);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -108,22 +94,15 @@ class UpsertUpdate(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_update_view;
                 C 10000 10000 10000
-           """
-            )
-        )
+           """))
 
 
 class UpsertDelete(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 $ kafka-create-topic topic=upsert-delete
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-delete key-schema=${keyschema} schema=${schema} repeat=30000
@@ -136,9 +115,7 @@ class UpsertDelete(Check):
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_delete_view AS SELECT COUNT(*), MIN(key1), MAX(key1) FROM upsert_delete;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -156,14 +133,10 @@ class UpsertDelete(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM upsert_delete_view;
                 10000 10000 19999
-           """
-            )
-        )
+           """))
 
 
 class UpsertLegacy(Check):
@@ -174,10 +147,7 @@ class UpsertLegacy(Check):
     """
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 $ kafka-create-topic topic=upsert-legacy-syntax
 
                 $ kafka-ingest format=avro key-format=avro topic=upsert-legacy-syntax key-schema=${keyschema} schema=${schema} repeat=10000
@@ -189,9 +159,7 @@ class UpsertLegacy(Check):
                   ENVELOPE UPSERT
 
                 > CREATE MATERIALIZED VIEW upsert_insert_legacy_view AS SELECT COUNT(DISTINCT key1 || ' ' || f1) FROM upsert_insert_legacy;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -209,14 +177,10 @@ class UpsertLegacy(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*), COUNT(DISTINCT key1), COUNT(DISTINCT f1) FROM upsert_insert_legacy
                 10000 10000 10000
 
                 > SELECT * FROM upsert_insert_legacy_view;
                 10000
-           """
-            )
-        )
+           """))

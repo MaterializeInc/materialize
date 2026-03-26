@@ -33,9 +33,7 @@ class PgCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres1{self.suffix} WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres1{self.suffix} WITH replication;
@@ -57,9 +55,7 @@ class PgCdcBase:
                   DATABASE postgres,
                   USER postgres1{self.suffix},
                   PASSWORD SECRET pgpass1{self.suffix}
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -168,8 +164,7 @@ class PgCdcBase:
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            f"""
+        sql = dedent(f"""
             $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT SELECT ON postgres_source_tableA{self.suffix} TO materialize
             GRANT SELECT ON postgres_source_tableB{self.suffix} TO materialize
@@ -259,8 +254,7 @@ class PgCdcBase:
               - materialize.public.postgres_source_tablea{self.suffix}_primary_idx (*** full scan ***)
 
             Target cluster: quickstart
-            """
-        )
+            """)
 
         return Testdrive(sql)
 
@@ -280,9 +274,7 @@ class PgCdcNoWait(PgCdcBase, Check):
 @externally_idempotent(False)
 class PgCdcMzNow(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 CREATE USER postgres2 WITH SUPERUSER PASSWORD 'postgres';
                 ALTER USER postgres2 WITH replication;
@@ -318,9 +310,7 @@ class PgCdcMzNow(Check):
                 > CREATE MATERIALIZED VIEW postgres_mz_now_view AS
                   SELECT * FROM postgres_mz_now_table
                   WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -350,9 +340,7 @@ class PgCdcMzNow(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*) FROM postgres_mz_now_table;
                 13
 
@@ -379,9 +367,7 @@ class PgCdcMzNow(Check):
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM postgres_mz_now_table WHERE f2 LIKE '%4%';
-                """
-            )
-        )
+                """))
 
 
 def remove_target_cluster_from_explain(sql: str) -> str:

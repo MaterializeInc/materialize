@@ -71,8 +71,7 @@ class CreateSqlServerCdcTable(Action):
             assert self.sql_server_cdc_table.sql_server_table is not None
             name = self.sql_server_cdc_table.name
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     > CREATE SECRET {name}_password AS '{SqlServer.DEFAULT_SA_PASSWORD}'
                     > CREATE CONNECTION {name}_conn TO SQL SERVER (
                         HOST 'sql-server',
@@ -86,8 +85,7 @@ class CreateSqlServerCdcTable(Action):
                       FROM SQL SERVER CONNECTION {name}_conn;
 
                     > CREATE TABLE {name} FROM SOURCE {name}_source (REFERENCE {self.sql_server_cdc_table.sql_server_table.name});
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 

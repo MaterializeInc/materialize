@@ -156,9 +156,7 @@ def workflow_no_agent(c: Composition, parser: WorkflowArgumentParser) -> None:
             ):
                 c.up("sql-server")
 
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                         > CREATE SECRET IF NOT EXISTS sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'
 
                         ! CREATE CONNECTION sql_server_conn TO SQL SERVER (
@@ -168,9 +166,7 @@ def workflow_no_agent(c: Composition, parser: WorkflowArgumentParser) -> None:
                             USER '{SqlServer.DEFAULT_USER}',
                             PASSWORD = SECRET sql_server_pass);
                         contains:Invalid SQL Server system replication settings
-                        """
-                    )
-                )
+                        """))
     finally:
         c.kill("sql-server")
         c.rm("sql-server")
@@ -202,9 +198,7 @@ def workflow_snapshot_consistency(
             f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
             f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
         )
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -224,21 +218,17 @@ def workflow_snapshot_consistency(
                     PASSWORD = SECRET mssql_pass);
 
                 > DROP SOURCE IF EXISTS mssql_source CASCADE;
-                """
-            )
-        )
+                """))
 
     # Create a concurrent workload with 2 variaties of updates
     # - insert of new rows
     # - insert and delete of a row (the same row)
     update_id_offset = 10000
     update_val_offset = 100000
-    insert_delete = lambda i: dedent(
-        f"""
+    insert_delete = lambda i: dedent(f"""
         INSERT INTO t1 VALUES (999999999,666666666), ({i + update_id_offset}, {i + update_val_offset});
         DELETE FROM t1 WHERE id = 999999999;
-        """
-    )
+        """)
 
     # The number of update rows is based on local testing. While this doesn't guarantee that updates
     # to SQL server are ocurring throughout the snapshot -> replication transition of the source, there is
@@ -247,18 +237,13 @@ def workflow_snapshot_consistency(
     upstream_updates = "\n".join([insert_delete(i) for i in range(update_rows)])
 
     def concurrent_updates(c: Composition) -> None:
-        input = (
-            dedent(
-                f"""
+        input = dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                """
-            )
-            + upstream_updates
-        )
+                """) + upstream_updates
         c.testdrive(args=["--no-reset"], input=input)
 
     driver_thread = threading.Thread(target=concurrent_updates, args=(c,))
@@ -268,13 +253,11 @@ def workflow_snapshot_consistency(
     # create the subsource that will create a snapshot and start replicating
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE SOURCE mssql_source
               FROM SQL SERVER CONNECTION mssql_connection
               FOR TABLES (dbo.t1);
-            """
-        ),
+            """),
     )
 
     # validate MZ sees the correct results once the conccurent load is complete
@@ -282,12 +265,10 @@ def workflow_snapshot_consistency(
     print("==== Validate concurrent updates")
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            f"""
+        input=dedent(f"""
             > SELECT COUNT(*) >= {update_rows + initial_rows}, MIN(id), MAX(id) >= {update_rows + update_id_offset - 1} FROM t1;
             true 1 true
-            """
-        ),
+            """),
     )
 
 
@@ -307,9 +288,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
         )
         # Set up the SQL Server instance with the initial records, set up the
         # connection to the SQL Server instance in Materialize.
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -328,23 +307,19 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
                     PASSWORD = SECRET mssql_pass);
 
                 > DROP SOURCE IF EXISTS mssql_source CASCADE;
-                """
-            )
-        )
+                """))
 
         def make_inserts(c: Composition, start: int, batch_num: int):
             c.testdrive(
                 args=["--no-reset"],
-                input=dedent(
-                    f"""
+                input=dedent(f"""
                     $ sql-server-connect name=sql-server
                     server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                     $ sql-server-execute name=sql-server
                     USE test;
                     WITH nums AS (SELECT TOP ({batch_num}) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) - 1 AS i FROM sys.all_objects a CROSS JOIN sys.all_objects b) INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT {start} + i, 'name' + CAST({start} + i AS VARCHAR(20)), ({start} + i) % 1000, ({start} + i) % 1000, ({start} + i) % 10, CAST('2024-12-12' AS DATE), REPLICATE('x', 1024) FROM nums;
-                """
-                ),
+                """),
             )
 
         num_rows = 10_000_000
@@ -355,25 +330,21 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
         c.testdrive(
             args=["--no-reset"],
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 > CREATE SOURCE s1
                   FROM SQL SERVER CONNECTION mssql_connection;
                 > CREATE TABLE products FROM SOURCE s1 (REFERENCE products);
                 > SELECT COUNT(*) FROM products;
                 {num_rows}
-                """
-            ),
+                """),
         )
 
         make_inserts(c, num_rows, 1)
 
         c.testdrive(
             args=["--no-reset"],
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 > SELECT COUNT(*) FROM products;
                 {num_rows + 1}
-                """
-            ),
+                """),
         )

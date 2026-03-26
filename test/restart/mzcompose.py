@@ -119,8 +119,7 @@ def workflow_github_5108(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE SOURCE with_subsources FROM LOAD GENERATOR AUCTION;
             > CREATE TABLE accounts FROM SOURCE with_subsources (REFERENCE accounts);
             > CREATE TABLE auctions FROM SOURCE with_subsources (REFERENCE auctions);
@@ -152,8 +151,7 @@ def workflow_github_5108(c: Composition) -> None:
             with_subsources   accounts
             with_subsources   auctions
             with_subsources   organizations
-            """
-        ),
+            """),
     )
 
     # Restart mz
@@ -162,8 +160,7 @@ def workflow_github_5108(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT
               top_level_s.name as source,
               s.name AS subsource
@@ -189,8 +186,7 @@ def workflow_github_5108(c: Composition) -> None:
             with_subsources   auctions
             with_subsources   organizations
 
-            """
-        ),
+            """),
     )
 
     c.kill("materialized")
@@ -282,8 +278,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # We can create a cluster with sizes 'scale=1,workers=1' and 'scale=1,workers=2'
@@ -299,8 +294,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
             ! CREATE CLUSTER REPLICA test.r3 SIZE 'scale=1,workers=2'
             contains:unknown cluster replica size scale=1,workers=2
-            """
-        ),
+            """),
     )
 
     # Assert that mz restarts successfully even in the presence of replica sizes that are not allowed
@@ -309,8 +303,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # Cluster replica of disallowed sizes still exist
@@ -332,8 +325,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             test r1 scale=1,workers=1 true ""
             test r2 scale=1,workers=2 true ""
             test r3 scale=1,workers=2 true ""
-            """
-        ),
+            """),
     )
 
     # Assert that the persisted allowed_cluster_replica_sizes (a setting that
@@ -343,8 +335,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SHOW allowed_cluster_replica_sizes
             "\\"scale=1,workers=1\\", \\"scale=1,workers=2\\""
 
@@ -353,8 +344,7 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
             # Reset for following tests
             $ postgres-execute connection=mz_system
             ALTER SYSTEM RESET allowed_cluster_replica_sizes
-            """
-        ),
+            """),
     )
 
 
@@ -658,8 +648,7 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             $ kafka-create-topic topic=status-history
 
             > CREATE CONNECTION kafka_conn
@@ -682,34 +671,29 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
               ENVELOPE DEBEZIUM
 
             $ kafka-verify-topic sink=materialize.public.kafka_sink
-            """
-        ),
+            """),
     )
 
     # Fill mz_source_status_history and mz_sink_status_history up with enough events
     for i in range(5):
         c.testdrive(
             service="testdrive_no_reset",
-            input=dedent(
-                """
+            input=dedent("""
                 > ALTER CONNECTION kafka_conn SET (BROKER 'dne') WITH (VALIDATE = false);
                 > ALTER CONNECTION kafka_conn SET (BROKER '${testdrive.kafka-addr}') WITH (VALIDATE = true);
-                """
-            ),
+                """),
         )
 
     # Verify that we have enough events so that they can be truncated
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT COUNT(*) > 7 FROM mz_internal.mz_source_status_history
             true
 
             > SELECT COUNT(*) > 7 FROM mz_internal.mz_sink_status_history
             true
-            """
-        ),
+            """),
     )
 
     # Restart mz.
@@ -721,15 +705,13 @@ def workflow_bound_size_mz_status_history(c: Composition) -> None:
     # objects produce a new starting and running event.
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT COUNT(*) FROM mz_internal.mz_source_status_history
             14
 
             > SELECT COUNT(*) FROM mz_internal.mz_sink_status_history
             7
-            """
-        ),
+            """),
     )
 
 
@@ -748,8 +730,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
     # Create a replica and wait for metrics data to arrive.
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > CREATE CLUSTER test SIZE 'scale=1,workers=1'
 
             > SELECT count(*) >= 1
@@ -758,8 +739,7 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # The default retention interval is 30 days, so we don't expect truncation
@@ -769,16 +749,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) >= 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # Reduce the retention interval to force a truncation.
@@ -793,16 +771,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) < 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
     # Verify that this also works a second time.
@@ -811,16 +787,14 @@ def workflow_bound_size_mz_cluster_replica_metrics_history(c: Composition) -> No
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > SELECT count(*) < 2
               FROM mz_internal.mz_cluster_replica_metrics_history m
               JOIN mz_cluster_replicas r ON r.id = m.replica_id
               JOIN mz_clusters c ON c.id = r.cluster_id
               WHERE c.name = 'test'
             true
-            """
-        ),
+            """),
     )
 
 
@@ -847,8 +821,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
         """Check whether `(obj_name, dep_name)` is a compute dependency or not."""
         c.testdrive(
             service="testdrive_no_reset",
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 > (
                     SELECT
                       true
@@ -883,14 +856,12 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
                       )
                   );
                 {str(expected).lower()}
-                """
-            ),
+                """),
         )
 
     c.testdrive(
         service="testdrive_no_reset",
-        input=dedent(
-            """
+        input=dedent("""
             > DROP TABLE IF EXISTS t1 CASCADE;
             > DROP TABLE IF EXISTS t2 CASCADE;
 
@@ -908,8 +879,7 @@ def workflow_index_compute_dependencies(c: Composition) -> None:
             > CREATE VIEW v2 AS SELECT * FROM t2 JOIN t1 USING (y);
             > CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM v2;
             > CREATE INDEX ix2 ON v2(x);
-            """
-        ),
+            """),
     )
 
     # Verify that mv1 and ix1 depend on t1_y_idx but not on t2_y_idx.

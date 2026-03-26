@@ -58,10 +58,7 @@ def wait_for_freshness(c: Composition) -> None:
     time.sleep(10)
     prev_lagging: set[str] = set()
     while True:
-        lagging: set[str] = {
-            entry[0]
-            for entry in c.sql_query(
-                """
+        lagging: set[str] = {entry[0] for entry in c.sql_query("""
             SELECT o.name
             FROM mz_internal.mz_materialization_lag l
             JOIN mz_objects o ON o.id = l.object_id
@@ -69,9 +66,7 @@ def wait_for_freshness(c: Composition) -> None:
               AND o.id NOT IN (SELECT id FROM mz_sinks)
               AND (l.global_lag IS NULL OR l.global_lag > INTERVAL '10 seconds')
             ORDER BY l.global_lag DESC NULLS FIRST
-            LIMIT 5;"""
-            )
-        }
+            LIMIT 5;""")}
         if lagging:
             if lagging != prev_lagging:
                 print(f"  Lagging: {', '.join(sorted(lagging))}")
@@ -185,10 +180,7 @@ def test(
         print("Waiting for hydration")
         prev_not_hydrated: list[str] = []
         while True:
-            not_hydrated: list[str] = [
-                entry[0]
-                for entry in c.sql_query(
-                    """
+            not_hydrated: list[str] = [entry[0] for entry in c.sql_query("""
                 SELECT DISTINCT name
                     FROM (
                       SELECT o.name
@@ -209,9 +201,7 @@ def test(
                         AND o.name NOT LIKE 'mz_%'
                         AND o.id NOT IN (SELECT id FROM mz_sinks)
                     ) x
-                    ORDER BY 1;"""
-                )
-            ]
+                    ORDER BY 1;""")]
             if not_hydrated:
                 if not_hydrated != prev_not_hydrated:
                     print(f"  Not yet hydrated: {', '.join(not_hydrated)}")

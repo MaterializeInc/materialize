@@ -351,16 +351,14 @@ class SqlServerExecutor(Executor):
         else:
             assert self.composition
             self.composition.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
                 USE test;
                 {query}
-            """
-                ),
+            """),
                 quiet=True,
                 silent=True,
             )

@@ -232,15 +232,11 @@ def workflow_default(c: Composition) -> None:
         c.testdrive("\n".join(["> SHOW max_result_size", "1GB"]))
         c.stop("materialized")
     except launchdarkly_api.ApiException as e:
-        raise UIError(
-            dedent(
-                f"""
+        raise UIError(dedent(f"""
                 Error when calling the Launch Darkly API.
                 - Status: {e.status},
                 - Reason: {e.reason},
-                """
-            )
-        )
+                """))
     finally:
         try:
             ld_client.delete_flag(LD_FEATURE_FLAG_KEY)

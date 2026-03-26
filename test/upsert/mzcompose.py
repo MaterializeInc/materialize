@@ -404,7 +404,7 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
 
     # Returns rockdb's cluster level and source level paths for a given source table name
     def rocksdb_path(source_tbl_name: str) -> tuple[str, str]:
-        (source_id, cluster_id, replica_id) = c.sql_query(
+        source_id, cluster_id, replica_id = c.sql_query(
             f"""select t.id, s.cluster_id, c.id
             from
             mz_sources s,
@@ -441,8 +441,8 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             c.up(Service("testdrive", idle=True))
             c.exec("testdrive", f"rocksdb-cleanup/{testdrive_file}")
 
-            (_, kept_source_path) = rocksdb_path("kept_upsert_tbl")
-            (dropped_cluster_path, dropped_source_path) = rocksdb_path(
+            _, kept_source_path = rocksdb_path("kept_upsert_tbl")
+            dropped_cluster_path, dropped_source_path = rocksdb_path(
                 "dropped_upsert_tbl"
             )
 
@@ -458,15 +458,11 @@ def workflow_rocksdb_cleanup(c: Composition) -> None:
             else:
                 assert num_files(dropped_source_path) == 0
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             $ nop
 
             # this is to reset testdrive
-            """
-            )
-        )
+            """))
 
 
 # This should not be run on ci and is not added to workflow_default above!
@@ -507,14 +503,10 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.rm("testdrive")
         c.up(Service("testdrive", idle=True))
         c.exec("testdrive", "load-test/setup.td")
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
                 "AAA":"START MARKER"
-                """
-            )
-        )
+                """))
         for number in range(updates_count):
             c.exec(
                 "testdrive",
@@ -523,23 +515,15 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "load-test/insert.td",
             )
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
                 "ZZZ":"END MARKER"
-                """
-            )
-        )
+                """))
 
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 > select * from v1;
                 {repeat + 2}
-                """
-            )
-        )
+                """))
 
         scenarios = [
             (
@@ -596,9 +580,7 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.kill("materialized", "clusterd1")
                 print(f"Running rehydration for scenario {scenario_name}")
                 c.up("materialized", "clusterd1")
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                 > select sum(records_indexed)
                   from mz_internal.mz_source_statistics st
                   join mz_sources s on s.id = st.id
@@ -610,18 +592,14 @@ def workflow_load_test(c: Composition, parser: WorkflowArgumentParser) -> None:
                   join mz_sources s on s.id = st.id
                   where name = 's1';
                 true
-                """
-                    )
-                )
+                """))
                 # ensure we wait till the stat is updated
                 rehydration_latency = last_latency
                 while rehydration_latency == last_latency:
-                    rehydration_latency = c.sql_query(
-                        """select max(rehydration_latency)
+                    rehydration_latency = c.sql_query("""select max(rehydration_latency)
                         from mz_internal.mz_source_statistics st
                         join mz_sources s on s.id = st.id
-                        where name = 's1';"""
-                    )[0]
+                        where name = 's1';""")[0]
                 last_latency = rehydration_latency
                 print(f"Scenario {scenario_name} took {rehydration_latency} ms")
 
@@ -653,26 +631,20 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
         c.rm("testdrive")
         c.up(Service("testdrive", idle=True))
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
             $ kafka-create-topic topic=topic1
 
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
               FOR KAFKA BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT;
-            """
-            )
-        )
+            """))
 
         def make_inserts(c: Composition, start: int, batch_num: int):
             c.testdrive(
                 args=["--no-reset"],
-                input=dedent(
-                    f"""
+                input=dedent(f"""
                     $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=: repeat={batch_num}
                     "${{kafka-ingest.iteration}}":"{'x'*1_000_000}"
-                    """
-                ),
+                    """),
             )
 
         num_rows = 100_000  # out of disk with 200_000 rows
@@ -683,8 +655,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
         c.testdrive(
             args=["--no-reset"],
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 > CREATE SOURCE s1
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic1-${{testdrive.seed}}');
 
@@ -694,26 +665,21 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
                 > SELECT COUNT(*) FROM s1_tbl;
                 {batch_size}
-                """
-            ),
+                """),
         )
 
         c.testdrive(
             args=["--no-reset"],
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 $ kafka-ingest format=bytes topic=topic1 key-format=bytes key-terminator=:
                 "{batch_size + 1}":"{'x'*1_000_000}"
-                """
-            ),
+                """),
         )
 
         c.testdrive(
             args=["--no-reset"],
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 > SELECT COUNT(*) FROM s1_tbl;
                 {batch_size + 1}
-                """
-            ),
+                """),
         )

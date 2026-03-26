@@ -14,15 +14,11 @@ from materialize.checks.checks import Check
 
 class ArrayType(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE array_type_table(int_col int[], text_col text[], array_col int[][]);
 
             > INSERT INTO array_type_table VALUES (array_fill(2, ARRAY[2], ARRAY[2]), array_fill('foo'::text, ARRAY[2]), ARRAY[ARRAY[1,2], ARRAY[NULL, 4]]);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -50,9 +46,7 @@ class ArrayType(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT int_col::text, array_fill::text, text_col::text, array_fill2::text, array_col::text, "array"::text FROM array_type_view1;
                 [2:3]={2,2} [2:3]={2,2} {foo,foo} {foo,foo} {{1,2},{NULL,4}} {{1,2},{NULL,4}}
                 [2:3]={2,2} [2:3]={2,2} {foo,foo} {foo,foo} {{1,2},{NULL,4}} {{1,2},{NULL,4}}
@@ -62,6 +56,4 @@ class ArrayType(Check):
                 [2:3]={2,2} [2:3]={2,2} {foo,foo} {foo,foo} {{1,2},{NULL,4}} {{1,2},{NULL,4}}
                 [2:3]={2,2} [2:3]={2,2} {foo,foo} {foo,foo} {{1,2},{NULL,4}} {{1,2},{NULL,4}}
                 [2:3]={2,2} [2:3]={2,2} {foo,foo} {foo,foo} {{1,2},{NULL,4}} {{1,2},{NULL,4}}
-            """
-            )
-        )
+            """))

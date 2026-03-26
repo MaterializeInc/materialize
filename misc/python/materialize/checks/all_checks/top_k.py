@@ -13,8 +13,7 @@ from materialize.checks.checks import Check, externally_idempotent
 
 
 def schema() -> str:
-    return dedent(
-        """
+    return dedent("""
        $ set schema={
            "type" : "record",
            "name" : "test",
@@ -22,21 +21,16 @@ def schema() -> str:
                {"name":"f1", "type":"string"}
            ]
          }
-       """
-    )
+       """)
 
 
 @externally_idempotent(False)
 class BasicTopK(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE basic_topk_table (f1 INTEGER);
             > INSERT INTO basic_topk_table VALUES (1), (2), (2), (3), (3), (3), (NULL), (NULL), (NULL), (NULL);
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -66,9 +60,7 @@ class BasicTopK(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM basic_topk_view1;
                 2 32
                 3 48
@@ -92,18 +84,13 @@ class BasicTopK(Check):
                 > SELECT * FROM view_with_limit_offset_2b;
                 2
                 1
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
 class MonotonicTopK(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schema()
-            + dedent(
-                """
+        return Testdrive(schema() + dedent("""
                 $ kafka-create-topic topic=monotonic-topk
 
                 $ kafka-ingest format=avro topic=monotonic-topk schema=${schema} repeat=1
@@ -114,9 +101,7 @@ class MonotonicTopK(Check):
                 > CREATE TABLE monotonic_topk_source FROM SOURCE monotonic_topk_source_src (REFERENCE "testdrive-monotonic-topk-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -140,9 +125,7 @@ class MonotonicTopK(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM monotonic_topk_view1;
                 E 5
                 D 4
@@ -150,18 +133,13 @@ class MonotonicTopK(Check):
                 > SELECT * FROM monotonic_topk_view2;
                 A 1
                 B 2
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
 class MonotonicTop1(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schema()
-            + dedent(
-                """
+        return Testdrive(schema() + dedent("""
                 $ kafka-create-topic topic=monotonic-top1
 
                 $ kafka-ingest format=avro topic=monotonic-top1 schema=${schema} repeat=1
@@ -172,9 +150,7 @@ class MonotonicTop1(Check):
                 > CREATE TABLE monotonic_top1_source FROM SOURCE monotonic_top1_source_src (REFERENCE "testdrive-monotonic-top1-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -198,14 +174,10 @@ class MonotonicTop1(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM monotonic_top1_view1;
                 D 5
 
                 > SELECT * FROM monotonic_top1_view2;
                 A 1
-                """
-            )
-        )
+                """))

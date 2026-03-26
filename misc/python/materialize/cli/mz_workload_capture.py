@@ -113,8 +113,7 @@ def attach_source_statistics_internal(
         del source["messages_second"]
     with conn.cursor() as cur:
         cur.execute("SET CLUSTER = mz_catalog_server")
-        sql = SQL(
-            """
+        sql = SQL("""
             SUBSCRIBE (
                 SELECT
                     messages_received,
@@ -122,8 +121,7 @@ def attach_source_statistics_internal(
                 FROM mz_internal.mz_source_statistics_with_history
                 WHERE id = {}
             )
-            WITH (PROGRESS) AS OF AT LEAST TIMESTAMP {}"""
-        ).format(
+            WITH (PROGRESS) AS OF AT LEAST TIMESTAMP {}""").format(
             Literal(source_id),
             Literal(datetime.fromtimestamp(start_time, tz=timezone.utc)),
         )

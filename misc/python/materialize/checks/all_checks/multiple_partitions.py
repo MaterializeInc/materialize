@@ -22,10 +22,7 @@ class MultiplePartitions(Check):
     """Test that adds new partitions to a Kafka source"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
                 $ kafka-create-topic topic=multiple-partitions-topic
@@ -43,9 +40,7 @@ class MultiplePartitions(Check):
                 $ kafka-add-partitions topic=multiple-partitions-topic total-partitions=2
 
                 > CREATE MATERIALIZED VIEW mv_multiple_partitions AS SELECT * FROM multiple_partitions_source;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -96,9 +91,7 @@ class MultiplePartitions(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT partition FROM multiple_partitions_source_src_progress;
                 (3,)
                 [0,0]
@@ -122,6 +115,4 @@ class MultiplePartitions(Check):
                 A 50
                 B 60
                 C 60
-                """
-            )
-        )
+                """))

@@ -112,8 +112,7 @@ class Object:
 
 class UpsertSource(Object):
     def prepare(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             $ set keyschema={{
                 "type": "record",
                 "name": "Key",
@@ -166,12 +165,10 @@ class UpsertSource(Object):
               URL 'http://toxiproxy:8081')
 
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
-              TO KAFKA (BROKER 'toxiproxy:9092', SECURITY PROTOCOL PLAINTEXT)"""
-        )
+              TO KAFKA (BROKER 'toxiproxy:9092', SECURITY PROTOCOL PLAINTEXT)""")
 
     def create(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > BEGIN
             > CREATE SOURCE {self.name}_source
               IN CLUSTER quickstart
@@ -179,15 +176,12 @@ class UpsertSource(Object):
             > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE "testdrive-{self.name}-${{testdrive.seed}}")
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE DEBEZIUM
-            > COMMIT"""
-        )
+            > COMMIT""")
 
     def destroy(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > DROP TABLE {self.name} CASCADE
-            > DROP SOURCE IF EXISTS {self.name}_source CASCADE"""
-        )
+            > DROP SOURCE IF EXISTS {self.name}_source CASCADE""")
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
@@ -223,8 +217,7 @@ class Table(Object):
 
 class PostgresSource(Object):
     def prepare(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             $ postgres-execute connection=postgres://postgres:postgres@postgres
             DROP USER IF EXISTS {self.name}_role;
             CREATE USER {self.name}_role WITH SUPERUSER PASSWORD 'postgres';
@@ -243,53 +236,40 @@ class PostgresSource(Object):
               HOST 'postgres',
               DATABASE postgres,
               USER {self.name}_role,
-              PASSWORD SECRET {self.name}_pass"""
-        )
+              PASSWORD SECRET {self.name}_pass""")
 
     def create(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > BEGIN
             > CREATE SOURCE {self.name}_source
               IN CLUSTER quickstart
               FROM POSTGRES CONNECTION {self.name}_conn
               (PUBLICATION '{self.name}_source')
             > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.name}_table)
-            > COMMIT"""
-        )
+            > COMMIT""")
 
     def destroy(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > DROP TABLE {self.name} CASCADE
-            > DROP SOURCE IF EXISTS {self.name}_source"""
-        )
+            > DROP SOURCE IF EXISTS {self.name}_source""")
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""
-            ),
-            lambda: dedent(
-                f"""
+                INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""),
+            lambda: dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                UPDATE {self.name}_table SET b = b || 'bar' WHERE true;"""
-            ),
-            lambda: dedent(
-                f"""
+                UPDATE {self.name}_table SET b = b || 'bar' WHERE true;"""),
+            lambda: dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
-                DELETE FROM {self.name}_table WHERE LENGTH(b) > 12;"""
-            ),
-            lambda: dedent(
-                f"""
+                DELETE FROM {self.name}_table WHERE LENGTH(b) > 12;"""),
+            lambda: dedent(f"""
                 > DROP TABLE IF EXISTS {self.name}_tmp_table
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -299,8 +279,7 @@ class PostgresSource(Object):
 
 class MySqlSource(Object):
     def prepare(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
             $ mysql-execute name=mysql
             # create the database if it does not exist yet but do not drop it
@@ -322,59 +301,46 @@ class MySqlSource(Object):
                 HOST 'mysql',
                 USER {self.name}_role,
                 PASSWORD SECRET {self.name}_pass
-              )"""
-        )
+              )""")
 
     def create(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > BEGIN
             > CREATE SOURCE {self.name}_source
               IN CLUSTER quickstart
               FROM MYSQL CONNECTION {self.name}_conn
             > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE public.{self.name}_table)
             > COMMIT
-            """
-        )
+            """)
 
     def destroy(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > DROP TABLE {self.name} CASCADE
-            > DROP SOURCE IF EXISTS {self.name}_source"""
-        )
+            > DROP SOURCE IF EXISTS {self.name}_source""")
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
                 $ mysql-execute name=mysql
                 USE public;
-                INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""
-            ),
-            lambda: dedent(
-                f"""
+                INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""),
+            lambda: dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
                 $ mysql-execute name=mysql
                 USE public;
-                UPDATE {self.name}_table SET b = CONCAT(b, 'bar') WHERE true;"""
-            ),
-            lambda: dedent(
-                f"""
+                UPDATE {self.name}_table SET b = CONCAT(b, 'bar') WHERE true;"""),
+            lambda: dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
                 $ mysql-execute name=mysql
                 USE public;
-                DELETE FROM {self.name}_table WHERE LENGTH(b) > 12;"""
-            ),
-            lambda: dedent(
-                f"""
+                DELETE FROM {self.name}_table WHERE LENGTH(b) > 12;"""),
+            lambda: dedent(f"""
                 > DROP TABLE IF EXISTS {self.name}_tmp_table
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -384,8 +350,7 @@ class MySqlSource(Object):
 
 class SqlServerSource(Object):
     def prepare(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             $ sql-server-connect name=sql-server
             server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -404,65 +369,52 @@ class SqlServerSource(Object):
                 DATABASE test,
                 USER {SqlServer.DEFAULT_USER},
                 PASSWORD SECRET {self.name}_pass
-              )"""
-        )
+              )""")
 
     def create(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > BEGIN
             > CREATE SOURCE {self.name}_source
               IN CLUSTER quickstart
               FROM SQL SERVER CONNECTION {self.name}_conn
             > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.name}_table)
             > COMMIT
-            """
-        )
+            """)
 
     def destroy(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > DROP TABLE {self.name} CASCADE
-            > DROP SOURCE IF EXISTS {self.name}_source"""
-        )
+            > DROP SOURCE IF EXISTS {self.name}_source""")
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""
-            ),
-            lambda: dedent(
-                f"""
+                INSERT INTO {self.name}_table VALUES ('foo', 'bar');"""),
+            lambda: dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                UPDATE {self.name}_table SET b = CONCAT(b, 'bar') WHERE 1 = 1;"""
-            ),
-            lambda: dedent(
-                f"""
+                UPDATE {self.name}_table SET b = CONCAT(b, 'bar') WHERE 1 = 1;"""),
+            lambda: dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
                 USE test;
-                DELETE FROM {self.name}_table WHERE LEN(b) > 12;"""
-            ),
-            lambda: dedent(
-                f"""
+                DELETE FROM {self.name}_table WHERE LEN(b) > 12;"""),
+            lambda: dedent(f"""
                 > DROP TABLE IF EXISTS {self.name}_tmp_table
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -484,13 +436,11 @@ class LoadGeneratorSource(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP SOURCE IF EXISTS {self.name}_tmp_source
                 > ALTER SOURCE {self.name} RENAME TO {self.name}_tmp_source
                 > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -504,31 +454,25 @@ class WebhookSource(Object):
         self.body_format = rng.choice(["TEXT", "JSON", "JSON ARRAY", "BYTES"])
 
     def create(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > DROP CLUSTER IF EXISTS {self.name}_cluster
             > CREATE CLUSTER {self.name}_cluster SIZE 'scale=1,workers=1', REPLICATION FACTOR 1
             > CREATE SOURCE {self.name} IN CLUSTER {self.name}_cluster FROM WEBHOOK BODY FORMAT {self.body_format}
-            """
-        )
+            """)
 
     def destroy(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             > DROP CLUSTER {self.name}_cluster CASCADE
-            """
-        )
+            """)
 
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP SOURCE IF EXISTS {self.name}_tmp_source
                 > ALTER SOURCE {self.name} RENAME TO {self.name}_tmp_source
                 > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -566,9 +510,7 @@ class KafkaSink(Object):
         # See database-issues#9048, topic has to be unique
         topic = f"{self.name}-{uuid4()}"
 
-        cmds.append(
-            dedent(
-                f"""
+        cmds.append(dedent(f"""
             > CREATE CONNECTION IF NOT EXISTS kafka_conn
               TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT)
             > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
@@ -579,9 +521,7 @@ class KafkaSink(Object):
               FROM {self.references_str}
               INTO KAFKA CONNECTION kafka_conn (TOPIC '{topic}')
               FORMAT {self.format}
-              ENVELOPE DEBEZIUM"""
-            )
-        )
+              ENVELOPE DEBEZIUM"""))
         return "\n".join(cmds)
 
     def destroy(self) -> str:
@@ -590,22 +530,18 @@ class KafkaSink(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv
                 > CREATE MATERIALIZED VIEW {self.name}_tmp_mv AS SELECT * FROM {self.references_str}
                 > ALTER SINK {self.name} SET FROM {self.name}_tmp_mv
                 > ALTER SINK {self.name} SET FROM {self.references_str}
                 > DROP MATERIALIZED VIEW {self.name}_tmp_mv
-                """
-            ),
-            lambda: dedent(
-                f"""
+                """),
+            lambda: dedent(f"""
                 > DROP SINK IF EXISTS {self.name}_tmp_sink
                 > ALTER SINK {self.name} RENAME TO {self.name}_tmp_sink
                 > ALTER SINK {self.name}_tmp_sink RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -637,17 +573,13 @@ class IcebergSink(Object):
         # See database-issues#9048, topic has to be unique
         table = f"{self.name}-{uuid4()}"
 
-        cmds.append(
-            dedent(
-                f"""
+        cmds.append(dedent(f"""
             > CREATE SINK {self.name}
               IN CLUSTER quickstart
               FROM {self.references_str}
               INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table}')
               USING AWS CONNECTION aws_conn
-              MODE UPSERT WITH (COMMIT INTERVAL '1s')"""
-            )
-        )
+              MODE UPSERT WITH (COMMIT INTERVAL '1s')"""))
         return "\n".join(cmds)
 
     def destroy(self) -> str:
@@ -666,13 +598,11 @@ class IcebergSink(Object):
             #     > DROP MATERIALIZED VIEW {self.name}_tmp_mv
             #     """
             # ),
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP SINK IF EXISTS {self.name}_tmp_sink
                 > ALTER SINK {self.name} RENAME TO {self.name}_tmp_sink
                 > ALTER SINK {self.name}_tmp_sink RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -695,13 +625,11 @@ class View(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP VIEW IF EXISTS {self.name}_tmp_view
                 > ALTER VIEW {self.name} RENAME TO {self.name}_tmp_view
                 > ALTER VIEW {self.name}_tmp_view RENAME TO {self.name}
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -724,13 +652,11 @@ class MaterializedView(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
-                """
-            ),
+                """),
             # TODO: Deal with 'The materialized view has already computed its output until the end of time, so replacing its definition would have no effect.'
             # lambda: dedent(
             #     f"""
@@ -739,13 +665,11 @@ class MaterializedView(Object):
             #     > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
             #     """
             # ),
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
                 > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
                 > DROP MATERIALIZED VIEW {self.name}_replacement
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -768,20 +692,16 @@ class ReplicaTargetedMaterializedView(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
-            lambda: dedent(
-                f"""
+            lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
-                """
-            ),
-            lambda: dedent(
-                f"""
+                """),
+            lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
                 > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
                 > DROP MATERIALIZED VIEW {self.name}_replacement
-                """
-            ),
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 

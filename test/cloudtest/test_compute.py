@@ -128,7 +128,7 @@ def test_disk_label(mz: MaterializeApplication) -> None:
 
     mz.environmentd.sql("CREATE CLUSTER disk SIZE = 'scale=1,workers=2'")
 
-    (cluster_id, replica_id) = mz.environmentd.sql_query(
+    cluster_id, replica_id = mz.environmentd.sql_query(
         "SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'disk'"
     )[0]
     assert cluster_id is not None
@@ -204,7 +204,7 @@ def test_cluster_replica_sizes(mz: MaterializeApplication) -> None:
         "medium": cluster_replica_size_map["medium"],
     }.items():
         mz.environmentd.sql(f"CREATE CLUSTER scale_{key} MANAGED, SIZE = '{key}'")
-        (cluster_id, replica_id) = mz.environmentd.sql_query(
+        cluster_id, replica_id = mz.environmentd.sql_query(
             f"SELECT mz_clusters.id, mz_cluster_replicas.id FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name = 'scale_{key}'"
         )[0]
         assert cluster_id is not None

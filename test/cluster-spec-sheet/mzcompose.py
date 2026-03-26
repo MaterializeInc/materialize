@@ -3078,7 +3078,7 @@ def analyze_cluster_results_file(file: str) -> None:
         .drop_duplicates()
         .itertuples(index=False)
     ):
-        (benchmark, category, mode) = (index.scenario, index.category, index.mode)
+        benchmark, category, mode = (index.scenario, index.category, index.mode)
         indexes = (
             (df_all["scenario"] == benchmark)
             & (df_all["category"] == category)

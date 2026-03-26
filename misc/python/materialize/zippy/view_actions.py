@@ -123,16 +123,13 @@ class CreateView(Action):
         )
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE MATERIALIZED VIEW {self.view.name}
                   WITH (REFRESH {refresh}) AS
                   SELECT {aggregates}
                   FROM {first_input.get_name_for_query()}
                   {outer_join}
-                """
-            )
-            + index,
+                """) + index,
             mz_service=state.mz_service,
         )
 
@@ -167,19 +164,15 @@ class ValidateView(Action):
         if view_min <= view_max:
             c.testdrive(
                 (
-                    dedent(
-                        f"""
+                    dedent(f"""
                     > SELECT count_all, count_distinct, min_value, max_value FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} count_distinct = {(view_max-view_min)+1} min_value = {view_min} max_value = {view_max} */ ;
                     {(view_max-view_min)+1} {(view_max-view_min)+1} {view_min} {view_max}
-                """
-                    )
+                """)
                     if self.view.expensive_aggregates
-                    else dedent(
-                        f"""
+                    else dedent(f"""
                     > SELECT count_all FROM {self.view.name} {self.select_limit} /* expecting count_all = {(view_max-view_min)+1} */ ;
                     {(view_max-view_min)+1}
-                """
-                    )
+                """)
                 ),
                 mz_service=state.mz_service,
             )

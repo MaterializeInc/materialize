@@ -36,8 +36,7 @@ class ProductLimitsResultStorage(BaseDataStorage):
 
         for result_entry in results:
             # TODO: remove NULL castings when database-issues#8100 is resolved
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO product_limits_result
                 (
                     build_job_id,
@@ -57,7 +56,6 @@ class ProductLimitsResultStorage(BaseDataStorage):
                     {result_entry.wallclock},
                     {result_entry.explain_wallclock or 'NULL::DOUBLE'}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)

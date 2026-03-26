@@ -15,9 +15,7 @@ from materialize.checks.checks import Check, externally_idempotent
 @externally_idempotent(False)
 class KafkaProtocols(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ set-from-file ca-crt=/share/secrets/ca.crt
                 $ set-from-file kafka-crt=/share/secrets/materialized-kafka.crt
                 $ set-from-file kafka-key=/share/secrets/materialized-kafka.key
@@ -109,9 +107,7 @@ class KafkaProtocols(Check):
                   )
                 > CREATE TABLE kafka_sasl_1 FROM SOURCE kafka_sasl_1_src (REFERENCE "testdrive-kafka-protocols-1-${testdrive.seed}")
                   FORMAT TEXT
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -201,9 +197,7 @@ class KafkaProtocols(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM kafka_plaintext_1
                 one
                 two
@@ -278,6 +272,4 @@ class KafkaProtocols(Check):
                 one
                 two
                 three
-                """
-            )
-        )
+                """))

@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class WindowFunctions(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE window_functions_table (f1 INTEGER, f2 INTEGER);
             > INSERT INTO window_functions_table VALUES (1,1), (2, 1), (3, 1);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -59,9 +55,7 @@ class WindowFunctions(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM window_functions_view1;
                 1 1 2 1 7 7 7 2
                 1 2 1 2 4 4 4 1
@@ -82,6 +76,4 @@ class WindowFunctions(Check):
                 3 1 2 2 9 9 9 3
                 3 2 1 2 6 6 6 2
                 3 3 3 2 3 3 3 1
-            """
-            )
-        )
+            """))

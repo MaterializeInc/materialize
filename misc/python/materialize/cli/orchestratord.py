@@ -146,7 +146,7 @@ def reset(args: argparse.Namespace):
         .splitlines()
     )
     for environment in environments:
-        (namespace, environment_name) = environment.split("/", 1)
+        namespace, environment_name = environment.split("/", 1)
         env_kubectl = make_env_kubectl(args, namespace)
 
         mz = json.loads(

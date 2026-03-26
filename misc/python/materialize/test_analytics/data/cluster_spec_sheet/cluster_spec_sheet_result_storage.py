@@ -54,8 +54,7 @@ class ClusterSpecSheetResultStorage(BaseDataStorage):
 
         for result_entry in results:
             # TODO: remove NULL castings when database-issues#8100 is resolved
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO cluster_spec_sheet_result
                 (
                     build_job_id,
@@ -85,8 +84,7 @@ class ClusterSpecSheetResultStorage(BaseDataStorage):
                     {result_entry.size_bytes or 'NULL::BIGINT'},
                     {result_entry.time_ms or 'NULL::BIGINT'}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)
 
@@ -104,8 +102,7 @@ class ClusterSpecSheetEnvironmentdResultStorage(BaseDataStorage):
 
         for result_entry in results:
             # TODO: remove NULL castings when database-issues#8100 is resolved
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO cluster_spec_sheet_environmentd_result
                 (
                     build_job_id,
@@ -133,7 +130,6 @@ class ClusterSpecSheetEnvironmentdResultStorage(BaseDataStorage):
                     {result_entry.repetition},
                     {result_entry.qps or 'NULL::FLOAT'}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)

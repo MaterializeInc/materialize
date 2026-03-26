@@ -1222,8 +1222,7 @@ class Composition:
             exclusion_clause = f"name NOT IN ({excluded_items})"
 
         # starting sources are currently expected if no new data is produced, see database-issues#6605
-        results = self.sql_query(
-            f"""
+        results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_source_statuses
             WHERE NOT(
@@ -1231,32 +1230,27 @@ class Composition:
                 (type = 'progress' AND status = 'created')
             )
             AND {exclusion_clause}
-            """
-        )
+            """)
         for name, status, error, details in results:
             return f"Source {name} is expected to be running/created/paused, but is {status}, error: {error}, details: {details}"
 
-        results = self.sql_query(
-            f"""
+        results = self.sql_query(f"""
             SELECT name, status, error, details
             FROM mz_internal.mz_sink_statuses
             WHERE status NOT IN ('running', 'dropped')
             AND {exclusion_clause}
-            """
-        )
+            """)
         for name, status, error, details in results:
             return f"Sink {name} is expected to be running/dropped, but is {status}, error: {error}, details: {details}"
 
-        results = self.sql_query(
-            """
+        results = self.sql_query("""
             SELECT mz_clusters.name, mz_cluster_replicas.name, status, reason
             FROM mz_internal.mz_cluster_replica_statuses
             JOIN mz_cluster_replicas
             ON mz_internal.mz_cluster_replica_statuses.replica_id = mz_cluster_replicas.id
             JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id
             WHERE status NOT IN ('online', 'offline')
-            """
-        )
+            """)
         for cluster_name, replica_name, status, reason in results:
             return f"Cluster replica {cluster_name}.{replica_name} is expected to be online/offline, but is {status}, reason: {reason}"
 

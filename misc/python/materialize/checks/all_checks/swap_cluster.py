@@ -14,9 +14,7 @@ from materialize.checks.checks import Check
 
 class SwapCluster(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE swap_cluster1_table (f1 INTEGER);
                 > CREATE TABLE swap_cluster2_table (f1 INTEGER);
                 > CREATE TABLE swap_cluster3_table (f1 INTEGER);
@@ -47,9 +45,7 @@ class SwapCluster(Check):
                 > SET cluster=swap_cluster4
                 > CREATE DEFAULT INDEX ON swap_cluster4_table;
                 > CREATE MATERIALIZED VIEW swap_cluster4_view AS SELECT SUM(f1) FROM swap_cluster4_table;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -66,9 +62,7 @@ class SwapCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=swap_cluster1
 
                 > SET cluster=swap_cluster2
@@ -102,6 +96,4 @@ class SwapCluster(Check):
 
                 > SELECT * FROM swap_cluster4_view;
                 456
-           """
-            )
-        )
+           """))

@@ -219,7 +219,7 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         print("Uncovered Lines in PR")
         # Buildkite interprets the +++ and --- chars at the start of line, put
         # in a zero-width space as a workaround.
-        ZWSP = "\u200B"
+        ZWSP = "\u200b"
         print(
             uncovered_report.replace("\n+++", f"\n{ZWSP}+++").replace(
                 "\n---", f"\n{ZWSP}---"
@@ -241,8 +241,8 @@ ci-coverage-pr-report creates a code coverage report for CI.""",
         # Buildkite interprets the +++ and --- chars at the start of line, put
         # in a zero-width space as a workaround.
         print(
-            unit_test_only_report.replace("\n+++", "\n\u200B+++").replace(
-                "\n---", "\n\u200B---"
+            unit_test_only_report.replace("\n+++", "\n\u200b+++").replace(
+                "\n---", "\n\u200b---"
             )
         )
         test_case.add_error_info(

@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class CreateTable(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE create_table1 (f1 INTEGER, f2 INTEGER NOT NULL DEFAULT 1234);
                 > INSERT INTO create_table1 VALUES (1, 1);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -42,9 +38,7 @@ class CreateTable(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM create_table1;
                 1 1
 
@@ -86,6 +80,4 @@ class CreateTable(Check):
                 1234
 
                 > DELETE FROM create_table3 WHERE f1 = 999;
-           """
-            )
-        )
+           """))

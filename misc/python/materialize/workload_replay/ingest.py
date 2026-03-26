@@ -483,16 +483,14 @@ def ingest(
             child
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
                 $ sql-server-execute name=sql-server
                 USE {ref_database};
                 INSERT INTO {ref_schema}.{ref_table} VALUES {', '.join(batch_values)}
-            """
-            ),
+            """),
             quiet=True,
             silent=True,
         )

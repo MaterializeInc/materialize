@@ -81,8 +81,7 @@ class RootScenario:
 
     def table_ten(self) -> TdAction:
         """Returns a Td() object that creates the 'ten' table"""
-        return TdAction(
-            """
+        return TdAction("""
 > CREATE TABLE ten (f1 INTEGER);
 > INSERT INTO ten VALUES (0)
 > INSERT INTO ten VALUES (1)
@@ -94,15 +93,12 @@ class RootScenario:
 > INSERT INTO ten VALUES (7)
 > INSERT INTO ten VALUES (8)
 > INSERT INTO ten VALUES (9)
-"""
-        )
+""")
 
     def view_ten(self) -> TdAction:
-        return TdAction(
-            """
+        return TdAction("""
 > CREATE VIEW ten (f1) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9));
-"""
-        )
+""")
 
     def unique_values(self) -> str:
         """Returns a string of the form 'a1.f1 + (a2.f1 * 10) + (a2.f1 * 100) ...'"""

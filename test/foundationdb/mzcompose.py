@@ -52,9 +52,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     c.up("materialized")
 
     # Basic smoke test - create objects and verify they work
-    c.testdrive(
-        input=dedent(
-            """
+    c.testdrive(input=dedent("""
             > CREATE TABLE t1 (a INT);
             > INSERT INTO t1 VALUES (1), (2), (3);
             > SELECT * FROM t1 ORDER BY a;
@@ -79,22 +77,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             > DROP MATERIALIZED VIEW mv1;
             > DROP VIEW v1;
             > DROP TABLE t1;
-            """
-        )
-    )
+            """))
 
     # Test restart - verify timestamp oracle state is preserved
     c.kill("materialized")
     c.up("materialized")
 
-    c.testdrive(
-        input=dedent(
-            """
+    c.testdrive(input=dedent("""
             > CREATE TABLE t2 (b TEXT);
             > INSERT INTO t2 VALUES ('hello'), ('world');
             > SELECT * FROM t2 ORDER BY b;
             hello
             world
-            """
-        )
-    )
+            """))

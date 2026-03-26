@@ -17,9 +17,7 @@ class CopyRoundtripS3(Check):
     """Basic check on copy to and from s3"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_copy_from_remote = true;
                 > CREATE SECRET minio AS '${arg.aws-secret-access-key}'
@@ -27,9 +25,7 @@ class CopyRoundtripS3(Check):
                 > COPY (SELECT 1, 2, 3) TO 's3://copytos3/key1' WITH (AWS CONNECTION = aws_conn1, FORMAT = 'csv');
                 > CREATE TABLE t1 (a INT, b INT, c INT);
                 > COPY INTO t1 FROM 's3://copytos3/key1' (FORMAT CSV, AWS CONNECTION = aws_conn1);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -55,9 +51,7 @@ class CopyRoundtripS3(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ s3-verify-data bucket=copytos3 key=key1
                 1,2,3
 
@@ -83,6 +77,4 @@ class CopyRoundtripS3(Check):
                 21 22 23
                 21 22 23
                 21 22 23
-                """
-            )
-        )
+                """))
