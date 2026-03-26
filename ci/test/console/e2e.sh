@@ -130,14 +130,33 @@ frontegg_jwk=$(node -e "
 # Extract environmentd image ref from cloud Pulumi config
 environmentd_image_ref=$(grep '^  mzcloud:environmentd_image_ref:' .cloud-repo/Pulumi.staging.yaml | sed 's/.*: //')
 
-# Create kind cluster using cloud's setup scripts
-cd .cloud-repo
-bin/helpers/pyactivate /dev/null
-FRONTEGG_URL=https://admin.staging.cloud.materialize.com \
-FRONTEGG_JWK_STRING="${frontegg_jwk}" \
-ENVIRONMENTD_IMAGE_REF_DEFAULT="${environmentd_image_ref}" \
-    bin/kind-create
-cd ..
+# Create kind cluster using cloud's setup scripts.
+# The kind setup is prone to transient timeouts (e.g. minio-setup pod) due to
+# resource contention on a single node, so retry with a full teardown in between.
+kind_create_max_attempts=3
+for kind_attempt in $(seq 1 "$kind_create_max_attempts"); do
+    echo "Kind cluster creation attempt $kind_attempt/$kind_create_max_attempts"
+    cd .cloud-repo
+    bin/helpers/pyactivate /dev/null
+    if FRONTEGG_URL=https://admin.staging.cloud.materialize.com \
+       FRONTEGG_JWK_STRING="${frontegg_jwk}" \
+       ENVIRONMENTD_IMAGE_REF_DEFAULT="${environmentd_image_ref}" \
+           bin/kind-create; then
+        cd ..
+        break
+    fi
+    cd ..
+    if [[ "$kind_attempt" -eq "$kind_create_max_attempts" ]]; then
+        echo "Kind cluster creation failed after $kind_create_max_attempts attempts" >&2
+        exit 1
+    fi
+    echo "Kind cluster setup failed, tearing down and retrying..." >&2
+    kind delete cluster --name mzcloud 2>/dev/null || true
+    docker ps -a --filter "network=kind" --filter "name=proxy-" --format '{{.Names}}' \
+        | xargs -r docker rm -f 2>/dev/null || true
+    docker network rm kind 2>/dev/null || true
+    sleep 5
+done
 
 # --- DNS setup (needs sudo) ---
 # The CI container doesn't have systemd, so we run dnsmasq on port 53 as a
