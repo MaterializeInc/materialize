@@ -9,11 +9,14 @@
 
 import { Box, Text, useTheme, VStack } from "@chakra-ui/react";
 import React from "react";
+import { useNavigate } from "react-router-dom";
 
 import Alert from "~/components/Alert";
 import { MaterializeTheme } from "~/theme";
 
+import { DependenciesSection } from "./DependenciesSection";
 import { ObjectDetailsCard } from "./ObjectDetailsCard";
+import { ObjectFreshnessChart } from "./ObjectFreshnessChart";
 import { ObjectMemoryCard } from "./ObjectMemoryCard";
 import { useObjectColumns, useObjectDetail, useObjectLag, useObjectMemory } from "./queries";
 import { MaintainedObjectListRow } from "./types";
@@ -24,6 +27,7 @@ export interface ObjectDetailPanelProps {
 
 export const ObjectDetailPanel = ({ object }: ObjectDetailPanelProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const navigate = useNavigate();
 
   const {
     data: detail,
@@ -70,6 +74,15 @@ export const ObjectDetailPanel = ({ object }: ObjectDetailPanelProps) => {
           replicaTotalMemoryBytes={detail?.replicaTotalMemoryBytes ?? null}
           replicaName={detail?.replicaName ?? null}
           replicaSize={detail?.replicaSize ?? null}
+        />
+
+        <ObjectFreshnessChart objectId={object.id} />
+
+        <DependenciesSection
+          objectId={object.id}
+          objectType={object.objectType}
+          lagMs={liveLag?.lagMs ?? object.lagMs}
+          onObjectClick={(id) => navigate(`../${id}`, { relative: "path" })}
         />
 
         {columns && columns.length > 0 && (
