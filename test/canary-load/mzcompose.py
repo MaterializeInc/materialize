@@ -9,7 +9,9 @@
 
 
 import datetime
+import json
 import os
+import threading
 import time
 import urllib.parse
 from textwrap import dedent
@@ -41,6 +43,55 @@ SERVICES = [
 ]
 
 
+class WebhookSender:
+    """Sends one webhook per second with the current timestamp in a background thread."""
+
+    def __init__(self, host: str) -> None:
+        self.webhook_url = f"https://{host}/api/webhook/qa_canary_environment/public_webhook/webhook_source"
+        self._pending: list[str] = []
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+    def take_pending(self) -> list[str]:
+        """Return and clear the list of created_at timestamps not yet validated."""
+        with self._lock:
+            pending = self._pending
+            self._pending = []
+            return pending
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                now = datetime.datetime.now(tz=datetime.timezone.utc)
+                ts = now.isoformat()
+                payload = {
+                    "event_type": "canary_heartbeat",
+                    "created_at": ts,
+                }
+                r = requests.post(
+                    self.webhook_url,
+                    headers={"Content-Type": "application/json"},
+                    data=json.dumps(payload),
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    with self._lock:
+                        self._pending.append(ts)
+                else:
+                    print(f"Webhook POST returned {r.status_code}: {r.text}")
+            except Exception as e:
+                print(f"Webhook send failed: {e}")
+            self._stop.wait(timeout=1)
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     REGION = "aws/us-east-1"
     ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
@@ -69,95 +120,106 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ):
         c.up(Service("testdrive", idle=True))
 
+        webhook_sender = WebhookSender(host)
+        webhook_sender.start()
+
         failures: list[TestFailureDetails] = []
 
-        count_chunk = 0
-        while time.time() - start_time < args.runtime:
-            count_chunk = count_chunk + 1
-            try:
-                c.testdrive(
-                    dedent(
-                        """
-                            > DELETE FROM qa_canary_environment.public_table.table
-                        """
+        try:
+            count_chunk = 0
+            while time.time() - start_time < args.runtime:
+                count_chunk = count_chunk + 1
+                try:
+                    c.testdrive(
+                        dedent(
+                            """
+                                > DELETE FROM qa_canary_environment.public_table.table
+                            """
+                        )
                     )
-                )
 
-                conn1, cursor_on_table = create_connection_and_cursor(
-                    host,
-                    USERNAME,
-                    APP_PASSWORD,
-                    "DECLARE subscribe_table CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table)",
-                )
-                conn2, cursor_on_mv = create_connection_and_cursor(
-                    host,
-                    USERNAME,
-                    APP_PASSWORD,
-                    "DECLARE subscribe_mv CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table_mv)",
-                )
-
-                i = 0
-                while time.time() - start_time < args.runtime:
-                    print(f"Running iteration {i} of chunk {count_chunk}")
-                    c.override_current_testcase_name(
-                        f"iteration {i} of chunk {count_chunk} in workflow_default"
-                    )
-                    perform_test(
-                        c,
+                    conn1, cursor_on_table = create_connection_and_cursor(
                         host,
                         USERNAME,
-                        PASSWORD,
-                        cursor_on_table,
-                        cursor_on_mv,
-                        i,
+                        APP_PASSWORD,
+                        "DECLARE subscribe_table CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table)",
                     )
-                    i += 1
+                    conn2, cursor_on_mv = create_connection_and_cursor(
+                        host,
+                        USERNAME,
+                        APP_PASSWORD,
+                        "DECLARE subscribe_mv CURSOR FOR SUBSCRIBE (SELECT * FROM qa_canary_environment.public_table.table_mv)",
+                    )
 
-                close_connection_and_cursor(conn1, cursor_on_table, "subscribe_table")
-                close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
+                    i = 0
+                    while time.time() - start_time < args.runtime:
+                        print(f"Running iteration {i} of chunk {count_chunk}")
+                        c.override_current_testcase_name(
+                            f"iteration {i} of chunk {count_chunk} in workflow_default"
+                        )
+                        perform_test(
+                            c,
+                            host,
+                            USERNAME,
+                            PASSWORD,
+                            cursor_on_table,
+                            cursor_on_mv,
+                            i,
+                            webhook_sender,
+                        )
+                        i += 1
 
-            except (
-                OperationalError,
-                ReadTimeout,
-                ConnectionError,
-                IdleInTransactionSessionTimeout,
-            ) as e:
-                error_msg_str = str(e)
-                if (
-                    "Read timed out" in error_msg_str
-                    or "closed connection" in error_msg_str
-                    or "terminating connection due to idle-in-transaction timeout"
-                    in error_msg_str
-                    or "consuming input failed: SSL SYSCALL error: EOF detected"
-                    in error_msg_str
-                    or "unexpected eof while reading" in error_msg_str
-                    or "consuming input failed: SSL connection has been closed unexpectedly"
-                    in error_msg_str
-                    or "terminating connection due to idle-in-transaction timeout"
-                    in error_msg_str
-                ):
-                    print(f"Failed: {e}; retrying")
-                else:
-                    raise
-            except FailedTestExecutionError as e:
-                assert len(e.errors) > 0, "Exception contains no errors"
-                for error in e.errors:
+                    close_connection_and_cursor(
+                        conn1, cursor_on_table, "subscribe_table"
+                    )
+                    close_connection_and_cursor(conn2, cursor_on_mv, "subscribe_mv")
+
+                except (
+                    OperationalError,
+                    ReadTimeout,
+                    ConnectionError,
+                    IdleInTransactionSessionTimeout,
+                ) as e:
+                    error_msg_str = str(e)
+                    if (
+                        "Read timed out" in error_msg_str
+                        or "closed connection" in error_msg_str
+                        or "terminating connection due to idle-in-transaction timeout"
+                        in error_msg_str
+                        or "consuming input failed: SSL SYSCALL error: EOF detected"
+                        in error_msg_str
+                        or "unexpected eof while reading" in error_msg_str
+                        or "consuming input failed: SSL connection has been closed unexpectedly"
+                        in error_msg_str
+                        or "terminating connection due to idle-in-transaction timeout"
+                        in error_msg_str
+                    ):
+                        print(f"Failed: {e}; retrying")
+                    else:
+                        raise
+                except FailedTestExecutionError as e:
+                    assert len(e.errors) > 0, "Exception contains no errors"
+                    for error in e.errors:
+                        # TODO(def-): Remove when database-issues#6825 is fixed
+                        if "Non-positive multiplicity in DistinctBy" in error.message:
+                            continue
+                        print(
+                            f"Test failure occurred ({error.message}), collecting it, and continuing."
+                        )
+                        # collect, continue, and rethrow at the end
+                        failures.append(error)
+                except CommandFailureCausedUIError as e:
+                    msg = (e.stdout or "") + (e.stderr or "")
                     # TODO(def-): Remove when database-issues#6825 is fixed
-                    if "Non-positive multiplicity in DistinctBy" in error.message:
+                    if "Non-positive multiplicity in DistinctBy" in msg:
                         continue
                     print(
-                        f"Test failure occurred ({error.message}), collecting it, and continuing."
+                        f"Test failure occurred ({msg}), collecting it, and continuing."
                     )
                     # collect, continue, and rethrow at the end
-                    failures.append(error)
-            except CommandFailureCausedUIError as e:
-                msg = (e.stdout or "") + (e.stderr or "")
-                # TODO(def-): Remove when database-issues#6825 is fixed
-                if "Non-positive multiplicity in DistinctBy" in msg:
-                    continue
-                print(f"Test failure occurred ({msg}), collecting it, and continuing.")
-                # collect, continue, and rethrow at the end
-                failures.append(TestFailureDetails(message=msg, details=None))
+                    failures.append(TestFailureDetails(message=msg, details=None))
+        finally:
+            webhook_sender.stop()
 
         if len(failures) > 0:
             # reset test case name to remove current iteration and chunk, which does not apply to collected errors
@@ -254,6 +316,7 @@ def perform_test(
     cursor_on_table: Cursor,
     cursor_on_mv: Cursor,
     i: int,
+    webhook_sender: WebhookSender,
 ) -> None:
     current_time = time.time()
     update_data(c, i)
@@ -270,6 +333,8 @@ def perform_test(
         token,
         i,
     )
+
+    validate_webhook(host, token, webhook_sender)
 
 
 def update_data(c: Composition, i: int) -> None:
@@ -408,3 +473,44 @@ def validate_data_through_http_connection(
         token,
     )
     assert result == [["0", f"{i * 100 + 99}", f"{(i + 1) * 100}"]]
+
+
+def validate_webhook(
+    host: str,
+    token: str,
+    webhook_sender: WebhookSender,
+) -> None:
+    # Drain the pending queue so we only check the window since last call.
+    pending = webhook_sender.take_pending()
+    if len(pending) == 0:
+        return
+
+    sent_timestamps = set(pending)
+    oldest = min(pending)
+
+    # Only scan events at or after the oldest pending timestamp.
+    result = http_sql_query(
+        host,
+        f"SELECT body->>'created_at' FROM qa_canary_environment.public_webhook.webhook_source "
+        f"WHERE body->>'event_type' = 'canary_heartbeat' AND body->>'created_at' >= '{oldest}'",
+        token,
+    )
+    received_timestamps = {row[0] for row in result}
+
+    missing = sorted(sent_timestamps - received_timestamps)
+    assert (
+        len(missing) == 0
+    ), f"Webhook events lost: {len(missing)} missing out of {len(pending)} sent. Missing created_at values: {missing[:20]}"
+
+    latest_ts = max(received_timestamps)
+    latest_dt = datetime.datetime.fromisoformat(latest_ts)
+    if latest_dt.tzinfo is None:
+        latest_dt = latest_dt.replace(tzinfo=datetime.timezone.utc)
+    age = datetime.datetime.now(tz=datetime.timezone.utc) - latest_dt
+    assert (
+        age.total_seconds() < 120
+    ), f"Webhook ingestion stall: latest event is {age} old (ts={latest_ts}), expected < 120s"
+
+    print(
+        f"Webhook validation passed: {len(pending)} events sent, all present, latest_ts={latest_ts}, age={age}"
+    )
