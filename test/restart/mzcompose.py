@@ -454,11 +454,31 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         agents_url = f"http://localhost:{http_port}/api/mcp/agents"
         observatory_url = f"http://localhost:{http_port}/api/mcp/observatory"
 
-        # Both endpoints should work by default.
+        # Both endpoints should be disabled by default (feature flags default to false).
+        assert requests.post(agents_url, json=mcp_request).status_code == 503
+        assert requests.post(observatory_url, json=mcp_request).status_code == 503
+
+        # Enable the agents endpoint individually.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_agents = true",
+            port=6877,
+            user="mz_system",
+        )
+
         assert requests.post(agents_url, json=mcp_request).status_code == 200
+        # Observatory should still be disabled.
+        assert requests.post(observatory_url, json=mcp_request).status_code == 503
+
+        # Enable observatory too.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_observatory = true",
+            port=6877,
+            user="mz_system",
+        )
+
         assert requests.post(observatory_url, json=mcp_request).status_code == 200
 
-        # Disable the agents endpoint.
+        # Disable agents again — observatory should remain enabled.
         c.sql(
             "ALTER SYSTEM SET enable_mcp_agents = false",
             port=6877,
@@ -466,26 +486,11 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         )
 
         assert requests.post(agents_url, json=mcp_request).status_code == 503
-        # Observatory should still work.
         assert requests.post(observatory_url, json=mcp_request).status_code == 200
 
-        # Disable observatory too.
-        c.sql(
-            "ALTER SYSTEM SET enable_mcp_observatory = false",
-            port=6877,
-            user="mz_system",
-        )
-
-        assert requests.post(observatory_url, json=mcp_request).status_code == 503
-
-        # Re-enable both.
+        # Re-enable agents.
         c.sql(
             "ALTER SYSTEM SET enable_mcp_agents = true",
-            port=6877,
-            user="mz_system",
-        )
-        c.sql(
-            "ALTER SYSTEM SET enable_mcp_observatory = true",
             port=6877,
             user="mz_system",
         )
