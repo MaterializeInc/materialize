@@ -322,8 +322,7 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "issue", "value": f"database-issues/{self.issue_number} "}]
-        ci_failures_url = f"https://ci-dev-ui.mtrl.dev/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci.dev.materialize.com/#failures?issue={urllib.parse.quote(f'database-issues/{self.issue_number}', safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
@@ -333,8 +332,7 @@ class ObservedErrorWithLocation(ObservedError):
         return f"{self.error_type} in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        filters = [{"id": "content", "value": self.error_message_as_text()[:2000]}]
-        ci_failures_url = f"https://ci-dev-ui.mtrl.dev/?key=test-failures&tfFilters={urllib.parse.quote(json.dumps(filters), safe='')}"
+        ci_failures_url = f"https://ci.dev.materialize.com/#failures?content={urllib.parse.quote(self.error_message_as_text()[:2000], safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
