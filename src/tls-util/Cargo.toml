@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.102"
+mz-ore = { path = "../ore" }
 openssl = { version = "0.10.76", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 postgres-openssl = { version = "0.5.2" }

@@ -8585,6 +8585,7 @@ name = "mz-tls-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "mz-ore",
  "openssl",
  "openssl-sys",
  "postgres-openssl",
