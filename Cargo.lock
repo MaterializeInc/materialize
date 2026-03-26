@@ -8136,7 +8136,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "workspace-hack",
- "zeroize",
 ]
 
 [[package]]
