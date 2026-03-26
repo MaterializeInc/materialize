@@ -23,8 +23,8 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     python_files_list=$(mktemp)
     dbt_files_list=$(mktemp)
     trap 'rm -f "$python_files_list" "$dbt_files_list"' EXIT
-    { git ls-files 'ci/*.py' 'misc/python/*.py' 'test/*.py'; git ls-files '**/mzcompose.py' | grep -v -e 'test/' -e 'misc/dbt-materialize/'; } > "$python_files_list"
-    git ls-files 'misc/dbt-materialize/*.py' > "$dbt_files_list"
+    { git_files 'ci/*.py' 'misc/python/*.py' 'test/*.py'; git_files '**/mzcompose.py' | grep -v -e 'test/' -e 'misc/dbt-materialize/'; } > "$python_files_list"
+    git_files 'misc/dbt-materialize/*.py' > "$dbt_files_list"
 
     try xargs npx --yes "pyright@$pyright_version" --warnings --threads 4 < "$python_files_list"
 

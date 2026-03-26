@@ -9,13 +9,11 @@
 
 import argparse
 
-from materialize.cli.scratch import check_required_vars
-from materialize.scratch import get_instance, mkrepo
+from materialize.cli.scratch import get_instance
+from materialize.scratch import mkrepo
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    check_required_vars()
-
     parser.add_argument(
         "instance",
         help="The ID of the instance to connect to, or 'mine' to specify your only live instance",
@@ -25,5 +23,4 @@ def configure_parser(parser: argparse.ArgumentParser) -> None:
 
 def run(args: argparse.Namespace) -> None:
     instance = get_instance(args.instance)
-
     mkrepo(instance, args.rev, init=False, force=True)

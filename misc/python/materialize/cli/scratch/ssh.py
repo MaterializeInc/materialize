@@ -9,22 +9,23 @@
 
 import argparse
 
-from materialize.cli.scratch import check_required_vars
-from materialize.scratch import get_instance, mssh
+from materialize.cli.scratch import get_instance, pick_instance
+from materialize.scratch import mssh
 
 
 def configure_parser(parser: argparse.ArgumentParser) -> None:
-    check_required_vars()
-
     parser.add_argument(
         "instance",
+        nargs="?",
+        default=None,
         help="The ID of the instance to connect to, or 'mine' to specify your only live instance",
     )
     parser.add_argument("command", nargs="*", help="The command to run via SSH, if any")
 
 
 def run(args: argparse.Namespace) -> None:
-    # SSH will join together multiple arguments with spaces, so we don't lose
-    # anything by doing the same.
-    instance = get_instance(args.instance)
+    if args.instance:
+        instance = get_instance(args.instance)
+    else:
+        instance = pick_instance()
     mssh(instance, " ".join(args.command))
