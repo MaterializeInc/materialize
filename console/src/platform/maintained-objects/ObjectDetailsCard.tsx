@@ -17,10 +17,13 @@ import {
   VStack,
 } from "@chakra-ui/react";
 import React from "react";
+import { Link } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
 import { IPostgresInterval } from "~/api/materialize";
+import { absoluteClusterPath } from "~/platform/routeHelpers";
+import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { sumPostgresIntervalMs } from "~/util";
 import { formatBytesShort, formatIntervalShort } from "~/utils/format";
@@ -45,6 +48,7 @@ export const ObjectDetailsCard = ({
   replicaTotalMemoryBytes,
 }: ObjectDetailsCardProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const regionSlug = useRegionSlug();
 
   const lag = object.lag as IPostgresInterval | null;
   const lagMs = lag ? sumPostgresIntervalMs(lag) : null;
@@ -84,10 +88,33 @@ export const ObjectDetailsCard = ({
           </GridItem>
           <GridItem>
             <VStack align="start" spacing={3}>
-              <DetailRow
-                label="Cluster"
-                value={object.clusterName ?? "—"}
-              />
+              <HStack spacing={3}>
+                <Text
+                  textStyle="text-ui-reg"
+                  color={colors.foreground.secondary}
+                  width={LABEL_WIDTH}
+                  flexShrink={0}
+                >
+                  Cluster
+                </Text>
+                {object.clusterName && object.clusterId ? (
+                  <Text
+                    as={Link}
+                    to={absoluteClusterPath(regionSlug, {
+                      id: object.clusterId,
+                      name: object.clusterName,
+                    })}
+                    textStyle="text-ui-med"
+                    color={colors.accent.brightPurple}
+                    _hover={{ textDecoration: "underline" }}
+                    onClick={(e: React.MouseEvent) => e.stopPropagation()}
+                  >
+                    {object.clusterName}
+                  </Text>
+                ) : (
+                  <Text textStyle="text-ui-med">—</Text>
+                )}
+              </HStack>
               {replicaName && (
                 <DetailRow
                   label="Replica"

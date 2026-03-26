@@ -22,9 +22,22 @@ interface WaterfallNode {
   id: string;
   name: string;
   type: string;
-  delay: number;
+  /** Self delay: min(input frontiers) - output frontier. Positive = this node is the bottleneck */
+  selfDelay: number;
+  /** Frontier lag: distance from wallclock time */
+  frontierLag: number;
 }
 
+/**
+ * Converts edges to a topologically sorted list of nodes with self-delay.
+ *
+ * Self-delay = min(input frontiers) - output frontier.
+ * Positive self-delay means THIS node is the bottleneck (it's behind its inputs).
+ * Zero self-delay means the delay is upstream, not at this node.
+ *
+ * This matches Frank McSherry's prototype: the bar shows WHERE in the chain
+ * the lag is being introduced, not just the total gap.
+ */
 function edgesToWaterfallNodes(
   edges: CriticalPathEdge[],
   probeId: string,
@@ -33,25 +46,31 @@ function edgesToWaterfallNodes(
   const childToParents = new Map<string, Set<string>>();
 
   for (const edge of edges) {
+    // Source node: we get its frontier lag from the edge data
     if (!nodeMap.has(edge.sourceId)) {
       nodeMap.set(edge.sourceId, {
         id: edge.sourceId,
         name: edge.sourceName,
         type: edge.sourceType,
-        delay: 0,
+        selfDelay: 0, // Sources (root nodes) have 0 self-delay by definition
+        frontierLag: edge.sourceFrontierLag,
       });
     }
+
+    // Target node: use targetSelfDelay from the query
     if (!nodeMap.has(edge.targetId)) {
       nodeMap.set(edge.targetId, {
         id: edge.targetId,
         name: edge.targetName,
         type: edge.targetType,
-        delay: 0,
+        selfDelay: Math.max(edge.targetSelfDelay, 0),
+        frontierLag: edge.targetFrontierLag,
       });
+    } else {
+      // Update with max self-delay if seen from multiple edges
+      const existing = nodeMap.get(edge.targetId)!;
+      existing.selfDelay = Math.max(existing.selfDelay, edge.targetSelfDelay);
     }
-
-    const existing = nodeMap.get(edge.sourceId)!;
-    existing.delay = Math.max(existing.delay, edge.delay);
 
     if (!childToParents.has(edge.targetId)) {
       childToParents.set(edge.targetId, new Set());
@@ -59,6 +78,7 @@ function edgesToWaterfallNodes(
     childToParents.get(edge.targetId)!.add(edge.sourceId);
   }
 
+  // Topological sort: roots first, probe last
   const sorted: WaterfallNode[] = [];
   const visited = new Set<string>();
 
@@ -114,7 +134,7 @@ export const CriticalPathChart = ({
         Full critical path to sources
       </Text>
       <Text textStyle="text-small" color={colors.foreground.secondary}>
-        Data flows top to bottom. Bar width shows delay introduced at each step.
+        Data flows top to bottom. Bar width shows incremental delay introduced at each step.
       </Text>
 
       <Box
@@ -159,7 +179,7 @@ const CriticalPathSVG = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
 
-  const maxDelay = Math.max(...nodes.map((n) => n.delay), 1);
+  const maxDelay = Math.max(...nodes.map((n) => n.selfDelay), 1);
 
   const yScale = scaleBand({
     domain: nodes.map((n) => n.id),
@@ -173,8 +193,7 @@ const CriticalPathSVG = ({
     nice: true,
   });
 
-  const getBarColor = (delaySeconds: number, isProbe: boolean) => {
-    if (isProbe) return colors.background.secondary;
+  const getBarColor = (delaySeconds: number) => {
     if (delaySeconds >= OUTDATED_THRESHOLD_SECONDS) return colors.accent.red;
     if (delaySeconds >= OUTDATED_THRESHOLD_SECONDS / 2) return colors.accent.orange;
     if (delaySeconds > 0) return colors.accent.brightPurple;
@@ -182,7 +201,7 @@ const CriticalPathSVG = ({
   };
 
   const getDotColor = (delaySeconds: number, isProbe: boolean) => {
-    if (isProbe) return colors.foreground.secondary;
+    if (isProbe && delaySeconds <= 0) return colors.foreground.secondary;
     if (delaySeconds >= OUTDATED_THRESHOLD_SECONDS) return colors.accent.red;
     if (delaySeconds >= OUTDATED_THRESHOLD_SECONDS / 2) return colors.accent.orange;
     return colors.accent.brightPurple;
@@ -206,12 +225,12 @@ const CriticalPathSVG = ({
 
       {nodes.map((node) => {
         const isProbe = node.id === probeId;
-        const delaySeconds = node.delay / 1000;
+        const delaySeconds = node.selfDelay / 1000;
         const y = yScale(node.id) ?? 0;
         const barY = y + (yScale.bandwidth() - BAR_HEIGHT) / 2;
         const barWidth = Math.max(
-          xScale(node.delay) - xScale(0),
-          isProbe ? width - MARGIN.left - MARGIN.right : 4,
+          xScale(node.selfDelay) - xScale(0),
+          4,
         );
 
         return (
@@ -282,15 +301,15 @@ const CriticalPathSVG = ({
               y={barY}
               width={barWidth}
               height={BAR_HEIGHT}
-              fill={getBarColor(delaySeconds, isProbe)}
+              fill={getBarColor(delaySeconds)}
               radius={4}
               all
             />
 
-            {/* Delay label on the bar */}
+            {/* Self delay label */}
             <text
               x={xScale(0) + barWidth + 8}
-              y={barY + BAR_HEIGHT / 2 + 4}
+              y={barY + BAR_HEIGHT / 2 - 2}
               fontSize="11px"
               fontWeight={600}
               fill={
@@ -302,11 +321,19 @@ const CriticalPathSVG = ({
               }
               style={{ fontFamily: "inherit" }}
             >
-              {isProbe
-                ? ""
-                : delaySeconds > 0
-                  ? `+${delaySeconds.toFixed(1)}s`
-                  : "0s"}
+              {delaySeconds > 0
+                ? `self: +${delaySeconds.toFixed(1)}s`
+                : "self: 0s"}
+            </text>
+            {/* Frontier lag label */}
+            <text
+              x={xScale(0) + barWidth + 8}
+              y={barY + BAR_HEIGHT / 2 + 12}
+              fontSize="10px"
+              fill={colors.foreground.secondary}
+              style={{ fontFamily: "inherit" }}
+            >
+              {`lag: ${(node.frontierLag / 1000).toFixed(1)}s`}
             </text>
           </Group>
         );

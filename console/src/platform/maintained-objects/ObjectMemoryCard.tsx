@@ -11,6 +11,8 @@ import {
   Box,
   Card,
   HStack,
+  Skeleton,
+  Spinner,
   Text,
   useTheme,
   VStack,
@@ -25,6 +27,7 @@ export interface ObjectMemoryCardProps {
   replicaTotalMemoryBytes: string | null;
   replicaName: string | null;
   replicaSize: string | null;
+  isLoading?: boolean;
 }
 
 export const ObjectMemoryCard = ({
@@ -32,10 +35,48 @@ export const ObjectMemoryCard = ({
   replicaTotalMemoryBytes,
   replicaName,
   replicaSize,
+  isLoading,
 }: ObjectMemoryCardProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
-  if (!memoryBytes) return null;
+  if (!memoryBytes && !isLoading) return null;
+
+  const [loadingStartTime] = React.useState(() => Date.now());
+  const [slowLoading, setSlowLoading] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!isLoading || memoryBytes) {
+      setSlowLoading(false);
+      return;
+    }
+    const timer = setTimeout(() => setSlowLoading(true), 15_000);
+    return () => clearTimeout(timer);
+  }, [isLoading, memoryBytes]);
+
+  if (!memoryBytes && isLoading) {
+    return (
+      <Card
+        p={5}
+        width="100%"
+        borderRadius="md"
+        border="1px"
+        borderColor={colors.border.primary}
+      >
+        <VStack align="start" spacing={3} width="100%">
+          <Text textStyle="heading-sm">Memory Usage</Text>
+          <HStack spacing={2}>
+            <Spinner size="sm" color={colors.foreground.secondary} />
+            <Text textStyle="text-small" color={colors.foreground.secondary}>
+              {slowLoading
+                ? "Cluster is heavily loaded — memory data may take a while"
+                : "Loading memory data from cluster..."}
+            </Text>
+          </HStack>
+          <Skeleton height="10px" width="100%" borderRadius="full" />
+        </VStack>
+      </Card>
+    );
+  }
 
   const objectBytes = BigInt(memoryBytes);
   const totalBytes = replicaTotalMemoryBytes
