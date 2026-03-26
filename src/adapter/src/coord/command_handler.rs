@@ -837,8 +837,6 @@ impl Coordinator {
             // user.
             let mut attributes = RoleAttributesRaw::new();
             // When auto-provisioning, we store the authenticator that was used to provision the role.
-            // This is useful for determining how a role was created and allows us to differentiate a role
-            // from a user without the LOGIN attribute.
             attributes.auto_provision_source = match user.authenticator_kind {
                 Some(AuthenticatorKind::Oidc) => Some(AutoProvisionSource::Oidc),
                 Some(AuthenticatorKind::Frontegg) => Some(AutoProvisionSource::Frontegg),

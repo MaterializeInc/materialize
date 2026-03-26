@@ -212,17 +212,7 @@ impl Client {
         Ok((response, Authenticated))
     }
 
-    /// Used by [mz_auth::AuthenticatorKind::Oidc] to check if a role exists and
-    /// has the `LOGIN` attribute.
-    /// We do not use it for [mz_auth::AuthenticatorKind::Password] and
-    /// [mz_auth::AuthenticatorKind::Sasl] because these authenticators do the same check
-    /// in their respective coordinator calls.
-    /// We do not use it for [mz_auth::AuthenticatorKind::Frontegg] and
-    /// [mz_auth::AuthenticatorKind::None] because these authenticators predate the
-    /// `LOGIN` attribute. To explain further, `LOGIN` is None for user roles created
-    /// with these authenticators and we can't deterministically migrate the `LOGIN`
-    /// attribute for them from None to True. This is not the case for user roles
-    /// created with other authenticators.
+    /// Checks if a role exists and has the `LOGIN` attribute.
     pub async fn role_can_login(&self, role_name: &str) -> Result<(), AdapterError> {
         let (tx, rx) = oneshot::channel();
         self.send(Command::CheckRoleCanLogin {
