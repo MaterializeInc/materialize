@@ -20,8 +20,8 @@ json_compatible!(v80::RoleVars with v81::RoleVars);
 
 /// Migrates the catalog role attribute `auto_provision_source` to the new `AutoProvisionSource` enum.
 ///
-/// For cloud environments (heuristic: mz_system cluster replication factor > 0), all existing
-/// roles are assumed to have been provisioned via Frontegg. For self-managed environments, the
+/// For cloud environments, all existing roles that look like an email address are assumed
+/// to have been provisioned via Frontegg. For self-managed environments, the
 /// field is left as `None` (the JSON default handles this without explicit update actions).
 pub fn upgrade(
     snapshot: Vec<v80::StateUpdateKind>,
@@ -30,14 +30,23 @@ pub fn upgrade(
     // and not a self-managed environment. This heuristic works because by default,
     // self managed environments have an mz_system cluster with a replication factor of 0.
     // This was to reduce the hardware requirements for self managed environments. However in
-    // Materialize cloud, we always set the replication factor to 1.
+    // Materialize cloud, we always set the replication factor to 1. Additionally, we also
+    // check if the enable_password_auth system parameter since it's only enabled in Self
+    // Managed environments.
+    let has_password_auth = snapshot.iter().any(|update| match update {
+        v80::StateUpdateKind::ServerConfiguration(config) => {
+            config.key.name == "enable_password_auth" && config.value.value == "on"
+        }
+        _ => false,
+    });
+
     let is_cloud = snapshot.iter().any(|update| match update {
         v80::StateUpdateKind::Cluster(cluster) if cluster.value.name == "mz_system" => {
             if let ClusterVariant::Managed(ManagedCluster {
                 replication_factor, ..
             }) = cluster.value.config.variant
             {
-                replication_factor > 0
+                replication_factor > 0 && !has_password_auth
             } else {
                 false
             }
@@ -63,13 +72,11 @@ pub fn upgrade(
         // `admin`, `prod_app`) almost certainly are not named to look like email
         // addresses.
         let email_regex_heuristic = Regex::new(r".+@.+\..+", true).expect("valid regex");
-        let (login, auto_provision_source) =
-            if email_regex_heuristic.is_match(&role.value.name.clone()) {
-                // Set login to true to differentiate users from other roles.
-                (Some(true), Some(v81::AutoProvisionSource::Frontegg))
-            } else {
-                (role.value.attributes.login, None)
-            };
+        let auto_provision_source = if email_regex_heuristic.is_match(&role.value.name.clone()) {
+            Some(v81::AutoProvisionSource::Frontegg)
+        } else {
+            None
+        };
 
         let new_role = v81::StateUpdateKind::Role(v81::Role {
             key: JsonCompatible::convert(&role.key),
@@ -78,7 +85,7 @@ pub fn upgrade(
                 attributes: v81::RoleAttributes {
                     inherit: role.value.attributes.inherit,
                     superuser: role.value.attributes.superuser,
-                    login,
+                    login: role.value.attributes.login,
                     auto_provision_source,
                 },
                 membership: JsonCompatible::convert(&role.value.membership),
@@ -99,6 +106,17 @@ mod tests {
     use crate::durable::upgrade::MigrationAction;
     use crate::durable::upgrade::objects_v80 as v80;
     use crate::durable::upgrade::objects_v81 as v81;
+
+    fn make_server_configuration(name: &str, value: &str) -> v80::StateUpdateKind {
+        v80::StateUpdateKind::ServerConfiguration(v80::ServerConfiguration {
+            key: v80::ServerConfigurationKey {
+                name: name.to_string(),
+            },
+            value: v80::ServerConfigurationValue {
+                value: value.to_string(),
+            },
+        })
+    }
 
     fn make_mz_system_cluster(replication_factor: u32) -> v80::StateUpdateKind {
         v80::StateUpdateKind::Cluster(v80::Cluster {
@@ -150,7 +168,25 @@ mod tests {
     fn test_self_managed_returns_no_migrations() {
         // We make mz_system cluster with replication factor 0 as heuristic to determine
         // if the environment is cloud or not.
-        let snapshot = vec![make_mz_system_cluster(0), make_role(1, "user@example.com")];
+        let snapshot = vec![
+            make_server_configuration("enable_password_auth", "on"),
+            make_mz_system_cluster(0),
+            make_role(1, "user@example.com"),
+        ];
+        let migrations = upgrade(snapshot);
+        assert!(migrations.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_self_managed_no_password_auth_returns_no_migrations() {
+        // In case a self managed environment has a system cluster with replication factor 1,
+        // we check if the enable_password_auth variable is on given it's only on for self
+        // managed environments.
+        let snapshot = vec![
+            make_server_configuration("enable_password_auth", "on"),
+            make_mz_system_cluster(1),
+            make_role(1, "user@example.com"),
+        ];
         let migrations = upgrade(snapshot);
         assert!(migrations.is_empty());
     }
@@ -159,6 +195,7 @@ mod tests {
     fn test_cloud_mixed_roles() {
         // Roles that look like email addresses should have autoprovisionsource = 'frontegg'.
         let snapshot = vec![
+            make_server_configuration("enable_password_auth", "off"),
             make_mz_system_cluster(1),
             make_role(1, "user@example.com"),
             make_role(2, "manually_created_role"),
@@ -176,7 +213,6 @@ mod tests {
             user_role.value.attributes.auto_provision_source,
             Some(v81::AutoProvisionSource::Frontegg)
         );
-        assert_eq!(user_role.value.attributes.login, Some(true));
 
         let MigrationAction::Update(_, manually_created_role_action) = &migrations[1] else {
             panic!();
@@ -188,14 +224,15 @@ mod tests {
             manually_created_role.value.attributes.auto_provision_source,
             None
         );
-
-        assert_eq!(manually_created_role.value.attributes.login, None);
     }
 
     #[mz_ore::test]
     fn test_non_role_updates_ignored() {
         // Should ignore Cloud environments with no roles
-        let snapshot = vec![make_mz_system_cluster(1)];
+        let snapshot = vec![
+            make_server_configuration("enable_password_auth", "off"),
+            make_mz_system_cluster(1),
+        ];
         let migrations = upgrade(snapshot);
         assert!(migrations.is_empty());
     }
