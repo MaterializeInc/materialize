@@ -1,7 +1,7 @@
 [
   {
     "name": "objects.rs",
-    "md5": "4a133ca169b83cd4fd762aba9b556dc4"
+    "md5": "42585baa1b4b5e1b6da4e361a35ec546"
   },
   {
     "name": "objects_v74.rs",
@@ -30,5 +30,9 @@
   {
     "name": "objects_v80.rs",
     "md5": "4a133ca169b83cd4fd762aba9b556dc4"
+  },
+  {
+    "name": "objects_v81.rs",
+    "md5": "42585baa1b4b5e1b6da4e361a35ec546"
   }
 ]

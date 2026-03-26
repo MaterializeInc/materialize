@@ -19,10 +19,10 @@ ALTER SYSTEM SET enable_password_auth TO false;
 COMPLETE 0
 
 statement ok
-CREATE ROLE nonlogin_because_not_formatted_like_an_email
+CREATE ROLE nonlogin_role
 
 statement ok
-CREATE ROLE "materialize@foocorp.io"
+CREATE ROLE "materialize@foocorp.io" WITH LOGIN
 
 query TIBBBBTTT rowsort
 SELECT usename, usesysid, usecreatedb, usesuper, userepl, usebypassrls, passwd, valuntil, useconfig FROM pg_user;

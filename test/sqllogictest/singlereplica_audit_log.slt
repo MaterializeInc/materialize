@@ -164,7 +164,7 @@ SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY 
 25  drop  schema  {"database_name":"test","id":"u9","name":"public"}  materialize
 26  drop  schema  {"database_name":"test","id":"u11","name":"sc2"}  materialize
 27  drop  database  {"id":"u2","name":"test"}  materialize
-28  create  role  {"id":"u2","name":"foo"}  materialize
+28  create  role  {"auto_provision_source":null,"id":"u2","name":"foo"}  materialize
 29  drop  role  {"id":"u2","name":"foo"}  materialize
 30  create  cluster  {"id":"u2","name":"foo"}  materialize
 31  create  cluster-replica  {"billed_as":null,"cluster_id":"u2","cluster_name":"foo","internal":false,"logical_size":"scale=1,workers=1","reason":"manual","replica_id":"u2","replica_name":"r"}  materialize
@@ -301,7 +301,7 @@ COMPLETE 1
 query ITTTT
 SELECT id, event_type, object_type, details, user FROM mz_audit_events ORDER BY id DESC LIMIT 1
 ----
-75  create  role  {"id":"u4","name":"new_user"}  NULL
+75  create  role  {"auto_provision_source":"none","id":"u4","name":"new_user"}  NULL
 
 # Test audit events for replacement materialized views
 

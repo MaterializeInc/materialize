@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use mz_auth::Authenticated;
+use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_sql::session::user::SYSTEM_USER;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -37,6 +37,7 @@ impl SystemParameterBackend {
                 client_ip: None,
                 external_metadata_rx: None,
                 helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
             },
             Authenticated,
         );

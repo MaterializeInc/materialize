@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
+use mz_auth::AuthenticatorKind;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
 use serde::Serialize;
@@ -19,6 +20,7 @@ pub static SYSTEM_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SYSTEM_USER_NAME.into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 pub const SUPPORT_USER_NAME: &str = "mz_support";
@@ -26,6 +28,7 @@ pub static SUPPORT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: SUPPORT_USER_NAME.into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 pub const ANALYTICS_USER_NAME: &str = "mz_analytics";
@@ -33,6 +36,7 @@ pub static ANALYTICS_USER: LazyLock<User> = LazyLock::new(|| User {
     name: ANALYTICS_USER_NAME.into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 pub static INTERNAL_USER_NAMES: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
@@ -58,6 +62,7 @@ pub static HTTP_DEFAULT_USER: LazyLock<User> = LazyLock::new(|| User {
     name: "anonymous_http_user".into(),
     external_metadata: None,
     internal_metadata: None,
+    authenticator_kind: None,
 });
 
 /// Identifies a user.
@@ -70,6 +75,9 @@ pub struct User {
     /// Metadata about this user stored in the catalog,
     /// such as its role's `SUPERUSER` attribute.
     pub internal_metadata: Option<InternalUserMetadata>,
+    /// The authenticator that authenticated this user.
+    /// If `None`, the user hasn't been authenticated.
+    pub authenticator_kind: Option<AuthenticatorKind>,
 }
 
 impl From<&User> for mz_pgwire_common::UserMetadata {

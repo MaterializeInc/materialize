@@ -505,6 +505,28 @@ pub enum PasswordAction {
     NoChange,
 }
 
+/// The authenticator that auto-provisioned a role on first login.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
+pub enum AutoProvisionSource {
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Oidc`].
+    Oidc,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::Frontegg`].
+    Frontegg,
+    /// Role was auto-provisioned by [`mz_auth::AuthenticatorKind::None`]
+    None,
+}
+
 /// A raw representation of attributes belonging to a [`CatalogRole`] that we might
 /// get as input from the user. This includes the password.
 /// This struct explicitly does not implement `Serialize` or `Deserialize` to avoid
@@ -521,6 +543,8 @@ pub struct RoleAttributesRaw {
     pub superuser: Option<bool>,
     /// Whether this role is login
     pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
     // Force use of constructor.
     _private: (),
 }
@@ -544,6 +568,8 @@ pub struct RoleAttributes {
     pub superuser: Option<bool>,
     /// Whether this role is login
     pub login: Option<bool>,
+    /// The authenticator that auto-provisioned this role, if any.
+    pub auto_provision_source: Option<AutoProvisionSource>,
     // Force use of constructor.
     _private: (),
 }
@@ -557,6 +583,7 @@ impl RoleAttributesRaw {
             scram_iterations: None,
             superuser: None,
             login: None,
+            auto_provision_source: None,
             _private: (),
         }
     }
@@ -577,11 +604,12 @@ impl RoleAttributes {
             inherit: true,
             superuser: None,
             login: None,
+            auto_provision_source: None,
             _private: (),
         }
     }
 
-    /// Adds all attributes except password.
+    /// Adds all attributes except password and auto_provision_source.
     pub const fn with_all(mut self) -> RoleAttributes {
         self.inherit = true;
         self.superuser = Some(true);
@@ -601,6 +629,7 @@ impl From<RoleAttributesRaw> for RoleAttributes {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             ..
         }: RoleAttributesRaw,
     ) -> RoleAttributes {
@@ -608,6 +637,7 @@ impl From<RoleAttributesRaw> for RoleAttributes {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             _private: (),
         }
     }
@@ -619,6 +649,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
             inherit,
             superuser,
             login,
+            auto_provision_source,
             ..
         }: RoleAttributes,
     ) -> RoleAttributesRaw {
@@ -628,6 +659,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
             scram_iterations: None,
             superuser,
             login,
+            auto_provision_source,
             _private: (),
         }
     }
@@ -651,6 +683,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
             scram_iterations,
             superuser,
             login,
+            auto_provision_source: None,
             _private: (),
         }
     }

@@ -857,12 +857,9 @@ impl Coordinator {
     /// Validates the role attributes for a `CREATE ROLE` statement.
     fn validate_role_attributes(&self, attributes: &RoleAttributesRaw) -> Result<(), AdapterError> {
         if !ENABLE_PASSWORD_AUTH.get(self.catalog().system_config().dyncfgs()) {
-            if attributes.superuser.is_some()
-                || attributes.password.is_some()
-                || attributes.login.is_some()
-            {
+            if attributes.superuser.is_some() || attributes.password.is_some() {
                 return Err(AdapterError::UnavailableFeature {
-                    feature: "SUPERUSER, PASSWORD, and LOGIN attributes".to_string(),
+                    feature: "SUPERUSER and PASSWORD attributes".to_string(),
                     docs: Some("https://materialize.com/docs/sql/create-role/#details".to_string()),
                 });
             }

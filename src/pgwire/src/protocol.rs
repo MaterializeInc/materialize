@@ -49,7 +49,8 @@ use mz_repr::{
     SqlRelationType, SqlScalarType,
 };
 use mz_server_core::TlsMode;
-use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
+use mz_server_core::listeners;
+use mz_server_core::listeners::AllowedRoles;
 use mz_sql::ast::display::AstDisplay;
 use mz_sql::ast::{
     CopyDirection, CopyStatement, CopyTarget, FetchDirection, Ident, Raw, Statement,
@@ -119,7 +120,7 @@ where
     pub oidc: GenericOidcAuthenticator,
     /// The authentication method defined by the server's listener
     /// configuration.
-    pub authenticator_kind: AuthenticatorKind,
+    pub authenticator_kind: listeners::AuthenticatorKind,
     /// Global connection limit and count
     pub active_connection_counter: ConnectionCounter,
     /// Helm chart version
@@ -203,6 +204,8 @@ where
         return conn.send(err).await;
     }
 
+    let authenticator_kind = authenticator.kind();
+
     let (mut session, expired) = match authenticator {
         Authenticator::Frontegg(frontegg) => {
             let password = match request_cleartext_password(conn).await {
@@ -230,6 +233,7 @@ where
                             client_ip: conn.peer_addr().clone(),
                             external_metadata_rx: Some(auth_session.external_metadata_rx()),
                             helm_chart_version,
+                            authenticator_kind,
                         },
                         authenticated,
                     );
@@ -267,6 +271,7 @@ where
                             client_ip: conn.peer_addr().clone(),
                             external_metadata_rx: None,
                             helm_chart_version,
+                            authenticator_kind,
                         },
                         authenticated,
                     );
@@ -287,6 +292,7 @@ where
                 user,
                 conn_uuid,
                 helm_chart_version,
+                authenticator_kind,
             )
             .await
             {
@@ -475,6 +481,7 @@ where
                     client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: None,
                     helm_chart_version,
+                    authenticator_kind,
                 },
                 authenticated,
             );
@@ -492,6 +499,7 @@ where
                     client_ip: conn.peer_addr().clone(),
                     external_metadata_rx: None,
                     helm_chart_version,
+                    authenticator_kind,
                 },
                 Authenticated,
             );
@@ -761,6 +769,7 @@ async fn authenticate_with_password<A>(
     user: String,
     conn_uuid: Uuid,
     helm_chart_version: Option<String>,
+    authenticator_kind: mz_auth::AuthenticatorKind,
 ) -> Result<Session, PasswordRequestError>
 where
     A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
@@ -788,6 +797,7 @@ where
             client_ip: conn.peer_addr().clone(),
             external_metadata_rx: None,
             helm_chart_version,
+            authenticator_kind,
         },
         authenticated,
     );
@@ -3168,7 +3178,7 @@ fn fetch_message(
 }
 
 fn get_authenticator(
-    authenticator_kind: AuthenticatorKind,
+    authenticator_kind: listeners::AuthenticatorKind,
     frontegg: Option<FronteggAuthenticator>,
     oidc: GenericOidcAuthenticator,
     adapter_client: mz_adapter::Client,
@@ -3177,12 +3187,12 @@ fn get_authenticator(
     oidc_auth_option_enabled: bool,
 ) -> Authenticator {
     match authenticator_kind {
-        AuthenticatorKind::Frontegg => Authenticator::Frontegg(
-            frontegg.expect("Frontegg authenticator should exist with AuthenticatorKind::Frontegg"),
-        ),
-        AuthenticatorKind::Password => Authenticator::Password(adapter_client),
-        AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client),
-        AuthenticatorKind::Oidc => {
+        listeners::AuthenticatorKind::Frontegg => Authenticator::Frontegg(frontegg.expect(
+            "Frontegg authenticator should exist with listeners::AuthenticatorKind::Frontegg",
+        )),
+        listeners::AuthenticatorKind::Password => Authenticator::Password(adapter_client),
+        listeners::AuthenticatorKind::Sasl => Authenticator::Sasl(adapter_client),
+        listeners::AuthenticatorKind::Oidc => {
             if oidc_auth_option_enabled {
                 Authenticator::Oidc(oidc)
             } else {
@@ -3191,7 +3201,7 @@ fn get_authenticator(
                 Authenticator::Password(adapter_client)
             }
         }
-        AuthenticatorKind::None => Authenticator::None,
+        listeners::AuthenticatorKind::None => Authenticator::None,
     }
 }
 

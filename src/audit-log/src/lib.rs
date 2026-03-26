@@ -237,6 +237,7 @@ pub enum EventDetails {
     SetV1(SetV1),
     ResetAllV1,
     RotateKeysV1(RotateKeysV1),
+    CreateRoleV1(CreateRoleV1),
 }
 
 #[derive(
@@ -324,6 +325,24 @@ pub struct FullNameV1 {
 pub struct IdNameV1 {
     pub id: String,
     pub name: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Serialize,
+    Deserialize,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Ord,
+    Hash,
+    Arbitrary
+)]
+pub struct CreateRoleV1 {
+    pub id: String,
+    pub name: String,
+    pub auto_provision_source: Option<String>,
 }
 
 #[derive(
@@ -1178,6 +1197,7 @@ impl EventDetails {
             EventDetails::SetV1(v) => serde_json::to_value(v).expect("must serialize"),
             EventDetails::ResetAllV1 => serde_json::Value::Null,
             EventDetails::RotateKeysV1(v) => serde_json::to_value(v).expect("must serialize"),
+            EventDetails::CreateRoleV1(v) => serde_json::to_value(v).expect("must serialize"),
         }
     }
 }

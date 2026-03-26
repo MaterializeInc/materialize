@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use jsonwebtoken::jwk::JwkSet;
-use mz_adapter::Client as AdapterClient;
+use mz_adapter::{AdapterError, AuthenticationError, Client as AdapterClient};
 use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_ISSUER};
 use mz_auth::Authenticated;
 use mz_ore::soft_panic_or_log;
@@ -61,6 +61,9 @@ pub enum OidcError {
         expected_issuer: String,
     },
     ExpiredSignature,
+    /// The role exists but does not have the LOGIN attribute.
+    NonLogin,
+    LoginCheckError,
 }
 
 impl std::fmt::Display for OidcError {
@@ -84,6 +87,8 @@ impl std::fmt::Display for OidcError {
             OidcError::InvalidAudience { .. } => write!(f, "invalid audience"),
             OidcError::InvalidIssuer { .. } => write!(f, "invalid issuer"),
             OidcError::ExpiredSignature => write!(f, "authentication credentials have expired"),
+            OidcError::NonLogin => write!(f, "role is not allowed to login"),
+            OidcError::LoginCheckError => write!(f, "unexpected error checking if role can login"),
         }
     }
 }
@@ -118,6 +123,7 @@ impl OidcError {
             } => Some(format!(
                 "Expected authentication claim \"{authentication_claim}\" in the JWT.",
             )),
+            OidcError::NonLogin => Some("The role does not have the LOGIN attribute.".into()),
             _ => None,
         }
     }
@@ -467,6 +473,26 @@ impl GenericOidcAuthenticatorInner {
             _private: (),
         })
     }
+
+    /// Checks whether the role has the LOGIN attribute. This is needed otherwise
+    /// a user can authenticate with an OIDC token to a role that isn't recognized
+    /// as a user.
+    async fn check_role_login(&self, role_name: &str) -> Result<(), OidcError> {
+        match self.adapter_client.role_can_login(role_name).await {
+            Ok(()) => Ok(()),
+            Err(AdapterError::AuthenticationError(AuthenticationError::RoleNotFound)) => {
+                // Role will be auto-provisioned during startup; allow login.
+                Ok(())
+            }
+            Err(AdapterError::AuthenticationError(AuthenticationError::NonLogin)) => {
+                Err(OidcError::NonLogin)
+            }
+            Err(e) => {
+                warn!(?e, "unexpected error checking OIDC role login");
+                Err(OidcError::LoginCheckError)
+            }
+        }
+    }
 }
 
 impl GenericOidcAuthenticator {
@@ -476,6 +502,7 @@ impl GenericOidcAuthenticator {
         expected_user: Option<&str>,
     ) -> Result<(ValidatedClaims, Authenticated), OidcError> {
         let validated_claims = self.inner.validate_token(token, expected_user).await?;
+        self.inner.check_role_login(&validated_claims.user).await?;
         Ok((validated_claims, Authenticated))
     }
 }

@@ -23,7 +23,7 @@ describe("buildRoleDetailsQuery", () => {
       CREATE ROLE rd_target;
       CREATE ROLE rd_member_1;
       CREATE ROLE rd_member_2;
-      CREATE ROLE "rd_user@test.com";
+      CREATE ROLE "rd_user@test.com" WITH LOGIN;
       GRANT rd_parent TO rd_target;
       GRANT rd_target TO rd_member_1;
       GRANT rd_target TO rd_member_2;

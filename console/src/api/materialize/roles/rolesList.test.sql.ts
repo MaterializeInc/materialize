@@ -21,7 +21,7 @@ describe("buildRolesListQuery", () => {
       DROP ROLE IF EXISTS "rl_user@test.com", rl_child_role, rl_parent_role;
       CREATE ROLE rl_parent_role;
       CREATE ROLE rl_child_role;
-      CREATE ROLE "rl_user@test.com";
+      CREATE ROLE "rl_user@test.com" WITH LOGIN;
       GRANT rl_parent_role TO rl_child_role;
       GRANT rl_parent_role TO "rl_user@test.com";
       CREATE TABLE rl_owned_table (id INT);

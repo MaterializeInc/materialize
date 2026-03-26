@@ -434,6 +434,7 @@ impl Message {
                 Command::AuthenticatePassword { .. } => "command-auth_check",
                 Command::AuthenticateGetSASLChallenge { .. } => "command-auth_get_sasl_challenge",
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
+                Command::CheckRoleCanLogin { .. } => "command-check_role_can_login",
                 Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
                 Command::GetOracle { .. } => "get-oracle",
                 Command::DetermineRealTimeRecentTimestamp { .. } => {

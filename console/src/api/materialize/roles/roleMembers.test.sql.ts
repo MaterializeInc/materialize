@@ -21,7 +21,7 @@ describe("buildRoleMembersQuery", () => {
       CREATE ROLE rm_parent;
       CREATE ROLE rm_child_1;
       CREATE ROLE rm_child_2;
-      CREATE ROLE "rm_user@test.com";
+      CREATE ROLE "rm_user@test.com" WITH LOGIN;
       GRANT rm_parent TO rm_child_1;
       GRANT rm_parent TO rm_child_2;
       GRANT rm_parent TO "rm_user@test.com";

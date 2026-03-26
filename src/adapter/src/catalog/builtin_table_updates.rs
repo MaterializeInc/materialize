@@ -52,7 +52,6 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
-use mz_repr::adt::regex;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
@@ -210,48 +209,14 @@ impl CatalogState {
                 let role = self.get_role(&id);
                 let builtin_supers = [MZ_SYSTEM_ROLE_ID, MZ_SUPPORT_ROLE_ID];
 
-                // For self managed auth, we can get the actual login and superuser bits
-                // directly from the role. For cloud auth, the LOGIN and SUPERUSER attribute
-                // are nullish and determined each time a role logs in, so there's no clean
-                // way to accurately determine this in the catalog. Instead we do something
-                // a little gross. For system roles, we hardcode the known roles that can
-                // log in. For user roles, we determine `rolcanlogin` based on whether the
-                // role name looks like an email address.
-                //
-                // This works for the vast majority of cases in production. Roles that users
-                // log in to come from Frontegg and therefore *must* be valid email
-                // addresses, while roles that are created via `CREATE ROLE` (e.g.,
-                // `admin`, `prod_app`) almost certainly are not named to look like email
-                // addresses.
-                //
-                // For the moment, we're comfortable with the edge cases here. If we discover
-                // that folks are regularly creating non-login roles with names that look
-                // like an email address (e.g., `admins@sysops.foocorp`), we can change
-                // course.
-                let cloud_login_regex = "^[^@]+@[^@]+\\.[^@]+$";
-                let matches_cloud_login_heuristic = regex::Regex::new(cloud_login_regex, true)
-                    .expect("valid regex")
-                    .is_match(&role.name);
-
                 let rolcanlogin = if let Some(login) = role.attributes.login {
                     login
                 } else {
-                    // Note: Self-managed users with email-like
-                    // role names may have `rolcanlogin` set to true if the role
-                    // was initialized without an explicit LOGIN attribute.
-                    // We're comfortable with this edge case, since roles that
-                    // have login explictly turned off via NOLOGIN will have a
-                    // LOGIN attribute value of false.
-                    builtin_supers.contains(&role.id) || matches_cloud_login_heuristic
+                    builtin_supers.contains(&role.id)
                 };
 
                 let rolsuper = if let Some(superuser) = role.attributes.superuser {
                     Datum::from(superuser)
-                } else if let Some(_) = role.attributes.login {
-                    // If a role has an explicit LOGIN attribute but no SUPERUSER
-                    // attribute, we assume this is self-managed auth where
-                    // the role was created without indicating superuser privileges.
-                    Datum::from(false)
                 } else if builtin_supers.contains(&role.id) {
                     // System roles (mz_system, mz_support) are superusers
                     Datum::from(true)
@@ -259,7 +224,7 @@ impl CatalogState {
                     // In cloud environments, superuser status is determined
                     // at login, so we set `rolsuper` to `null` here because
                     // it cannot be known beforehand. For self-managed
-                    // auth, roles created without an explicit LOGIN
+                    // auth, roles created without an explicit SUPERUSER
                     // attribute would typically have `rolsuper` set to false.
                     // However, since we cannot reliably distinguish between
                     // cloud and self-managed here, we conservatively use NULL
