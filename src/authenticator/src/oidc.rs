@@ -11,6 +11,27 @@
 //!
 //! This module provides JWT-based authentication using OpenID Connect (OIDC).
 //! JWTs are validated locally using JWKS fetched from the configured provider.
+//!
+//! # Zeroization (SEC-115)
+//!
+//! Sensitive types in this module implement [`Zeroize`] where feasible to ensure
+//! secret material does not linger in process memory after use:
+//!
+//! - [`ValidatedClaims`]: implements `Zeroize` and `ZeroizeOnDrop`. The `user`
+//!   field (extracted identity) is zeroed when the value is dropped.
+//!
+//! - [`OidcClaims`]: implements `Zeroize`. All fields — including the issuer,
+//!   audience list, and the freeform `unknown_claims` map — are cleared.
+//!
+//! The following types **cannot** be zeroized and callers should be aware:
+//!
+//! - [`OidcDecodingKey`]: wraps the opaque foreign type `jsonwebtoken::DecodingKey`,
+//!   whose internal representation is not accessible. The key material lives
+//!   inside the foreign type and cannot be overwritten from Rust code.
+//!
+//! - **JWT token strings** (`&str`): passed by reference to [`GenericOidcAuthenticatorInner::validate_token`].
+//!   Because these are borrowed, this crate cannot zeroize the caller's buffer.
+//!   Callers handling raw JWT tokens should use `Zeroizing<String>` for owned copies.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -20,6 +41,7 @@ use jsonwebtoken::jwk::JwkSet;
 use mz_adapter::{AdapterError, AuthenticationError, Client as AdapterClient};
 use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_ISSUER};
 use mz_auth::Authenticated;
+use mz_ore::secure::{Zeroize, ZeroizeOnDrop};
 use mz_ore::soft_panic_or_log;
 use mz_pgwire_common::{ErrorResponse, Severity};
 use reqwest::Client as HttpClient;
@@ -183,6 +205,25 @@ pub struct OidcClaims {
     pub unknown_claims: BTreeMap<String, serde_json::Value>,
 }
 
+impl Zeroize for OidcClaims {
+    fn zeroize(&mut self) {
+        self.iss.zeroize();
+        self.exp.zeroize();
+        self.iat.zeroize();
+        // Vec<String>: zeroize each string's contents, then clear the vec.
+        for s in &mut self.aud {
+            s.zeroize();
+        }
+        self.aud.clear();
+        // BTreeMap<String, serde_json::Value>: serde_json::Value does not
+        // implement Zeroize, so we clear the map to drop all entries. String
+        // keys and any heap-allocated Value contents are freed but not
+        // cryptographically zeroed — this is the best we can do without
+        // forking serde_json.
+        self.unknown_claims.clear();
+    }
+}
+
 impl OidcClaims {
     /// Extract the username from the OIDC claims.
     fn user(&self, authentication_claim: &str) -> Option<&str> {
@@ -198,6 +239,30 @@ pub struct ValidatedClaims {
     _private: (),
 }
 
+impl Zeroize for ValidatedClaims {
+    fn zeroize(&mut self) {
+        self.user.zeroize();
+    }
+}
+
+impl Drop for ValidatedClaims {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+/// The `Drop` implementation calls `zeroize()`, which zeroes all
+/// sensitive fields. This satisfies the `ZeroizeOnDrop` contract.
+impl ZeroizeOnDrop for ValidatedClaims {}
+
+/// Wrapper around `jsonwebtoken::DecodingKey` with a redacted `Debug` impl.
+///
+/// # Zeroization limitation (SEC-115)
+///
+/// `DecodingKey` is an opaque foreign type from the `jsonwebtoken` crate. Its
+/// internal representation (parsed JWK key material) is not accessible, so we
+/// cannot implement `Zeroize` for this wrapper. The key material will be freed
+/// by the allocator on drop but is **not** cryptographically zeroed.
 #[derive(Clone)]
 struct OidcDecodingKey(jsonwebtoken::DecodingKey);
 
@@ -565,6 +630,65 @@ mod tests {
         assert_eq!(
             url.to_string(),
             "https://dev-123456.okta.com/oauth2/default/.well-known/openid-configuration"
+        );
+    }
+
+    // --- Zeroization tests (SEC-115) ---
+
+    #[mz_ore::test]
+    fn validated_claims_implements_zeroize() {
+        fn assert_zeroize<T: mz_ore::secure::Zeroize>() {}
+        assert_zeroize::<ValidatedClaims>();
+    }
+
+    #[mz_ore::test]
+    fn validated_claims_implements_zeroize_on_drop() {
+        fn assert_zod<T: mz_ore::secure::ZeroizeOnDrop>() {}
+        assert_zod::<ValidatedClaims>();
+    }
+
+    #[mz_ore::test]
+    fn validated_claims_user_field_is_zeroed() {
+        use mz_ore::secure::Zeroize;
+        let mut claims = ValidatedClaims {
+            user: "alice@example.com".to_string(),
+            _private: (),
+        };
+        claims.zeroize();
+        assert!(claims.user.is_empty(), "user field should be zeroed");
+    }
+
+    #[mz_ore::test]
+    fn oidc_claims_implements_zeroize() {
+        fn assert_zeroize<T: mz_ore::secure::Zeroize>() {}
+        assert_zeroize::<OidcClaims>();
+    }
+
+    #[mz_ore::test]
+    fn oidc_claims_zeroize_clears_fields() {
+        use mz_ore::secure::Zeroize;
+        let mut claims = OidcClaims {
+            iss: "https://issuer.example.com".to_string(),
+            exp: 1234567890,
+            iat: Some(1234567800),
+            aud: vec!["app1".to_string(), "app2".to_string()],
+            unknown_claims: {
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "email".to_string(),
+                    serde_json::Value::String("alice@example.com".to_string()),
+                );
+                m
+            },
+        };
+        claims.zeroize();
+        assert!(claims.iss.is_empty(), "iss should be zeroed");
+        assert_eq!(claims.exp, 0, "exp should be zeroed");
+        assert!(claims.iat.is_none(), "iat should be zeroed");
+        assert!(claims.aud.is_empty(), "aud should be zeroed");
+        assert!(
+            claims.unknown_claims.is_empty(),
+            "unknown_claims should be zeroed"
         );
     }
 }
