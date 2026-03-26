@@ -30,6 +30,7 @@ use http::StatusCode;
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_OBSERVATORY,
 };
+use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast::display::escaped_string_literal;
@@ -887,7 +888,13 @@ impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
     }
 }
 
-/// Validates query references only mz_* system catalog tables.
+/// Validates that a query only references system catalog tables.
+///
+/// For SELECT statements, all table references must be in system schemas
+/// (from `SYSTEM_SCHEMAS`, excluding `mz_unsafe`), and at least one system
+/// table must be referenced (constant queries like `SELECT 1` are rejected
+/// to prevent misuse of the observatory endpoint for arbitrary computation).
+/// SHOW and EXPLAIN statements are allowed without table references.
 fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
     // Parse the SQL to validate it
     let stmts = parse(sql).map_err(|e| {
@@ -906,20 +913,19 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
         collector.visit_statement(&stmt.ast);
     }
 
-    // Allowed system schemas
-    const ALLOWED_SCHEMAS: &[&str] = &[
-        "mz_catalog",
-        "mz_internal",
-        "pg_catalog",
-        "information_schema",
-    ];
+    // Use the canonical system schema list, excluding mz_unsafe which contains
+    // internal-only objects that should not be exposed to MCP clients.
+    let is_allowed_schema =
+        |s: &str| SYSTEM_SCHEMAS.contains(&s) && s != namespaces::MZ_UNSAFE_SCHEMA;
 
     // Helper to check if a table reference is allowed
     let is_system_table = |(schema, table_name): &(Option<String>, String)| {
         match schema {
             // Explicitly qualified with allowed schema
-            Some(s) => ALLOWED_SCHEMAS.contains(&s.as_str()),
-            // Unqualified: allow if starts with mz_ (common Materialize system tables)
+            Some(s) => is_allowed_schema(s.as_str()),
+            // Unqualified: allow if starts with mz_ (common Materialize system tables).
+            // Note: user tables can also start with mz_, but unqualified references
+            // resolve to the user's search_path first, so this is a best-effort check.
             None => table_name.starts_with("mz_"),
         }
     };
@@ -1275,6 +1281,24 @@ mod tests {
             )
             .is_ok(),
             "Should allow UNION of system tables"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_rejects_constant_queries() {
+        // SELECT without any table reference should be rejected — the observatory
+        // endpoint is for system catalog queries, not arbitrary computation.
+        assert!(
+            validate_system_catalog_query("SELECT 1").is_err(),
+            "Should reject constant SELECT with no table references"
+        );
+        assert!(
+            validate_system_catalog_query("SELECT 1 + 2, 'hello'").is_err(),
+            "Should reject constant expression SELECT"
+        );
+        assert!(
+            validate_system_catalog_query("SELECT now()").is_err(),
+            "Should reject function-only SELECT with no table references"
         );
     }
 
