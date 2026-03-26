@@ -64,7 +64,7 @@ tokio-stream = "0.1.18"
 tonic = "0.14.2"
 tonic-prost = "0.14.2"
 tracing = "0.1.44"
-uuid = { version = "1.19.0", features = ["v4"] }
+uuid = { version = "1.22.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

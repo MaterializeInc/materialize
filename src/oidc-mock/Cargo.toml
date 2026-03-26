@@ -22,7 +22,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", default-features = false }
 tracing = "0.1.44"
-uuid = "1.19.0"
+uuid = "1.22.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

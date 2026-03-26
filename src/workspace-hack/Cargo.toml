@@ -160,7 +160,7 @@ uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.8", features = ["serde"] }
-uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.22.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13.3" }

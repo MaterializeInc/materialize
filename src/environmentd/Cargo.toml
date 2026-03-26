@@ -128,7 +128,7 @@ tracing-opentelemetry = { version = "0.32.1" }
 tracing-subscriber = "0.3.22"
 tungstenite = { version = "0.28.0" }
 url = "2.5.8"
-uuid = "1.19.0"
+uuid = "1.22.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
