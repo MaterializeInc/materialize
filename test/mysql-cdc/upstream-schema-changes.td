@@ -20,6 +20,7 @@
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
+SET GLOBAL binlog_row_metadata = FULL;
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
@@ -100,12 +101,17 @@ d date
 e elderberry
 f fig
 
-# In MySQL, dropping an excluded column stalls the source with an incompatible schema change.
+# dropping an excluded column should have no effect
 $ mysql-execute name=mysql
 ALTER TABLE foo DROP COLUMN meta_col;
 
-! SELECT * FROM foo3;
-contains:incompatible schema change
+> SELECT * FROM foo3;
+a apple
+b banana
+c cherry
+d date
+e elderberry
+f fig
 
 > DROP TABLE foo3;
 
@@ -156,8 +162,15 @@ b banana 7
 $ mysql-execute name=mysql
 ALTER TABLE bar DROP COLUMN meta_col;
 
-# Dropping an excluded column stalls the source in MySQL.
-! SELECT * FROM bar1;
-contains:incompatible schema change
+> SELECT * FROM bar1;
+a apple 5
+b banana 7
+
+$ mysql-execute name=mysql
+ALTER TABLE bar ADD COLUMN lastname VARCHAR(16) AFTER `name`;
+
+> SELECT * FROM bar1;
+a apple 5
+b banana 7
 
 > DROP SOURCE mysql_src2 CASCADE;
