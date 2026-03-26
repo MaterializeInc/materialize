@@ -182,70 +182,6 @@ type DeltaWriterType = DeltaWriter<
 /// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
 const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
 
-/// Convert an Arrow DataType to an Iceberg-compatible DataType.
-///
-/// Iceberg has specific rules for unsigned integer types:
-/// - UInt8, UInt16 -> Int32 (promotion to 32-bit signed)
-/// - UInt32 -> Int64 (promotion to 64-bit signed)
-/// - UInt64 -> Decimal128(20, 0) (decimal can hold full uint64 range)
-///
-/// This function recursively transforms nested types (structs, lists, maps).
-/// It's primarily used in tests; the main code path uses `iceberg_type_overrides`.
-#[allow(dead_code)]
-fn convert_datatype_for_iceberg(data_type: &DataType) -> DataType {
-    match data_type {
-        // Unsigned integer types need conversion per Iceberg rules
-        DataType::UInt8 | DataType::UInt16 => DataType::Int32,
-        DataType::UInt32 => DataType::Int64,
-        DataType::UInt64 => DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
-
-        // Recursively handle nested types
-        DataType::Struct(fields) => {
-            let new_fields: Vec<Field> = fields
-                .iter()
-                .map(|f| {
-                    Field::new(
-                        f.name(),
-                        convert_datatype_for_iceberg(f.data_type()),
-                        f.is_nullable(),
-                    )
-                    .with_metadata(f.metadata().clone())
-                })
-                .collect();
-            DataType::Struct(new_fields.into())
-        }
-        DataType::List(element_field) => {
-            let new_element = Field::new(
-                element_field.name(),
-                convert_datatype_for_iceberg(element_field.data_type()),
-                element_field.is_nullable(),
-            )
-            .with_metadata(element_field.metadata().clone());
-            DataType::List(Arc::new(new_element))
-        }
-        DataType::LargeList(element_field) => {
-            let new_element = Field::new(
-                element_field.name(),
-                convert_datatype_for_iceberg(element_field.data_type()),
-                element_field.is_nullable(),
-            )
-            .with_metadata(element_field.metadata().clone());
-            DataType::LargeList(Arc::new(new_element))
-        }
-        DataType::Map(entries_field, sorted) => {
-            let new_entries = Field::new(
-                entries_field.name(),
-                convert_datatype_for_iceberg(entries_field.data_type()),
-                entries_field.is_nullable(),
-            )
-            .with_metadata(entries_field.metadata().clone());
-            DataType::Map(Arc::new(new_entries), *sorted)
-        }
-        // All other types pass through unchanged
-        other => other.clone(),
-    }
-}
-
 /// Cast an Arrow array to an Iceberg-compatible type.
 ///
 /// This handles the conversion of unsigned integer arrays:
@@ -1904,62 +1840,59 @@ where
 mod tests {
     use super::*;
     use arrow::array::Array;
+    use mz_repr::SqlScalarType;
 
     #[mz_ore::test]
-    fn test_convert_datatype_for_iceberg_unsigned_integers() {
-        // UInt8 and UInt16 should convert to Int32
-        assert_eq!(
-            convert_datatype_for_iceberg(&DataType::UInt8),
-            DataType::Int32
-        );
-        assert_eq!(
-            convert_datatype_for_iceberg(&DataType::UInt16),
-            DataType::Int32
-        );
+    fn test_iceberg_type_overrides() {
+        // UInt16 should override to Int32
+        let result = iceberg_type_overrides(&SqlScalarType::UInt16);
+        assert_eq!(result.unwrap().0, DataType::Int32);
 
-        // UInt32 should convert to Int64
-        assert_eq!(
-            convert_datatype_for_iceberg(&DataType::UInt32),
-            DataType::Int64
-        );
+        // UInt32 should override to Int64
+        let result = iceberg_type_overrides(&SqlScalarType::UInt32);
+        assert_eq!(result.unwrap().0, DataType::Int64);
 
-        // UInt64 should convert to Decimal128(20, 0)
+        // UInt64 should override to Decimal128(20, 0)
+        let result = iceberg_type_overrides(&SqlScalarType::UInt64);
         assert_eq!(
-            convert_datatype_for_iceberg(&DataType::UInt64),
+            result.unwrap().0,
             DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
         );
+
+        // MzTimestamp should override to Decimal128(20, 0)
+        let result = iceberg_type_overrides(&SqlScalarType::MzTimestamp);
+        assert_eq!(
+            result.unwrap().0,
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+        );
+
+        // Other types should return None (use default)
+        assert!(iceberg_type_overrides(&SqlScalarType::Int32).is_none());
+        assert!(iceberg_type_overrides(&SqlScalarType::String).is_none());
+        assert!(iceberg_type_overrides(&SqlScalarType::Bool).is_none());
     }
 
     #[mz_ore::test]
-    fn test_convert_datatype_for_iceberg_passthrough() {
-        // Signed integers should pass through unchanged
-        assert_eq!(
-            convert_datatype_for_iceberg(&DataType::Int32),
-            DataType::Int32
-        );
-        assert_eq!(
-            convert_datatype_for_iceberg(&DataType::Int64),
-            DataType::Int64
-        );
+    fn test_iceberg_schema_with_nested_uint64() {
+        // Test that desc_to_schema_with_overrides handles nested UInt64
+        // by using iceberg_type_overrides which applies recursively
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column(
+                "items",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::UInt64),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish();
 
-        // Other types should pass through unchanged
-        assert_eq!(
-            convert_datatype_for_iceberg(&DataType::Utf8),
-            DataType::Utf8
-        );
-        assert_eq!(
-            convert_datatype_for_iceberg(&DataType::Boolean),
-            DataType::Boolean
-        );
-    }
+        let schema =
+            mz_arrow_util::builder::desc_to_schema_with_overrides(&desc, iceberg_type_overrides)
+                .expect("schema conversion should succeed");
 
-    #[mz_ore::test]
-    fn test_convert_datatype_for_iceberg_nested() {
-        // Test that nested types are converted recursively
-        let list_of_uint64 = DataType::List(Arc::new(Field::new("item", DataType::UInt64, true)));
-        let converted = convert_datatype_for_iceberg(&list_of_uint64);
-
-        if let DataType::List(field) = converted {
+        // The inner element should be Decimal128, not UInt64
+        if let DataType::List(field) = schema.field(0).data_type() {
             assert_eq!(
                 field.data_type(),
                 &DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
