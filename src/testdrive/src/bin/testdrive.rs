@@ -216,6 +216,12 @@ struct Args {
     /// Kafka broker.
     #[clap(long, env = "KAFKA_OPTION", use_value_delimiter=true, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
     kafka_option: Vec<(String, String)>,
+    /// Route to brokers through this PrivateLink service.
+    #[clap(long, value_name = "HOST", requires = "privatelink_azs")]
+    privatelink_service_name: Option<String>,
+    /// Route to AZ-specific brokers through these AZ-specific PrivateLink endpoints.
+    #[clap(long, value_name = "AZ,...", use_value_delimiter = true, requires = "privatelink_service_name")]
+    privatelink_azs: Vec<String>,
     /// URL of the schema registry that testdrive will connect to.
     #[clap(long, value_name = "URL", default_value = "http://localhost:8081")]
     schema_registry_url: Url,
@@ -451,6 +457,8 @@ async fn main() {
         kafka_addr: args.kafka_addr,
         kafka_default_partitions: args.kafka_default_partitions,
         kafka_opts: args.kafka_option,
+        privatelink_service_name: args.privatelink_service_name,
+        privatelink_azs: args.privatelink_azs,
         schema_registry_url: args.schema_registry_url,
         cert_path: args.cert,
         cert_password: args.cert_password,

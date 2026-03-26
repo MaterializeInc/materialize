@@ -510,12 +510,15 @@ def td(
         assert CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER
         assert CONFLUENT_PRIVATELINK_API_KEY
         assert CONFLUENT_PRIVATELINK_API_SECRET
+        assert CONFLUENT_PRIVATELINK_SERVICE_NAME
         testdrive = Testdrive(
             default_timeout="1200s",
             materialize_url=materialize_url,
             no_reset=True,  # Required so that admin port 6877 is not used
             seed=1,  # Required for predictable Kafka topic names
             kafka_url=CONFLUENT_PRIVATELINK_BOOTSTRAP_SERVER,
+            privatelink_service_name=CONFLUENT_PRIVATELINK_SERVICE_NAME,
+            privatelink_azs=["use1-az1", "use1-az4", "use1-az6"],
             no_consistency_checks=True,
             environment=[
                 "KAFKA_OPTION="

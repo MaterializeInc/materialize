@@ -27,7 +27,10 @@ use mz_build_info::BuildInfo;
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
 use mz_ccsr::SubjectVersion;
-use mz_kafka_util::client::{MzClientContext, create_new_client_config_simple};
+use mz_kafka_util::client::{
+    BrokerAddr, BrokerRewrite, ConnectionRulePattern, HostMappingRules, MzClientContext,
+    create_new_client_config_simple,
+};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -40,8 +43,12 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
+use rdkafka::{ClientConfig, ClientContext, Statistics};
+use rdkafka::config::RDKafkaLogLevel;
+use rdkafka::consumer::ConsumerContext;
+use rdkafka::error::KafkaError;
+use rdkafka::producer::{DefaultProducerContext, DeliveryResult, ProducerContext};
 use regex::{Captures, Regex};
 use semver::Version;
 use tokio_postgres::error::{DbError, SqlState};
@@ -78,6 +85,51 @@ mod sql;
 mod sql_server;
 mod version_check;
 mod webhook;
+
+/// A Kafka client context that rewrites broker addresses for PrivateLink
+/// connectivity. Wraps [`MzClientContext`] and uses [`HostMappingRules`] to
+/// rewrite broker connections to VPC endpoint hosts while preserving the
+/// original hostname for TLS SNI.
+struct BrokerRewriteContext {
+    inner: MzClientContext,
+    rules: HostMappingRules,
+}
+
+impl ClientContext for BrokerRewriteContext {
+    fn log(&self, level: RDKafkaLogLevel, fac: &str, log_message: &str) {
+        self.inner.log(level, fac, log_message);
+    }
+
+    fn stats(&self, statistics: Statistics) {
+        self.inner.stats(statistics);
+    }
+
+    fn error(&self, error: KafkaError, reason: &str) {
+        self.inner.error(error, reason);
+    }
+
+    fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, std::io::Error> {
+        let addr = BrokerAddr {
+            host: host.into(),
+            port,
+        };
+        // If no rules match, just use the address as-is.
+        self.rules.rewrite(&addr).unwrap_or(addr).to_socket_addrs()
+    }
+}
+
+impl ConsumerContext for BrokerRewriteContext {}
+
+impl ProducerContext for BrokerRewriteContext {
+    type DeliveryOpaque = <DefaultProducerContext as ProducerContext>::DeliveryOpaque;
+    fn delivery(
+        &self,
+        delivery_result: &DeliveryResult<'_>,
+        delivery_opaque: Self::DeliveryOpaque,
+    ) {
+        DefaultProducerContext.delivery(delivery_result, delivery_opaque);
+    }
+}
 
 /// User-settable configuration parameters.
 #[derive(Debug, Clone)]
@@ -164,6 +216,10 @@ pub struct Config {
     /// Arbitrary rdkafka options for testdrive to use when connecting to the
     /// Kafka broker.
     pub kafka_opts: Vec<(String, String)>,
+    /// Route to brokers through this PrivateLink service.
+    pub privatelink_service_name: Option<String>,
+    /// Route to AZ-specific brokers through these AZ-specific PrivateLink endpoints.
+    pub privatelink_azs: Vec<String>,
     /// The URL of the schema registry that testdrive will connect to.
     pub schema_registry_url: Url,
     /// An optional path to a TLS certificate that testdrive will present when
@@ -245,11 +301,11 @@ pub struct State {
     schema_registry_url: Url,
     ccsr_client: mz_ccsr::Client,
     kafka_addr: String,
-    kafka_admin: rdkafka::admin::AdminClient<MzClientContext>,
+    kafka_admin: rdkafka::admin::AdminClient<BrokerRewriteContext>,
     kafka_admin_opts: rdkafka::admin::AdminOptions,
     kafka_config: ClientConfig,
     kafka_default_partitions: usize,
-    kafka_producer: rdkafka::producer::FutureProducer<MzClientContext>,
+    kafka_producer: rdkafka::producer::FutureProducer<BrokerRewriteContext>,
     kafka_topics: BTreeMap<String, usize>,
 
     // === AWS state. ===
@@ -1076,14 +1132,56 @@ pub async fn create_state(
             kafka_config.set(key, value);
         }
 
+        // Build PrivateLink broker rewrite rules.
+        let rules = if let Some(service_name) = &config.privatelink_service_name {
+            let mut rules = Vec::new();
+            // Exact-match rule for the bootstrap broker.
+            rules.push((
+                ConnectionRulePattern {
+                    prefix_wildcard: false,
+                    literal_match: config.kafka_addr.clone(),
+                    suffix_wildcard: false,
+                },
+                BrokerRewrite {
+                    host: service_name.clone(),
+                    port: None,
+                },
+            ));
+            // Wildcard rules for AZ-specific brokers.
+            for az in &config.privatelink_azs {
+                rules.push((
+                    ConnectionRulePattern {
+                        prefix_wildcard: true,
+                        literal_match: format!(".{az}."),
+                        suffix_wildcard: true,
+                    },
+                    BrokerRewrite {
+                        host: format!("{service_name}-{az}"),
+                        port: None,
+                    },
+                ));
+            }
+            HostMappingRules { rules }
+        } else {
+            HostMappingRules { rules: vec![] }
+        };
+
+        let context = BrokerRewriteContext {
+            inner: MzClientContext::default(),
+            rules: rules.clone(),
+        };
         let admin: AdminClient<_> = kafka_config
-            .create_with_context(MzClientContext::default())
+            .create_with_context(context)
             .with_context(|| format!("opening Kafka connection: {}", config.kafka_addr))?;
 
         let admin_opts = AdminOptions::new().operation_timeout(Some(config.default_timeout));
 
+        let context = BrokerRewriteContext {
+            inner: MzClientContext::default(),
+            rules,
+        };
         let producer: FutureProducer<_> = kafka_config
-            .create_with_context(MzClientContext::default())
+            .create_with_context(context)
             .with_context(|| format!("opening Kafka producer connection: {}", config.kafka_addr))?;
 
         let topics = BTreeMap::new();
