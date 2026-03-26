@@ -92,7 +92,7 @@ pub use crate::catalog::builtin_table_updates::BuiltinTableUpdate;
 pub use crate::catalog::open::{InitializeStateResult, OpenCatalogResult};
 pub use crate::catalog::state::CatalogState;
 pub use crate::catalog::transact::{
-    DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult,
+    DropObjectInfo, InjectedAuditEvent, Op, ReplicaCreateDropReason, TransactionResult,
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;

@@ -62,6 +62,7 @@ use mz_sql::session::vars::{Value as VarValue, VarInput};
 use mz_sql::{DEFAULT_SCHEMA, rbac};
 use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
+use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
 use crate::AdapterError;
@@ -76,6 +77,18 @@ use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
+
+/// A manually injected audit event.
+///
+/// Matches [`mz_audit_log::EventV1`], but without the `id` and `occurred_at` fields -- both are
+/// filled in automatically.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InjectedAuditEvent {
+    pub event_type: EventType,
+    pub object_type: ObjectType,
+    pub details: EventDetails,
+    pub user: Option<String>,
+}
 
 #[derive(Debug, Clone)]
 pub enum Op {
@@ -241,6 +254,14 @@ pub enum Op {
         object_id: Option<String>,
         size_bytes: u64,
         collection_timestamp: EpochMillis,
+    },
+    /// Injects audit events into the catalog.
+    ///
+    /// This is a nonstandard path used for manually appending audit events at the current time.
+    /// Mainly useful for correcting the audit log in the face of bugs that made us forget to emit
+    /// audit events.
+    InjectAuditEvents {
+        events: Vec<InjectedAuditEvent>,
     },
 }
 
@@ -2667,6 +2688,21 @@ impl Catalog {
                 let builtin_table_update = state.pack_storage_usage_update(metric, Diff::ONE);
                 let builtin_table_update = state.resolve_builtin_table_update(builtin_table_update);
                 weird_builtin_table_update = Some(builtin_table_update);
+            }
+            Op::InjectAuditEvents { events } => {
+                for event in events {
+                    let id = tx.allocate_audit_log_id()?;
+                    let ev = VersionedEvent::new(
+                        id,
+                        event.event_type,
+                        event.object_type,
+                        event.details,
+                        event.user,
+                        oracle_write_ts.into(),
+                    );
+                    audit_events.push(ev.clone());
+                    tx.insert_audit_log_event(ev);
+                }
             }
         };
         Ok((weird_builtin_table_update, temporary_item_updates))

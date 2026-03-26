@@ -452,6 +452,7 @@ impl Message {
                 Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
+                Command::InjectAuditEvents { .. } => "inject-audit-events",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,

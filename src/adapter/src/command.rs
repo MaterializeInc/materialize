@@ -162,6 +162,12 @@ pub enum Command {
         tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
+    InjectAuditEvents {
+        events: Vec<crate::catalog::InjectedAuditEvent>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
     Terminate {
         conn_id: ConnectionId,
         tx: Option<oneshot::Sender<Result<(), AdapterError>>>,
@@ -358,7 +364,8 @@ impl Command {
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..) => None,
+            | Command::FrontendStatementLogging(..)
+            | Command::InjectAuditEvents { .. } => None,
         }
     }
 
@@ -393,7 +400,8 @@ impl Command {
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
-            | Command::FrontendStatementLogging(..) => None,
+            | Command::FrontendStatementLogging(..)
+            | Command::InjectAuditEvents { .. } => None,
         }
     }
 }

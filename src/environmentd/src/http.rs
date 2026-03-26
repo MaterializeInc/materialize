@@ -362,6 +362,10 @@ impl HttpServer {
                     routing::get(catalog::handle_catalog_check),
                 )
                 .route(
+                    "/api/catalog/inject-audit-events",
+                    routing::post(catalog::handle_inject_audit_events),
+                )
+                .route(
                     "/api/coordinator/check",
                     routing::get(catalog::handle_coordinator_check),
                 )

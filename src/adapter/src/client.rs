@@ -933,6 +933,23 @@ impl SessionClient {
             .await
     }
 
+    /// Injects audit events into the catalog via the coordinator.
+    ///
+    /// No authorization is performed, so access to this function must be limited to internal
+    /// servers or superusers.
+    pub async fn inject_audit_events(
+        &mut self,
+        events: Vec<crate::catalog::InjectedAuditEvent>,
+    ) -> Result<(), AdapterError> {
+        let conn_id = self.session().conn_id().clone();
+        self.send_without_session(|tx| Command::InjectAuditEvents {
+            events,
+            conn_id,
+            tx,
+        })
+        .await
+    }
+
     /// Terminates the client session.
     pub async fn terminate(&mut self) {
         let conn_id = self.session().conn_id().clone();
@@ -1052,7 +1069,8 @@ impl SessionClient {
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
                 | Command::ExplainTimestamp { .. }
-                | Command::FrontendStatementLogging(..) => {}
+                | Command::FrontendStatementLogging(..)
+                | Command::InjectAuditEvents { .. } => {}
             };
             cmd
         });
