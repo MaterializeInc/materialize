@@ -5693,3 +5693,106 @@ fn test_mcp_agents_rbac() {
         "get_data_product_details should fail with not-found when cluster USAGE is revoked"
     );
 }
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_inject_audit_events() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut pg_client = server.connect(postgres::NoTls).unwrap();
+
+    // Inject two audit events via the HTTP API.
+    let http_client = Client::new();
+    let url = Url::parse(&format!(
+        "http://{}/api/catalog/inject-audit-events",
+        server.internal_http_local_addr()
+    ))
+    .unwrap();
+    let res = http_client
+        .post(url)
+        .json(&serde_json::json!([
+            {
+                "event_type": "create",
+                "object_type": "table",
+                "details": {"IdNameV1": {"id": "u1", "name": "injected_table"}},
+                "user": "mz_system"
+            },
+            {
+                "event_type": "drop",
+                "object_type": "table",
+                "details": {"IdNameV1": {"id": "u1", "name": "injected_table"}},
+                "user": null
+            }
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Verify the injected events are the last two audit events.
+    let rows = pg_client
+        .query(
+            "SELECT event_type, object_type, details->>'name' as name, occurred_at
+             FROM mz_audit_events
+             ORDER BY id DESC LIMIT 2",
+            &[],
+        )
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<_, String>("event_type"), "drop");
+    assert_eq!(rows[0].get::<_, String>("object_type"), "table");
+    assert_eq!(rows[0].get::<_, String>("name"), "injected_table");
+    assert_eq!(rows[1].get::<_, String>("event_type"), "create");
+    assert_eq!(rows[1].get::<_, String>("object_type"), "table");
+    assert_eq!(rows[1].get::<_, String>("name"), "injected_table");
+    let drop_ts: DateTime<Utc> = rows[0].get("occurred_at");
+    let create_ts: DateTime<Utc> = rows[1].get("occurred_at");
+    assert_eq!(drop_ts, create_ts);
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_inject_audit_events_malformed() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    let http_client = Client::new();
+    let url = Url::parse(&format!(
+        "http://{}/api/catalog/inject-audit-events",
+        server.internal_http_local_addr()
+    ))
+    .unwrap();
+
+    // Missing required fields.
+    let res = http_client
+        .post(url.clone())
+        .json(&serde_json::json!([
+            {
+                "event_type": "create"
+            }
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Invalid event_type value.
+    let res = http_client
+        .post(url.clone())
+        .json(&serde_json::json!([
+            {
+                "event_type": "bogus",
+                "object_type": "table",
+                "details": {"IdNameV1": {"id": "u1", "name": "t"}},
+                "user": null
+            }
+        ]))
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Not valid JSON at all.
+    let res = http_client
+        .post(url)
+        .header("content-type", "application/json")
+        .body("not json")
+        .send()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}

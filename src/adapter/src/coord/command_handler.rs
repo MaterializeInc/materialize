@@ -242,6 +242,18 @@ impl Coordinator {
                     let _ = tx.send(result);
                 }
 
+                Command::InjectAuditEvents {
+                    events,
+                    conn_id,
+                    tx,
+                } => {
+                    let ops = vec![catalog::Op::InjectAuditEvents { events }];
+                    let result = self
+                        .catalog_transact_with_context(Some(&conn_id), None, ops)
+                        .await;
+                    let _ = tx.send(result);
+                }
+
                 Command::Terminate { conn_id, tx } => {
                     self.handle_terminate(conn_id).await;
                     // Note: We purposefully do not use a ClientTransmitter here because we're already

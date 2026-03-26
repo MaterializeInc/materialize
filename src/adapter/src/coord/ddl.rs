@@ -1290,7 +1290,8 @@ impl Coordinator {
                 | Op::ResetSystemConfiguration { .. }
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
-                | Op::WeirdStorageUsageUpdates { .. } => {}
+                | Op::WeirdStorageUsageUpdates { .. }
+                | Op::InjectAuditEvents { .. } => {}
             }
         }
 
