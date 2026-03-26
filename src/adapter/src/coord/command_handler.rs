@@ -178,7 +178,7 @@ impl Coordinator {
                     );
                 }
 
-                Command::RoleCanLogin { tx, role_name } => {
+                Command::CheckRoleCanLogin { tx, role_name } => {
                     self.handle_role_can_login(tx, role_name);
                 }
 

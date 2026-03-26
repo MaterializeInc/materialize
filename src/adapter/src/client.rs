@@ -225,7 +225,7 @@ impl Client {
     /// created with other authenticators.
     pub async fn role_can_login(&self, role_name: &str) -> Result<(), AdapterError> {
         let (tx, rx) = oneshot::channel();
-        self.send(Command::RoleCanLogin {
+        self.send(Command::CheckRoleCanLogin {
             role_name: role_name.to_string(),
             tx,
         });
@@ -1056,7 +1056,7 @@ impl SessionClient {
                 | Command::AuthenticatePassword { .. }
                 | Command::AuthenticateGetSASLChallenge { .. }
                 | Command::AuthenticateVerifySASLProof { .. }
-                | Command::RoleCanLogin { .. }
+                | Command::CheckRoleCanLogin { .. }
                 | Command::CatalogSnapshot { .. }
                 | Command::Commit { .. }
                 | Command::CancelRequest { .. }
