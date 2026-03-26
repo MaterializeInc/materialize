@@ -15,7 +15,7 @@ import { atom, useAtom, useAtomValue } from "jotai";
 import { atomFamily, loadable } from "jotai/utils";
 import { sql } from "kysely";
 import { PostgresError } from "pg-error-enum";
-import React from "react";
+import React, { useRef } from "react";
 import { gte as semverGte, parse as semverParse, SemVer } from "semver";
 
 import { buildGlobalQueryKey } from "~/api/buildQueryKeySchema";
@@ -342,10 +342,19 @@ export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
     return environmentMap;
   };
 
+  const updateValueRef = useRef(updateValue);
+  React.useEffect(() => {
+    updateValueRef.current = updateValue;
+  });
+
   useSuspenseQuery({
-    queryKey: environmentQueryKeys.environmentHealth(cloudRegions),
+    queryKey: [
+      ...environmentQueryKeys.environmentHealth(cloudRegions),
+      appConfig,
+      updateValueRef,
+    ],
     refetchInterval: options.intervalMs,
-    queryFn: async ({ queryKey: [, regions] }) => {
+    queryFn: async () => {
       return Sentry.startSpan(
         {
           name: "poll-environment-health",
@@ -354,10 +363,10 @@ export const usePollEnvironmentHealth = (options: { intervalMs: number }) => {
         },
         async () => {
           const result = await fetchEnvironmentsWithHealth({
-            cloudRegions: regions,
+            cloudRegions,
             appConfig,
           });
-          return updateValue(result);
+          return updateValueRef.current(result);
         },
       );
     },

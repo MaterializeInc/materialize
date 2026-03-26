@@ -37,6 +37,9 @@ import {
   initialPlaceholderDataBuilders,
 } from "~/utils/initialPlaceholderData";
 
+const { buildPlaceholderDataReturn, buildQueryFnReturn } =
+  initialPlaceholderDataBuilders<QueryHistoryListRow>();
+
 export const STATEMENT_LIFECYCLE_POLL_RATE_MS = 1000;
 
 export const queryHistoryQueryKeys = {
@@ -135,9 +138,6 @@ export function useFetchQueryHistoryStatementInfo(
   options?: { enabled?: boolean },
 ) {
   const queryClient = useQueryClient();
-
-  const { buildPlaceholderDataReturn, buildQueryFnReturn } =
-    initialPlaceholderDataBuilders<QueryHistoryListRow>();
 
   return useQuery({
     queryKey: queryHistoryQueryKeys.statementInfo(parameters),

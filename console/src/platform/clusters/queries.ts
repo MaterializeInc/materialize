@@ -157,7 +157,7 @@ export const clusterQueryKeys = {
 };
 
 export function useClusters(filters?: ClusterListFilters) {
-  const suspenseQueryResult = useSuspenseQuery({
+  const { data, refetch } = useSuspenseQuery({
     refetchInterval: 5000,
     queryKey: clusterQueryKeys.list(filters),
     queryFn: ({ queryKey, signal }) => {
@@ -168,16 +168,14 @@ export function useClusters(filters?: ClusterListFilters) {
         requestOptions: { signal },
       });
     },
-    select: (data) => {
-      return data.rows;
+    select: (result) => {
+      return result.rows;
     },
   });
 
   const clusterMap = useMemo(() => {
-    return new Map(
-      suspenseQueryResult.data.map((cluster) => [cluster.id, cluster]),
-    );
-  }, [suspenseQueryResult.data]);
+    return new Map(data.map((cluster) => [cluster.id, cluster]));
+  }, [data]);
 
   const getClusterById = useCallback(
     (clusterId: string) => {
@@ -187,7 +185,8 @@ export function useClusters(filters?: ClusterListFilters) {
   );
 
   return {
-    ...suspenseQueryResult,
+    data,
+    refetch,
     getClusterById,
   };
 }
