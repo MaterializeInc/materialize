@@ -41,7 +41,7 @@ class SqlServer(Service):
                     *environment_extra,
                 ],
                 "healthcheck": {
-                    "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q 'SELECT 1'",
+                    "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q 'SELECT 1 FROM msdb.dbo.sysjobs'",
                     "interval": "1s",
                     # Recovering can take a while
                     "start_period": "300s",
