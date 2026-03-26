@@ -23,7 +23,6 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -31,11 +30,12 @@ use anyhow::Context;
 use axum::response::IntoResponse;
 use axum::{Router, routing};
 use bytes::BytesMut;
-use domain::base::{Name, Rtype};
-use domain::rdata::AllRecordData;
-use domain::resolv::StubResolver;
 use futures::TryFutureExt;
 use futures::stream::BoxStream;
+use hickory_resolver::{
+    Resolver, TokioResolver, config::*, name_server::TokioConnectionProvider,
+    proto::rr::RecordType, system_conf::read_system_conf,
+};
 use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
 use launchdarkly_server_sdk as ld;
@@ -94,7 +94,7 @@ pub struct BalancerConfig {
     /// DNS resolver for pgwire cancellation requests
     cancellation_resolver: CancellationResolver,
     /// DNS resolver.
-    resolver: Resolver,
+    resolver: BalancerResolver,
     https_sni_addr_template: String,
     tls: Option<TlsCertConfig>,
     internal_tls: bool,
@@ -117,7 +117,7 @@ impl BalancerConfig {
         pgwire_listen_addr: SocketAddr,
         https_listen_addr: SocketAddr,
         cancellation_resolver: CancellationResolver,
-        resolver: Resolver,
+        resolver: BalancerResolver,
         https_sni_addr_template: String,
         tls: Option<TlsCertConfig>,
         internal_tls: bool,
@@ -322,6 +322,15 @@ impl BalancerService {
         let https_addr = self.https.0.local_addr();
         let internal_http_addr = self.internal_http.0.local_addr();
 
+        // Extract shared DNS resolver before moving the resolver into PgwireBalancer.
+        // In multi-tenant mode, this allows HTTPS and pgwire to share the same resolver.
+        // In static mode, HTTPS creates its own resolver (though it won't be used for SNI).
+        let shared_dns = self
+            .cfg
+            .resolver
+            .shared_dns()
+            .unwrap_or_else(|| Arc::new(TenantDnsResolver::new()));
+
         {
             let pgwire = PgwireBalancer {
                 resolver: Arc::new(self.cfg.resolver),
@@ -354,9 +363,9 @@ impl BalancerService {
                 panic!("expected port in https_addr_template");
             };
             let port: u16 = port.parse().expect("unexpected port");
-            let resolver = StubResolver::new();
+
             let https = HttpsBalancer {
-                resolver: Arc::from(resolver),
+                resolver: shared_dns,
                 tls: https_tls,
                 resolve_template: Arc::from(addr),
                 port,
@@ -613,7 +622,7 @@ struct PgwireBalancer {
     tls: Option<ReloadingTlsConfig>,
     internal_tls: bool,
     cancellation_resolver: Arc<CancellationResolver>,
-    resolver: Arc<Resolver>,
+    resolver: Arc<BalancerResolver>,
     metrics: ServerMetrics,
     now: NowFn,
 }
@@ -624,7 +633,7 @@ impl PgwireBalancer {
         conn: &'a mut FramedConn<A>,
         version: i32,
         params: BTreeMap<String, String>,
-        resolver: &Resolver,
+        resolver: &BalancerResolver,
         tls_mode: Option<TlsMode>,
         internal_tls: bool,
         metrics: &ServerMetrics,
@@ -1087,7 +1096,7 @@ async fn cancel_request(
 }
 
 struct HttpsBalancer {
-    resolver: Arc<StubResolver>,
+    resolver: Arc<TenantDnsResolver>,
     tls: Option<ReloadingSslContext>,
     resolve_template: Arc<str>,
     port: u16,
@@ -1098,74 +1107,25 @@ struct HttpsBalancer {
 
 impl HttpsBalancer {
     async fn resolve(
-        resolver: &StubResolver,
+        resolver: &TenantDnsResolver,
         resolve_template: &str,
         port: u16,
         servername: Option<&str>,
     ) -> Result<ResolvedAddr, anyhow::Error> {
-        let addr = match &servername {
-            Some(servername) => resolve_template.replace("{}", servername),
-            None => resolve_template.to_string(),
+        let (addr, tenant) = match servername {
+            Some(sni) => resolver.resolve_sni(resolve_template, port, sni).await?,
+            None => {
+                // No SNI - use template directly (shouldn't happen for HTTPS in practice)
+                debug!("https hostname (no SNI): {}:{}", resolve_template, port);
+                resolver.resolve(resolve_template, port).await?
+            }
         };
-        debug!("https address: {addr}");
-
-        // When we lookup the address using SNI, we get a hostname (`3dl07g8zmj91pntk4eo9cfvwe` for
-        // example), which you convert into a different form for looking up the environment address
-        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`. When you do a DNS lookup in kubernetes for
-        // `blncr-3dl07g8zmj91pntk4eo9cfvwe`, you get a CNAME response pointing at environmentd
-        // `environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local`. This
-        // is of the form `<service>.<namespace>.svc.cluster.local`. That `<namespace>` is the same
-        // as the environment name, and is based on the tenant ID. `environment-<tenant_id>-<index>`
-        // We currently only support a single environment per tenant in a region, so `<index>` is
-        // always 0. Do not rely on this ending in `-0` so in the future multiple envds are
-        // supported.
-
-        // Attempt to get a tenant.
-        let tenant = resolver.tenant(&addr).await;
-
-        // Now do the regular ip lookup, regardless of if there was a CNAME.
-        let envd_addr = lookup(&format!("{addr}:{port}")).await?;
 
         Ok(ResolvedAddr {
-            addr: envd_addr,
+            addr,
             password: None,
             tenant,
         })
-    }
-}
-
-trait StubResolverExt {
-    async fn tenant(&self, addr: &str) -> Option<String>;
-}
-
-impl StubResolverExt for StubResolver {
-    /// Finds the tenant of a DNS address. Errors or lack of cname resolution here are ok, because
-    /// this is only used for metrics.
-    async fn tenant(&self, addr: &str) -> Option<String> {
-        let Ok(dname) = Name::<Vec<_>>::from_str(addr) else {
-            return None;
-        };
-        debug!("resolving tenant for {:?}", addr);
-        // Lookup the CNAME. If there's a CNAME, find the tenant.
-        let lookup = self.query((dname, Rtype::CNAME)).await;
-        if let Ok(lookup) = lookup {
-            if let Ok(answer) = lookup.answer() {
-                let res = answer.limit_to::<AllRecordData<_, _>>();
-                for record in res {
-                    let Ok(record) = record else {
-                        continue;
-                    };
-                    if record.rtype() != Rtype::CNAME {
-                        continue;
-                    }
-                    let cname = record.data();
-                    let cname = cname.to_string();
-                    debug!("cname: {cname}");
-                    return extract_tenant_from_cname(&cname);
-                }
-            }
-        }
-        None
     }
 }
 
@@ -1324,8 +1284,7 @@ impl mz_server_core::Server for HttpsBalancer {
 }
 
 #[derive(Debug)]
-pub struct SniResolver {
-    pub resolver: StubResolver,
+pub struct SniTemplate {
     pub template: String,
     pub port: u16,
 }
@@ -1334,12 +1293,25 @@ trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 #[derive(Debug)]
-pub enum Resolver {
+pub enum BalancerResolver {
     Static(String),
-    MultiTenant(FronteggResolver, Option<SniResolver>),
+    MultiTenant {
+        dns: Arc<TenantDnsResolver>,
+        frontegg: FronteggResolver,
+        sni: Option<SniTemplate>,
+    },
 }
 
-impl Resolver {
+impl BalancerResolver {
+    /// Returns a clone of the shared DNS resolver if in multi-tenant mode.
+    /// This allows sharing the resolver with other components like HttpsBalancer.
+    pub fn shared_dns(&self) -> Option<Arc<TenantDnsResolver>> {
+        match self {
+            BalancerResolver::Static(_) => None,
+            BalancerResolver::MultiTenant { dns, .. } => Some(Arc::clone(dns)),
+        }
+    }
+
     async fn resolve<A>(
         &self,
         conn: &mut FramedConn<A>,
@@ -1350,13 +1322,15 @@ impl Resolver {
         A: AsyncRead + AsyncWrite + Unpin,
     {
         match self {
-            Resolver::MultiTenant(
-                FronteggResolver {
-                    auth,
-                    addr_template,
-                },
-                sni_resolver,
-            ) => {
+            BalancerResolver::MultiTenant {
+                dns: dns_resolver,
+                frontegg:
+                    FronteggResolver {
+                        auth,
+                        addr_template,
+                    },
+                sni: sni_resolver,
+            } => {
                 let servername = match conn.inner() {
                     Conn::Ssl(ssl_stream) => {
                         ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
@@ -1369,23 +1343,12 @@ impl Resolver {
                     Conn::Unencrypted(_) => None,
                 };
                 let has_sni = servername.is_some();
-                // We found an SNi
-                let resolved_addr = match (servername, sni_resolver) {
-                    (
-                        Some(servername),
-                        Some(SniResolver {
-                            resolver: stub_resolver,
-                            template: sni_addr_template,
-                            port,
-                        }),
-                    ) => {
-                        let sni_addr = sni_addr_template.replace("{}", servername);
-                        let tenant = stub_resolver.tenant(&sni_addr).await;
-                        let sni_addr = format!("{sni_addr}:{port}");
-                        let addr = lookup(&sni_addr).await?;
-                        if tenant.is_some() {
-                            debug!("SNI header found for tenant {:?}", tenant);
-                        }
+                let resolved_addr = match (servername, sni_resolver.as_ref()) {
+                    (Some(servername), Some(SniTemplate { template, port })) => {
+                        let (addr, tenant) = dns_resolver
+                            .resolve_sni(template, *port, servername)
+                            .await?;
+                        debug!("pgwire SNI resolved tenant: {:?}", tenant);
                         ResolvedAddr {
                             addr,
                             password: None,
@@ -1406,22 +1369,25 @@ impl Resolver {
                             Ok((auth_session, _)) => auth_session,
                             Err(e) => {
                                 warn!("pgwire connection failed authentication: {}", e);
-                                // TODO: fix error codes.
                                 anyhow::bail!("invalid password");
                             }
                         };
 
-                        let addr =
+                        let hostname_with_port =
                             addr_template.replace("{}", &auth_session.tenant_id().to_string());
-                        let addr = lookup(&addr).await?;
-                        let tenant = Some(auth_session.tenant_id().to_string());
-                        if tenant.is_some() {
-                            debug!("SNI header NOT found for tenant {:?}", tenant);
-                        }
+                        let (hostname, port_str) = hostname_with_port
+                            .rsplit_once(':')
+                            .ok_or_else(|| anyhow::anyhow!("port required in addr_template"))?;
+                        let port: u16 = port_str.parse().with_context(|| {
+                            format!("invalid port in addr_template: {}", port_str)
+                        })?;
+                        let (addr, _) = dns_resolver.resolve(hostname, port).await?;
+                        let tenant = auth_session.tenant_id().to_string();
+                        debug!("Frontegg resolved tenant: {}", tenant);
                         ResolvedAddr {
                             addr,
                             password: Some(password),
-                            tenant,
+                            tenant: Some(tenant),
                         }
                     }
                 };
@@ -1434,8 +1400,16 @@ impl Resolver {
 
                 Ok(resolved_addr)
             }
-            Resolver::Static(addr) => {
-                let addr = lookup(addr).await?;
+            BalancerResolver::Static(addr) => {
+                // We don't want any caching here so we just use the standard
+                // tokio resolver.
+                let addr = if let Some(a) = tokio::net::lookup_host(addr).await?.next() {
+                    a
+                } else {
+                    error!("{addr} did not resolve to any addresses");
+                    anyhow::bail!("internal error");
+                };
+
                 Ok(ResolvedAddr {
                     addr,
                     password: None,
@@ -1446,15 +1420,161 @@ impl Resolver {
     }
 }
 
-/// Returns the first IP address resolved from the provided hostname.
-async fn lookup(name: &str) -> Result<SocketAddr, anyhow::Error> {
-    let mut addrs = tokio::net::lookup_host(name).await?;
-    match addrs.next() {
-        Some(addr) => Ok(addr),
-        None => {
-            error!("{name} did not resolve to any addresses");
-            anyhow::bail!("internal error")
+/// Creates a default resolver with caching enabled for DNS lookups.
+fn create_default_resolver() -> TokioResolver {
+    let mut resolver_opts = ResolverOpts::default();
+    resolver_opts.cache_size = 10000;
+    resolver_opts.positive_max_ttl = Some(Duration::from_secs(10));
+    resolver_opts.positive_min_ttl = Some(Duration::from_secs(1));
+    resolver_opts.negative_min_ttl = Some(Duration::from_secs(1));
+    resolver_opts.negative_max_ttl = Some(Duration::from_secs(1));
+    resolver_opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+
+    // Read system DNS configuration or fall back to defaults
+    let (config, opts) = read_system_conf()
+        .map(|(config, mut opts)| {
+            // Override specific options while keeping system DNS servers
+            opts.cache_size = resolver_opts.cache_size;
+            opts.positive_max_ttl = resolver_opts.positive_max_ttl;
+            opts.positive_min_ttl = resolver_opts.positive_min_ttl;
+            opts.negative_min_ttl = resolver_opts.negative_min_ttl;
+            opts.negative_max_ttl = resolver_opts.negative_max_ttl;
+            opts.ip_strategy = resolver_opts.ip_strategy;
+            (config, opts)
+        })
+        .unwrap_or_else(|err| {
+            warn!(
+                "Failed to read system DNS configuration, using defaults: {}",
+                err
+            );
+            (ResolverConfig::default(), resolver_opts)
+        });
+
+    Resolver::builder_with_config(config, TokioConnectionProvider::default())
+        .with_options(opts)
+        .build()
+}
+
+/// Creates a resolver with caching disabled for DNS lookups.
+fn create_non_caching_resolver() -> TokioResolver {
+    let mut resolver_opts = ResolverOpts::default();
+    resolver_opts.cache_size = 0; // Disable caching
+    resolver_opts.ip_strategy = LookupIpStrategy::Ipv4thenIpv6;
+
+    // Read system DNS configuration or fall back to defaults
+    let (config, opts) = read_system_conf()
+        .map(|(config, mut opts)| {
+            // Override specific options while keeping system DNS servers
+            opts.cache_size = resolver_opts.cache_size;
+            opts.ip_strategy = resolver_opts.ip_strategy;
+            (config, opts)
+        })
+        .unwrap_or_else(|err| {
+            warn!(
+                "Failed to read system DNS configuration, using defaults: {}",
+                err
+            );
+            (ResolverConfig::default(), resolver_opts)
+        });
+
+    Resolver::builder_with_config(config, TokioConnectionProvider::default())
+        .with_options(opts)
+        .build()
+}
+
+/// A resolver that uses separate caching and non-caching resolvers for different record types.
+#[derive(Debug)]
+pub struct TenantDnsResolver {
+    caching_resolver: TokioResolver,
+    non_caching_resolver: TokioResolver,
+}
+
+impl TenantDnsResolver {
+    /// Creates a new TenantDnsResolver with default caching and non-caching resolvers.
+    pub fn new() -> Self {
+        Self {
+            caching_resolver: create_default_resolver(),
+            non_caching_resolver: create_non_caching_resolver(),
         }
+    }
+
+    /// Resolves a CNAME record using the caching resolver.
+    async fn resolve_cname(&self, hostname: &str) -> Option<String> {
+        match self
+            .caching_resolver
+            .lookup(hostname, RecordType::CNAME)
+            .await
+        {
+            Ok(cname_response) => {
+                if let Some(cname_record) = cname_response.iter().next() {
+                    if let Some(cname_data) = cname_record.as_cname() {
+                        let cname = cname_data.to_string();
+                        debug!("CNAME for {}: {}", hostname, cname);
+                        return Some(cname);
+                    }
+                }
+                None
+            }
+            Err(e) => {
+                debug!("CNAME lookup failed for {}: {}", hostname, e);
+                None
+            }
+        }
+    }
+
+    /// Resolves A records without caching.
+    async fn resolve_arec_no_cache(
+        &self,
+        hostname: &str,
+    ) -> Result<hickory_resolver::lookup_ip::LookupIp, anyhow::Error> {
+        self.non_caching_resolver
+            .lookup_ip(hostname)
+            .await
+            .with_context(|| format!("Failed to resolve A record for hostname: {}", hostname))
+    }
+
+    /// Resolves an address using SNI-based lookup.
+    ///
+    /// Takes a template (e.g., "blncr-{}") and servername from TLS SNI,
+    /// substitutes the servername into the template, and resolves to an address and tenant.
+    pub async fn resolve_sni(
+        &self,
+        template: &str,
+        port: u16,
+        servername: &str,
+    ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
+        let hostname = template.replace("{}", servername);
+        debug!("SNI hostname: {}", hostname);
+        self.resolve(&hostname, port).await
+    }
+
+    /// Resolves the address and tenant from a hostname and port.
+    ///
+    /// CNAMEs are resolved with caching, while A records are resolved without caching.
+    /// The tenant is extracted from the CNAME if present.
+    async fn resolve(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> Result<(SocketAddr, Option<String>), anyhow::Error> {
+        // Resolve CNAME with caching (these are generally static).
+        // Extract tenant from CNAME if present.
+        let (ip, tenant) = if let Some(cname) = self.resolve_cname(host).await {
+            let tenant = extract_tenant_from_cname(&cname);
+            let ip = self.resolve_arec_no_cache(&cname).await?;
+            (ip, tenant)
+        } else {
+            let ip = self.resolve_arec_no_cache(host).await?;
+            (ip, None)
+        };
+
+        let addr = ip
+            .iter()
+            .next()
+            .map(|r| SocketAddr::new(r, port))
+            .ok_or_else(|| anyhow::anyhow!("No A records found in DNS response"))?;
+
+        Ok((addr, tenant))
     }
 }
 
