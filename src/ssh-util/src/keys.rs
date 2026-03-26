@@ -12,6 +12,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use mz_ore::secure::Zeroizing;
 use openssl::pkey::{PKey, Private};
 use serde::de::{self, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::ser::{SerializeStruct, Serializer};
@@ -19,7 +20,6 @@ use serde::{Deserialize, Serialize};
 use ssh_key::private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData};
 use ssh_key::public::Ed25519PublicKey;
 use ssh_key::{HashAlg, LineEnding, PrivateKey};
-use zeroize::Zeroizing;
 
 /// A SSH key pair consisting of a public and private key.
 #[derive(Debug, Clone)]
@@ -37,9 +37,12 @@ impl SshKeyPair {
     pub fn new() -> Result<SshKeyPair, anyhow::Error> {
         let openssl_key = PKey::<Private>::generate_ed25519()?;
 
+        // Wrap the raw private key bytes in Zeroizing so they are erased on drop,
+        // preventing the intermediate buffer from lingering in memory.
+        let raw_private = Zeroizing::new(openssl_key.raw_private_key()?);
         let key_pair_data = KeypairData::Ed25519(Ed25519Keypair {
             public: Ed25519PublicKey::try_from(openssl_key.raw_public_key()?.as_slice())?,
-            private: Ed25519PrivateKey::try_from(openssl_key.raw_private_key()?.as_slice())?,
+            private: Ed25519PrivateKey::try_from(raw_private.as_slice())?,
         });
 
         let key_pair = PrivateKey::new(key_pair_data, "materialize")?;
