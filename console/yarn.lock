@@ -3005,81 +3005,81 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@frontegg/js@npm:7.34.0":
-  version: 7.34.0
-  resolution: "@frontegg/js@npm:7.34.0"
+"@frontegg/js@npm:7.103.0":
+  version: 7.103.0
+  resolution: "@frontegg/js@npm:7.103.0"
   dependencies:
     "@babel/runtime": "npm:^7.18.6"
-    "@frontegg/types": "npm:7.34.0"
-  checksum: 10c0/a8ecfdbb3bc6af12694863878433d9e827661f8c51f982b0c6ce1e4348a25f915db0770353a71222d25fc6fcf3ab1cc7d841d71537cc7bff97797a2110de3895
+    "@frontegg/types": "npm:7.103.0"
+  checksum: 10c0/c90b180a22306e597c2ecafaa3882453a478d74c948dcc5107f216b0d213d89bdeb5e5c680482711c8518a6489ba43c4eed67d0e07c8e5fa255075be26bcf4af
   languageName: node
   linkType: hard
 
-"@frontegg/react-hooks@npm:7.34.0":
-  version: 7.34.0
-  resolution: "@frontegg/react-hooks@npm:7.34.0"
+"@frontegg/react-hooks@npm:7.103.0":
+  version: 7.103.0
+  resolution: "@frontegg/react-hooks@npm:7.103.0"
   dependencies:
     "@babel/runtime": "npm:^7.18.6"
-    "@frontegg/redux-store": "npm:7.34.0"
-    "@frontegg/types": "npm:7.34.0"
+    "@frontegg/redux-store": "npm:7.103.0"
+    "@frontegg/types": "npm:7.103.0"
     "@types/react": "npm:*"
     "@types/react-is": "npm:^17.0.7"
     get-value: "npm:^3.0.1"
     react-is: "npm:^17.0.2"
     use-sync-external-store: "npm:^1.2.2"
-  checksum: 10c0/ffc68adf3609c39680448263da52d22ccfd33024cc48c6f4dedfcc019777959b3ac8c2bf8391461d674e9d86622adbf1886a5f57d6a3225e6085968de9c66d63
+  checksum: 10c0/f61acc6ec7e13c950598599e0c5b37b3687f5a9cc3800da9b1020dc8b98c7a8da263fb05cbfab6e2f9bdd93d24e241221409afe5b6b4ce7a22d5ed66c52523ba
   languageName: node
   linkType: hard
 
-"@frontegg/react@npm:^7.2.0":
-  version: 7.2.0
-  resolution: "@frontegg/react@npm:7.2.0"
+"@frontegg/react@npm:^7.12.20":
+  version: 7.12.20
+  resolution: "@frontegg/react@npm:7.12.20"
   dependencies:
-    "@frontegg/js": "npm:7.34.0"
-    "@frontegg/react-hooks": "npm:7.34.0"
+    "@frontegg/js": "npm:7.103.0"
+    "@frontegg/react-hooks": "npm:7.103.0"
   peerDependencies:
     react: ">16.9.0"
     react-dom: ">16.9.0"
     react-router-dom: ">5.0.0"
-  checksum: 10c0/edef933c650cb18e17c4a271c2539d7a186c6dc153337129f2bdc37608695a07e28a39b4b9c99377447a6664045a85efff73cbdede44d05cb421ff4ceaac167a
+  checksum: 10c0/e86dc3112f2d0c480759d94130e6640ef4d12e7bb2706717b8d2a769c3acb126138605fd7dd6e33078ffadf528068c557f7ed8d84b0f57de0d81d66616b347ec
   languageName: node
   linkType: hard
 
-"@frontegg/redux-store@npm:7.34.0":
-  version: 7.34.0
-  resolution: "@frontegg/redux-store@npm:7.34.0"
+"@frontegg/redux-store@npm:7.103.0":
+  version: 7.103.0
+  resolution: "@frontegg/redux-store@npm:7.103.0"
   dependencies:
     "@babel/runtime": "npm:^7.18.6"
     "@frontegg/entitlements-javascript-commons": "npm:1.1.2"
-    "@frontegg/rest-api": "npm:7.34.0"
+    "@frontegg/rest-api": "npm:7.103.0"
     fast-deep-equal: "npm:3.1.3"
     get-value: "npm:^3.0.1"
     proxy-compare: "npm:^3.0.0"
     set-value: "npm:^4.1.0"
     uuid: "npm:^10.0.0"
-  checksum: 10c0/869330138461bcb42b826fd2e1588af1d421c2e2587d4e71f460a9b162e8c3e22d1b4c93f5a24a00de3173fc2d90dcc16d499ed1a3ccece402fd2ef1cd42bfce
+  checksum: 10c0/dea481a25c5da448918a12f4f3c12eb9b7605a5daa2bc57485f532af631a7c937a38cd6be8e0065db9909be7c84e7cd902639e32db6b321453389339b1ce1c98
   languageName: node
   linkType: hard
 
-"@frontegg/rest-api@npm:7.34.0":
-  version: 7.34.0
-  resolution: "@frontegg/rest-api@npm:7.34.0"
+"@frontegg/rest-api@npm:7.103.0":
+  version: 7.103.0
+  resolution: "@frontegg/rest-api@npm:7.103.0"
   dependencies:
     "@babel/runtime": "npm:^7.18.6"
     "@frontegg/entitlements-javascript-commons": "npm:1.1.2"
-  checksum: 10c0/d2307ddfa914c1959d7ff7d4adc0763a9522a75b14644558d3e4f00353cbc243e7324fbabb89a11da385eb147dab0a6074901e273e390cc4841c2dc273697791
+  checksum: 10c0/4b92ba06d505f81c6695452f2735ecff832cde521f7598f3fbf8ece3311824d73fc1c719befd2c1e77c928a2f1e2b8cdaed2784fe0e2cea7fe1a70e0d69660f0
   languageName: node
   linkType: hard
 
-"@frontegg/types@npm:7.34.0":
-  version: 7.34.0
-  resolution: "@frontegg/types@npm:7.34.0"
+"@frontegg/types@npm:7.103.0":
+  version: 7.103.0
+  resolution: "@frontegg/types@npm:7.103.0"
   dependencies:
     "@babel/runtime": "npm:^7.18.6"
-    "@frontegg/redux-store": "npm:7.34.0"
+    "@frontegg/redux-store": "npm:7.103.0"
     csstype: "npm:^3.0.9"
     deepmerge: "npm:^4.2.2"
-  checksum: 10c0/49bd2fbf22e959d7bc8fa5fca18bc8b08c3120e9ba6861cac40b88e9631ce2f27cb4423b60846ab4af39f79bfd1c78fb8f0fce2c99a2845267a199ec84b6909e
+  checksum: 10c0/2e05b21c0cc093747f28bf7b65c9d63ef8c84542645d5e33941eea9ff93a1ce5fd5fa6f410bce58b571ef625f67312c14acf1cfaee1596ca547cf4411cba57d1
   languageName: node
   linkType: hard
 
@@ -11090,7 +11090,7 @@ __metadata:
     "@emotion/styled": "npm:^11.14.1"
     "@fontsource/roboto-mono": "npm:^5.1.0"
     "@frontegg/client": "npm:^5.3.2"
-    "@frontegg/react": "npm:^7.2.0"
+    "@frontegg/react": "npm:^7.12.20"
     "@hookform/resolvers": "npm:^3.9.1"
     "@intercom/messenger-js-sdk": "npm:^0.0.14"
     "@juggle/resize-observer": "npm:^3.4.0"
