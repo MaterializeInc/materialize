@@ -7,10 +7,62 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Implementation of feedback UPSERT operator. See [`upsert_inner`] for how it
-//! works.
+//! Implementation of the feedback UPSERT operator.
+//!
+//! # Architecture
+//!
+//! The operator converts a stream of upsert commands `(key, Option<value>)` into
+//! a differential collection of `(key, value)` pairs, using a feedback loop
+//! through persist to maintain the "previous value" state needed for computing
+//! retractions.
+//!
+//! ## Dataflow topology
+//!
+//! ```text
+//!   Source input ──► ┌──────────┐ ──► Output ──► Persist
+//!                    │  Upsert  │
+//!   Persist read ──► └──────────┘
+//!       ▲                                           │
+//!       └───────────── feedback ────────────────────┘
+//! ```
+//!
+//! ## Operator loop (each iteration)
+//!
+//! 1. **Ingest source data.** Read upsert commands from the source input,
+//!    wrap each in an [`UpsertDiff`] (carrying `from_time` for dedup), and
+//!    push into the [`MergeBatcher`]. The batcher consolidates entries for the
+//!    same `(key, time)` using the `UpsertDiff` Semigroup, which keeps the
+//!    update with the highest `FromTime` (latest Kafka offset). This happens
+//!    via amortized geometric merging as data is pushed in, bounding memory
+//!    to O(unique key-time pairs) even during large Kafka snapshots.
+//!
+//! 2. **Read persist frontier.** Check the probe on the persist arrangement
+//!    to learn which times have been committed. When the persist frontier
+//!    reaches the resume upper, rehydration is complete.
+//!
+//! 3. **Seal & drain.** Call `batcher.seal(input_upper)` to extract all
+//!    source-finalized entries as sorted, consolidated chunks. Each entry is
+//!    classified:
+//!    - **Eligible** (at the persist frontier): the persist trace has the
+//!      correct "before" state for this time. Look up the old value via a
+//!      cursor, emit a retraction if present, and emit the new value.
+//!    - **Ineligible** (between persist and input frontiers): persist hasn't
+//!      caught up yet. Push back into the batcher for the next iteration.
+//!
+//! 4. **Capability management.** Downgrade the output capability to the
+//!    minimum time of any remaining buffered data (in the batcher or pushed
+//!    back as ineligible). Drop the capability entirely when the batcher is
+//!    empty.
+//!
+//! ## Eligibility condition (total order)
+//!
+//! For a total-order timestamp with `input_upper = {i}` and
+//! `persist_upper = {p}`, an entry at time `ts` is eligible when
+//! `ts == p < i` — the source has finalized it and persist is exactly at
+//! that time, so the trace cursor returns the correct prior state.
 
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use differential_dataflow::difference::{IsZero, Semigroup};
@@ -18,7 +70,9 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::agent::TraceAgent;
 use differential_dataflow::trace::implementations::ValSpine;
-use differential_dataflow::trace::{Cursor, TraceReader};
+use differential_dataflow::trace::implementations::chunker::ContainerChunker;
+use differential_dataflow::trace::implementations::merge_batcher::{MergeBatcher, VecMerger};
+use differential_dataflow::trace::{Batcher, Builder, Cursor, Description, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, EnvelopeError};
@@ -62,6 +116,46 @@ impl<O: Ord + Clone> Semigroup for UpsertDiff<O> {
         if rhs.from_time > self.from_time {
             *self = rhs.clone();
         }
+    }
+}
+
+// ── MergeBatcher type alias ──────────────────────────────────────────────────
+// The source stash uses DD's MergeBatcher for amortized consolidation.
+// Data is pushed in unsorted; the batcher maintains geometrically-sized sorted
+// chains and consolidates via the UpsertDiff Semigroup automatically.
+
+type UpsertBatcher<T, FromTime> = MergeBatcher<
+    Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
+    ContainerChunker<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>,
+    VecMerger<UpsertKey, T, UpsertDiff<FromTime>>,
+>;
+
+/// A minimal [`Builder`] that captures sealed chains without copying.
+///
+/// Used with [`MergeBatcher::seal`] to extract sorted, consolidated chunks
+/// directly as `Vec<Vec<...>>`.
+struct CapturingBuilder<D, T>(D, PhantomData<T>);
+
+impl<D, T: Timestamp> Builder for CapturingBuilder<D, T> {
+    type Input = D;
+    type Time = T;
+    type Output = Vec<D>;
+
+    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
+        unimplemented!()
+    }
+
+    fn push(&mut self, _chunk: &mut Self::Input) {
+        unimplemented!()
+    }
+
+    fn done(self, _description: Description<Self::Time>) -> Self::Output {
+        unimplemented!()
+    }
+
+    #[inline]
+    fn seal(chain: &mut Vec<Self::Input>, _description: Description<Self::Time>) -> Self::Output {
+        std::mem::take(chain)
     }
 }
 
@@ -153,8 +247,17 @@ where
 
         let mut hydrating = true;
 
-        // Source stash with UpsertDiff Semigroup for dedup.
-        let mut stash: Vec<(UpsertKey, G::Timestamp, UpsertDiff<FromTime>)> = vec![];
+        // Source stash backed by DD's MergeBatcher. The batcher maintains
+        // geometrically-sized sorted chains and consolidates via the
+        // UpsertDiff Semigroup as data is pushed in, bounding memory to
+        // O(unique key-time pairs) even during large initial snapshots.
+        let mut batcher: UpsertBatcher<G::Timestamp, FromTime> = Batcher::new(None, 0);
+        // Scratch buffer for accumulating source events before flushing to
+        // the batcher. Drained on each iteration via `push_container`.
+        let mut push_buffer: Vec<(UpsertKey, G::Timestamp, UpsertDiff<FromTime>)> = Vec::new();
+        // Capability held at the minimum time of any buffered data. When
+        // Some, the operator may still produce output; when None, the
+        // batcher is empty.
         let mut stash_cap: Option<Capability<G::Timestamp>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
 
@@ -162,20 +265,30 @@ where
         let snapshot_start = std::time::Instant::now();
         let mut prev_persist_upper = Antichain::from_elem(Timestamp::minimum());
 
+        // ──────────────────────────────────────────────────────────────────
+        // Main operator loop. Each iteration performs four steps:
+        //   Step 1: Ingest source data into the batcher.
+        //   Step 2: Read the persist frontier and update rehydration state.
+        //   Step 3: Seal the batcher, drain eligible entries, push back the rest.
+        //   Step 4: Manage the output capability.
+        // ──────────────────────────────────────────────────────────────────
         loop {
-            // Wait for either source input or persist frontier changes.
+            // Block until woken by source input or a persist frontier advance.
             tokio::select! {
                 _ = input.ready() => {}
                 _ = persist_wakeup.ready() => {
-                    // Drain events so the input doesn't accumulate.
                     while persist_wakeup.next_sync().is_some() {}
                 }
             }
 
-            // ── Read source input ───────────────────────────────────────
+            // ── Step 1: Ingest source data ────────────────────────────────
+            // Read all available source events, wrap each value in an
+            // UpsertDiff (carrying FromTime for dedup), and buffer them.
+            // Events before the resume_upper are dropped (already persisted).
             while let Some(event) = input.next_sync() {
                 match event {
                     AsyncEvent::Data(cap, data) => {
+                        let mut pushed_any = false;
                         for ((key, value, from_time), ts, diff) in data {
                             assert!(diff.is_positive(), "invalid upsert input");
                             if PartialOrder::less_equal(&input_upper, &resume_upper)
@@ -183,9 +296,12 @@ where
                             {
                                 continue;
                             }
-                            stash.push((key, ts, UpsertDiff { from_time, value }));
+                            push_buffer.push((key, ts, UpsertDiff { from_time, value }));
+                            pushed_any = true;
                         }
-                        if !stash.is_empty() {
+                        // Track the minimum capability across all buffered data
+                        // so we can emit output at the correct times.
+                        if pushed_any {
                             stash_cap = Some(match stash_cap {
                                 Some(prev) if cap.time() < prev.time() => cap,
                                 Some(prev) => prev,
@@ -202,11 +318,21 @@ where
                 }
             }
 
-            if stash.len() > 10_000 {
-                differential_dataflow::consolidation::consolidate_updates(&mut stash);
+            // Flush buffered events into the batcher. This triggers the
+            // chunker + geometric chain merging, which consolidates entries
+            // for the same (key, time) via the UpsertDiff Semigroup.
+            if !push_buffer.is_empty() {
+                batcher.push_container(&mut push_buffer);
             }
 
-            // ── Read persist frontier from probe ────────────────────────
+            // ── Step 2: Read persist frontier ─────────────────────────────
+            // The persist probe tells us which output times have been
+            // committed back through the feedback loop. This determines:
+            //   - Whether rehydration is complete (persist >= resume_upper).
+            //   - Which source entries are eligible for processing (their
+            //     time must equal persist_upper so the trace cursor returns
+            //     the correct prior state).
+            //   - How far to compact the persist trace.
             let persist_upper = persist_probe.with_frontier(|f| f.to_owned());
 
             if persist_upper != prev_persist_upper {
@@ -235,30 +361,66 @@ where
                 prev_persist_upper = persist_upper.clone();
             }
 
-            // ── Drain eligible source updates ───────────────────────────
-            if !stash.is_empty() {
-                let cap = stash_cap.as_mut().expect("capability for non-empty stash");
+            // ── Step 3: Seal & drain ──────────────────────────────────────
+            // Seal the batcher at input_upper to extract all source-finalized
+            // entries as sorted, consolidated chunks. The seal merges all
+            // internal chains (O(N) linear merge of sorted data) and splits
+            // by time: entries at ts < input_upper are extracted, the rest
+            // stay in the batcher.
+            //
+            // Extracted entries are partitioned into:
+            //   - Eligible (ts == persist_upper): processed now via cursor
+            //     lookup on the persist trace.
+            //   - Ineligible (persist_upper < ts < input_upper): persist
+            //     hasn't caught up yet; pushed back into the batcher.
+            if stash_cap.is_some() {
+                let cap = stash_cap.as_mut().unwrap();
 
-                differential_dataflow::consolidation::consolidate_updates(&mut stash);
+                let sealed = batcher.seal::<CapturingBuilder<_, _>>(input_upper.clone());
+                // Frontier of data remaining in the batcher (ts >= input_upper).
+                let remaining_frontier = batcher.frontier().to_owned();
 
-                drain_staged_input(
-                    &mut stash,
+                let mut ineligible = Vec::new();
+                drain_sealed_input(
+                    sealed,
+                    &mut ineligible,
                     &mut output_updates,
-                    &input_upper,
                     &persist_upper,
                     &mut persist_trace,
                     &source_config,
                 );
 
+                // Emit output: retractions of old values and insertions of
+                // new values, all at the eligible timestamp.
                 for (update, ts, diff) in output_updates.drain(..) {
                     output_handle.give(cap, (update, ts, diff));
                 }
 
-                if stash.is_empty() {
-                    stash_cap = None;
-                } else {
-                    let min_ts = stash.iter().map(|(_, ts, _)| ts).min().unwrap().clone();
+                // ── Step 4: Capability management ─────────────────────────
+                // Downgrade the output capability to the minimum time of any
+                // remaining data: either entries still in the batcher (above
+                // input_upper) or ineligible entries being pushed back.
+                let min_ineligible_ts = ineligible.iter().map(|(_, ts, _)| ts).min().cloned();
+                if !ineligible.is_empty() {
+                    batcher.push_container(&mut ineligible);
+                }
+
+                let has_remaining = !remaining_frontier.is_empty() || min_ineligible_ts.is_some();
+                if has_remaining {
+                    let min_ts = match (
+                        remaining_frontier.elements().first(),
+                        min_ineligible_ts.as_ref(),
+                    ) {
+                        (Some(a), Some(b)) => std::cmp::min(a, b).clone(),
+                        (Some(a), None) => a.clone(),
+                        (None, Some(b)) => b.clone(),
+                        (None, None) => unreachable!(),
+                    };
                     cap.downgrade(&min_ts);
+                } else {
+                    // Batcher is completely empty — drop the capability so
+                    // downstream operators can make progress.
+                    stash_cap = None;
                 }
             }
 
@@ -281,15 +443,15 @@ where
     )
 }
 
-/// Drain source updates whose timestamp is complete and whose persist state is
-/// caught up. Uses cursor-based lookups on the persist trace.
+/// Process sealed chunks from the batcher. Entries at the persist frontier are
+/// eligible for processing (cursor lookup + output); all others are returned
+/// in `ineligible` for re-stashing.
 ///
-/// The stash must be pre-consolidated (sorted by (key, time) with the
-/// UpsertDiff Semigroup having deduped by FromTime).
-fn drain_staged_input<T, FromTime>(
-    stash: &mut Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
+/// The sealed chunks are already sorted and consolidated by the MergeBatcher.
+fn drain_sealed_input<T, FromTime>(
+    sealed: Vec<Vec<(UpsertKey, T, UpsertDiff<FromTime>)>>,
+    ineligible: &mut Vec<(UpsertKey, T, UpsertDiff<FromTime>)>,
     output: &mut Vec<(UpsertValue, T, Diff)>,
-    input_upper: &Antichain<T>,
     persist_upper: &Antichain<T>,
     trace: &mut TraceAgent<ValSpine<UpsertKey, UpsertValue, T, Diff>>,
     source_config: &crate::source::SourceExportCreationConfig,
@@ -297,17 +459,23 @@ fn drain_staged_input<T, FromTime>(
     T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
     FromTime: timely::ExchangeData + Clone + Ord + Sync,
 {
-    let eligible: Vec<_> = stash
-        .extract_if(.., |(_, ts, _)| {
-            !input_upper.less_equal(ts) && !persist_upper.less_than(ts)
-        })
-        .filter(|(_, ts, _)| persist_upper.less_equal(ts))
-        .collect();
+    // Separate eligible (at persist frontier) from ineligible.
+    let mut eligible = Vec::new();
+    for chunk in sealed {
+        for entry in chunk {
+            let (_, ref ts, _) = entry;
+            if !persist_upper.less_than(ts) && persist_upper.less_equal(ts) {
+                eligible.push(entry);
+            } else {
+                ineligible.push(entry);
+            }
+        }
+    }
 
     tracing::debug!(
         worker_id = %source_config.worker_id,
         source_id = %source_config.id,
-        remaining = stash.len(),
+        ineligible = ineligible.len(),
         eligible = eligible.len(),
         "draining stash",
     );
@@ -316,7 +484,7 @@ fn drain_staged_input<T, FromTime>(
         return;
     }
 
-    // Eligible entries are sorted by (key, time) from consolidation.
+    // Eligible entries are sorted by (key, time) from the batcher.
     // The trace cursor moves forward through keys, matching this order.
     let (mut cursor, storage) = trace.cursor();
 
@@ -548,7 +716,7 @@ mod test {
         let val_b = row(1, 2);
         let val_a2 = row(99, 10);
         let val_b2 = row(1, 20);
-        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
+        let expected: Vec<(Result<Row, DataflowError>, _, _)> = vec![
             (Ok(val_b.clone()), new_ts(1), Diff::ONE),
             (Ok(val_b), new_ts(2), Diff::MINUS_ONE),
             (Ok(val_b2), new_ts(2), Diff::ONE),
