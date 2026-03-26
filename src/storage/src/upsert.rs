@@ -181,7 +181,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
 )
 where
     G::Timestamp: TotalOrder + Sync,
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + differential_dataflow::lattice::Lattice + Sync,
     FromTime: Timestamp + Clone + Sync,
 {
     let upsert_metrics = source_config.metrics.get_upsert_metrics(
