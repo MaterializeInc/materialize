@@ -200,6 +200,29 @@ For example, an insert that occurred before the `SUBSCRIBE` began would appear i
 
 To see only updates after the initial timestamp, specify `WITH (SNAPSHOT = false)`.
 
+{{< note >}}
+While `WITH (SNAPSHOT = false)` guarantees that the snapshot will not be sent to
+the client, Materialize may still need to fetch and process the snapshot data to
+compute the correct result.
+
+For example, consider:
+
+```mzsql
+SUBSCRIBE TO SELECT SUM(column) FROM table WITH (SNAPSHOT = false)
+```
+
+The latest update for the query depends on _all_ rows in `table`, not just the
+rows that have changed recently.
+
+However, when subscribing directly to a collection; e.g.,
+
+```mzsql
+SUBSCRIBE TO <object> WITH (SNAPSHOT = false)
+```
+
+where `<object>` is a materialized view, table, source, or index, Materialize can generally skip fetching or processing the snapshot data from that collection entirely.
+{{< /note >}}
+
 ### `PROGRESS`
 
 If the `PROGRESS` option is specified via `WITH (PROGRESS)`:
