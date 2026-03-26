@@ -29,10 +29,17 @@ from materialize.util import PropagatingThread
 from materialize.workload_replay.column import Column
 from materialize.workload_replay.config import SEED_RANGE
 from materialize.workload_replay.ingest import (
+    _open_ingest_conn,
+    _resolve_child_obj,
     delivery_report,
     get_kafka_objects,
+    get_parquet_row_count,
     ingest,
+    ingest_captured_parquet_kafka,
+    ingest_captured_rows,
     ingest_webhook,
+    iter_parquet_batches,
+    parse_parquet_file,
 )
 from materialize.workload_replay.util import (
     get_kafka_topic,
@@ -708,5 +715,285 @@ def create_ingestions(
                                 ),
                             )
                         )
+
+    return threads
+
+
+# --- Captured data orchestration ---
+
+
+def _list_parquet_fqns(data_dir: str) -> list[tuple[str, str]]:
+    """List all (fqn, path) pairs for non-empty Parquet files in a directory."""
+    results = []
+    for name in sorted(os.listdir(data_dir)):
+        if name.endswith(".parquet"):
+            path = os.path.join(data_dir, name)
+            if os.path.getsize(path) > 0:
+                fqn = name[: -len(".parquet")]
+                results.append((fqn, path))
+    return results
+
+
+def _lookup_fqn(
+    fqn: str, workload: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Look up an FQN in the workload and return (meta, source_obj).
+
+    meta always has database, schema, name, columns.
+    source_obj is the parent source object (for routing), or None for tables.
+    """
+    db, schema, name = fqn.split(".", 2)
+    meta: dict[str, Any] = {"database": db, "schema": schema, "name": name}
+
+    items = workload.get("databases", {}).get(db, {}).get(schema, {})
+
+    # Check tables first — no parent source, data goes directly into MZ.
+    obj = items.get("tables", {}).get(name)
+    if obj:
+        meta["columns"] = obj.get("columns", [])
+        return meta, None
+
+    # Check source children (subsources / tables-from-source).
+    for source in items.get("sources", {}).values():
+        children = source.get("children", {})
+        if fqn in children:
+            meta["columns"] = children[fqn].get("columns", [])
+            return meta, source
+        for child in children.values():
+            if child.get("name") == name:
+                meta["columns"] = child.get("columns", [])
+                return meta, source
+
+    # Source children are keyed by fully-qualified name and can live under a
+    # source in a different schema than the child's schema.
+    for other_schema_items in workload.get("databases", {}).get(db, {}).values():
+        for source in other_schema_items.get("sources", {}).values():
+            children = source.get("children", {})
+            if fqn in children:
+                meta["columns"] = children[fqn].get("columns", [])
+                return meta, source
+
+    # Check standalone sources (no children).
+    obj = items.get("sources", {}).get(name)
+    if obj:
+        meta["columns"] = obj.get("columns", [])
+        return meta, obj
+
+    meta["columns"] = []
+    return meta, None
+
+
+def _sample_rows(
+    rows: list[list[str | None]], factor: float, rng: random.Random
+) -> list[list[str | None]]:
+    """Return a random sample of rows based on the given factor (0..1]."""
+    if factor >= 1.0:
+        return rows
+    n = max(1, int(len(rows) * factor))
+    return rng.sample(rows, n)
+
+
+def _captured_object_requires_mz(source_obj: dict[str, Any] | None) -> bool:
+    """Whether importing this captured object requires the MZ object to exist."""
+    if source_obj is None:
+        # Standalone tables are imported via COPY into Materialize.
+        return True
+    return source_obj.get("type") == "webhook"
+
+
+def _import_non_kafka_object(
+    c: Composition,
+    workload: dict[str, Any],
+    fqn: str,
+    data_path: str,
+    meta: dict[str, Any],
+    source_obj: dict[str, Any] | None,
+    factor: float,
+    seed: str | int,
+) -> None:
+    """Import a single non-Kafka object's Parquet data (thread target)."""
+    rng = random.Random(seed)
+    conn = _open_ingest_conn(c, meta, source_obj)
+    try:
+        col_types = [col["type"] for col in meta.get("columns", [])]
+        for batch in iter_parquet_batches(data_path, column_types=col_types):
+            batch = _sample_rows(batch, factor, rng)
+            ingest_captured_rows(c, workload, meta, source_obj, batch, conn=conn)
+    finally:
+        if conn is not None:
+            conn.close()
+    print(f"  Done: {fqn}")
+
+
+def import_captured_data_initial(
+    c: Composition,
+    workload: dict[str, Any],
+    data_dir: str,
+    factor: float = 1.0,
+    seed: str | int = 0,
+    requires_mz: bool | None = None,
+) -> bool:
+    """Import initial captured data (Parquet) into upstream systems or MZ tables.
+
+    Kafka objects are processed serially (already parallel internally).
+    Non-Kafka objects are imported in parallel (max 4 concurrent threads).
+    """
+    parquet_files = _list_parquet_fqns(data_dir)
+    if not parquet_files:
+        return False
+
+    imported = False
+    non_kafka_work: list[tuple[str, str, dict[str, Any], dict[str, Any] | None]] = []
+
+    for fqn, data_path in parquet_files:
+        meta, source_obj = _lookup_fqn(fqn, workload)
+        if (
+            requires_mz is not None
+            and _captured_object_requires_mz(source_obj) != requires_mz
+        ):
+            continue
+        total_rows = get_parquet_row_count(data_path)
+        if total_rows == 0:
+            continue
+
+        if factor < 1.0:
+            target_rows = int(total_rows * factor)
+            if target_rows == 0:
+                continue
+            print(
+                f"  Importing {fqn} ({target_rows}/{total_rows} rows, factor={factor})"
+            )
+        else:
+            print(f"  Importing {fqn} ({total_rows} rows)")
+
+        source_type = source_obj.get("type") if source_obj else None
+        if source_type == "kafka":
+            assert source_obj is not None
+            child_obj = _resolve_child_obj(meta, source_obj)
+            ingest_captured_parquet_kafka(
+                c,
+                meta,
+                source_obj,
+                child_obj,
+                data_path,
+                factor=factor,
+                seed=int(seed),
+            )
+            imported = True
+        else:
+            non_kafka_work.append((fqn, data_path, meta, source_obj))
+
+    if non_kafka_work:
+        max_concurrent = 4
+        active_threads: list[PropagatingThread] = []
+
+        for fqn, data_path, meta, source_obj in non_kafka_work:
+            while len(active_threads) >= max_concurrent:
+                for t in active_threads:
+                    t.join(timeout=0.1)
+                active_threads = [t for t in active_threads if t.is_alive()]
+
+            t = PropagatingThread(
+                target=_import_non_kafka_object,
+                name=f"import-{fqn}",
+                args=(c, workload, fqn, data_path, meta, source_obj, factor, seed),
+            )
+            t.start()
+            active_threads.append(t)
+
+        for t in active_threads:
+            t.join()
+
+        imported = True
+
+    return imported
+
+
+def _replay_continuous_object(
+    c: Composition,
+    workload: dict[str, Any],
+    fqn: str,
+    data_path: str,
+    speed: float,
+    factor: float,
+    seed: str | int,
+    stop_event: threading.Event,
+) -> None:
+    """Replay continuous captured data for a single object at original cadence."""
+    meta, source_obj = _lookup_fqn(fqn, workload)
+    col_types = [col["type"] for col in meta.get("columns", [])]
+
+    rows_by_timestamp = parse_parquet_file(
+        data_path, column_types=col_types, group_by_timestamp=True
+    )
+    timestamps = sorted(rows_by_timestamp.keys())
+    if not timestamps:
+        return
+
+    rng = random.Random(seed)
+    total = sum(len(v) for v in rows_by_timestamp.values())
+    duration_s = (timestamps[-1] - timestamps[0]) / 1000.0 / speed
+    if factor < 1.0:
+        target = int(total * factor)
+        print(
+            f"  Replaying {target}/{total} rows for {fqn} across {len(timestamps)} timestamps"
+            f" (factor={factor}, {duration_s:.0f}s at {speed}x speed)"
+        )
+    else:
+        print(
+            f"  Replaying {total} rows for {fqn} across {len(timestamps)} timestamps"
+            f" ({duration_s:.0f}s at {speed}x speed)"
+        )
+
+    first_ts = timestamps[0]
+    replay_start = time.time()
+
+    conn = _open_ingest_conn(c, meta, source_obj)
+    try:
+        for ts in timestamps:
+            if stop_event.is_set():
+                break
+
+            target_time = replay_start + (ts - first_ts) / 1000.0 / speed
+            now = time.time()
+            if target_time > now:
+                stop_event.wait(timeout=target_time - now)
+                if stop_event.is_set():
+                    break
+
+            rows = rows_by_timestamp[ts]
+            if factor < 1.0:
+                rows = _sample_rows(rows, factor, rng)
+
+            try:
+                ingest_captured_rows(c, workload, meta, source_obj, rows, conn=conn)
+            except Exception as e:
+                print(f"  Error replaying {fqn} at ts {ts}: {e}")
+                break
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def import_captured_data_streaming(
+    c: Composition,
+    workload: dict[str, Any],
+    data_dir: str,
+    speed: float,
+    factor: float,
+    seed: str | int,
+    stop_event: threading.Event,
+) -> list[threading.Thread]:
+    """Start threads to replay continuous captured data at original cadence."""
+    parquet_files = _list_parquet_fqns(data_dir)
+    threads: list[threading.Thread] = []
+
+    for fqn, data_path in parquet_files:
+        t = PropagatingThread(
+            target=_replay_continuous_object,
+            name=f"replay-{fqn}",
+            args=(c, workload, fqn, data_path, speed, factor, seed, stop_event),
+        )
+        threads.append(t)
 
     return threads

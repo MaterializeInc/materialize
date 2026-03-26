@@ -7362,6 +7362,7 @@ dependencies = [
  "mz-proto",
  "mz-timely-util",
  "num_cpus",
+ "parquet",
  "prometheus",
  "proptest",
  "proptest-derive",
