@@ -36,11 +36,27 @@ import { MaintainedObjectListRow } from "./types";
 
 export interface ObjectDetailPanelProps {
   object: MaintainedObjectListRow;
+  breadcrumbs?: { id: string; name: string }[];
+  onObjectClick?: (id: string) => void;
+  onBreadcrumbClick?: (id: string, index: number) => void;
 }
 
-export const ObjectDetailPanel = ({ object }: ObjectDetailPanelProps) => {
+export const ObjectDetailPanel = ({
+  object,
+  breadcrumbs = [],
+  onObjectClick,
+  onBreadcrumbClick,
+}: ObjectDetailPanelProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const navigate = useNavigate();
+
+  const handleObjectClick = (id: string) => {
+    if (onObjectClick) {
+      onObjectClick(id);
+    } else {
+      navigate(`../${id}`, { relative: "path" });
+    }
+  };
 
   const {
     data: detail,
@@ -64,6 +80,38 @@ export const ObjectDetailPanel = ({ object }: ObjectDetailPanelProps) => {
   return (
     <Box p={4}>
       <VStack align="start" spacing={6} width="100%">
+        {breadcrumbs.length > 0 && (
+          <HStack spacing={1} flexWrap="wrap">
+            {breadcrumbs.map((crumb, i) => (
+              <React.Fragment key={crumb.id}>
+                <Text
+                  textStyle="text-small"
+                  color={colors.accent.brightPurple}
+                  cursor="pointer"
+                  _hover={{ textDecoration: "underline" }}
+                  onClick={() => onBreadcrumbClick?.(crumb.id, i)}
+                  noOfLines={1}
+                  maxWidth="200px"
+                >
+                  {crumb.name}
+                </Text>
+                <Text textStyle="text-small" color={colors.foreground.secondary}>
+                  /
+                </Text>
+              </React.Fragment>
+            ))}
+            <Text
+              textStyle="text-small"
+              color={colors.foreground.primary}
+              fontWeight={600}
+              noOfLines={1}
+              maxWidth="200px"
+            >
+              {object.name}
+            </Text>
+          </HStack>
+        )}
+
         {detailError && (
           <Alert
             variant="error"
@@ -101,7 +149,7 @@ export const ObjectDetailPanel = ({ object }: ObjectDetailPanelProps) => {
           objectId={object.id}
           objectType={object.objectType}
           lagMs={liveLag?.lagMs ?? object.lagMs}
-          onObjectClick={(id) => navigate(`../${id}`, { relative: "path" })}
+          onObjectClick={handleObjectClick}
         />
 
         {object.objectType === "source" && (

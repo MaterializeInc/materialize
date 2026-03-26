@@ -141,6 +141,11 @@ const MaintainedObjects = () => {
   const [selectedObject, setSelectedObject] =
     React.useState<MaintainedObjectListRow | null>(null);
 
+  // Breadcrumb trail for drill-down navigation
+  const [breadcrumbs, setBreadcrumbs] = React.useState<
+    { id: string; name: string }[]
+  >([]);
+
   React.useEffect(() => {
     if (objectId && objects) {
       // Only set if we don't already have one, or the ID changed
@@ -150,12 +155,33 @@ const MaintainedObjects = () => {
       });
     } else if (!objectId) {
       setSelectedObject(null);
+      setBreadcrumbs([]);
     }
   }, [objectId, objects]);
 
   const handleRowClick = (obj: MaintainedObjectListRow) => {
     setSelectedObject(obj);
+    setBreadcrumbs([]);
     navigate(obj.id);
+  };
+
+  const handleDrillDown = (targetId: string) => {
+    // Add current object to breadcrumbs before navigating
+    if (selectedObject) {
+      setBreadcrumbs((prev) => {
+        // Don't add duplicates if going back and forth
+        if (prev.length > 0 && prev[prev.length - 1].id === selectedObject.id)
+          return prev;
+        return [...prev, { id: selectedObject.id, name: selectedObject.name }];
+      });
+    }
+    navigate(`../${targetId}`, { relative: "path" });
+  };
+
+  const handleBreadcrumbClick = (targetId: string, index: number) => {
+    // Trim breadcrumbs to the clicked position
+    setBreadcrumbs((prev) => prev.slice(0, index));
+    navigate(`../${targetId}`, { relative: "path" });
   };
 
   if (objectsLoading) {
@@ -276,7 +302,14 @@ const MaintainedObjects = () => {
         width="66%"
         trapFocus={false}
       >
-        {selectedObject && <ObjectDetailPanel object={selectedObject} />}
+        {selectedObject && (
+          <ObjectDetailPanel
+            object={selectedObject}
+            breadcrumbs={breadcrumbs}
+            onObjectClick={handleDrillDown}
+            onBreadcrumbClick={handleBreadcrumbClick}
+          />
+        )}
       </SideDrawer>
     </>
   );
