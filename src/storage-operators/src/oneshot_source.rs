@@ -160,7 +160,17 @@ where
             connection_id,
             uri,
         } => {
-            let source = AwsS3Source::new(connection, connection_id, connection_context, uri);
+            // Checksum validation does not work with GCS when using ranges, which happens with parquet.
+            // From here, there is no way to know if this is a connection to S3 or GCS, so we just disable checksum validation
+            // for all parquet ingestions.
+            let use_checksum = format != ContentFormat::Parquet;
+            let source = AwsS3Source::new(
+                connection,
+                connection_id,
+                connection_context,
+                uri,
+                use_checksum,
+            );
             SourceKind::AwsS3(source)
         }
     };

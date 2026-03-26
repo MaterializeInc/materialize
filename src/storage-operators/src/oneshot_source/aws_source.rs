@@ -45,6 +45,7 @@ pub struct AwsS3Source {
     /// S3 client that is lazily initialized.
     #[derivative(Debug = "ignore")]
     client: std::sync::OnceLock<mz_aws_util::s3::Client>,
+    use_checksum: bool,
 }
 
 impl AwsS3Source {
@@ -53,6 +54,7 @@ impl AwsS3Source {
         connection_id: CatalogItemId,
         context: ConnectionContext,
         uri: String,
+        use_checksum: bool,
     ) -> Self {
         let uri = http::Uri::from_str(&uri).expect("validated URI in sequencing");
 
@@ -83,21 +85,20 @@ impl AwsS3Source {
             bucket,
             prefix,
             client: std::sync::OnceLock::new(),
+            use_checksum,
         }
     }
 
-    pub async fn initialize(
-        &self,
-        use_checksum: bool,
-    ) -> Result<mz_aws_util::s3::Client, anyhow::Error> {
+    pub async fn initialize(&self) -> Result<mz_aws_util::s3::Client, anyhow::Error> {
         let sdk_config = self
             .connection
             .load_sdk_config(&self.context, self.connection_id, InTask::Yes)
             .await?;
 
-        let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
+        let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config)
+            .force_path_style(sdk_config.endpoint_url().is_some());
 
-        if !use_checksum {
+        if !self.use_checksum {
             s3_config_builder = s3_config_builder.response_checksum_validation(
                 aws_smithy_types::checksum_config::ResponseChecksumValidation::WhenRequired,
             );
@@ -108,12 +109,9 @@ impl AwsS3Source {
         Ok(s3_client)
     }
 
-    pub async fn client(
-        &self,
-        use_checksum: bool,
-    ) -> Result<&mz_aws_util::s3::Client, anyhow::Error> {
+    pub async fn client(&self) -> Result<&mz_aws_util::s3::Client, anyhow::Error> {
         if self.client.get().is_none() {
-            let client = self.initialize(use_checksum).await?;
+            let client = self.initialize().await?;
             let _ = self.client.set(client);
         }
 
@@ -161,10 +159,7 @@ impl OneshotSource for AwsS3Source {
     async fn list<'a>(
         &'a self,
     ) -> Result<Vec<(Self::Object, Self::Checksum)>, super::StorageErrorX> {
-        let client = self
-            .client(true)
-            .await
-            .map_err(StorageErrorXKind::generic)?;
+        let client = self.client().await.map_err(StorageErrorXKind::generic)?;
         let mut objects_request = client.list_objects_v2().bucket(&self.bucket);
 
         // Users can optionally specify a prefix via the S3 uri they originally specify.
@@ -220,13 +215,7 @@ impl OneshotSource for AwsS3Source {
         let initial_response = async move {
             tracing::info!(name = %object.name(), ?range, "fetching object");
 
-            // Checksum validation does not work with GCS when using ranges, so we only enable it when fetching the whole object.
-            // From here, there is no way to know if this is a connection to S3 or GCS, so we just disable checksum validation whenever a range is specified.
-            let use_checksum = range.is_none();
-            let client = self
-                .client(use_checksum)
-                .await
-                .map_err(StorageErrorXKind::generic)?;
+            let client = self.client().await.map_err(StorageErrorXKind::generic)?;
 
             let mut request = client.get_object().bucket(&self.bucket).key(&object.key);
             if let Some(range) = range {
