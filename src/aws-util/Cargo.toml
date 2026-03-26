@@ -25,7 +25,7 @@ futures = "0.3.31"
 http = "1.4.0"
 hyper-tls = "0.5.0"
 mz-ore = { path = "../ore", features = ["async"], default-features = false }
-pin-project = "1.1.10"
+pin-project = "1.1.11"
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", default-features = false, features = ["macros"] }
 uuid = { version = "1.19.0", features = ["v4"] }

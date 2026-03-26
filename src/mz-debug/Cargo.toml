@@ -24,7 +24,7 @@ mz-server-core = { path = "../server-core"}
 mz-sql-parser = { path = "../sql-parser" }
 mz-tls-util = { path = "../tls-util" }
 postgres-openssl = { version = "0.5.2" }
-regex = "1.12.2"
+regex = "1.12.3"
 reqwest = { version = "0.12.28", features = ["stream"] }
 serde = "1.0.219"
 serde_yaml = "0.9.34"
@@ -32,7 +32,7 @@ tokio = "1.49.0"
 tokio-postgres = { version = "0.7.15" }
 tokio-util = { version = "0.7.18", features = ["io"] }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
 url = { version = "2.5.8", features = ["serde"] }
 walkdir = "2.5"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
