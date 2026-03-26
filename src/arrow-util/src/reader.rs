@@ -822,8 +822,8 @@ impl ColReader {
                 values,
                 nulls,
             } => {
-                let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
-                if !is_valid {
+                let is_non_null = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
+                if !is_non_null {
                     packer.push(Datum::Null);
                     return Ok(());
                 }

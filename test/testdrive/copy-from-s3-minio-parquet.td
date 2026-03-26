@@ -51,14 +51,14 @@ $ s3-upload-parquet-types bucket=copyfroms3 key-prefix=parquet/types.parquet
   timestamp_ms_col timestamp,
   -- timestampz_ms_col timestamp with time zone, -- not supported
   time32_col time,
-  list_col bigint list, -- cant be verified in testdrive
+  list_col bigint list,
   decimal_col decimal,
   json_col jsonb,
   record_col record_type,
   uuid_col uuid,
   interval_ym_col interval,
   interval_dt_col interval,
-  map_col map[text => text] -- cant be verified in testdrive
+  map_col map[text => text]
   );
 
 $ s3-set-presigned-url bucket=copyfroms3 key=parquet/types.parquet var-name=types_url
@@ -375,5 +375,45 @@ Taco
 "1 day 00:00:00.5"
 "1 day 00:00:00.5"
 "1 day 00:00:00.5"
+
+> SELECT list_col::text FROM types ORDER BY int8_col DESC;
+{-1,2}
+{-1,2}
+{-1,2}
+{-1,2}
+{-1,2}
+{-1,2}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{3,4,5}
+{}
+{}
+{}
+{}
+{}
+{}
+
+> SELECT map_col::text FROM types ORDER BY int8_col DESC;
+{}
+{}
+{}
+{}
+{}
+{}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k3=>v3}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
+{k1=>v1,k2=>v2}
 
 # Test explicit file lists.
