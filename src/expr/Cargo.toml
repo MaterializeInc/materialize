@@ -23,7 +23,7 @@ harness = false
 
 [dependencies]
 aho-corasick = "1.1.4"
-anyhow = "1.0.101"
+anyhow = "1.0.102"
 bytes = "1.11.1"
 bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }

@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.100"
+anyhow = "1.0.102"
 axum = { version = "0.8.8", default-features = false }
 base64 = "0.22.1"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
