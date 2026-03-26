@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { createQueryId } from "kysely";
+
 import { buildFirstReplicaSourceStatisticsTable } from "~/api/materialize/expressionBuilders";
 import {
   executeSqlHttp,
@@ -63,6 +65,7 @@ describe("buildFirstReplicaSourceStatisticsTable", () => {
         sql: query,
         parameters: replicaStatsTable.parameters,
         query: replicaStatsTable.query,
+        queryId: createQueryId(),
       });
 
       expect(result.rows).toHaveLength(1);
@@ -130,6 +133,7 @@ describe("buildFirstReplicaSourceStatisticsTable", () => {
         sql: query,
         parameters: replicaStatsTable.parameters,
         query: replicaStatsTable.query,
+        queryId: createQueryId(),
       });
 
       // Should return exactly one row (first replica)

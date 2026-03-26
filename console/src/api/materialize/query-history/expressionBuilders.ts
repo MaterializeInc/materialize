@@ -7,7 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { ExpressionBuilder, sql, StringReference } from "kysely";
+import {
+  ExpressionBuilder,
+  SelectQueryBuilder,
+  sql,
+  StringReference,
+} from "kysely";
 
 import { queryBuilder } from "~/api/materialize/db";
 import {
@@ -15,6 +20,31 @@ import {
   QUERY_HISTORY_LIST_TABLE_REDACTED,
 } from "~/api/materialize/query-history/constants";
 import { DB, Interval } from "~/types/materialize";
+
+/** Common output columns from all branches of buildActivityLogTable. */
+export interface ActivityLogOutput {
+  application_name: string;
+  authenticated_user: string;
+  database_name: string;
+  cluster_name: string | null;
+  mz_version: string;
+  execution_id: string;
+  execution_strategy: string | null;
+  finished_status: string | null;
+  session_id: string;
+  cluster_id: string | null;
+  statement_type: string | null;
+  transaction_isolation: string;
+  finished_at: Date | null;
+  prepared_at: Date;
+  began_at: Date;
+  rows_returned: string | null;
+  result_size: string | null;
+  search_path: string[];
+  error_message: string | null;
+  sql: string;
+  throttled_count: string;
+}
 
 function buildSearchPathCommonColumn(
   eb: ExpressionBuilder<
@@ -33,7 +63,8 @@ export function buildActivityLogTable({
 }: {
   showRedacted: boolean;
   shouldUseIndexedView: boolean;
-}) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+}): SelectQueryBuilder<any, any, ActivityLogOutput> {
   if (shouldUseIndexedView) {
     const commonColumns = [
       "application_name",
@@ -56,6 +87,7 @@ export function buildActivityLogTable({
       "throttled_count",
     ] as const;
     if (showRedacted) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return queryBuilder
         .selectFrom(QUERY_HISTORY_LIST_TABLE_REDACTED)
         .select([
@@ -63,8 +95,9 @@ export function buildActivityLogTable({
           (eb) => buildSearchPathCommonColumn(eb),
           (eb) => eb.lit(null).as("error_message"),
           "redacted_sql as sql",
-        ]);
+        ]) as any;
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return queryBuilder
       .selectFrom(QUERY_HISTORY_LIST_TABLE)
       .select([
@@ -72,7 +105,7 @@ export function buildActivityLogTable({
         (eb) => buildSearchPathCommonColumn(eb),
         "error_message",
         "sql",
-      ]);
+      ]) as any;
   }
 
   const mzActivityLogThinned = queryBuilder
@@ -83,6 +116,7 @@ export function buildActivityLogTable({
       "msh.session_id",
     );
   if (showRedacted) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return mzActivityLogThinned
       .innerJoin(
         "mz_statement_execution_history_redacted as meh",
@@ -116,8 +150,9 @@ export function buildActivityLogTable({
         (eb) => eb.lit(null).as("error_message"),
         "redacted_sql as sql",
         "throttled_count",
-      ]);
+      ]) as any;
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return mzActivityLogThinned
     .innerJoin(
       "mz_statement_execution_history as meh",
@@ -147,7 +182,7 @@ export function buildActivityLogTable({
       "error_message",
       "sql",
       "throttled_count",
-    ]);
+    ]) as any;
 }
 
 export function buildFinishedStatusSelection<DB, TB extends keyof DB>(
