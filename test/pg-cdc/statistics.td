@@ -36,6 +36,8 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 INSERT INTO t1 VALUES ('one');
 INSERT INTO t1 VALUES ('two');
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > CREATE CLUSTER stats_cluster SIZE '${arg.default-replica-size}'

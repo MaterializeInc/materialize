@@ -42,6 +42,8 @@ INSERT INTO table_a VALUES (1, 'one');
 ALTER TABLE table_a REPLICA IDENTITY FULL;
 INSERT INTO table_a VALUES (2, 'two');
 
+ANALYZE;
+
 # Check empty publication on ALTER
 
 > CREATE SOURCE "mz_source"
@@ -116,6 +118,8 @@ CREATE TABLE table_g (pk INTEGER PRIMARY KEY, f2 TEXT);
 INSERT INTO table_g VALUES (1, 'one');
 ALTER TABLE table_g REPLICA IDENTITY FULL;
 INSERT INTO table_g VALUES (2, 'two');
+
+ANALYZE;
 
 > CREATE SOURCE "mz_source"
   FROM POSTGRES CONNECTION pg (

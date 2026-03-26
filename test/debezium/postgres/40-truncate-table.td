@@ -16,6 +16,7 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE truncate_table (f1 INTEGER PRIMARY KEY);
 INSERT INTO truncate_table VALUES (1),(2),(3);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.truncate_table
 

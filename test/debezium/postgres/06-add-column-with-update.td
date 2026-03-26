@@ -17,6 +17,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column (f1 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column VALUES (123);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_add_column
 

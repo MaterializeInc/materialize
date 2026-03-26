@@ -15,6 +15,7 @@
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_drop_column_not_null (f1 INTEGER PRIMARY KEY, col_not_null INTEGER NOT NULL);
 INSERT INTO alter_drop_column_not_null VALUES (123, 234);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_drop_column_not_null
 

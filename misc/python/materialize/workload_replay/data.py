@@ -51,6 +51,7 @@ def _copy_chunk(
     column_dicts: list[dict[str, Any]],
     num_rows: int,
     rng_seed: int,
+    analyze: bool = False,
 ) -> int:
     """Generate random data and COPY to Postgres or Materialize."""
     rng = random.Random(rng_seed)
@@ -77,6 +78,14 @@ def _copy_chunk(
                 for _ in range(batch_rows):
                     row = [c.value(rng, in_query=False) for c in columns]
                     copy.write_row(row)
+        if analyze:
+            # Update pg_class.relpages so that Materialize's ctid-based parallel
+            # snapshot can partition the table across workers from the first read.
+            # Without this, relpages stays at 0 until autovacuum runs, forcing the
+            # snapshot into single-worker mode.
+            cur.execute(
+                SQL("ANALYZE {}").format(SQL(".").join(map(Identifier, table_fqn)))
+            )
 
     conn.close()
     return num_rows
@@ -209,14 +218,16 @@ def _submit_chunks(
     rng: random.Random,
     futures: dict[Future[int], str],
     totals: dict[str, int],
+    extra_kwargs: dict[str, Any] | None = None,
 ) -> None:
     """Split *num_rows* into _CHUNK_ROWS-sized pieces and submit them."""
     totals[pretty_name] = totals.get(pretty_name, 0) + num_rows
     remaining = num_rows
+    kw = extra_kwargs or {}
     while remaining > 0:
         n = min(_CHUNK_ROWS, remaining)
         seed = rng.randrange(SEED_RANGE)
-        f = pool.submit(worker_fn, *args, column_dicts, n, seed)
+        f = pool.submit(worker_fn, *args, column_dicts, n, seed, **kw)
         futures[f] = pretty_name
         remaining -= n
 
@@ -361,6 +372,7 @@ def create_initial_data_external(
                                 rng,
                                 futures,
                                 totals,
+                                extra_kwargs={"analyze": True},
                             )
                         elif st == "kafka":
                             topic = get_kafka_topic(source)

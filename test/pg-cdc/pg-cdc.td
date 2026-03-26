@@ -136,6 +136,8 @@ CREATE TABLE conflict_schema.another_enum_table ("колона" another_enum);
 INSERT INTO conflict_schema.another_enum_table VALUES ('var2'), ('var3');
 ALTER TABLE conflict_schema.another_enum_table REPLICA IDENTITY FULL;
 
+ANALYZE;
+
 DROP PUBLICATION IF EXISTS mz_source_narrow;
 
 CREATE PUBLICATION mz_source_narrow FOR TABLE enum_table, public.another_enum_table, pk_table;
@@ -145,6 +147,8 @@ CREATE SCHEMA another_schema;
 CREATE TABLE another_schema.another_table (f1 TEXT);
 ALTER TABLE another_schema.another_table REPLICA IDENTITY FULL;
 INSERT INTO another_schema.another_table VALUES ('123');
+
+ANALYZE;
 
 DROP PUBLICATION IF EXISTS another_publication;
 

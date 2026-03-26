@@ -17,6 +17,7 @@ CREATE TABLE update_update (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE update_update REPLICA IDENTITY FULL;
 INSERT INTO update_update VALUES (1);
 INSERT INTO update_update VALUES (10);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.update_update
 

@@ -1794,6 +1794,11 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
 INSERT INTO pk_table SELECT x, x*2 FROM generate_series(1, {2 * self.n()}) as x;
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
+-- Ensure pg_class.relpages is up to date so that Materialize's ctid-based
+-- parallel snapshot uses all workers from the first iteration. Without this,
+-- relpages stays at 0 until Postgres autovacuum/autoanalyze runs, causing
+-- the first several iterations to use a single worker and appear slower.
+ANALYZE pk_table;
 """
         )
 
