@@ -78,7 +78,10 @@ use std::time::Instant;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
-use arrow::array::{ArrayRef, Int32Array, RecordBatch};
+use arrow::array::{
+    ArrayRef, Decimal128Array, Int32Array, Int64Array, RecordBatch, UInt16Array, UInt32Array,
+    UInt64Array, UInt8Array,
+};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
@@ -175,6 +178,134 @@ type DeltaWriterType = DeltaWriter<
     >,
 >;
 
+/// The precision needed to store all UInt64 values in a Decimal128.
+/// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
+const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
+
+/// Convert an Arrow DataType to an Iceberg-compatible DataType.
+///
+/// Iceberg has specific rules for unsigned integer types:
+/// - UInt8, UInt16 -> Int32 (promotion to 32-bit signed)
+/// - UInt32 -> Int64 (promotion to 64-bit signed)
+/// - UInt64 -> Decimal128(20, 0) (decimal can hold full uint64 range)
+///
+/// This function recursively transforms nested types (structs, lists, maps).
+/// It's primarily used in tests; the main code path uses `iceberg_type_overrides`.
+#[allow(dead_code)]
+fn convert_datatype_for_iceberg(data_type: &DataType) -> DataType {
+    match data_type {
+        // Unsigned integer types need conversion per Iceberg rules
+        DataType::UInt8 | DataType::UInt16 => DataType::Int32,
+        DataType::UInt32 => DataType::Int64,
+        DataType::UInt64 => DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+
+        // Recursively handle nested types
+        DataType::Struct(fields) => {
+            let new_fields: Vec<Field> = fields
+                .iter()
+                .map(|f| {
+                    Field::new(
+                        f.name(),
+                        convert_datatype_for_iceberg(f.data_type()),
+                        f.is_nullable(),
+                    )
+                    .with_metadata(f.metadata().clone())
+                })
+                .collect();
+            DataType::Struct(new_fields.into())
+        }
+        DataType::List(element_field) => {
+            let new_element = Field::new(
+                element_field.name(),
+                convert_datatype_for_iceberg(element_field.data_type()),
+                element_field.is_nullable(),
+            )
+            .with_metadata(element_field.metadata().clone());
+            DataType::List(Arc::new(new_element))
+        }
+        DataType::LargeList(element_field) => {
+            let new_element = Field::new(
+                element_field.name(),
+                convert_datatype_for_iceberg(element_field.data_type()),
+                element_field.is_nullable(),
+            )
+            .with_metadata(element_field.metadata().clone());
+            DataType::LargeList(Arc::new(new_element))
+        }
+        DataType::Map(entries_field, sorted) => {
+            let new_entries = Field::new(
+                entries_field.name(),
+                convert_datatype_for_iceberg(entries_field.data_type()),
+                entries_field.is_nullable(),
+            )
+            .with_metadata(entries_field.metadata().clone());
+            DataType::Map(Arc::new(new_entries), *sorted)
+        }
+        // All other types pass through unchanged
+        other => other.clone(),
+    }
+}
+
+/// Cast an Arrow array to an Iceberg-compatible type.
+///
+/// This handles the conversion of unsigned integer arrays:
+/// - UInt8, UInt16 arrays -> Int32Array
+/// - UInt32 arrays -> Int64Array
+/// - UInt64 arrays -> Decimal128Array(20, 0)
+fn cast_array_for_iceberg(array: &ArrayRef) -> anyhow::Result<ArrayRef> {
+    match array.data_type() {
+        DataType::UInt8 => {
+            let uint_array = array
+                .as_any()
+                .downcast_ref::<UInt8Array>()
+                .context("Failed to downcast to UInt8Array")?;
+            let int_array: Int32Array = uint_array
+                .iter()
+                .map(|v| v.map(|x| i32::from(x)))
+                .collect();
+            Ok(Arc::new(int_array))
+        }
+        DataType::UInt16 => {
+            let uint_array = array
+                .as_any()
+                .downcast_ref::<UInt16Array>()
+                .context("Failed to downcast to UInt16Array")?;
+            let int_array: Int32Array = uint_array
+                .iter()
+                .map(|v| v.map(|x| i32::from(x)))
+                .collect();
+            Ok(Arc::new(int_array))
+        }
+        DataType::UInt32 => {
+            let uint_array = array
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .context("Failed to downcast to UInt32Array")?;
+            let int_array: Int64Array = uint_array
+                .iter()
+                .map(|v| v.map(|x| i64::from(x)))
+                .collect();
+            Ok(Arc::new(int_array))
+        }
+        DataType::UInt64 => {
+            let uint_array = array
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .context("Failed to downcast to UInt64Array")?;
+            // Convert UInt64 to Decimal128 with precision 20, scale 0
+            let decimal_array: Decimal128Array = uint_array
+                .iter()
+                .map(|v| v.map(|x| i128::from(x)))
+                .collect::<Decimal128Array>()
+                .with_precision_and_scale(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+                .context("Failed to set decimal precision and scale")?;
+            Ok(Arc::new(decimal_array))
+        }
+        // For non-unsigned types, return the array unchanged
+        _ => Ok(Arc::clone(array)),
+    }
+}
+
 /// Add Parquet field IDs to an Arrow schema. Iceberg requires field IDs in the
 /// Parquet metadata for schema evolution tracking. Field IDs are assigned
 /// recursively to all nested fields (structs, lists, maps) using a depth-first,
@@ -229,6 +360,41 @@ fn add_field_ids_to_datatype(data_type: &DataType, next_id: &mut i32) -> DataTyp
         }
         _ => data_type.clone(),
     }
+}
+
+/// Merge extension metadata from a source schema into a target schema.
+///
+/// This copies ARROW:extension:name metadata from source fields to target fields
+/// (matched by field name), preserving the target schema's data types and other metadata.
+/// Used to give the build schema (with Materialize types) the extension names from
+/// the target schema (with Iceberg types).
+fn merge_extension_metadata_into_schema(
+    target_schema: &ArrowSchema,
+    source_schema: &ArrowSchema,
+) -> ArrowSchema {
+    let fields: Vec<Field> = target_schema
+        .fields()
+        .iter()
+        .map(|target_field| {
+            let source_field = source_schema.field_with_name(target_field.name()).ok();
+            let mut metadata = target_field.metadata().clone();
+
+            // Copy extension name from source if available
+            if let Some(source) = source_field {
+                if let Some(ext_name) = source.metadata().get(ARROW_EXTENSION_NAME_KEY) {
+                    metadata.insert(ARROW_EXTENSION_NAME_KEY.to_string(), ext_name.clone());
+                }
+            }
+
+            Field::new(
+                target_field.name(),
+                target_field.data_type().clone(),
+                target_field.is_nullable(),
+            )
+            .with_metadata(metadata)
+        })
+        .collect();
+    ArrowSchema::new(fields).with_metadata(target_schema.metadata().clone())
 }
 
 /// Merge Materialize extension metadata into Iceberg's Arrow schema.
@@ -627,21 +793,66 @@ fn retrieve_upper_from_snapshots(
     Ok(None)
 }
 
+/// Type overrides for Iceberg-compatible Arrow schemas.
+///
+/// Iceberg doesn't support unsigned integer types, so we map them to compatible types:
+/// - UInt8, UInt16 -> Int32
+/// - UInt32 -> Int64
+/// - UInt64 -> Decimal128(20, 0)
+/// - MzTimestamp (which uses UInt64) -> Decimal128(20, 0)
+fn iceberg_type_overrides(
+    scalar_type: &mz_repr::SqlScalarType,
+) -> Option<(DataType, String)> {
+    use mz_repr::SqlScalarType;
+    match scalar_type {
+        SqlScalarType::UInt16 => Some((DataType::Int32, "uint2".to_string())),
+        SqlScalarType::UInt32 => Some((DataType::Int64, "uint4".to_string())),
+        SqlScalarType::UInt64 => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "uint8".to_string(),
+        )),
+        SqlScalarType::MzTimestamp => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "mz_timestamp".to_string(),
+        )),
+        _ => None,
+    }
+}
+
 /// Convert a Materialize RelationDesc into Arrow and Iceberg schemas.
-/// Returns the Arrow schema (with field IDs) for writing Parquet files,
-/// and the Iceberg schema for table creation/validation.
+///
+/// Returns a tuple of:
+/// - The Materialize Arrow schema (with field IDs) - used by ArrowBuilder to build data
+/// - The Iceberg schema - for table creation/validation
+///
+/// The Materialize schema may contain types not supported by Iceberg (e.g., UInt64),
+/// so we create two schemas:
+/// 1. Materialize schema with original types (for ArrowBuilder)
+/// 2. Iceberg-compatible schema (for Iceberg table creation)
+///
+/// At write time, data is built using Materialize types and then cast to
+/// Iceberg-compatible types before writing to Parquet.
 fn relation_desc_to_iceberg_schema(
     desc: &mz_repr::RelationDesc,
 ) -> anyhow::Result<(ArrowSchema, SchemaRef)> {
-    let arrow_schema = mz_arrow_util::builder::desc_to_schema(desc)
+    // Create the Materialize schema with original types (including UInt64)
+    let materialize_arrow_schema = mz_arrow_util::builder::desc_to_schema(desc)
         .context("Failed to convert RelationDesc to Arrow schema")?;
 
-    let arrow_schema_with_ids = add_field_ids_to_arrow_schema(arrow_schema);
+    // Create the Iceberg-compatible schema using type overrides
+    let iceberg_arrow_schema =
+        mz_arrow_util::builder::desc_to_schema_with_overrides(desc, iceberg_type_overrides)
+            .context("Failed to convert RelationDesc to Iceberg-compatible Arrow schema")?;
 
-    let iceberg_schema = arrow_schema_to_schema(&arrow_schema_with_ids)
+    // Add field IDs to both schemas
+    let materialize_arrow_schema = add_field_ids_to_arrow_schema(materialize_arrow_schema);
+    let iceberg_arrow_schema = add_field_ids_to_arrow_schema(iceberg_arrow_schema);
+
+    // Create the Iceberg schema from the converted Arrow schema
+    let iceberg_schema = arrow_schema_to_schema(&iceberg_arrow_schema)
         .context("Failed to convert Arrow schema to Iceberg schema")?;
 
-    Ok((arrow_schema_with_ids, Arc::new(iceberg_schema)))
+    Ok((materialize_arrow_schema, Arc::new(iceberg_schema)))
 }
 
 /// Resolve Materialize key column indexes to Iceberg top-level field IDs.
@@ -686,13 +897,17 @@ fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
 /// Convert a Materialize DiffPair into an Arrow RecordBatch with an __op column.
 /// The __op column indicates whether each row is an insert (1) or delete (-1), which
 /// the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
+///
+/// This function builds the RecordBatch using Materialize types (which may include
+/// unsigned integers like UInt64), then casts them to Iceberg-compatible types
+/// (e.g., UInt64 -> Decimal128).
 fn row_to_recordbatch(
     row: DiffPair<Row>,
-    schema: ArrowSchemaRef,
-    schema_with_op: ArrowSchemaRef,
+    build_schema: ArrowSchemaRef,
+    target_schema_with_op: ArrowSchemaRef,
 ) -> anyhow::Result<RecordBatch> {
     let mut builder = ArrowBuilder::new_with_schema(
-        Arc::clone(&schema),
+        Arc::clone(&build_schema),
         DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
         DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
     )
@@ -717,11 +932,20 @@ fn row_to_recordbatch(
         .to_record_batch()
         .context("Failed to create record batch")?;
 
-    let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+    // Cast columns to Iceberg-compatible types (e.g., UInt64 -> Decimal128)
+    let casted_columns: Vec<ArrayRef> = batch
+        .columns()
+        .iter()
+        .map(cast_array_for_iceberg)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .context("Failed to cast columns for Iceberg")?;
+
+    // Add the __op column (Int32 needs no casting)
+    let mut columns = casted_columns;
     let op_column = Arc::new(Int32Array::from(op_values));
     columns.push(op_column);
 
-    let batch_with_op = RecordBatch::try_new(schema_with_op, columns)
+    let batch_with_op = RecordBatch::try_new(target_schema_with_op, columns)
         .context("Failed to create batch with op column")?;
     Ok(batch_with_op)
 }
@@ -1215,10 +1439,15 @@ where
             let table_metadata = table.metadata().clone();
             let current_schema = Arc::clone(table_metadata.current_schema());
 
-            // Merge Materialize extension metadata into the Iceberg schema.
-            // We need extension metadata for ArrowBuilder to work correctly (it uses
-            // extension names to know how to handle different types like records vs arrays).
-            let arrow_schema = Arc::new(
+            // Create two schemas:
+            // 1. build_schema: Uses Materialize types (e.g., UInt64) for ArrowBuilder
+            //    to correctly match Datum types during data construction
+            // 2. target_schema: Uses Iceberg-compatible types (e.g., Decimal128) for
+            //    the final RecordBatch that gets written to Parquet
+            //
+            // We need to merge Materialize extension metadata into the Iceberg schema
+            // so ArrowBuilder knows how to handle special types like records vs arrays.
+            let target_arrow_schema = Arc::new(
                 merge_materialize_metadata_into_iceberg_schema(
                     materialize_arrow_schema.as_ref(),
                     current_schema.as_ref(),
@@ -1226,8 +1455,19 @@ where
                 .context("Failed to merge Materialize metadata into Iceberg schema")?,
             );
 
-            // Build schema_with_op by adding the __op column used by DeltaWriter.
-            let schema_with_op = Arc::new(build_schema_with_op_column(&arrow_schema));
+            // The build schema uses Materialize types (which ArrowBuilder can populate
+            // from Datum values), but with the merged extension names from Iceberg.
+            // We merge the extension metadata from target_arrow_schema back into the
+            // Materialize schema to ensure ArrowBuilder has the correct type hints.
+            let build_arrow_schema = Arc::new(merge_extension_metadata_into_schema(
+                materialize_arrow_schema.as_ref(),
+                target_arrow_schema.as_ref(),
+            ));
+
+            // Build schemas with __op column for DeltaWriter.
+            // Build schema_with_op used by DeltaWriter for the final RecordBatch.
+            // The build_arrow_schema is used directly by ArrowBuilder (without __op column).
+            let target_schema_with_op = Arc::new(build_schema_with_op_column(&target_arrow_schema));
 
             // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
             // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
@@ -1282,11 +1522,11 @@ where
                 )?,
             );
 
-            let arrow_schema_for_closure = Arc::clone(&arrow_schema);
+            let target_arrow_schema_for_closure = Arc::clone(&target_arrow_schema);
             let current_schema_for_closure = Arc::clone(&current_schema);
 
             let create_delta_writer = move |disable_seen_rows: bool| {
-                let arrow_schema = Arc::clone(&arrow_schema_for_closure);
+                let target_arrow_schema = Arc::clone(&target_arrow_schema_for_closure);
                 let current_schema = Arc::clone(&current_schema_for_closure);
                 let file_io = file_io.clone();
                 let location_generator = location_generator.clone();
@@ -1302,7 +1542,7 @@ where
                         writer_properties.clone(),
                         Arc::clone(&current_schema),
                     )
-                    .with_arrow_schema(Arc::clone(&arrow_schema))
+                    .with_arrow_schema(Arc::clone(&target_arrow_schema))
                     .context("Arrow schema validation failed")?;
                     let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
                         data_parquet_writer,
@@ -1454,8 +1694,8 @@ where
                                                 metrics.stashed_rows.dec();
                                                 let record_batch = row_to_recordbatch(
                                                     diff_pair.clone(),
-                                                    Arc::clone(&arrow_schema),
-                                                    Arc::clone(&schema_with_op),
+                                                    Arc::clone(&build_arrow_schema),
+                                                    Arc::clone(&target_schema_with_op),
                                                 )
                                                 .context("failed to convert row to recordbatch")?;
                                                 delta_writer.write(record_batch).await.context(
@@ -1517,8 +1757,8 @@ where
                                     {
                                         let record_batch = row_to_recordbatch(
                                             diff_pair.clone(),
-                                            Arc::clone(&arrow_schema),
-                                            Arc::clone(&schema_with_op),
+                                            Arc::clone(&build_arrow_schema),
+                                            Arc::clone(&target_schema_with_op),
                                         )
                                         .context("failed to convert row to recordbatch")?;
                                         delta_writer
@@ -1663,6 +1903,150 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arrow::array::Array;
+
+    #[mz_ore::test]
+    fn test_convert_datatype_for_iceberg_unsigned_integers() {
+        // UInt8 and UInt16 should convert to Int32
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::UInt8),
+            DataType::Int32
+        );
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::UInt16),
+            DataType::Int32
+        );
+
+        // UInt32 should convert to Int64
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::UInt32),
+            DataType::Int64
+        );
+
+        // UInt64 should convert to Decimal128(20, 0)
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::UInt64),
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_convert_datatype_for_iceberg_passthrough() {
+        // Signed integers should pass through unchanged
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::Int32),
+            DataType::Int32
+        );
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::Int64),
+            DataType::Int64
+        );
+
+        // Other types should pass through unchanged
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::Utf8),
+            DataType::Utf8
+        );
+        assert_eq!(
+            convert_datatype_for_iceberg(&DataType::Boolean),
+            DataType::Boolean
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_convert_datatype_for_iceberg_nested() {
+        // Test that nested types are converted recursively
+        let list_of_uint64 = DataType::List(Arc::new(Field::new("item", DataType::UInt64, true)));
+        let converted = convert_datatype_for_iceberg(&list_of_uint64);
+
+        if let DataType::List(field) = converted {
+            assert_eq!(
+                field.data_type(),
+                &DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+            );
+        } else {
+            panic!("Expected List type");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_cast_array_for_iceberg_uint64() {
+        let uint64_array = UInt64Array::from(vec![Some(0u64), Some(u64::MAX), None]);
+        let array_ref: ArrayRef = Arc::new(uint64_array);
+
+        let casted = cast_array_for_iceberg(&array_ref).expect("casting should succeed");
+
+        // Should be Decimal128
+        assert_eq!(
+            casted.data_type(),
+            &DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+        );
+
+        let decimal_array = casted
+            .as_any()
+            .downcast_ref::<Decimal128Array>()
+            .expect("should be Decimal128Array");
+
+        assert_eq!(decimal_array.len(), 3);
+        assert_eq!(decimal_array.value(0), 0i128);
+        assert_eq!(decimal_array.value(1), i128::from(u64::MAX));
+        assert!(decimal_array.is_null(2));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_array_for_iceberg_uint32() {
+        let uint32_array = UInt32Array::from(vec![Some(0u32), Some(u32::MAX), None]);
+        let array_ref: ArrayRef = Arc::new(uint32_array);
+
+        let casted = cast_array_for_iceberg(&array_ref).expect("casting should succeed");
+
+        // Should be Int64
+        assert_eq!(casted.data_type(), &DataType::Int64);
+
+        let int64_array = casted
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("should be Int64Array");
+
+        assert_eq!(int64_array.len(), 3);
+        assert_eq!(int64_array.value(0), 0i64);
+        assert_eq!(int64_array.value(1), i64::from(u32::MAX));
+        assert!(int64_array.is_null(2));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_array_for_iceberg_uint16() {
+        let uint16_array = UInt16Array::from(vec![Some(0u16), Some(u16::MAX), None]);
+        let array_ref: ArrayRef = Arc::new(uint16_array);
+
+        let casted = cast_array_for_iceberg(&array_ref).expect("casting should succeed");
+
+        // Should be Int32
+        assert_eq!(casted.data_type(), &DataType::Int32);
+
+        let int32_array = casted
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("should be Int32Array");
+
+        assert_eq!(int32_array.len(), 3);
+        assert_eq!(int32_array.value(0), 0i32);
+        assert_eq!(int32_array.value(1), i32::from(u16::MAX));
+        assert!(int32_array.is_null(2));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_array_for_iceberg_passthrough() {
+        // Int64 array should pass through unchanged
+        let int64_array = Int64Array::from(vec![Some(42i64), None]);
+        let array_ref: ArrayRef = Arc::new(int64_array);
+
+        let casted = cast_array_for_iceberg(&array_ref).expect("casting should succeed");
+
+        assert_eq!(casted.data_type(), &DataType::Int64);
+        // Should be the same Arc (not a copy)
+        assert!(Arc::ptr_eq(&array_ref, &casted));
+    }
 
     #[mz_ore::test]
     fn equality_ids_follow_iceberg_field_ids() {
@@ -2024,7 +2408,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             .sink_write_frontiers
             .insert(sink_id, Rc::clone(&write_frontier));
 
-        let (arrow_schema_with_ids, iceberg_schema) =
+        let (materialize_arrow_schema, iceberg_schema) =
             match relation_desc_to_iceberg_schema(&sink.from_desc) {
                 Ok(schemas) => schemas,
                 Err(err) => {
@@ -2074,7 +2458,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             sink.as_of.clone(),
             connection_for_writer,
             storage_state.storage_configuration.clone(),
-            Arc::new(arrow_schema_with_ids.clone()),
+            Arc::new(materialize_arrow_schema.clone()),
             Arc::clone(&metrics),
             statistics.clone(),
         );
