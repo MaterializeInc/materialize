@@ -446,8 +446,11 @@ const DownstreamDependents = ({
 
 /**
  * Shows an insight when the object has high lag but its upstream inputs
- * have low delay — meaning the bottleneck is the object's own compute,
+ * are fresh — meaning the bottleneck is the object's own compute,
  * not its inputs.
+ *
+ * Uses input freshness (wallclock lag), not the delay gap to the probe.
+ * An input at 2s lag is delivering data fine even if the probe is 600s behind.
  */
 const ComputeBottleneckInsight = ({
   lagMs,
@@ -461,15 +464,15 @@ const ComputeBottleneckInsight = ({
   const { colors } = useTheme<MaterializeTheme>();
 
   if (!lagMs || lagMs < outdatedMs) return null;
+  if (upstream.length === 0) return null;
 
-  const maxUpstreamDelayMs = upstream.reduce((max, dep) => {
-    const d = dep.delay != null ? Number(dep.delay) : 0;
-    return isNaN(d) ? max : Math.max(max, d);
-  }, 0);
+  // Check if ALL inputs are fresh (low wallclock lag)
+  const allInputsFresh = upstream.every((dep) => {
+    const inputLagMs = dep.lag ? sumPostgresIntervalMs(dep.lag as IPostgresInterval) : 0;
+    return inputLagMs < outdatedMs;
+  });
 
-  // If the object's lag is significantly higher than the max upstream delay,
-  // the bottleneck is the object's own processing
-  if (maxUpstreamDelayMs > lagMs * 0.5) return null;
+  if (!allInputsFresh) return null;
 
   const objectLagSeconds = Math.round(lagMs / 1000);
 
