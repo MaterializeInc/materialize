@@ -1338,7 +1338,6 @@ fn create_connection_info(
                     profiling: false,
                     mcp_agents: false,
                     mcp_observatory: false,
-                    console_config: true,
                 }
             },
             "internal".to_owned() => HttpListenerConfig{
@@ -1360,7 +1359,6 @@ fn create_connection_info(
                     profiling: true,
                     mcp_agents: false,
                     mcp_observatory: false,
-                    console_config: false,
                 }
             },
         },
@@ -1404,7 +1402,6 @@ fn create_connection_info(
                     profiling: false,
                     mcp_agents: false,
                     mcp_observatory: false,
-                    console_config: false,
                 },
             },
         );

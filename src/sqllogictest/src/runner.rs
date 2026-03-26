@@ -1129,7 +1129,6 @@ impl<'a> RunnerInner<'a> {
                         profiling: false,
                         mcp_agents: false,
                         mcp_observatory: false,
-                        console_config: true,
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
@@ -1147,7 +1146,6 @@ impl<'a> RunnerInner<'a> {
                         profiling: true,
                         mcp_agents: false,
                         mcp_observatory: false,
-                        console_config: false,
                     },
                 },
             ],

@@ -18,8 +18,7 @@
         "webhook": true,
         "internal": true,
         "metrics": false,
-        "profiling": true,
-        "console_config": true
+        "profiling": true
       }
     },
     "metrics": {
@@ -32,8 +31,7 @@
         "webhook": false,
         "internal": false,
         "metrics": true,
-        "profiling": false,
-        "console_config": false
+        "profiling": false
       }
     }
   }
