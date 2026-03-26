@@ -19,7 +19,7 @@ mz-repr = { path = "../repr", optional = true }
 mz-sql-parser = { path = "../sql-parser" }
 mz-ssh-util = { path = "../ssh-util", optional = true }
 mz-tls-util = { path = "../tls-util", default-features = false }
-openssl = { version = "0.10.75", features = ["vendored"] }
+openssl = { version = "0.10.76", features = ["vendored"] }
 openssh = { version = "0.11.6", default-features = false, features = [
     "native-mux",
 ], optional = true }

@@ -35,7 +35,7 @@ prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 fancy-regex = "0.16.2"
-regex = "1.12.2"
+regex = "1.12.3"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149" }
 thiserror = "2.0.18"

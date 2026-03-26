@@ -32,13 +32,13 @@ mz-pgwire-common = { path = "../pgwire-common" }
 mz-repr = { path = "../repr" }
 mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
-openssl = { version = "0.10.75", features = ["vendored"] }
+openssl = { version = "0.10.76", features = ["vendored"] }
 postgres = { version = "0.19.12" }
 tokio = "1.49.0"
 tokio-stream = "0.1.18"
 tokio-openssl = "0.6.5"
 tokio-util = { version = "0.7.18", features = ["codec"] }
-tokio-metrics = "0.4.7"
+tokio-metrics = "0.4.9"
 tracing = "0.1.44"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 uuid = { version = "1.19.0", features = ["v4"] }

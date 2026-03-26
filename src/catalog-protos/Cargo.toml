@@ -16,7 +16,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-storage-types = { path = "../storage-types" }
-num_enum = "0.7.4"
+num_enum = "0.7.6"
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = "0.8.0"
 serde = { version = "1.0.219", features = ["derive"] }

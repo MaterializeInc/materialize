@@ -57,12 +57,12 @@ mz-proto = { path = "../proto", features = ["chrono"], default-features = false 
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 mz-timely-util = { path = "../timely-util", default-features = false }
 num-traits = "0.2.15"
-num_enum = "0.7.5"
+num_enum = "0.7.6"
 ordered-float = { version = "5.1.0", features = ["serde"] }
 postgres-protocol = { version = "0.6.9" }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-regex = "1.12.2"
-ryu = "1.0.22"
+regex = "1.12.3"
+ryu = "1.0.23"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
@@ -79,7 +79,7 @@ thiserror = "2.0.18"
 tracing = { version = "0.1.44" }
 
 # for the tracing feature
-tracing-subscriber = { version = "0.3.22", default-features = false, optional = true }
+tracing-subscriber = { version = "0.3.23", default-features = false, optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

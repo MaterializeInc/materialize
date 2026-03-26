@@ -19,7 +19,7 @@ itertools = "0.14.0"
 mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = false }
 mz-pgrepr = { path = "../pgrepr", default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
-openssl = { version = "0.10.75", features = ["vendored"] }
+openssl = { version = "0.10.76", features = ["vendored"] }
 postgres-openssl = "0.5.2"
 postgres-protocol = { version = "0.6.9" }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
@@ -30,14 +30,14 @@ sha2 = "0.10.9"
 socket2 = "0.6.0"
 thiserror = "2.0.18"
 tonic = { version = "0.14.2", features = ["gzip"] }
-tonic-prost = "0.14.2"
+tonic-prost = "0.14.5"
 tokio = { version = "1.49.0", features = ["rt"] }
 tokio-postgres = { version = "0.7.15" }
 tokio-stream = { version = "0.1.18", features = ["net"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
 tracing = "0.1.44"
 tracing-core = "0.1.35"
-tracing-subscriber = "0.3.22"
+tracing-subscriber = "0.3.23"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
@@ -47,7 +47,7 @@ insta = "1.45"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.14.3"
 reqwest = { version = "0.12.28", features = ["blocking", "native-tls-vendored"] }
-tonic-prost-build = "0.14.2"
+tonic-prost-build = "0.14.5"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
