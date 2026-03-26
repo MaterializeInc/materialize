@@ -453,7 +453,7 @@ steps:
     inputs: [misc/python/materialize/zippy]
     timeout_in_minutes: 30
     agents:
-      queue: hetzner-aarch64-4cpu-8gb
+      queue: hetzner-aarch64-8cpu-16gb
     plugins:
       - ./ci/plugins/mzcompose:
           composition: zippy
