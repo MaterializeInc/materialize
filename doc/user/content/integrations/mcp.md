@@ -194,6 +194,23 @@ Discover all available data products. Returns a list of names and descriptions.
 
 **Parameters:** None.
 
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"\\\"materialize\\\".\\\"mcp_schema\\\".\\\"payment_status\\\"\",\n    \"Given an order ID, return the current payment status.\",\n    \"mcp_cluster\"\n  ]\n]"
+      }
+    ]
+  }
+}
+```
+
 ### `get_data_product_details`
 
 Get the full schema (columns, types, index keys) for a specific data product.
@@ -201,6 +218,23 @@ Get the full schema (columns, types, index keys) for a specific data product.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | Yes | Exact name from the `get_data_products` list. |
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"order_id\",\n    \"integer\",\n    true\n  ],\n  [\n    \"status\",\n    \"text\",\n    false\n  ]\n]"
+      }
+    ]
+  }
+}
+```
 
 ### `read_data_product`
 
@@ -211,6 +245,23 @@ Read rows from a data product.
 | `name` | string | Yes | Fully-qualified name, e.g. `"materialize"."public"."payment_status"`. |
 | `limit` | integer | No | Maximum rows to return. Default: 500, max: 1000. |
 | `cluster` | string | No | Cluster override. If omitted, uses the cluster from the catalog. |
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    1001,\n    42,\n    \"shipped\",\n    \"2026-03-26T10:30:00Z\"\n  ]\n]"
+      }
+    ]
+  }
+}
+```
 
 ### `query`
 
@@ -226,6 +277,23 @@ Execute a SQL `SELECT` statement against your data products.
 | `cluster` | string | Yes | Exact cluster name from the data product details. |
 | `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
 
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    42,\n    \"shipped\"\n  ]\n]"
+      }
+    ]
+  }
+}
+```
+
 ## Observatory endpoint
 
 **`POST /api/mcp/observatory`**
@@ -240,6 +308,23 @@ Execute a SQL query restricted to `mz_*` system tables.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `sql_query` | string | Yes | `SELECT` query using only `mz_*` system tables. |
+
+**Example response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "[\n  [\n    \"quickstart\",\n    \"ready\"\n  ],\n  [\n    \"mcp_cluster\",\n    \"ready\"\n  ]\n]"
+      }
+    ]
+  }
+}
+```
 
 ## Client configuration
 
@@ -465,7 +550,7 @@ When an endpoint is disabled, requests return HTTP 503 (Service Unavailable).
 
 ## Related Pages
 
-- [MCP Server (Python)](/integrations/llm/) — standalone Python MCP server
+- [MCP Server (Python)](/integrations/llm/): standalone Python MCP server
   for `stdio` and `sse` transports
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 - [CREATE INDEX](/sql/create-index)

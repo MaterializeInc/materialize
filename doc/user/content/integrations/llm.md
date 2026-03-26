@@ -1,5 +1,5 @@
 ---
-title: MCP Server
+title: MCP Server (Python)
 description: "Learn how to integrate Materialize with Large Language Models (LLMs) using MCP"
 make_table_row_headers_searchable: true
 menu:
