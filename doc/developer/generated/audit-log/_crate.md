@@ -1,6 +1,6 @@
 ---
 source: src/audit-log/src/lib.rs
-revision: 4267863081
+revision: aa7a1afd31
 ---
 
 # mz-audit-log
@@ -21,12 +21,14 @@ It defines two independent versioned hierarchies:
 * **Storage usage snapshots** — `VersionedStorageUsage` (currently `V1`) wraps `StorageUsageV1`, recording per-shard byte sizes at a point in time.
 
 Each `EventDetails` variant is a versioned struct (e.g. `CreateClusterReplicaV1` through `V4`).
+The `CreateRoleV1` variant records role creation events with an optional `auto_provision_source` field.
 All types derive `Serialize`/`Deserialize` with stable JSON representations; the test in `lib.rs` hard-codes expected bytes to prevent accidental schema drift.
 
 ## Key types
 
 * `VersionedEvent` — top-level event envelope; use `VersionedEvent::new` to create and `serialize`/`deserialize` for I/O.
 * `EventDetails` — exhaustive enum of all event payloads; `as_json()` produces the detail object stored in the catalog table.
+* `CreateRoleV1` — audit detail for role creation, carrying `id`, `name`, and optional `auto_provision_source`.
 * `VersionedStorageUsage` — envelope for periodic storage-usage records.
 
 ## Dependencies

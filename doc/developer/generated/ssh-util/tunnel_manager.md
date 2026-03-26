@@ -1,6 +1,6 @@
 ---
 source: src/ssh-util/src/tunnel_manager.rs
-revision: e757b4d11b
+revision: c10148c42f
 ---
 
 # mz-ssh-util::tunnel_manager

@@ -35,6 +35,12 @@ For each stale doc:
 1. Re-read the source file.
 2. Rewrite the `.md` with updated content and a new `revision` from `git log -1 --format=%h -- <source>`.
 
+**Writing style**: Describe the code's **current state**, not what changed.
+Avoid changelog language like "now", "added", "new", "no longer", "has been removed", "previously", "was replaced".
+Write as if describing the code to someone seeing it for the first time.
+Good: "`MZ_DATABASES` is a `BuiltinMaterializedView` backed by a query over the catalog."
+Bad: "`MZ_DATABASES` is now a `BuiltinMaterializedView` (rather than a `BuiltinTable`)."
+
 ### 5. Create docs for new files
 
 Follow the structure in `doc/developer/generated/`:

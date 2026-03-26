@@ -1,6 +1,6 @@
 ---
 source: src/mz/src/command/region.rs
-revision: adfa404693
+revision: c10148c42f
 ---
 
 # mz::command::region

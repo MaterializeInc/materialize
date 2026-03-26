@@ -1,6 +1,6 @@
 ---
 source: src/storage-client/src/client.rs
-revision: 4267863081
+revision: c10148c42f
 ---
 
 # storage-client::client
