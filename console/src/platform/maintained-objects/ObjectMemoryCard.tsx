@@ -84,7 +84,7 @@ export const ObjectMemoryCard = ({
     : null;
   const percent =
     totalBytes && totalBytes > 0n
-      ? Math.round(Number((objectBytes * 100n) / totalBytes))
+      ? parseFloat(((Number(objectBytes) / Number(totalBytes)) * 100).toFixed(2))
       : null;
 
   const barColor =

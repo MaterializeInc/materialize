@@ -263,7 +263,7 @@ const formatMemory = (
   if (totalBytes) {
     const total = BigInt(totalBytes);
     if (total > 0n) {
-      const pct = Math.round(Number((bytes * 100n) / total));
+      const pct = parseFloat(((Number(bytes) / Number(total)) * 100).toFixed(2));
       return `${formatted} (${pct}% of ${formatBytesShort(total)})`;
     }
   }
