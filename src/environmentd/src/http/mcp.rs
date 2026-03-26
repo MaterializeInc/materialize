@@ -942,8 +942,12 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
         )));
     }
 
-    // Ensure at least one system table is referenced
-    if collector.tables.is_empty() || !collector.tables.iter().any(is_system_table) {
+    // SHOW and EXPLAIN statements don't reference tables in the AST, but are safe
+    // read-only operations. Only require system table references for SELECT.
+    use mz_sql_parser::ast::Statement;
+    let is_select = stmts.iter().any(|s| matches!(&s.ast, Statement::Select(_)));
+
+    if is_select && (collector.tables.is_empty() || !collector.tables.iter().any(is_system_table)) {
         return Err(McpRequestError::QueryValidationFailed(
             "Query must reference at least one system catalog table".to_string(),
         ));
@@ -1281,6 +1285,43 @@ mod tests {
                 "SELECT * FROM mz_tables t JOIN user_data u ON t.id = u.table_id"
             )
             .is_err()
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_allows_show() {
+        // SHOW queries don't reference tables in the AST but are safe read-only ops
+        assert!(
+            validate_system_catalog_query("SHOW TABLES FROM mz_internal").is_ok(),
+            "SHOW TABLES FROM mz_internal should be allowed"
+        );
+        assert!(
+            validate_system_catalog_query("SHOW TABLES FROM mz_catalog").is_ok(),
+            "SHOW TABLES FROM mz_catalog should be allowed"
+        );
+        assert!(
+            validate_system_catalog_query("SHOW CLUSTERS").is_ok(),
+            "SHOW CLUSTERS should be allowed"
+        );
+        assert!(
+            validate_system_catalog_query("SHOW SOURCES").is_ok(),
+            "SHOW SOURCES should be allowed"
+        );
+        assert!(
+            validate_system_catalog_query("SHOW TABLES").is_ok(),
+            "SHOW TABLES should be allowed"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_system_catalog_query_allows_explain() {
+        assert!(
+            validate_system_catalog_query("EXPLAIN SELECT * FROM mz_tables").is_ok(),
+            "EXPLAIN of system table query should be allowed"
+        );
+        assert!(
+            validate_system_catalog_query("EXPLAIN SELECT 1").is_ok(),
+            "EXPLAIN SELECT 1 should be allowed"
         );
     }
 

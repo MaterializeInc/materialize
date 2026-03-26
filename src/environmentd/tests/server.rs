@@ -5075,6 +5075,15 @@ fn test_mcp_observatory() {
     run_mcp_datadriven("tests/testdata/mcp/observatory", harness);
 }
 
+/// Tests the MCP observatory endpoint when disabled (503).
+#[mz_ore::test]
+fn test_mcp_observatory_disabled() {
+    let harness = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_observatory".to_string(), "false".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/observatory_disabled", harness);
+}
+
 /// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
 fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
     let res = Client::new().post(url).json(&json).send().unwrap();
