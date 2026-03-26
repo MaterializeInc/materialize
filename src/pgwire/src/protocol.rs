@@ -2391,20 +2391,35 @@ where
                 FetchResult::Rows(None)
             } else {
                 let notice_fut = self.adapter_client.session().recv_notice();
+                // Biased: drain available data before checking the deadline.
+                // This is critical for the WaitOnce case, where the deadline
+                // is set to `Instant::now()` right after the first batch:
+                // without `biased`, `recv()` and the already-expired deadline
+                // race nondeterministically, so we might break the loop
+                // before `no_more_rows` is set (or even before ready rows
+                // are consumed). With an explicit `TIMEOUT`, missing a batch
+                // right at the boundary is acceptable, but WaitOnce fires
+                // immediately and the race is not.
+                //
+                // Trade-off: if `recv()` keeps returning Ready (unlikely in
+                // practice—row processing + flush is slower than upstream
+                // tick granularity), a `TIMEOUT` deadline could be delayed.
+                // See database-issues#9470.
                 tokio::select! {
+                    biased;
                     err = self.conn.wait_closed() => return Err(err),
-                    _ = time::sleep_until(
-                        deadline.unwrap_or_else(tokio::time::Instant::now),
-                    ), if deadline.is_some() => FetchResult::Rows(None),
-                    notice = notice_fut => {
-                        FetchResult::Notice(notice)
-                    }
                     batch = rows.remaining.recv() => match batch {
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
+                    notice = notice_fut => {
+                        FetchResult::Notice(notice)
+                    }
+                    _ = time::sleep_until(
+                        deadline.unwrap_or_else(tokio::time::Instant::now),
+                    ), if deadline.is_some() => FetchResult::Rows(None),
                 }
             };
 
