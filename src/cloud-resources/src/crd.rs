@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use futures::future::join_all;
-use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
+use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::{
+    CustomResourceConversion, CustomResourceDefinition,
+};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::{
     Api, Client, Resource, ResourceExt,
@@ -97,6 +99,9 @@ fn owner_reference<T: Resource<DynamicType = ()>>(t: &T) -> OwnerReference {
 pub struct VersionedCrd {
     pub crds: Vec<CustomResourceDefinition>,
     pub stored_version: String,
+    /// Conversion configuration to apply after merging CRDs.
+    /// `merge_crds` drops the conversion field, so we must set it after merging.
+    pub conversion: Option<CustomResourceConversion>,
 }
 
 pub async fn register_versioned_crds(
@@ -150,7 +155,10 @@ async fn register_custom_resource(
     let crd_name = format!("{}.{}", &crds[0].spec.names.plural, &crds[0].spec.group);
     info!("Registering {} crd", &crd_name);
     let crd_api = Api::<CustomResourceDefinition>::all(kube_client);
-    let crd = merge_crds(crds, &versioned_crds.stored_version).unwrap();
+    let mut crd = merge_crds(crds, &versioned_crds.stored_version).unwrap();
+    if let Some(conversion) = versioned_crds.conversion {
+        crd.spec.conversion = Some(conversion);
+    }
     let crd_json = serde_json::to_string(&serde_json::json!(&crd))?;
     info!(crd_json = %crd_json);
     crd_api
