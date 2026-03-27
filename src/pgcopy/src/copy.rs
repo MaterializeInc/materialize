@@ -319,7 +319,7 @@ impl<'a> CopyTextFormatParser<'a> {
                                         match decode_nibble(self.peek()) {
                                             Some(c) => {
                                                 self.consume_n(1);
-                                                value = value << 4 | c;
+                                                value = (value << 4) | c;
                                             }
                                             _ => break,
                                         }
@@ -337,7 +337,7 @@ impl<'a> CopyTextFormatParser<'a> {
                                 match self.peek() {
                                     Some(c @ b'0'..=b'7') => {
                                         self.consume_n(1);
-                                        value = value << 3 | (c - b'0');
+                                        value = (value << 3) | (c - b'0');
                                     }
                                     _ => break,
                                 }

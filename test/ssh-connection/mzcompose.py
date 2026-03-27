@@ -40,7 +40,7 @@ SERVICES = [
     Materialized(),
     Testdrive(consistent_seed=True),
     SshBastionHost(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     TestCerts(),
     Redpanda(),
     MySql(),

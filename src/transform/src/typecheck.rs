@@ -982,9 +982,9 @@ impl Typecheck {
             FlatMap { input, func, exprs } => {
                 let mut t_in = tc.typecheck(input, ctx)?;
 
-                let mut t_exprs = Vec::with_capacity(exprs.len());
                 for scalar_expr in exprs {
-                    t_exprs.push(tc.typecheck_scalar(scalar_expr, expr, &t_in)?);
+                    // TODO(mgree) check result agrees with `func`'s input type
+                    let _t_expr = tc.typecheck_scalar(scalar_expr, expr, &t_in)?;
 
                     if self.disallow_dummy && scalar_expr.contains_dummy() {
                         return Err(TypeError::DisallowedDummy {
@@ -992,7 +992,6 @@ impl Typecheck {
                         });
                     }
                 }
-                // TODO(mgree) check t_exprs agrees with `func`'s input type
 
                 let t_out: Vec<ReprColumnType> = func
                     .output_type().column_types;

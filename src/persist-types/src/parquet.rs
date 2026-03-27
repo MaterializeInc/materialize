@@ -133,12 +133,10 @@ impl<const MIN: i32, const MAX: i32, const DEFAULT: i32> CompressionLevel<MIN, M
     /// Try creating a [`CompressionLevel`] from the provided value, returning an error if it is
     /// outside the `MIN` and `MAX` bounds.
     pub const fn try_new(val: i32) -> Result<Self, i32> {
-        if val < MIN {
-            Err(val)
-        } else if val > MAX {
-            Err(val)
-        } else {
+        if val >= MIN && val <= MAX {
             Ok(CompressionLevel(val))
+        } else {
+            Err(val)
         }
     }
 

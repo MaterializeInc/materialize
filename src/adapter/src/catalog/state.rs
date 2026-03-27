@@ -2375,9 +2375,7 @@ impl CatalogState {
                         .clone(),
                     availability_zones: match (availability_zone, allowed_availability_zones) {
                         (Some(az), _) => ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
-                        (None, Some(azs)) if azs.is_empty() => {
-                            ManagedReplicaAvailabilityZones::FromCluster(None)
-                        }
+                        (None, Some([])) => ManagedReplicaAvailabilityZones::FromCluster(None),
                         (None, Some(azs)) => {
                             ManagedReplicaAvailabilityZones::FromCluster(Some(azs.to_vec()))
                         }

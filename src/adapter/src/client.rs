@@ -490,10 +490,10 @@ Issue a SQL query to get started. Need help?
             .declare(EMPTY_PORTAL.into(), stmt, sql.to_string())
             .await?;
 
-        match session_client
+        let execute_result = session_client
             .execute(EMPTY_PORTAL.into(), futures::future::pending(), None)
-            .await?
-        {
+            .await?;
+        match execute_result {
             (ExecuteResponse::SendingRowsStreaming { mut rows, .. }, _) => {
                 // We have to only drop the session client _after_ we read the
                 // result. Otherwise the peek will get cancelled right when we
@@ -738,10 +738,10 @@ impl SessionClient {
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
         let mut outer_ctx_extra = outer_ctx_extra;
-        if let Some(resp) = self
+        let peek_result = self
             .try_frontend_peek(&portal_name, &mut outer_ctx_extra)
-            .await?
-        {
+            .await?;
+        if let Some(resp) = peek_result {
             debug!("frontend peek succeeded");
             // Frontend peek handled the execution and retired outer_ctx_extra if it existed.
             // No additional work needed here.

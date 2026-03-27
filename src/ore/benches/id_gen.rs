@@ -35,6 +35,8 @@ fn bench_id_allocator<A: IdAllocatorInner>(
         let permanent = (0..initial_conns)
             .map(|_| allocator.alloc().unwrap())
             .collect::<Vec<_>>();
+        // Holds allocations during the benchmark iteration; read via push/clear.
+        #[allow(clippy::collection_is_never_read)]
         let mut tmp = Vec::with_capacity(bench_conns);
         b.iter(|| {
             for _ in 0..bench_conns {

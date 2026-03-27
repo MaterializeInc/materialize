@@ -454,7 +454,7 @@ mod tests {
         let mut tasks = (0..TASKS).collect_vec();
         let mut rng = rand::rng();
         tasks.shuffle(&mut rng);
-        for i in (0..TASKS).rev() {
+        for i in tasks {
             set.spawn({
                 let state = state.clone();
                 async move {

@@ -77,8 +77,8 @@ impl Format for Base64Format {
             match chunk {
                 [o1, o2, o3] => {
                     let s1 = (o1 & 0b11111100) >> 2;
-                    let s2 = (o1 & 0b00000011) << 4 | (o2 & 0b11110000) >> 4;
-                    let s3 = (o2 & 0b00001111) << 2 | (o3 & 0b11000000) >> 6;
+                    let s2 = ((o1 & 0b00000011) << 4) | ((o2 & 0b11110000) >> 4);
+                    let s3 = ((o2 & 0b00001111) << 2) | ((o3 & 0b11000000) >> 6);
                     let s4 = o3 & 0b00111111;
                     buf.push(Self::encode_sextet(s1));
                     buf.push(Self::encode_sextet(s2));
@@ -87,7 +87,7 @@ impl Format for Base64Format {
                 }
                 [o1, o2] => {
                     let s1 = (o1 & 0b11111100) >> 2;
-                    let s2 = (o1 & 0b00000011) << 4 | (o2 & 0b11110000) >> 4;
+                    let s2 = ((o1 & 0b00000011) << 4) | ((o2 & 0b11110000) >> 4);
                     let s3 = (o2 & 0b00001111) << 2;
                     buf.push(Self::encode_sextet(s1));
                     buf.push(Self::encode_sextet(s2));
@@ -138,14 +138,14 @@ impl Format for Base64Format {
                 (Some(c1), Some(c2), Some(b'='), Some(b'=')) => {
                     let s1 = Self::decode_sextet(c1)?;
                     let s2 = Self::decode_sextet(c2)?;
-                    buf.push(s1 << 2 | (s2 & 0b110000) >> 4);
+                    buf.push((s1 << 2) | ((s2 & 0b110000) >> 4));
                 }
                 (Some(c1), Some(c2), Some(c3), Some(b'=')) => {
                     let s1 = Self::decode_sextet(c1)?;
                     let s2 = Self::decode_sextet(c2)?;
                     let s3 = Self::decode_sextet(c3)?;
-                    buf.push(s1 << 2 | (s2 & 0b110000) >> 4);
-                    buf.push((s2 & 0b001111) << 4 | (s3 & 0b111100) >> 2);
+                    buf.push((s1 << 2) | ((s2 & 0b110000) >> 4));
+                    buf.push(((s2 & 0b001111) << 4) | ((s3 & 0b111100) >> 2));
                 }
                 (Some(b'='), _, _, _) | (_, Some(b'='), _, _) | (_, _, Some(b'='), _) => {
                     return Err(EvalError::InvalidBase64Equals);
@@ -155,9 +155,9 @@ impl Format for Base64Format {
                     let s2 = Self::decode_sextet(c2)?;
                     let s3 = Self::decode_sextet(c3)?;
                     let s4 = Self::decode_sextet(c4)?;
-                    buf.push(s1 << 2 | (s2 & 0b110000) >> 4);
-                    buf.push((s2 & 0b001111) << 4 | (s3 & 0b111100) >> 2);
-                    buf.push((s3 & 0b000011) << 6 | s4);
+                    buf.push((s1 << 2) | ((s2 & 0b110000) >> 4));
+                    buf.push(((s2 & 0b001111) << 4) | ((s3 & 0b111100) >> 2));
+                    buf.push(((s3 & 0b000011) << 6) | s4);
                 }
                 (None, None, None, None) => return Ok(buf),
                 _ => return Err(EvalError::InvalidBase64EndSequence),

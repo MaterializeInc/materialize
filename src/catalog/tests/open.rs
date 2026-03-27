@@ -283,7 +283,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
 
         // Perform writes.
         let mut txn = state.transaction().await.unwrap();
-        let mut ids = Vec::new();
         let mut db_schemas = Vec::new();
         for i in 0..10 {
             let (db_id, db_oid) = txn
@@ -303,7 +302,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
                     &HashSet::new(),
                 )
                 .unwrap();
-            ids.push((db_id.clone(), schema_id.clone()));
             db_schemas.push((
                 Database {
                     id: db_id.clone(),

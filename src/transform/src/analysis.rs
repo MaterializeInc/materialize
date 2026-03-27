@@ -858,7 +858,8 @@ mod non_negative {
                             let mut children = depends.children_of_rev(index, 2);
                             let _negate = children.next().unwrap();
                             let base_id = children.next().unwrap();
-                            debug_assert_eq!(children.next(), None);
+                            let extra = children.next();
+                            debug_assert_eq!(extra, None);
                             if results[base_id] && is_superset_of(&*base, &*input) {
                                 return true;
                             }

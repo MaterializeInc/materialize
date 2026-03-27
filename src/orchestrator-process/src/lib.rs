@@ -811,6 +811,8 @@ impl OrchestratorWorker {
         };
 
         async move {
+            // Holds AbortOnDropHandles to keep proxy tasks alive.
+            #[allow(clippy::collection_is_never_read)]
             let mut proxy_handles = vec![];
             for port in ports {
                 if let Some(tcp_listener) = port.tcp_proxy_listener {
@@ -857,11 +859,10 @@ impl OrchestratorWorker {
                     .await
                 {
                     Ok(status) => {
-                        if propagate_crashes && did_process_crash(status) {
-                            panic!(
-                                "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
-                            );
-                        }
+                        assert!(
+                            !(propagate_crashes && did_process_crash(status)),
+                            "{full_id}-{i} crashed; aborting because propagate_crashes is enabled"
+                        );
                         error!("{full_id}-{i} exited: {:?}; relaunching in 5s", status);
                     }
                     Err(e) => {

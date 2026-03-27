@@ -41,6 +41,25 @@ pub struct ArrowBuilder {
 
 /// Converts a RelationDesc to an Arrow Schema.
 pub fn desc_to_schema(desc: &RelationDesc) -> Result<Schema, anyhow::Error> {
+    desc_to_schema_with_overrides(desc, |_| None)
+}
+
+/// Converts a RelationDesc to an Arrow Schema, with optional type overrides.
+///
+/// The `overrides` function receives a SqlScalarType and can return:
+/// - `Some((DataType, String))` to override the default mapping
+/// - `None` to use the default mapping from `scalar_to_arrow_datatype`
+///
+/// This allows destinations like Iceberg to customize type mappings for
+/// unsupported types (e.g., UInt64 -> Decimal128) while keeping the standard
+/// mapping for everything else.
+pub fn desc_to_schema_with_overrides<F>(
+    desc: &RelationDesc,
+    overrides: F,
+) -> Result<Schema, anyhow::Error>
+where
+    F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+{
     let mut fields = vec![];
     let mut errs = vec![];
     let mut seen_names = BTreeSet::new();
@@ -68,7 +87,11 @@ pub fn desc_to_schema(desc: &RelationDesc) -> Result<Schema, anyhow::Error> {
 
         seen_names.insert(col_name.clone());
         all_names.insert(col_name.clone());
-        match scalar_to_arrow_datatype(&col_type.scalar_type) {
+
+        // Use the override-aware version which applies overrides recursively
+        let result = scalar_to_arrow_datatype_with_overrides(&col_type.scalar_type, &overrides);
+
+        match result {
             Ok((data_type, extension_type_name)) => {
                 fields.push(field_with_typename(
                     &col_name,
@@ -210,6 +233,35 @@ impl ArrowBuilder {
 fn scalar_to_arrow_datatype(
     scalar_type: &SqlScalarType,
 ) -> Result<(DataType, String), anyhow::Error> {
+    scalar_to_arrow_datatype_impl(scalar_type, &|_| None)
+}
+
+/// Return the appropriate Arrow DataType for the given SqlScalarType, with optional
+/// type overrides. The override function is called for each SqlScalarType (including
+/// nested types) and can return Some((DataType, extension_name)) to override the
+/// default mapping.
+fn scalar_to_arrow_datatype_with_overrides<F>(
+    scalar_type: &SqlScalarType,
+    overrides: &F,
+) -> Result<(DataType, String), anyhow::Error>
+where
+    F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+{
+    scalar_to_arrow_datatype_impl(scalar_type, overrides)
+}
+
+/// Core implementation of scalar-to-arrow type conversion with override support.
+fn scalar_to_arrow_datatype_impl<F>(
+    scalar_type: &SqlScalarType,
+    overrides: &F,
+) -> Result<(DataType, String), anyhow::Error>
+where
+    F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+{
+    // Check for override first
+    if let Some(result) = overrides(scalar_type) {
+        return Ok(result);
+    }
     let (data_type, extension_name) = match scalar_type {
         SqlScalarType::Bool => (DataType::Boolean, "boolean"),
         SqlScalarType::Int16 => (DataType::Int16, "smallint"),
@@ -218,6 +270,7 @@ fn scalar_to_arrow_datatype(
         SqlScalarType::UInt16 => (DataType::UInt16, "uint2"),
         SqlScalarType::UInt32 => (DataType::UInt32, "uint4"),
         SqlScalarType::UInt64 => (DataType::UInt64, "uint8"),
+        SqlScalarType::Oid => (DataType::UInt32, "oid"),
         SqlScalarType::Float32 => (DataType::Float32, "real"),
         SqlScalarType::Float64 => (DataType::Float64, "double"),
         SqlScalarType::Date => (DataType::Date32, "date"),
@@ -306,7 +359,7 @@ fn scalar_to_arrow_datatype(
             // We use a struct type with two fields - one containing the array elements as a list
             // and the other containing the number of dimensions the array represents. Since arrays
             // are not allowed to be ragged, the number of elements in each dimension is the same.
-            let (inner_type, inner_name) = scalar_to_arrow_datatype(inner)?;
+            let (inner_type, inner_name) = scalar_to_arrow_datatype_impl(inner, overrides)?;
             // TODO: Document these field names in our copy-to-s3 docs
             let inner_field = field_with_typename("item", inner_type, true, &inner_name);
             let list_field = Arc::new(field_with_typename(
@@ -327,7 +380,7 @@ fn scalar_to_arrow_datatype(
             element_type,
             custom_id: _,
         } => {
-            let (inner_type, inner_name) = scalar_to_arrow_datatype(element_type)?;
+            let (inner_type, inner_name) = scalar_to_arrow_datatype_impl(element_type, overrides)?;
             // TODO: Document these field names in our copy-to-s3 docs
             let field = field_with_typename("item", inner_type, true, &inner_name);
             (DataType::List(field.into()), "list")
@@ -336,7 +389,7 @@ fn scalar_to_arrow_datatype(
             value_type,
             custom_id: _,
         } => {
-            let (value_type, value_name) = scalar_to_arrow_datatype(value_type)?;
+            let (value_type, value_name) = scalar_to_arrow_datatype_impl(value_type, overrides)?;
             // Arrow maps are represented as an 'entries' struct with 'keys' and 'values' fields.
             let field_names = MapFieldNames::default();
             let struct_type = DataType::Struct(
@@ -363,7 +416,7 @@ fn scalar_to_arrow_datatype(
             let mut arrow_fields = Vec::with_capacity(fields.len());
             for (field_name, field_type) in fields.iter() {
                 let (inner_type, inner_extension_name) =
-                    scalar_to_arrow_datatype(&field_type.scalar_type)?;
+                    scalar_to_arrow_datatype_impl(&field_type.scalar_type, overrides)?;
                 let field = field_with_typename(
                     field_name.as_str(),
                     inner_type,
@@ -719,6 +772,20 @@ impl ArrowColumn {
             (ColBuilder::LargeStringBuilder(builder), Datum::String(s)) => builder.append_value(s),
             (ColBuilder::UInt64Builder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(ts.into())
+            }
+            // Lossless unsigned-to-signed promotions for destinations that don't
+            // support unsigned types (e.g., Iceberg).
+            (ColBuilder::Int32Builder(builder), Datum::UInt16(i)) => {
+                builder.append_value(i32::from(i))
+            }
+            (ColBuilder::Int64Builder(builder), Datum::UInt32(i)) => {
+                builder.append_value(i64::from(i))
+            }
+            (ColBuilder::Decimal128Builder(builder), Datum::UInt64(i)) => {
+                builder.append_value(i128::from(i))
+            }
+            (ColBuilder::Decimal128Builder(builder), Datum::MzTimestamp(ts)) => {
+                builder.append_value(i128::from(u64::from(ts)))
             }
             (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
                 if dec.0.is_special() {

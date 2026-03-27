@@ -133,7 +133,7 @@ for (const region of REGIONS) {
               .getByText(
                 "Where would you like to run your Materialize environment?",
               )
-              .waitFor();
+              .waitFor({ timeout: 10_000 });
             return DashboardState.NoRegions;
           })(),
           (async () => {

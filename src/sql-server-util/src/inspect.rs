@@ -390,7 +390,7 @@ JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
 ";
 
 /// Returns the table metadata for the tables that are tracked by the specified `capture_instance`s.
-pub async fn get_tables_for_capture_instance<'a>(
+pub async fn get_tables_for_capture_instance(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
@@ -936,7 +936,7 @@ where
 /// have the necessary permissions to and an error if any table, column,
 /// or capture instance does not have the necessary permissions
 /// for tracking changes.
-pub async fn validate_source_privileges<'a>(
+pub async fn validate_source_privileges(
     client: &mut Client,
     capture_instances: impl IntoIterator<Item = &str>,
 ) -> Result<(), SqlServerError> {

@@ -105,7 +105,9 @@ def create_postgres(
     else:
         image = f"postgres:{pg_version}"
 
-    return Postgres(image=image, extra_command=extra_command)
+    return Postgres(
+        image=image, extra_command=extra_command, volumes=["secrets:/certs:ro"]
+    )
 
 
 def get_testdrive_ssl_args(c: Composition):
