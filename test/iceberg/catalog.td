@@ -156,3 +156,39 @@ SELECT a, b FROM polaris.default_namespace.demo_table ORDER BY a
 4 FOUR
 6 six
 7 seven
+
+# Test unsigned integer types (uint8 = UInt64)
+# Iceberg doesn't support UInt64 natively, so we convert to Decimal(20,0)
+> create table bar(id uint8, name text);
+
+> insert into bar values (1, 'one'), (2, 'two'), (18446744073709551615, 'max');
+
+> CREATE SINK uint_demo
+    FROM bar
+    INTO ICEBERG CATALOG CONNECTION polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'uint_table'
+    )
+    USING AWS CONNECTION aws_conn
+    KEY (id) NOT ENFORCED
+    MODE UPSERT
+    WITH (COMMIT INTERVAL '1s');
+
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+$ duckdb-query name=iceberg
+SELECT id, name FROM iceberg_scan('s3://test-bucket/default_namespace/uint_table') ORDER BY id
+1 one
+2 two
+18446744073709551615 max
+
+# Test updating uint8 values
+> UPDATE bar SET name = 'ONE' WHERE id = 1;
+
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+$ duckdb-query name=iceberg
+SELECT id, name FROM iceberg_scan('s3://test-bucket/default_namespace/uint_table') ORDER BY id
+1 ONE
+2 two
+18446744073709551615 max
