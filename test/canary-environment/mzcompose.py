@@ -222,6 +222,15 @@ def workflow_create(c: Composition, parser: WorkflowArgumentParser) -> None:
             > CREATE TABLE IF NOT EXISTS public_table.table (c INT);
             > GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public_table.table TO "infra+qacanaryload@materialize.io"
 
+            > CREATE SCHEMA IF NOT EXISTS public_webhook;
+
+            > CREATE SOURCE IF NOT EXISTS public_webhook.webhook_source
+              IN CLUSTER qa_canary_environment_storage
+              FROM WEBHOOK
+              BODY FORMAT JSON
+
+            > GRANT SELECT ON public_webhook.webhook_source TO "infra+qacanaryload@materialize.io"
+
             > CREATE SCHEMA IF NOT EXISTS public_loadgen;
             > CREATE TABLE IF NOT EXISTS public_loadgen.product_category (
                 category_id INT,
