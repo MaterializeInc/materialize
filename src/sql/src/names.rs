@@ -2246,7 +2246,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             self.status = Err(PlanError::FromValueRequiresParen);
                         }
                     }
-                    _ => {}
+                    RawItemName::Id(..) => {}
                 }
 
                 Function {

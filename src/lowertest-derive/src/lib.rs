@@ -224,7 +224,7 @@ fn extract_reflected_type(t: &syn::Type) -> Vec<&syn::Type> {
                             .collect::<Vec<_>>();
                     }
                 }
-                _ => {}
+                syn::PathArguments::Parenthesized(_) => {}
             }
         }
         syn::Type::Tuple(tt) => {

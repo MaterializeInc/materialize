@@ -714,7 +714,7 @@ impl<T: AstInfo> AstDisplay for Join<T> {
                                 f.write_node(join_using_alias);
                             }
                         }
-                        _ => {}
+                        JoinConstraint::Natural => {}
                     }
                 }
             }

@@ -120,7 +120,7 @@ fn get_union_columns<'a>(
         for (i, v) in vs.iter().filter(|v| !is_null(v)).enumerate() {
             let named_idx = match v {
                 SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                _ => None,
+                SchemaPieceOrNamed::Piece(_) => None,
             };
             if let Some(named_idx) = named_idx {
                 if !seen_avro_nodes.insert(named_idx) {
@@ -249,7 +249,7 @@ fn validate_schema_2(
             for f in fields {
                 let named_idx = match &f.schema {
                     SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                    _ => None,
+                    SchemaPieceOrNamed::Piece(_) => None,
                 };
                 if let Some(named_idx) = named_idx {
                     if !seen_avro_nodes.insert(named_idx) {
@@ -275,7 +275,7 @@ fn validate_schema_2(
         SchemaPiece::Array(inner) => {
             let named_idx = match inner.as_ref() {
                 SchemaPieceOrNamed::Named(idx) => Some(*idx),
-                _ => None,
+                SchemaPieceOrNamed::Piece(_) => None,
             };
             if let Some(named_idx) = named_idx {
                 if !seen_avro_nodes.insert(named_idx) {

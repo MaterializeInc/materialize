@@ -104,7 +104,7 @@ impl TryFrom<&ReducePlan> for ReductionType {
             ReducePlan::Hierarchical(_) => Ok(ReductionType::Hierarchical),
             ReducePlan::Accumulable(_) => Ok(ReductionType::Accumulable),
             ReducePlan::Basic(_) => Ok(ReductionType::Basic),
-            _ => Err(()),
+            ReducePlan::Distinct => Err(()),
         }
     }
 }

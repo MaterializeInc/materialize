@@ -1387,7 +1387,11 @@ impl Coordinator {
                             | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
                                 desc.clone().into_inline_connection(self.catalog().state())
                             }
-                            _ => {
+                            DataSourceDesc::IngestionExport { .. }
+                            | DataSourceDesc::Introspection(_)
+                            | DataSourceDesc::Progress
+                            | DataSourceDesc::Webhook { .. }
+                            | DataSourceDesc::Catalog => {
                                 // Only ingestions reference connections directly.
                                 continue;
                             }
@@ -1419,7 +1423,14 @@ impl Coordinator {
                             );
                         }
                     }
-                    _ => {
+                    CatalogItem::Log(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::MaterializedView(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::ContinualTask(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
                     }

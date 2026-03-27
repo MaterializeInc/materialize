@@ -1332,7 +1332,7 @@ impl Sink {
     pub fn combined_format(&self) -> Option<Cow<'_, str>> {
         match &self.connection {
             StorageSinkConnection::Kafka(connection) => Some(connection.format.get_format_name()),
-            _ => None,
+            StorageSinkConnection::Iceberg(_) => None,
         }
     }
 
@@ -1348,7 +1348,7 @@ impl Sink {
                 let value_format = connection.format.value_format.get_format_name();
                 Some((key_format, value_format))
             }
-            _ => None,
+            StorageSinkConnection::Iceberg(_) => None,
         }
     }
 
@@ -3481,14 +3481,14 @@ impl mz_sql::catalog::CatalogCluster<'_> for Cluster {
     fn managed_size(&self) -> Option<&str> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { size, .. }) => Some(size),
-            _ => None,
+            ClusterVariant::Unmanaged => None,
         }
     }
 
     fn schedule(&self) -> Option<&ClusterSchedule> {
         match &self.config.variant {
             ClusterVariant::Managed(ClusterVariantManaged { schedule, .. }) => Some(schedule),
-            _ => None,
+            ClusterVariant::Unmanaged => None,
         }
     }
 

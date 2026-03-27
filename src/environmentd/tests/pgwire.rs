@@ -660,7 +660,7 @@ fn pg_test_inner(path: &Path, mz_flags: bool) {
             tokio_postgres::config::Host::Tcp(host) => {
                 format!("{}:{}", host, config.get_ports()[0])
             }
-            _ => panic!("only tcp connections supported"),
+            tokio_postgres::config::Host::Unix(_) => panic!("only tcp connections supported"),
         };
         let user = config.get_user().unwrap();
         let timeout = Duration::from_secs(120);

@@ -794,7 +794,7 @@ fn arg_type(arg: &syn::ItemFn, nth: usize) -> Result<syn::Type, syn::Error> {
             }
             Ok((*pat.ty).clone())
         }
-        _ => Err(syn::Error::new(
+        syn::FnArg::Receiver(_) => Err(syn::Error::new(
             arg.sig.inputs[nth].span(),
             "Unsupported argument type",
         )),
@@ -1377,7 +1377,7 @@ fn variadic_func(
                 }
                 param_types.push(patch_lifetimes(&pat.ty));
             }
-            _ => {
+            syn::FnArg::Receiver(_) => {
                 return Err(darling::Error::custom("unexpected self parameter"));
             }
         }

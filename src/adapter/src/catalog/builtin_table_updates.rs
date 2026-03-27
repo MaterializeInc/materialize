@@ -432,7 +432,7 @@ impl CatalogState {
                 *internal,
                 *pending,
             ),
-            _ => (None, None, None, false, false),
+            ReplicaLocation::Unmanaged(_) => (None, None, None, false, false),
         };
 
         let cluster_replica_update = BuiltinTableUpdate::row(
@@ -625,7 +625,12 @@ impl CatalogState {
                                 s => unreachable!("{s} sources do not have tables"),
                             }
                         }
-                        _ => vec![],
+                        DataSourceDesc::Ingestion { .. }
+                        | DataSourceDesc::OldSyntaxIngestion { .. }
+                        | DataSourceDesc::Introspection(_)
+                        | DataSourceDesc::Progress
+                        | DataSourceDesc::Webhook { .. }
+                        | DataSourceDesc::Catalog => vec![],
                     });
                 }
 
@@ -641,7 +646,12 @@ impl CatalogState {
                     DataSourceDesc::IngestionExport { ingestion_id, .. } => {
                         self.get_entry(&ingestion_id)
                     }
-                    _ => entry,
+                    DataSourceDesc::Ingestion { .. }
+                    | DataSourceDesc::OldSyntaxIngestion { .. }
+                    | DataSourceDesc::Introspection(_)
+                    | DataSourceDesc::Progress
+                    | DataSourceDesc::Webhook { .. }
+                    | DataSourceDesc::Catalog => entry,
                 };
 
                 let cluster_id = cluster_entry.item().cluster_id().map(|id| id.to_string());
@@ -743,7 +753,9 @@ impl CatalogState {
                     DataSourceDesc::Webhook { .. } => {
                         vec![self.pack_webhook_source_update(id, diff)]
                     }
-                    _ => vec![],
+                    DataSourceDesc::Introspection(_)
+                    | DataSourceDesc::Progress
+                    | DataSourceDesc::Catalog => vec![],
                 });
 
                 updates

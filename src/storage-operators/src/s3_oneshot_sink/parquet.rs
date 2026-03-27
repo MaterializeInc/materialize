@@ -184,7 +184,7 @@ impl CopyToS3Uploader for ParquetUploader {
                 active_file: None,
                 params,
             }),
-            _ => anyhow::bail!("Expected Parquet format"),
+            S3SinkFormat::PgCopy(_) => anyhow::bail!("Expected Parquet format"),
         }
     }
 
