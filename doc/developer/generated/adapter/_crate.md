@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/lib.rs
-revision: 07e0546b22
+revision: aa7a1afd31
 ---
 
 # adapter
@@ -16,7 +16,7 @@ The crate is organized into several major subsystems:
 * `session` — per-connection `Session` state including transaction management and prepared statements.
 * `config` — system-parameter synchronisation with LaunchDarkly or a JSON file.
 
-Key public types re-exported from `lib.rs`: `Client`, `SessionClient`, `Handle`, `ExecuteResponse`, `AdapterError`, `AdapterNotice`, `CollectionIdBundle`, `ReadHolds`, `TimestampContext`, `serve`, `Config`.
+Key public types re-exported from `lib.rs`: `Client`, `SessionClient`, `Handle`, `ExecuteResponse`, `AdapterError`, `AuthenticationError`, `AdapterNotice`, `CollectionIdBundle`, `ReadHolds`, `TimestampContext`, `serve`, `Config`.
 
 Key dependencies: `mz-catalog`, `mz-controller`, `mz-compute-client`, `mz-storage-client`, `mz-sql`, `mz-expr`, `mz-transform`, `mz-persist-client`, `mz-timestamp-oracle`.
 Downstream consumers: `mz-environmentd` (calls `serve` to start the coordinator), `mz-pgwire` (uses `Client`/`SessionClient`), `mz-balancerd`.

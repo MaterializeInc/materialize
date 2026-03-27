@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 1e050fdd07
+revision: c10148c42f
 ---
 
 # mz-sql-parser::parser

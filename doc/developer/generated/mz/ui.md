@@ -1,6 +1,6 @@
 ---
 source: src/mz/src/ui.rs
-revision: 1ad121620a
+revision: c10148c42f
 ---
 
 # mz::ui

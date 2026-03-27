@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/fusion/reduce.rs
-revision: da91c9a7f1
+revision: c10148c42f
 ---
 
 # mz-transform::fusion::reduce

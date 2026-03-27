@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/ast/transform.rs
-revision: 336f1f997d
+revision: 8f136c6f83
 ---
 
 # mz-sql::ast::transform
