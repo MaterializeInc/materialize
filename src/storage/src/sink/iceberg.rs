@@ -651,6 +651,8 @@ fn iceberg_type_overrides(scalar_type: &mz_repr::SqlScalarType) -> Option<(DataT
             DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
             "mz_timestamp".to_string(),
         )),
+        // Iceberg doesn't support interval types natively, so we store as string.
+        SqlScalarType::Interval => Some((DataType::LargeUtf8, "interval".to_string())),
         _ => None,
     }
 }
