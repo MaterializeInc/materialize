@@ -206,7 +206,7 @@ impl BalancerService {
             cfg.config_sync_file_path.as_deref(),
         ) {
             (Some(key), None) => {
-                mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
+                let _ = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
                     configs.clone(),
                     &BUILD_INFO,
                     |builder| {
@@ -257,11 +257,10 @@ impl BalancerService {
                     },
                 )
                 .await
-                .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"))
-                .ok();
+                .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"));
             }
             (None, Some(path)) => {
-                mz_dyncfg_file::sync_file_to_configset(
+                let _ = mz_dyncfg_file::sync_file_to_configset(
                     configs.clone(),
                     path,
                     cfg.config_sync_timeout,
@@ -281,8 +280,7 @@ impl BalancerService {
                 // (unlike the adapter, but it has a durable catalog). The
                 // ConfigSet defaults have been chosen to be good enough if this
                 // is the case.
-                .inspect_err(|e| warn!("File config sync error: {e}"))
-                .ok();
+                .inspect_err(|e| warn!("File config sync error: {e}"));
             }
             (Some(_), Some(_)) => panic!(
                 "must provide either config_sync_file_path or launchdarkly_sdk_key for config syncing",

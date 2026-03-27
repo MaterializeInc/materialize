@@ -241,7 +241,7 @@ impl TypeConstraint for IntervalConstraints {
             Ok(None)
         } else {
             // https://github.com/postgres/postgres/blob/27b77ecf9/src/include/utils/timestamp.h#L53-L54
-            let range = typmod >> 16 & 0x7fff;
+            let range = (typmod >> 16) & 0x7fff;
             let precision = typmod & 0xffff;
             if precision > MAX_INTERVAL_PRECISION {
                 return Err(format!(

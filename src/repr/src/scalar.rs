@@ -2337,6 +2337,7 @@ impl<B> std::ops::Deref for ExcludeNull<B> {
 /// Macro to derive InputDatumType and OutputDatumType for all Datum variants that are simple Copy types
 macro_rules! impl_datum_type_copy {
     ($lt:lifetime, $native:ty, $variant:ident) => {
+        #[allow(unused_lifetimes)]
         impl<$lt> AsColumnType for $native {
             fn as_column_type() -> SqlColumnType {
                 SqlScalarType::$variant.nullable(false)
