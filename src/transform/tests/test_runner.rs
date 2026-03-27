@@ -405,7 +405,7 @@ mod tests {
                     out.push_str(&apply_cross_view_transform(t, &mut dataflow, cat)?[..]);
                 }
             }
-            _ => {}
+            TestType::Steps => {}
         };
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();

@@ -1564,7 +1564,7 @@ mod tests {
         });
         let mut state = match state {
             Continue((_, x)) => x,
-            _ => unreachable!(),
+            std::ops::ControlFlow::Break(_) => unreachable!(),
         };
 
         let metrics = Metrics::new(&PersistConfig::new_for_tests(), &MetricsRegistry::new());

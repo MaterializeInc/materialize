@@ -6500,7 +6500,23 @@ impl<'a> Parser<'a> {
         let keywords: &[_] = match object_type {
             ObjectType::Table => &[SET, RENAME, OWNER, RESET, ADD],
             ObjectType::MaterializedView => &[SET, RENAME, OWNER, RESET, APPLY],
-            _ => &[SET, RENAME, OWNER, RESET],
+            ObjectType::View | ObjectType::ContinualTask => &[SET, RENAME, OWNER, RESET],
+            ObjectType::Source
+            | ObjectType::Sink
+            | ObjectType::Index
+            | ObjectType::Type
+            | ObjectType::Role
+            | ObjectType::Cluster
+            | ObjectType::ClusterReplica
+            | ObjectType::Secret
+            | ObjectType::Connection
+            | ObjectType::Database
+            | ObjectType::Schema
+            | ObjectType::Func
+            | ObjectType::Subsource
+            | ObjectType::NetworkPolicy => {
+                unreachable!("parse_alter_views called with unsupported object type: {object_type}")
+            }
         };
 
         let action = self

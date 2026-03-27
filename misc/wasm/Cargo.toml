@@ -88,4 +88,5 @@ borrow_interior_mutable_const = "warn"
 or_fun_call = "warn"
 let_unit_value = "warn"
 match_wild_err_arm = "warn"
+match_wildcard_for_single_variants = "warn"
 # END LINT CONFIG

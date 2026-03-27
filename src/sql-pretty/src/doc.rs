@@ -798,7 +798,7 @@ impl Pretty {
         }
         let sources = match &v.source {
             InsertSource::Query(query) => self.doc_query(query),
-            _ => self.doc_display(&v.source, "insert source"),
+            InsertSource::DefaultValues => self.doc_display(&v.source, "insert source"),
         };
         let mut doc = intersperse_line_nest([intersperse_line_nest(first), sources]);
         if !v.returning.is_empty() {
@@ -975,7 +975,7 @@ impl Pretty {
             JoinOperator::FullOuter(constraint) => (constraint, "FULL JOIN"),
             JoinOperator::LeftOuter(constraint) => (constraint, "LEFT JOIN"),
             JoinOperator::RightOuter(constraint) => (constraint, "RIGHT JOIN"),
-            _ => return self.doc_display(v, "join operator"),
+            JoinOperator::CrossJoin => return self.doc_display(v, "join operator"),
         };
         let constraint = match constraint {
             JoinConstraint::On(expr) => nest_title("ON", self.doc_expr(expr)),
@@ -990,7 +990,7 @@ impl Pretty {
                 }
                 doc
             }
-            _ => return self.doc_display(v, "join constraint"),
+            JoinConstraint::Natural => return self.doc_display(v, "join constraint"),
         };
         intersperse_line_nest([
             RcDoc::text(name),

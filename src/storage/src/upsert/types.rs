@@ -285,7 +285,7 @@ impl<T, O> StateValue<T, O> {
     pub fn is_tombstone(&self) -> bool {
         match self {
             Self::Value(value) => value.finalized.is_none(),
-            _ => false,
+            Self::Consolidating(_) => false,
         }
     }
 
@@ -293,7 +293,9 @@ impl<T, O> StateValue<T, O> {
     pub fn into_decoded(self) -> Value<T, O> {
         match self {
             Self::Value(value) => value,
-            _ => panic!("called `into_decoded without calling `ensure_decoded`"),
+            Self::Consolidating(_) => {
+                panic!("called `into_decoded without calling `ensure_decoded`")
+            }
         }
     }
 
@@ -434,7 +436,9 @@ impl<T: Eq, O> StateValue<T, O> {
     pub fn into_finalized_value(self) -> Option<UpsertValue> {
         match self {
             Self::Value(v) => v.finalized,
-            _ => panic!("called `into_finalized_value` without calling `ensure_decoded`"),
+            Self::Consolidating(_) => {
+                panic!("called `into_finalized_value` without calling `ensure_decoded`")
+            }
         }
     }
 }
@@ -673,7 +677,7 @@ impl<T: Eq, O> StateValue<T, O> {
                     }
                 }
             }
-            _ => {}
+            StateValue::Value(_) => {}
         }
     }
 }

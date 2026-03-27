@@ -258,7 +258,7 @@ impl DemuxHandler<'_, '_, '_> {
             Drop(e) => self.handle_drop(e),
             TraceShare(e) => self.handle_trace_share(e),
             Batcher(e) => self.handle_batcher_event(e),
-            _ => (),
+            MergeShortfall(_) => (),
         }
     }
 

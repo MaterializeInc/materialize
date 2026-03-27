@@ -815,7 +815,7 @@ impl crate::coord::Coordinator {
                     StatementExecutionStrategy::Standard,
                 )
             }
-            _ => {
+            PeekPlan::FastPath(_) => {
                 unreachable!()
             }
         };

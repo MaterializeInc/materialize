@@ -150,7 +150,7 @@ impl FrontendStartupMessage {
                 dst.put_u32(*secret_key);
             }
             FrontendStartupMessage::SslRequest {} => dst.put_i32(VERSION_SSL),
-            _ => panic!("unsupported"),
+            FrontendStartupMessage::GssEncRequest => panic!("unsupported"),
         }
 
         let len = dst.len() - base;

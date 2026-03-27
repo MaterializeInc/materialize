@@ -271,7 +271,7 @@ impl CsrPurificationError {
         match self {
             Self::ClientError(e) => Some(e.to_string_with_causes()),
             Self::ListSubjectsError(e) => Some(e.to_string_with_causes()),
-            _ => None,
+            Self::NotCsrConnection(_) => None,
         }
     }
 

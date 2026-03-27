@@ -1736,7 +1736,7 @@ pub mod datadriven {
                         updates.decode(&datadriven.client.metrics.columnar)?;
                     updates.structured_key_lower()
                 }
-                other => other.structured_key_lower(),
+                other @ BatchPart::Hollow(_) => other.structured_key_lower(),
             };
 
             if let Some(lower) = lower {
@@ -2334,7 +2334,7 @@ pub mod datadriven {
                     batch.batch = Arc::new(b.into_hollow_batch());
                     continue;
                 }
-                _ => panic!("{:?}", res),
+                CompareAndAppendRes::InvalidUsage(_) => panic!("{:?}", res),
             };
         };
         // TODO: Don't throw away writer maintenance. It's slightly tricky

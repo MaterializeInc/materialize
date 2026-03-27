@@ -627,7 +627,16 @@ impl Catalog {
                             },
                         );
                     }
-                    _ => {}
+                    CatalogItem::Table(_)
+                    | CatalogItem::Source(_)
+                    | CatalogItem::Log(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::Index(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::ContinualTask(_) => {}
                 }
             }
         }
@@ -1571,10 +1580,19 @@ impl Catalog {
                                 },
                             )
                         }
-                        _ => EventDetails::IdFullNameV1(IdFullNameV1 {
-                            id: id.to_string(),
-                            name,
-                        }),
+                        CatalogItem::Table(_)
+                        | CatalogItem::Log(_)
+                        | CatalogItem::View(_)
+                        | CatalogItem::Type(_)
+                        | CatalogItem::Func(_)
+                        | CatalogItem::Secret(_)
+                        | CatalogItem::Connection(_)
+                        | CatalogItem::ContinualTask(_) => {
+                            EventDetails::IdFullNameV1(IdFullNameV1 {
+                                id: id.to_string(),
+                                name,
+                            })
+                        }
                     };
                     CatalogState::add_to_audit_log(
                         &state.system_configuration,
