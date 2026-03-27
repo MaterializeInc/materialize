@@ -11089,7 +11089,7 @@ __metadata:
     p-retry: "npm:^4.6.1"
     papaparse: "npm:^5.4.1"
     pg: "npm:^8.20.0"
-    pg-error-enum: "npm:^0.7.3"
+    pg-error-enum: "npm:^2.0.1"
     picocolors: "npm:^1.1.1"
     popper-max-size-modifier: "npm:^0.2.0"
     prettier: "npm:^3.3.3"
@@ -12108,10 +12108,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"pg-error-enum@npm:^0.7.3":
-  version: 0.7.3
-  resolution: "pg-error-enum@npm:0.7.3"
-  checksum: 10c0/c34954011ad1b1e048e251ec2c2615a4aa89315e4e858dcf6fc4c89ed4e8005cfdfbbddc31b4d252b4da2d0cbda1c8292f11cabad0bcd5aec78a1c9be7432361
+"pg-error-enum@npm:^2.0.1":
+  version: 2.0.1
+  resolution: "pg-error-enum@npm:2.0.1"
+  checksum: 10c0/f86c63904b2576e586355019a1fe405f439c267402529135774e166d696a6322a5cbb2103c5405dc2239535ef3e93815915718bc7e3bcd008836172aa9410289
   languageName: node
   linkType: hard
 
