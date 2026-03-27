@@ -43,6 +43,7 @@ use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
     ClaimTokenType, Claims, DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+    TenantScope,
 };
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
@@ -527,7 +528,7 @@ async fn test_auth_expiry() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -813,7 +814,7 @@ async fn test_auth_base_require_tls_frontegg() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now,
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -2706,7 +2707,7 @@ async fn test_auth_admin_non_superuser() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now,
             admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -2854,7 +2855,7 @@ async fn test_auth_admin_superuser() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now,
             admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -3002,7 +3003,7 @@ async fn test_auth_admin_superuser_revoked() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now,
             admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -3134,7 +3135,7 @@ async fn test_auth_deduplication() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -3306,7 +3307,7 @@ async fn test_refresh_task_metrics() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -3470,7 +3471,7 @@ async fn test_superuser_can_alter_cluster() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now,
             admin_role: admin_role.to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -3593,7 +3594,7 @@ async fn test_refresh_dropped_session() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -3771,7 +3772,7 @@ async fn test_refresh_dropped_session_lru() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             // Make the refresh LRU cache very small, and the window size very large so it's easy
@@ -3961,7 +3962,7 @@ async fn test_transient_auth_failures() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -4085,7 +4086,7 @@ async fn test_transient_auth_failure_on_refresh() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -5099,7 +5100,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
             decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
-            tenant_id: Some(tenant_id),
+            tenant_id: TenantScope::Specific(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
             refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -5364,6 +5365,250 @@ async fn test_auth_oidc_non_login_role() {
             options: Some("--oidc_auth_enabled=true"),
             configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
             assert: Assert::Success,
+        }],
+    )
+    .await;
+}
+
+// ---------------------------------------------------------------------------
+// SEC-132: Cross-tenant regression tests
+// ---------------------------------------------------------------------------
+//
+// All organizations share a single Frontegg workspace (and RSA signing key).
+// The tenant_id check in validate_access_token is the sole Materialize-side
+// defense against cross-org access. These tests ensure that defense holds.
+
+/// A user from tenant B must be rejected by an environmentd configured for
+/// tenant A, even though the JWT signature is valid (same signing key).
+/// Verified across pgwire (app-password), HTTP (bearer), and WebSocket.
+#[allow(clippy::unit_arg)]
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl`
+async fn test_auth_cross_tenant_rejected() {
+    let ca = Ca::new_root("test ca").unwrap();
+    let (server_cert, server_key) = ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let metrics_registry = MetricsRegistry::new();
+
+    let tenant_a = Uuid::new_v4();
+    let tenant_b = Uuid::new_v4();
+
+    // -- Tenant A user (should succeed) --
+    let user_a_email = "alice@tenant-a.com";
+    let user_a_client_id = Uuid::new_v4();
+    let user_a_secret = Uuid::new_v4();
+
+    // -- Tenant B user (should be rejected) --
+    let user_b_email = "bob@tenant-b.com";
+    let user_b_client_id = Uuid::new_v4();
+    let user_b_secret = Uuid::new_v4();
+
+    let users = BTreeMap::from([
+        (
+            user_a_email.to_string(),
+            UserConfig {
+                id: Uuid::new_v4(),
+                email: user_a_email.to_string(),
+                password: Uuid::new_v4().to_string(),
+                tenant_id: tenant_a,
+                initial_api_tokens: vec![ApiToken {
+                    client_id: user_a_client_id,
+                    secret: user_a_secret,
+                    description: None,
+                    created_at: Utc::now(),
+                }],
+                roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
+            },
+        ),
+        (
+            user_b_email.to_string(),
+            UserConfig {
+                id: Uuid::new_v4(),
+                email: user_b_email.to_string(),
+                password: Uuid::new_v4().to_string(),
+                tenant_id: tenant_b,
+                initial_api_tokens: vec![ApiToken {
+                    client_id: user_b_client_id,
+                    secret: user_b_secret,
+                    description: None,
+                    created_at: Utc::now(),
+                }],
+                roles: Vec::new(),
+                auth_provider: None,
+                verified: None,
+                metadata: None,
+            },
+        ),
+    ]);
+
+    let issuer = "frontegg-mock".to_owned();
+    let encoding_key =
+        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let now = SYSTEM_TIME.clone();
+
+    let frontegg_server = FronteggMockServer::start(
+        None,
+        issuer,
+        encoding_key.clone(),
+        decoding_key,
+        users,
+        BTreeMap::new(),
+        None,
+        now.clone(),
+        i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    // environmentd is configured for tenant_a only.
+    let frontegg_auth = FronteggAuthentication::new(
+        FronteggConfig {
+            admin_api_token_url: frontegg_server.auth_api_token_url(),
+            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            tenant_id: TenantScope::Specific(tenant_a),
+            now: now.clone(),
+            admin_role: "mzadmin".to_string(),
+            refresh_drop_lru_size: DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
+            refresh_drop_factor: DEFAULT_REFRESH_DROP_FACTOR,
+        },
+        mz_frontegg_auth::Client::default(),
+        &metrics_registry,
+    );
+
+    let server = test_util::TestHarness::default()
+        .with_tls(server_cert, server_key)
+        .with_frontegg_auth(&frontegg_auth)
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let password_a = format!("mzp_{user_a_client_id}{user_a_secret}");
+    let password_b = format!("mzp_{user_b_client_id}{user_b_secret}");
+
+    // Mint a bearer token for tenant_b user (valid signature, wrong tenant).
+    let cross_tenant_claims = Claims {
+        exp: now.as_secs() + i64::try_from(EXPIRES_IN_SECS).unwrap(),
+        email: Some(user_b_email.to_string()),
+        iss: "frontegg-mock".to_string(),
+        sub: Uuid::new_v4(),
+        user_id: None,
+        tenant_id: tenant_b,
+        roles: Vec::new(),
+        permissions: Vec::new(),
+        token_type: ClaimTokenType::UserToken,
+        metadata: None,
+    };
+    let cross_tenant_jwt = jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &cross_tenant_claims,
+        &encoding_key,
+    )
+    .unwrap();
+
+    let no_headers = HeaderMap::new();
+
+    // ---- Tenant A user should succeed across all transports ----
+    run_tests(
+        "Cross-tenant: tenant A user accepted",
+        &server,
+        &[
+            TestCase::Pgwire {
+                user_to_auth_as: user_a_email,
+                user_reported_by_system: user_a_email,
+                password: Some(Cow::Borrowed(&password_a)),
+                ssl_mode: SslMode::Require,
+                options: None,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Http {
+                user_to_auth_as: user_a_email,
+                user_reported_by_system: user_a_email,
+                scheme: Scheme::HTTPS,
+                headers: &make_header(Authorization::basic(user_a_email, &password_a)),
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+            TestCase::Ws {
+                user_reported_by_system: user_a_email,
+                auth: &WebSocketAuth::Basic {
+                    user: user_a_email.to_string(),
+                    password: Password(password_a.clone()),
+                    options: BTreeMap::default(),
+                },
+                headers: &no_headers,
+                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                assert: Assert::Success,
+            },
+        ],
+    )
+    .await;
+
+    // ---- Tenant B user must be REJECTED across all transports ----
+    run_tests(
+        "Cross-tenant: tenant B user rejected via pgwire app-password",
+        &server,
+        &[TestCase::Pgwire {
+            user_to_auth_as: user_b_email,
+            user_reported_by_system: user_b_email,
+            password: Some(Cow::Borrowed(&password_b)),
+            ssl_mode: SslMode::Require,
+            options: None,
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            // The pgwire layer does not expose the specific Frontegg error
+            // reason; any auth failure becomes "invalid password" at the wire
+            // protocol level. The cross-tenant rejection is verified via the
+            // HTTP and WebSocket tests below which do surface the error.
+            assert: Assert::Err(Box::new(|err| {
+                assert_contains!(err.to_string_with_causes(), "invalid password");
+            })),
+        }],
+    )
+    .await;
+
+    run_tests(
+        "Cross-tenant: tenant B bearer token rejected via HTTP",
+        &server,
+        &[TestCase::Http {
+            user_to_auth_as: user_b_email,
+            user_reported_by_system: user_b_email,
+            scheme: Scheme::HTTPS,
+            headers: &make_header(Authorization::bearer(&cross_tenant_jwt).unwrap()),
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Err(Box::new(|code, message| {
+                assert_eq!(
+                    code,
+                    Some(StatusCode::UNAUTHORIZED),
+                    "cross-tenant HTTP bearer must get 401"
+                );
+                assert_eq!(message, "unauthorized");
+            })),
+        }],
+    )
+    .await;
+
+    run_tests(
+        "Cross-tenant: tenant B bearer token rejected via WebSocket",
+        &server,
+        &[TestCase::Ws {
+            user_reported_by_system: user_b_email,
+            auth: &WebSocketAuth::Bearer {
+                token: cross_tenant_jwt.clone(),
+                options: BTreeMap::default(),
+            },
+            headers: &no_headers,
+            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            assert: Assert::Err(Box::new(|code, message| {
+                assert_eq!(code, CloseCode::Protocol);
+                assert_eq!(message, "unauthorized");
+            })),
         }],
     )
     .await;
