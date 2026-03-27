@@ -15,6 +15,17 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.17.1
+*Released to Materialize Self-Managed: 2026-03-27* <br>
+
+This release includes a bug fix.
+
+### Bug Fixes {#v26.17.1-bug-fixes}
+
+- Fixed Iceberg sinks failing to write unsigned integer types (UInt8,
+  UInt16, UInt32, UInt64) by mapping them to Iceberg-compatible signed
+  types.
+
 ## v26.17.0
 *Released to Materialize Cloud: 2026-03-26* <br>
 *Released to Materialize Self-Managed: 2026-03-27* <br>
