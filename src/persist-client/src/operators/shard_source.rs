@@ -19,7 +19,7 @@ use std::hash::{Hash, Hasher};
 use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use arrow::array::ArrayRef;
@@ -51,6 +51,22 @@ use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
 use crate::internal::state::BatchPart;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
+
+async fn maybe_sleep_failpoint(name: &'static str, default_sleep_ms: u64, reason: &'static str) {
+    let mut sleep_ms = None;
+    let _ = fail::eval(name, |arg| {
+        sleep_ms = Some(
+            arg.as_deref()
+                .and_then(|arg| arg.parse::<u64>().ok())
+                .unwrap_or(default_sleep_ms),
+        );
+    });
+
+    if let Some(sleep_ms) = sleep_ms {
+        tracing::info!(failpoint = name, sleep_ms, "{reason}");
+        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+    }
+}
 
 /// The result of applying an MFP to a part, if we know it.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -644,6 +660,12 @@ where
                 // `LeasedBatchPart`es cannot be dropped at this point w/o
                 // panicking, so swap them to an owned version.
                 for (_idx, part) in data {
+                    maybe_sleep_failpoint(
+                        "persist_source_sleep_before_fetch_leased_part",
+                        500,
+                        "sleeping before fetching leased persist part",
+                    )
+                    .await;
                     let fetched = fetcher
                         .fetch_leased_part(part)
                         .await

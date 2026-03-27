@@ -130,6 +130,36 @@ use tracing::trace;
 use crate::metrics::source::SourcePersistSinkMetrics;
 use crate::storage_state::StorageState;
 
+async fn maybe_sleep_failpoint(
+    name: &'static str,
+    default_sleep_ms: u64,
+    worker_id: usize,
+    collection_id: GlobalId,
+    shard_id: mz_persist_client::ShardId,
+    reason: &'static str,
+) {
+    let mut sleep_ms = None;
+    let _ = fail::eval(name, |arg| {
+        sleep_ms = Some(
+            arg.as_deref()
+                .and_then(|arg| arg.parse::<u64>().ok())
+                .unwrap_or(default_sleep_ms),
+        );
+    });
+
+    if let Some(sleep_ms) = sleep_ms {
+        tracing::info!(
+            %worker_id,
+            %collection_id,
+            %shard_id,
+            failpoint = name,
+            sleep_ms,
+            "{reason}",
+        );
+        tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
+    }
+}
+
 /// Metrics about batches.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 struct BatchMetrics {
@@ -802,6 +832,17 @@ where
                         .copied()
                         .collect();
 
+                    tracing::info!(
+                        %worker_index,
+                        %collection_id,
+                        %shard_id,
+                        ?batch_lower,
+                        ?batch_upper,
+                        finalized_timestamps = ?finalized_timestamps,
+                        finalized_timestamp_count = finalized_timestamps.len(),
+                        "persist_sink ready batch description",
+                    );
+
                     let mut batch_tokens = vec![];
                     for ts in finalized_timestamps {
                         let batch_builder = stashed_batches.remove(&ts).unwrap();
@@ -1169,6 +1210,19 @@ where
 
                 let batch_metrics = batch_set.batch_metrics;
 
+                let batch_data_ts = batches.iter().map(|b| b.data_ts).collect_vec();
+                tracing::info!(
+                    %worker_id,
+                    %collection_id,
+                    %shard_id,
+                    ?batch_lower,
+                    ?batch_upper,
+                    batch_count = batches.len(),
+                    batch_data_ts = ?batch_data_ts,
+                    validate_part_bounds_on_write,
+                    "persist_sink attempting append",
+                );
+
                 let mut to_append = batches.iter_mut().map(|b| &mut b.batch).collect::<Vec<_>>();
 
                 let result = {
@@ -1272,6 +1326,16 @@ where
                         Ok(()) => {
                             let _permit = busy_signal.acquire().await;
 
+                            maybe_sleep_failpoint(
+                                "persist_sink_sleep_before_compare_and_append",
+                                500,
+                                worker_id,
+                                collection_id,
+                                shard_id,
+                                "sleeping before compare_and_append",
+                            )
+                            .await;
+
                             write.compare_and_append_batch(
                                 &mut to_append[..],
                                 batch_lower.clone(),
@@ -1368,13 +1432,29 @@ where
                             // not.
                             let mut batch_delete_futures = vec![];
                             let mut new_batch_set = BatchSet::default();
+                            let mut kept_data_ts = vec![];
+                            let mut deleted_data_ts = vec![];
                             for batch in batches {
                                 if new_batch_lower.less_equal(&batch.data_ts) {
+                                    kept_data_ts.push(batch.data_ts);
                                     new_batch_set.finished.push(batch);
                                 } else {
+                                    deleted_data_ts.push(batch.data_ts);
                                     batch_delete_futures.push(batch.batch.delete());
                                 }
                             }
+
+                            tracing::warn!(
+                                %worker_id,
+                                %collection_id,
+                                %shard_id,
+                                ?batch_lower,
+                                ?batch_upper,
+                                current_upper = ?mismatch.current,
+                                kept_data_ts = ?kept_data_ts,
+                                deleted_data_ts = ?deleted_data_ts,
+                                "persist_sink trimmed append after upper mismatch",
+                            );
 
                             // Re-add the new batch to the list of batches to process.
                             todo.push_front((new_done_batch_metadata, new_batch_set));
