@@ -23,7 +23,7 @@ This release includes performance improvements and bug fixes.
 
 ### Improvements {#v26.17-improvements}
 
-- **10% improved transactional DDL performance**: We've eliminated an O(n^2) operation replay. DDL transactions (such as creating multiple tables from a source in a single transaction) now execute faster.
+- **10% improved transactional DDL performance**: We've eliminated an O(n^2) operation. DDL transactions (such as creating multiple tables from a source in a single transaction) now execute faster.
 - **Reduced catalog server load during blue/green deploys**: The dbt-materialize adapter now uses a single batched query instead of
   per-cluster sequential polling. This is especially useful when creating a large number of objects.
 
