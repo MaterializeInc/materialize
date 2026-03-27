@@ -14,9 +14,7 @@ from materialize.checks.checks import Check
 
 class DeltaJoin(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE delta_join_table1 (f1 INT, f2 INT);
             > CREATE INDEX delta_join_index1 ON delta_join_table1(f1);
             > INSERT INTO delta_join_table1 VALUES (1, 1);
@@ -24,9 +22,7 @@ class DeltaJoin(Check):
             > CREATE TABLE delta_join_table2 (f3 INT, f4 INT);
             > CREATE INDEX delta_join_index2 ON delta_join_table2(f3);
             > INSERT INTO delta_join_table2 VALUES (1, 1);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -46,9 +42,7 @@ class DeltaJoin(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM delta_join_view1;
                 1 1 1 1
                 2 2 2 2
@@ -58,24 +52,18 @@ class DeltaJoin(Check):
                 1 1 1 1
                 2 2 2 2
                 3 3 3 3
-            """
-            )
-        )
+            """))
 
 
 class LinearJoin(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE linear_join_table1 (f1 INT);
             > INSERT INTO linear_join_table1 VALUES (1);
 
             > CREATE TABLE linear_join_table2 (f2 INT);
             > INSERT INTO linear_join_table2 VALUES (1);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -95,9 +83,7 @@ class LinearJoin(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM linear_join_view1;
                 1 1
                 2 2
@@ -107,6 +93,4 @@ class LinearJoin(Check):
                 1 1
                 2 2
                 3 3
-            """
-            )
-        )
+            """))

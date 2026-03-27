@@ -17,9 +17,7 @@ class JsonSource(Check):
     """Test CREATE SOURCE ... FORMAT JSON"""
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ kafka-create-topic topic=format-json partitions=1
 
                 $ kafka-ingest format=bytes key-format=bytes key-terminator=: topic=format-json
@@ -42,9 +40,7 @@ class JsonSource(Check):
                   KEY FORMAT JSON
                   VALUE FORMAT JSON
                   ENVELOPE UPSERT
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -64,9 +60,7 @@ class JsonSource(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM format_jsonA ORDER BY key
                 "\\"array\\"" [1,2,3]
                 "\\"float\\"" 1.23
@@ -80,6 +74,4 @@ class JsonSource(Check):
                 "\\"int\\"" 1
                 "\\"object\\"" "{\\"a\\":\\"b\\",\\"c\\":\\"d\\"}"
                 "\\"str\\"" "\\"hello\\""
-                """
-            )
-        )
+                """))

@@ -149,14 +149,12 @@ class ConfigureMz(MzcomposeAction):
         self.scenario = scenario
 
     def execute(self, e: Executor) -> None:
-        input = dedent(
-            """
+        input = dedent("""
             # Run any query to have the materialize user implicitly created if
             # it didn't exist yet. Required for the GRANT later.
             > SELECT 1;
             1
-            """
-        )
+            """)
 
         system_settings = {
             "ALTER SYSTEM SET max_tables = 1000;",
@@ -190,13 +188,11 @@ class ConfigureMz(MzcomposeAction):
             )
 
         kafka_broker = "BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT"
-        input += dedent(
-            f"""
+        input += dedent(f"""
             > CREATE CONNECTION IF NOT EXISTS kafka_conn FOR KAFKA {kafka_broker}
 
             > CREATE CONNECTION IF NOT EXISTS csr_conn FOR CONFLUENT SCHEMA REGISTRY URL '${{testdrive.schema-registry-url}}';
-            """
-        )
+            """)
 
         self.handle = e.testdrive(input=input, mz_service=self.mz_service)
         e.system_settings.update(system_settings)

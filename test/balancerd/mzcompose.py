@@ -429,16 +429,14 @@ def workflow_ip_forwarding(c: Composition) -> None:
         }
         json_data = json.dumps(json_data)
         content_length = len(json_data.encode())
-        http_sql_query_request = dedent(
-            f"""\
+        http_sql_query_request = dedent(f"""\
             POST /api/sql HTTP/1.1\r
             Host: 127.0.0.1:{materialize_port}\r
             Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
             Content-Type: application/json\r
             Content-Length: {content_length}\r
             \r
-            {json_data}"""
-        )
+            {json_data}""")
         sock.sendall(proxy_header + http_sql_query_request.encode())
 
         # read and parse the response
@@ -783,16 +781,14 @@ def workflow_split_proxy_header(c: Composition) -> None:
     proxy_hdr = create_proxy_protocol_v2_header("2.2.2.2", 2222, "127.0.0.1", 2222)
     json_data = json.dumps({"query": "SELECT 42 AS answer"})
     content_length = len(json_data.encode())
-    http_request = dedent(
-        f"""\
+    http_request = dedent(f"""\
         POST /api/sql HTTP/1.1\r
         Host: 127.0.0.1:{materialize_port}\r
         Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
         Content-Type: application/json\r
         Content-Length: {content_length}\r
         \r
-        {json_data}"""
-    ).encode()
+        {json_data}""").encode()
 
     # Split the 28-byte proxy header at byte 8 (middle of the 12-byte
     # signature). Send the first fragment, wait for the server to peek

@@ -45,8 +45,7 @@ class IcebergStart(Action):
         state.iceberg_key = key
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE SECRET IF NOT EXISTS iceberg_access_key_secret AS '{key}'
                 > CREATE CONNECTION IF NOT EXISTS iceberg_aws_conn TO AWS (
                     ACCESS KEY ID = '{username}',
@@ -61,8 +60,7 @@ class IcebergStart(Action):
                     WAREHOUSE = 'default_catalog',
                     SCOPE = 'PRINCIPAL_ROLE:ALL'
                   )
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -126,8 +124,7 @@ class CreateIcebergSink(Action):
     def run(self, c: Composition, state: State) -> None:
         table_name = self.sink.name.replace("-", "_")
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE SINK {self.sink.name}
                   IN CLUSTER {self.sink.cluster_name}
                   FROM {self.sink.source_view.name}
@@ -142,8 +139,7 @@ class CreateIcebergSink(Action):
 
                 > SELECT status FROM mz_internal.mz_sink_statuses WHERE name = '{self.sink.name}'
                 running
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 

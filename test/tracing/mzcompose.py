@@ -163,8 +163,7 @@ def workflow_clusterd(c: Composition) -> None:
         user="mz_system",
     )
 
-    c.sql(
-        """
+    c.sql("""
         CREATE CLUSTER c REPLICAS (r1 (
             STORAGECTL ADDRESSES ['clusterd:2100'],
             STORAGE ADDRESSES ['clusterd:2103'],
@@ -172,8 +171,7 @@ def workflow_clusterd(c: Composition) -> None:
             COMPUTE ADDRESSES ['clusterd:2102'],
             WORKERS 1
         ))
-    """
-    )
+    """)
 
     c.sql(
         "ALTER SYSTEM SET log_filter = 'foo=debug,info'",

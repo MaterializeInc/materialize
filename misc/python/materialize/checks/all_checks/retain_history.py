@@ -26,9 +26,7 @@ def schemas() -> str:
 )
 class RetainHistoryOnMv(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > CREATE TABLE time_for_mv (time_index INT, t TIMESTAMP);
 
                 # Give it some time
@@ -60,9 +58,7 @@ class RetainHistoryOnMv(Check):
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
                 > INSERT INTO time_for_mv VALUES (3, now());
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -244,9 +240,7 @@ class RetainHistoryOnMv(Check):
                 Target cluster: quickstart
                 """
 
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 {time_definitions}
 
                 {content_validations}
@@ -254,9 +248,7 @@ class RetainHistoryOnMv(Check):
                 {definition_validations}
 
                 {other_validations}
-                """
-            )
-        )
+                """))
 
 
 @disabled(
@@ -264,10 +256,7 @@ class RetainHistoryOnMv(Check):
 )
 class RetainHistoryOnKafkaSource(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                f"""
+        return Testdrive(schemas() + dedent(f"""
                 > CREATE TABLE time_for_source (time_index INT, t TIMESTAMP);
 
                 # Give it some time
@@ -309,9 +298,7 @@ class RetainHistoryOnKafkaSource(Check):
                 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
                 > INSERT INTO time_for_source VALUES (4, now());
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -347,9 +334,7 @@ class RetainHistoryOnKafkaSource(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ set-from-sql var=time0
                 SELECT t::STRING FROM time_for_source WHERE time_index = 0
                 $ set-from-sql var=time1
@@ -432,9 +417,7 @@ class RetainHistoryOnKafkaSource(Check):
                 K3 C3
                 K4 C4
                 K5 C5
-                """
-            )
-        )
+                """))
 
 
 def remove_target_cluster_from_explain(sql: str) -> str:

@@ -41,8 +41,7 @@ class BuildAnnotationStorage(BaseDataStorage):
 
         sql_statements = []
 
-        sql_statements.append(
-            f"""
+        sql_statements.append(f"""
             INSERT INTO build_annotation
             (
                 build_id,
@@ -60,12 +59,10 @@ class BuildAnnotationStorage(BaseDataStorage):
                 {annotation.is_failure},
                 now()
             ;
-                """
-        )
+                """)
 
         for error in annotation.errors:
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO build_annotation_error
                 (
                     build_job_id,
@@ -81,7 +78,6 @@ class BuildAnnotationStorage(BaseDataStorage):
                     {as_sanitized_literal(error.issue)},
                     {error.occurrence_count}
             ;
-            """
-            )
+            """)
 
         self.database_connector.add_update_statements(sql_statements)

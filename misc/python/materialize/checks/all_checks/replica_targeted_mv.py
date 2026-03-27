@@ -19,9 +19,7 @@ class ReplicaTargetedMaterializedViews(Check):
         return self.base_version >= MzVersion.parse_mz("v26.16.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE replica_targeted_mv_t (x INT);
                 > INSERT INTO replica_targeted_mv_t SELECT generate_series FROM generate_series(1, 100);
 
@@ -31,9 +29,7 @@ class ReplicaTargetedMaterializedViews(Check):
                 ALTER SYSTEM SET enable_replica_targeted_materialized_views = true
 
                 > CREATE MATERIALIZED VIEW replica_targeted_mv_1 IN CLUSTER replica_targeted_mv_cluster REPLICA r1 AS SELECT count(*) AS cnt FROM replica_targeted_mv_t;
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -62,9 +58,7 @@ class ReplicaTargetedMaterializedViews(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT cnt FROM replica_targeted_mv_1;
                 300
 
@@ -73,6 +67,4 @@ class ReplicaTargetedMaterializedViews(Check):
 
                 > SELECT cnt FROM replica_targeted_mv_3;
                 300
-           """
-            )
-        )
+           """))

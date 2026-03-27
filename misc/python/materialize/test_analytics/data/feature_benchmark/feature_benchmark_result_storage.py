@@ -41,8 +41,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
 
         for result_entry in results:
             # TODO: remove NULL castings when database-issues#8100 is resolved
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO feature_benchmark_result
                 (
                     build_job_id,
@@ -80,8 +79,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {result_entry.wallclock.mean or 'NULL::DOUBLE'},
                     {result_entry.wallclock.variance or 'NULL::DOUBLE'}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)
 
@@ -98,8 +96,7 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
 
             # Do not store framework version, scenario version, and scale. If needed, they can be retrieved from the
             # result entries.
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO feature_benchmark_discarded_result
                 (
                     build_job_id,
@@ -129,7 +126,6 @@ class FeatureBenchmarkResultStorage(BaseDataStorage):
                     {discarded_entry.wallclock.mean or 'NULL::DOUBLE'},
                     {discarded_entry.wallclock.variance or 'NULL::DOUBLE'}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)

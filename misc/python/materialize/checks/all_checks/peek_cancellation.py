@@ -15,15 +15,11 @@ from materialize.checks.checks import Check, disabled
 @disabled("due to database-issues#6249")
 class PeekCancellation(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE peek_cancellation (f1 INTEGER);
                 > CREATE DEFAULT INDEX ON peek_cancellation;
                 > INSERT INTO peek_cancellation SELECT * FROM generate_series(1, 10000);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -43,12 +39,8 @@ class PeekCancellation(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET statement_timeout = '10ms';
                 ! INSERT INTO peek_cancellation SELECT * FROM peek_cancellation;
                 contains: timeout
-                """
-            )
-        )
+                """))

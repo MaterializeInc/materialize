@@ -30,11 +30,7 @@ class CheckSchemas(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SHOW SCHEMAS LIKE 'to_be_%';
                 to_be_created ""
-                """
-            )
-        )
+                """))

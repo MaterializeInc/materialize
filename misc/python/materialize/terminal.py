@@ -9,7 +9,6 @@
 
 """Terminal utilities."""
 
-
 COLOR_GREEN = "\033[92m"
 COLOR_RED = "\033[91m"
 COLOR_BLUE = "\033[34m"

@@ -292,18 +292,12 @@ class ObservedError(ObservedBaseError):
 
         assert self.additional_collapsed_error_details_header is not None
 
-        return (
-            "\n"
-            + dedent(
-                f"""
+        return "\n" + dedent(f"""
                 <details>
                     <summary>{self.additional_collapsed_error_details_header}</summary>
                     <pre>{self.additional_collapsed_error_details}</pre>
                 </details>
-            """
-            ).strip()
-            + "\n\n"
-        )
+            """).strip() + "\n\n"
 
 
 @dataclass(kw_only=True, unsafe_hash=True)
@@ -554,7 +548,7 @@ def annotate_logged_errors(
     token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
         "GITHUB_TOKEN"
     )
-    (known_issues, issues_with_invalid_regex) = get_known_issues_from_github(token)
+    known_issues, issues_with_invalid_regex = get_known_issues_from_github(token)
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
 

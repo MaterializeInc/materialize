@@ -16,17 +16,13 @@ from materialize.checks.checks import Check
 
 class ExplainCatalogItem(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE explain_item_t1(x int, y int);
 
                 > CREATE TABLE explain_item_t2(x int, y int);
 
                 > CREATE INDEX explain_item_t1_y ON explain_item_t1(y);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -44,8 +40,7 @@ class ExplainCatalogItem(Check):
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            """
+        sql = dedent("""
             ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR MATERIALIZED VIEW explain_mv1;
             materialize.public.explain_mv1:
               Project (#0, #1)
@@ -66,8 +61,7 @@ class ExplainCatalogItem(Check):
               filter=((#1{y} = 7))
 
             Target cluster: quickstart
-            """
-        )
+            """)
 
         return Testdrive(sql)
 

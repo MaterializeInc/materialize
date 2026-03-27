@@ -31,8 +31,7 @@ class BuildHistoryAnalysis(BaseDataStorage):
             else "shard_index IS NULL"
         )
 
-        rows = self.query_data(
-            f"""
+        rows = self.query_data(f"""
                 SELECT
                     build_number,
                     build_id,
@@ -46,8 +45,7 @@ class BuildHistoryAnalysis(BaseDataStorage):
                     {shard_index_comparison}
                 ORDER BY
                     build_number DESC
-                """
-        )
+                """)
 
         result = []
 

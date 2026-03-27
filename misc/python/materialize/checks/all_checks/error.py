@@ -14,15 +14,11 @@ from materialize.checks.checks import Check, externally_idempotent
 
 class ParseError(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE parse_error_table (f1 STRING);
                 > CREATE MATERIALIZED VIEW parse_error_view AS SELECT f1::INTEGER FROM parse_error_table;
                 > INSERT INTO parse_error_table VALUES ('123');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -34,27 +30,19 @@ class ParseError(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 ! SELECT * FROM parse_error_view;
                 contains: invalid input syntax for type integer
-                """
-            )
-        )
+                """))
 
 
 class ParseHexError(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE parse_hex_error_table (f1 STRING);
                 > CREATE MATERIALIZED VIEW parse_hex_error_view AS SELECT decode(f1, 'hex') FROM parse_hex_error_table;
                 > INSERT INTO parse_hex_error_table VALUES ('aa');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -66,21 +54,15 @@ class ParseHexError(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 ! SELECT * FROM parse_hex_error_view;
                 contains: invalid hexadecimal digit
-                """
-            )
-        )
+                """))
 
 
 class DataflowErrorRetraction(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE dataflow_error_retraction_table (f1 STRING);
                 > CREATE MATERIALIZED VIEW dataflow_error_retraction_view AS SELECT f1::INTEGER FROM dataflow_error_retraction_table;
                 > INSERT INTO dataflow_error_retraction_table VALUES ('123');
@@ -89,42 +71,31 @@ class DataflowErrorRetraction(Check):
                 > INSERT INTO dataflow_error_retraction_table VALUES ('234');
                 ! SELECT * FROM dataflow_error_retraction_view;
                 contains: invalid input syntax for type integer
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
             Testdrive(s)
             for s in [
-                dedent(
-                    """
+                dedent("""
                 > DELETE FROM dataflow_error_retraction_table WHERE f1 = 'abc'
-                """
-                ),
-                dedent(
-                    """
+                """),
+                dedent("""
                 > DELETE FROM dataflow_error_retraction_table WHERE f1 = 'klm'
-                """
-                ),
+                """),
             ]
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM dataflow_error_retraction_view;
                 123
                 234
-                """
-            )
-        )
+                """))
 
 
 def schemas() -> str:
-    return dedent(
-        """
+    return dedent("""
        $ set schema-f1={
            "type" : "record",
            "name" : "test",
@@ -140,17 +111,13 @@ def schemas() -> str:
                {"name":"f2", "type":"int"}
            ]
          }
-       """
-    )
+       """)
 
 
 @externally_idempotent(False)
 class DecodeError(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 $ kafka-create-topic topic=decode-error
 
                 $ kafka-ingest format=avro topic=decode-error schema=${schema-f1} repeat=1
@@ -161,9 +128,7 @@ class DecodeError(Check):
                 > CREATE TABLE decode_error FROM SOURCE decode_error_src (REFERENCE "testdrive-decode-error-${testdrive.seed}")
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -182,21 +147,15 @@ class DecodeError(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 ! SELECT * FROM decode_error
                 contains: Decode error
-                """
-            )
-        )
+                """))
 
 
 class DecodeErrorUpsertValue(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ kafka-create-topic topic=decode-error-upsert-value
 
                 $ set schema={
@@ -227,23 +186,17 @@ class DecodeErrorUpsertValue(Check):
 
                 ! SELECT * FROM decode_error_upsert_value
                 contains: avro deserialization error
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(
-                dedent(
-                    """
+            Testdrive(dedent("""
                     $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=bytes
                     key2: garbage2
 
                     ! SELECT * FROM decode_error_upsert_value
                     contains: avro deserialization error
-                    """
-                )
-            ),
+                    """)),
             Testdrive(
                 dedent(
                     """
@@ -267,9 +220,7 @@ class DecodeErrorUpsertValue(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 # Retract all the garbage and confirm the source is now operational
 
                 $ kafka-ingest topic=decode-error-upsert-value key-format=bytes key-terminator=: format=bytes
@@ -279,16 +230,12 @@ class DecodeErrorUpsertValue(Check):
 
                 > SELECT f1 FROM decode_error_upsert_value
                 1
-                """
-            )
-        )
+                """))
 
 
 class DecodeErrorUpsertKey(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ kafka-create-topic topic=decode-error-upsert-key
 
                 $ set key-schema={
@@ -315,15 +262,11 @@ class DecodeErrorUpsertKey(Check):
 
                 ! SELECT * FROM decode_error_upsert_key
                 contains: avro deserialization error
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
-            Testdrive(
-                dedent(
-                    """
+            Testdrive(dedent("""
                     # Retract existing garbage
                     $ kafka-ingest topic=decode-error-upsert-key key-format=bytes format=bytes key-terminator=:
                     garbage1:
@@ -342,9 +285,7 @@ class DecodeErrorUpsertKey(Check):
 
                     ! SELECT * FROM decode_error_upsert_key
                     contains: avro deserialization error
-                    """
-                )
-            ),
+                    """)),
             Testdrive(
                 dedent(
                     """
@@ -371,9 +312,7 @@ class DecodeErrorUpsertKey(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 # Retract any remaining garbage
                 $ kafka-ingest topic=decode-error-upsert-key key-format=bytes format=bytes key-terminator=:
                 garbage3:
@@ -382,6 +321,4 @@ class DecodeErrorUpsertKey(Check):
                 > SELECT f1 FROM decode_error_upsert_key
                 1
                 2
-                """
-            )
-        )
+                """))

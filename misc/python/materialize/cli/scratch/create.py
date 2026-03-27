@@ -86,7 +86,7 @@ def multi_json(s: str) -> list[dict[Any, Any]]:
         if s[idx] in " \t\n\r":
             idx += 1
         else:
-            (obj, idx) = decoder.raw_decode(s, idx)
+            obj, idx = decoder.raw_decode(s, idx)
             result.append(obj)
 
     return result

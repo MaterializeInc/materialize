@@ -256,14 +256,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         # Separate clusterd not supported by Mz0dtDeploy yet
         if Mz0dtDeploy in scenario.actions_with_weight():
-            c.sql(
-                """
+            c.sql("""
                 CREATE CLUSTER storage (SIZE = 'scale=2,workers=2');
-            """
-            )
+            """)
         else:
-            c.sql(
-                """
+            c.sql("""
                 CREATE CLUSTER storage REPLICAS (r2 (
                     STORAGECTL ADDRESSES ['storaged:2100'],
                     STORAGE ADDRESSES ['storaged:2103'],
@@ -271,8 +268,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     COMPUTE ADDRESSES ['storaged:2102'],
                     WORKERS 4
                 ))
-            """
-            )
+            """)
 
         setup_default_ssh_test_connection(c, "zippy_ssh")
 

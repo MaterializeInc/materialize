@@ -49,12 +49,10 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     assert check == True
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! ALTER CLUSTER sized1 SET (AVAILABILITY ZONES ('4'))
             exact:unknown cluster replica availability zone 4
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -83,12 +81,10 @@ def test_managed_cluster_sizing(mz: MaterializeApplication) -> None:
     mz.environmentd.sql("DROP CLUSTER sized1 CASCADE")
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE CLUSTER sizedbad (SIZE="badsize")
             contains:unknown cluster replica size badsize
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -128,30 +124,21 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     )
 
     def assert_replica_names(names, allow_pending=False):
-        replicas = mz.environmentd.sql_query(
-            """
+        replicas = mz.environmentd.sql_query("""
             SELECT mz_cluster_replicas.name
             FROM mz_cluster_replicas, mz_clusters
             WHERE mz_cluster_replicas.cluster_id = mz_clusters.id
             AND mz_clusters.name = 'zdtaltertest';
-            """
-        )
+            """)
         assert [replica[0] for replica in replicas] == names
         if not allow_pending:
-            assert (
-                len(
-                    mz.environmentd.sql_query(
-                        """
+            assert len(mz.environmentd.sql_query("""
                         SELECT cr.name
                         FROM mz_internal.mz_pending_cluster_replicas  ur
                         INNER join mz_cluster_replicas cr ON cr.id=ur.id
                         INNER join mz_clusters c ON c.id=cr.cluster_id
                         WHERE c.name = 'zdtaltertest';
-                        """
-                    )
-                )
-                == 0
-            ), "There should be no pending replicas"
+                        """)) == 0, "There should be no pending replicas"
 
     # Basic zero-downtime reconfig test cases matrix
     # - size change, no replica change
@@ -220,8 +207,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
     # replica checks during alter
     mz.testdrive.run(
         no_reset=True,
-        input=dedent(
-            """
+        input=dedent("""
         $ kafka-create-topic topic=zdt-reconfig
 
         $ kafka-ingest topic=zdt-reconfig format=bytes key-format=bytes key-terminator=: repeat=1000
@@ -255,8 +241,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
           KEY FORMAT TEXT
           VALUE FORMAT TEXT
           ENVELOPE UPSERT
-        """
-        ),
+        """),
     )
 
     # Valudate replicas are correct during an ongoing alter
@@ -275,24 +260,18 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     assert_replica_names(["r1", "r1-pending"], allow_pending=True)
     assert (
-        mz.environmentd.sql_query(
-            """
+        mz.environmentd.sql_query("""
         SELECT size FROM mz_clusters WHERE name='zdtaltertest';
-        """
-        )
-        == (["scale=1,workers=1"],)
+        """) == (["scale=1,workers=1"],)
     ), "Cluster should use original config during alter"
 
     thread.join()
 
     assert_replica_names(["r1"], allow_pending=False)
     assert (
-        mz.environmentd.sql_query(
-            """
+        mz.environmentd.sql_query("""
         SELECT size FROM mz_clusters WHERE name='zdtaltertest';
-        """
-        )
-        == (["scale=1,workers=2"],)
+        """) == (["scale=1,workers=2"],)
     ), "Cluster should use new config after alter completes"
 
     # Validate cancelation of alter cluster..with
@@ -349,12 +328,9 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
 
     assert_replica_names(["r1"], allow_pending=False)
     assert (
-        mz.environmentd.sql_query(
-            """
+        mz.environmentd.sql_query("""
         SELECT size FROM mz_clusters WHERE name='cluster1';
-        """
-        )
-        == (["scale=1,workers=1"],)
+        """) == (["scale=1,workers=1"],)
     ), "Cluster should not have updated if canceled during alter"
 
     # Test zero-downtime reconfig wait until ready
@@ -367,8 +343,7 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         user="mz_system",
     )
 
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER slow_hydration( SIZE = "scale=1,workers=1" );
         SET CLUSTER TO slow_hydration;
         SET DATABASE TO materialize;
@@ -382,37 +357,30 @@ def test_zero_downtime_reconfiguration(mz: MaterializeApplication) -> None:
         SELECT * FROM  a,b,test_table;
 
         CREATE INDEX test_view_idx ON test_view(id);
-        """
-    )
+        """)
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! ALTER CLUSTER slow_hydration set (size='scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT='1s', ON TIMEOUT ROLLBACK))
             contains: canceling statement, provided timeout lapsed
-            """
-        ),
+            """),
         no_reset=True,
     )
 
     # Test fails to alter with source
-    mz.environmentd.sql(
-        """
+    mz.environmentd.sql("""
         CREATE CLUSTER cluster_with_source( SIZE = "scale=1,workers=1" );
         SET CLUSTER TO cluster_with_source;
         SET DATABASE TO materialize;
         CREATE SOURCE counter
           FROM LOAD GENERATOR COUNTER
           (TICK INTERVAL '500ms');
-        """
-    )
+        """)
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! ALTER CLUSTER cluster_with_source set (replication factor 2000) WITH (WAIT UNTIL READY (TIMEOUT='10s', ON TIMEOUT ROLLBACK))
             contains: creating cluster replica would violate max_replicas_per_cluster limit
-            """
-        ),
+            """),
         no_reset=True,
     )

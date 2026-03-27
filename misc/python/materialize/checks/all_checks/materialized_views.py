@@ -17,17 +17,13 @@ from materialize.mz_version import MzVersion
 
 class MaterializedViews(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE materialized_views_table (f1 STRING);
                 > INSERT INTO materialized_views_table SELECT 'T1A' || generate_series FROM generate_series(1,10000);
                 > INSERT INTO materialized_views_table SELECT 'T1B' || generate_series FROM generate_series(1,10000);
                 # Regression test for database-issues#8032.
                 > CREATE MATERIALIZED VIEW zero_arity AS SELECT;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -55,9 +51,7 @@ class MaterializedViews(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM materialized_view1
                 T1B 10000
                 T2B 10000
@@ -69,22 +63,16 @@ class MaterializedViews(Check):
                 T3B 10000
                 > SELECT 1, * FROM zero_arity
                 1
-                """
-            )
-        )
+                """))
 
 
 class MaterializedViewsAssertNotNull(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE not_null_table (x INT, y INT, z INT);
                 > INSERT INTO not_null_table VALUES (NULL, 2, 3), (4, NULL, 6), (7, 8, NULL);
                 > CREATE MATERIALIZED VIEW not_null_view1 WITH (ASSERT NOT NULL x) AS SELECT * FROM not_null_table;
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -102,8 +90,7 @@ class MaterializedViewsAssertNotNull(Check):
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            """
+        sql = dedent("""
             ! SELECT * FROM not_null_view1
             contains: column "x" must not be null
 
@@ -214,25 +201,20 @@ class MaterializedViewsAssertNotNull(Check):
 
             ! SELECT * FROM not_null_view3
             contains: column "z" must not be null
-            """
-        )
+            """)
 
         return Testdrive(sql)
 
 
 class MaterializedViewsRefresh(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE refresh_table (x INT);
                 > INSERT INTO refresh_table VALUES (1);
                 > CREATE MATERIALIZED VIEW refresh_view_2s_1 WITH (REFRESH EVERY '2 seconds') AS SELECT DISTINCT(x) FROM refresh_table;
                 > CREATE MATERIALIZED VIEW refresh_view_at_1 WITH (REFRESH AT mz_now()::string::int8) AS SELECT DISTINCT(x) FROM refresh_table;
                 > CREATE MATERIALIZED VIEW refresh_view_late_1 WITH (REFRESH AT mz_now()::string::int8 + 86400000) AS SELECT DISTINCT(x) FROM refresh_table;
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -254,9 +236,7 @@ class MaterializedViewsRefresh(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > INSERT INTO refresh_table VALUES (4);
 
                 > SELECT * FROM refresh_view_2s_1
@@ -305,9 +285,7 @@ class MaterializedViewsRefresh(Check):
                 "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_3 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (StorageInput([User<>])): [<> <>]\\n"
                 >[version>=2601600] EXPLAIN TIMESTAMP FOR SELECT * FROM refresh_view_late_3
                 "                query timestamp: <> <>\\n          oracle read timestamp: <> <>\\nlargest not in advance of upper: <> <>\\n                          upper:[<> <>]\\n                          since:[<> <>]\\n        can respond immediately: false\\n                       timeline: Some(EpochMilliseconds)\\n              session wall time: <> <>\\n\\nsource materialize.public.refresh_view_late_3 (<>, storage):\\n                  read frontier:[<> <>]\\n                 write frontier:[<> <>]\\n\\nbinding constraints:\\nlower:\\n  (Storage inputs: [<>]): [<> <>]\\n"
-           """
-            )
-        )
+           """))
 
 
 class MaterializedViewReplacement(Check):
@@ -315,15 +293,11 @@ class MaterializedViewReplacement(Check):
         return self.base_version >= MzVersion.parse_mz("v26.13.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE mv_replacement_table (a INT, b INT)
                 > INSERT INTO mv_replacement_table VALUES (1, 2), (3, 4), (5, 6)
                 > CREATE MATERIALIZED VIEW mv_replacement_target AS SELECT a, b FROM mv_replacement_table
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -356,9 +330,7 @@ class MaterializedViewReplacement(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM mv_replacement_target
                 3  2
                 7  4
@@ -380,9 +352,7 @@ class MaterializedViewReplacement(Check):
                 # Drop the replacement instead of applying it, to ensure
                 # `validate` remains idempotent.
                 > DROP MATERIALIZED VIEW mv_replacement_replacement
-            """
-            )
-        )
+            """))
 
 
 def remove_target_cluster_from_explain(sql: str) -> str:

@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class String(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE string_table (f1 STRING, f2 STRING, f3 STRING, f4 INT, f5 INT, f6 INT[]);
             > INSERT INTO string_table VALUES (' foobar ', ' abc ', ' xyz ', 2, 3, '{1,NULL,3}');
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -65,9 +61,7 @@ class String(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > SELECT * FROM string_view1;
             true true false foo "foobar " " fo" "foobar" "foobar " " foobar" "oobar " "ooba" 1,NULL,3
             true true false foo "foo " " fo" foo "foo " " foo" "oo " oo 1,2,3,4,NULL,NULL
@@ -77,6 +71,4 @@ class String(Check):
             true true false foo "foobar " " fo" "foobar" "foobar " " foobar" "oobar " "ooba" 1,NULL,3
             true true false foo "foo " " fo" foo "foo " " foo" "oo " oo 1,2,3,4,NULL,NULL
             false true true bar "bar " " ba" bar "bar " " bar" "bar " ba NULL
-            """
-            )
-        )
+            """))

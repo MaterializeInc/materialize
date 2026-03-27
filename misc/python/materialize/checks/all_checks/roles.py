@@ -32,9 +32,7 @@ class CreateRole(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT name FROM mz_roles WHERE name LIKE 'create_role%';
                 create_role1
                 create_role2
@@ -44,21 +42,15 @@ class CreateRole(Check):
                 > SELECT role.name, member.name from mz_role_members JOIN mz_roles role ON mz_role_members.role_id = role.id JOIN mz_roles member ON mz_role_members.member = member.id JOIN mz_roles grantor ON mz_role_members.grantor = grantor.id WHERE role.name LIKE 'create_role%';
                 create_role1 materialize
                 create_role2 materialize
-                """
-            )
-        )
+                """))
 
 
 class DropRole(CreateRole):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE ROLE drop_role1;
                 > GRANT drop_role1 TO materialize;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -78,16 +70,12 @@ class DropRole(CreateRole):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*) FROM mz_roles WHERE name LIKE 'drop_role%';
                 0
                 > SELECT COUNT(*) FROM mz_role_members JOIN mz_roles ON mz_role_members.role_id = mz_roles.id WHERE name LIKE 'drop_role%';
                 0
-                """
-            )
-        )
+                """))
 
 
 class BuiltinRoles(CreateRole):
@@ -95,15 +83,11 @@ class BuiltinRoles(CreateRole):
         return [Testdrive(TESTDRIVE_NOP), Testdrive(TESTDRIVE_NOP)]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             $ skip-if
             SELECT mz_version_num() < 8300
 
             > SELECT name FROM mz_roles WHERE name IN ('mz_monitor', 'mz_monitor_redacted') ORDER BY name
             mz_monitor
             mz_monitor_redacted
-            """
-            )
-        )
+            """))

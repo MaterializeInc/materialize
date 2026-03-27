@@ -40,14 +40,10 @@ def changes(
     info(f"Comparing `{base_suffix}` vs `{diff_suffix}` " f"plans in {target}")
 
     info("Comparing optimized plans")
-    out.write(
-        dedent(
-            f"""
+    out.write(dedent(f"""
             ## {header_name}
 
-            """
-        ).lstrip("\n")
-    )
+            """).lstrip("\n"))
 
     for base_path in target.glob(f"**/*.optimized_plan.{base_suffix}.txt"):
         base = explain_file(base_path)
@@ -71,9 +67,7 @@ def changes(
         if base_data != diff_data:
             info(f"Found diff at {item_type.sql()} `{database}.{schema}.{name}`")
 
-            out.write(
-                dedent(
-                    f"""
+            out.write(dedent(f"""
                     - TODO(REGRESSION|IMPROVEMENT) in {item_type.sql()} `{database}.{schema}.{name}`
 
                       ```bash
@@ -82,6 +76,4 @@ def changes(
                           {target / diff.path()}
                       ```
 
-                    """
-                ).lstrip("\n")
-            )
+                    """).lstrip("\n"))

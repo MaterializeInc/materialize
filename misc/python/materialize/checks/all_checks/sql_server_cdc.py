@@ -34,9 +34,7 @@ class SqlServerCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -55,9 +53,7 @@ class SqlServerCdcBase:
                     USER {SqlServer.DEFAULT_USER},
                     PASSWORD SECRET sql_server_password1{self.suffix}
                   )
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -174,8 +170,7 @@ class SqlServerCdcBase:
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            f"""
+        sql = dedent(f"""
             $ sql-server-connect name=sql-server
             server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -263,8 +258,7 @@ class SqlServerCdcBase:
               - materialize.public.sql_server_source_tablea{self.suffix}_primary_idx (*** full scan ***)
 
             Target cluster: quickstart
-            """
-        )
+            """)
 
         return Testdrive(sql)
 
@@ -306,9 +300,7 @@ class SqlServerCdcMzNow(Check):
         )
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ sql-server-connect name=sql-server
                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -340,9 +332,7 @@ class SqlServerCdcMzNow(Check):
                 > CREATE MATERIALIZED VIEW sql_server_mz_now_view AS
                   SELECT * FROM sql_server_mz_now_table
                   WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -380,9 +370,7 @@ class SqlServerCdcMzNow(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT COUNT(*) FROM sql_server_mz_now_table;
                 13
 
@@ -414,6 +402,4 @@ class SqlServerCdcMzNow(Check):
                 USE test;
                 INSERT INTO sql_server_mz_now_table VALUES (SYSDATETIME(), 'B3');
                 DELETE FROM sql_server_mz_now_table WHERE f2 LIKE '%4%';
-                """
-            )
-        )
+                """))

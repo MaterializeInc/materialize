@@ -14,14 +14,10 @@ from materialize.checks.checks import Check
 
 class CreateIndex(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE create_index_table (f1 INTEGER, f2 INTEGER, f3 INTEGER);
                 > INSERT INTO create_index_table VALUES (1,2,3);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -41,9 +37,7 @@ class CreateIndex(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM create_index_table;
                 1 2 3
                 2 3 4
@@ -64,6 +58,4 @@ class CreateIndex(Check):
                 5
                 6
                 7
-           """
-            )
-        )
+           """))

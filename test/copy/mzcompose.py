@@ -350,9 +350,7 @@ def workflow_test_column_dedup(c: Composition):
     with c.override(Testdrive(no_reset=True)):
         c.up("materialized", "minio")
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_copy_to_expr = true;
 
@@ -371,9 +369,7 @@ def workflow_test_column_dedup(c: Composition):
 
                 $ s3-verify-data bucket=copytos3 key=test/column_dedup
                 1 2 3 4
-                """
-            )
-        )
+                """))
 
 
 def workflow_test_github_9627(c: Composition):
@@ -386,9 +382,7 @@ def workflow_test_github_9627(c: Composition):
     with c.override(Testdrive(no_reset=True)):
         c.up("materialized", "minio")
 
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > CREATE TABLE t (a int)
                 > INSERT INTO t VALUES (1)
 
@@ -403,9 +397,7 @@ def workflow_test_github_9627(c: Composition):
 
                 > COPY (SELECT * FROM t) TO 's3://copytos3/test/github_9627/'
                   WITH (AWS CONNECTION = aws_conn, FORMAT = 'csv');
-                """
-            )
-        )
+                """))
 
         # Check that the table's read frontier still advances.
 

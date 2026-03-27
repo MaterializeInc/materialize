@@ -18,8 +18,7 @@ from materialize.mzcompose.service import (
     ServiceDependency,
 )
 
-STANDALONE_INIT_SCRIPT = dedent(
-    """
+STANDALONE_INIT_SCRIPT = dedent("""
     set -e
 
     CLUSTER_FILE="${FDB_CLUSTER_FILE:-/var/fdb/fdb.cluster}"
@@ -48,8 +47,7 @@ STANDALONE_INIT_SCRIPT = dedent(
 
     # Execute the original entrypoint
     exec /var/fdb/scripts/fdb.bash "$@"
-    """
-)
+    """)
 
 
 class FoundationDB(Service):

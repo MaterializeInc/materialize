@@ -671,14 +671,10 @@ class State:
 
         with c.override(testdrive(no_reset=False)):
             c.up(Service("testdrive", idle=True))
-            c.testdrive(
-                dedent(
-                    """
+            c.testdrive(dedent("""
                > SELECT 1
                1
-            """
-                )
-            )
+            """))
 
 
 class AWS(State):
@@ -1074,15 +1070,11 @@ def workflow_aws_persistent_setup(
         aws.setup(PREFIX_AWS_PERSISTENT, True, tag)
         with c.override(testdrive(no_reset=True)):
             aws.connect(c)
-            c.testdrive(
-                dedent(
-                    """
+            c.testdrive(dedent("""
                > CREATE SOURCE counter FROM LOAD GENERATOR COUNTER
                > CREATE TABLE table (c INT)
                > CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM table
-            """
-                )
-            )
+            """))
     finally:
         aws.cleanup()
 
@@ -1112,18 +1104,12 @@ def workflow_aws_persistent_test(
 
             count = 1
 
-            c.testdrive(
-                dedent(
-                    """
+            c.testdrive(dedent("""
                > DELETE FROM table
-                """
-                )
-            )
+                """))
 
             while time.time() - start_time < args.runtime:
-                c.testdrive(
-                    dedent(
-                        f"""
+                c.testdrive(dedent(f"""
                    > SELECT 1
                    1
 
@@ -1141,9 +1127,7 @@ def workflow_aws_persistent_test(
 
                    > SELECT * FROM temp
                    {count}
-                """
-                    )
-                )
+                """))
 
                 count += 1
 

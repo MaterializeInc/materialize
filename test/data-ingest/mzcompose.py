@@ -176,15 +176,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         conn = c.sql_connection()
         conn.autocommit = True
         with conn.cursor() as cur:
-            cur.execute(
-                """CREATE CONNECTION IF NOT EXISTS kafka_conn
-                   FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT"""
-            )
-            cur.execute(
-                """CREATE CONNECTION IF NOT EXISTS csr_conn
+            cur.execute("""CREATE CONNECTION IF NOT EXISTS kafka_conn
+                   FOR KAFKA BROKER 'kafka:9092', SECURITY PROTOCOL PLAINTEXT""")
+            cur.execute("""CREATE CONNECTION IF NOT EXISTS csr_conn
                    FOR CONFLUENT SCHEMA REGISTRY
-                   URL 'http://schema-registry:8081'"""
-            )
+                   URL 'http://schema-registry:8081'""")
         conn.autocommit = False
         conn.close()
 

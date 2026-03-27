@@ -43,15 +43,13 @@ class CopyToS3(Action):
         secret_name = f"zippy_minio_secret_{self.seqno}"
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE SECRET {secret_name} AS '${{testdrive.aws-secret-access-key}}'
                 > CREATE CONNECTION {conn_name} TO AWS (ENDPOINT '${{testdrive.aws-endpoint}}', REGION 'us-east-1', ACCESS KEY ID '${{testdrive.aws-access-key-id}}', SECRET ACCESS KEY SECRET {secret_name})
                 > COPY (SELECT f1 FROM {self.table.name}) TO 's3://copytos3/{self.s3_key}' WITH (AWS CONNECTION = {conn_name}, FORMAT = 'csv')
                 > DROP CONNECTION {conn_name}
                 > DROP SECRET {secret_name}
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
         self.s3_object.min_val = self.table.watermarks.min
@@ -75,8 +73,7 @@ class CopyFromS3(Action):
         staging_table = f"zippy_s3_staging_{self.seqno}"
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 > CREATE SECRET {secret_name} AS '${{testdrive.aws-secret-access-key}}'
                 > CREATE CONNECTION {conn_name} TO AWS (ENDPOINT '${{testdrive.aws-endpoint}}', REGION 'us-east-1', ACCESS KEY ID '${{testdrive.aws-access-key-id}}', SECRET ACCESS KEY SECRET {secret_name})
                 > CREATE TABLE {staging_table} (f1 INTEGER)
@@ -86,7 +83,6 @@ class CopyFromS3(Action):
                 > DROP TABLE {staging_table}
                 > DROP CONNECTION {conn_name}
                 > DROP SECRET {secret_name}
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )

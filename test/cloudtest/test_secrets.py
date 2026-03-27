@@ -19,9 +19,7 @@ from materialize.cloudtest.util.wait import wait
 
 
 def test_secrets(mz: MaterializeApplication) -> None:
-    mz.testdrive.run(
-        input=dedent(
-            """
+    mz.testdrive.run(input=dedent("""
             > CREATE SECRET username AS '123';
             > CREATE SECRET password AS '234';
 
@@ -34,9 +32,7 @@ def test_secrets(mz: MaterializeApplication) -> None:
                 SASL PASSWORD = SECRET password
               );
             contains:Broker does not support SSL connections
-            """
-        )
-    )
+            """))
 
     id = mz.environmentd.sql_query("SELECT id FROM mz_secrets WHERE name = 'username'")[
         0
@@ -98,9 +94,7 @@ def test_orphaned_secrets(mz: MaterializeApplication) -> None:
 @pytest.mark.skip(reason="Flaky, see database-issues#8456")
 def test_missing_secret(mz: MaterializeApplication) -> None:
     """Test that Mz does not panic if a secret goes missing from K8s"""
-    mz.testdrive.run(
-        input=dedent(
-            """
+    mz.testdrive.run(input=dedent("""
           $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
           ALTER SYSTEM SET enable_connection_validation_syntax = true
 
@@ -143,9 +137,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
 
           > SELECT COUNT(*) > 0 FROM t1;
           true
-     """
-        )
-    )
+     """))
 
     id = mz.environmentd.sql_query(
         "SELECT id FROM mz_secrets WHERE name = 'to_be_deleted'"
@@ -157,8 +149,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     wait(condition="delete", resource=f"secret/{secret}")
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
               (PUBLICATION 'mz_source');
@@ -168,8 +159,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               FROM KAFKA CONNECTION kafka_conn_with_deleted_secret
               (TOPIC 'foo')
             contains:failed to create and connect Kafka consumer
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -190,8 +180,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
         assert e.returncode == 137
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
               (PUBLICATION 'mz_source');
@@ -206,8 +195,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
               FROM mz_internal.mz_source_statuses
               WHERE name = 'source_with_deleted_secret';
             true
-            """
-        ),
+            """),
         no_reset=True,
     )
 
@@ -224,8 +212,7 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
     wait(condition="condition=Ready", resource="pod/environmentd-0")
 
     mz.testdrive.run(
-        input=dedent(
-            """
+        input=dedent("""
             ! CREATE SOURCE some_pg_source
               FROM POSTGRES CONNECTION pg_conn_with_deleted_secret
               (PUBLICATION 'mz_source');
@@ -245,7 +232,6 @@ def test_missing_secret(mz: MaterializeApplication) -> None:
             # upstream Postgres DB, and we don't want to block dropping objects
             # because of that.
             > DROP CLUSTER to_be_killed CASCADE;
-            """
-        ),
+            """),
         no_reset=True,
     )

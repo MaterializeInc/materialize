@@ -103,7 +103,7 @@ class SmokeTest(unittest.TestCase):
             # Validate the first row, but ignore the timestamp column.
             row = cur.fetchone()
             if row is not None:
-                (ts, diff, a, b) = row
+                ts, diff, a, b = row
                 self.assertEqual(diff, 1)
                 self.assertEqual(a, 1)
                 self.assertEqual(b, "a")
@@ -124,7 +124,7 @@ class SmokeTest(unittest.TestCase):
             row = cur.fetchone()
             assert row is not None
 
-            (ts, diff, a, b) = row
+            ts, diff, a, b = row
             self.assertEqual(diff, 1)
             self.assertEqual(a, 2)
             self.assertEqual(b, "b")
@@ -157,7 +157,7 @@ class SmokeTest(unittest.TestCase):
                     # Validate the first row, but ignore the timestamp column.
                     row = copy.read_row()
                     assert row is not None
-                    (ts, diff, a, b) = row
+                    ts, diff, a, b = row
                     self.assertEqual(diff, 1)
                     self.assertEqual(a, 1)
                     self.assertEqual(b, "a")
@@ -174,7 +174,7 @@ class SmokeTest(unittest.TestCase):
                     # Validate the new row, again ignoring the timestamp column.
                     row = copy.read_row()
                     assert row is not None
-                    (ts, diff, a, b) = row
+                    ts, diff, a, b = row
                     self.assertEqual(diff, 1)
                     self.assertEqual(a, 2)
                     self.assertEqual(b, "b")
@@ -198,7 +198,7 @@ class SmokeTest(unittest.TestCase):
                 stream = cur.stream("SUBSCRIBE psycopg3_subscribe_stream")
 
                 # Validate the first row, but ignore the timestamp column.
-                (ts, diff, a, b) = next(stream)
+                ts, diff, a, b = next(stream)
                 self.assertEqual(diff, 1)
                 self.assertEqual(a, 1)
                 self.assertEqual(b, "a")
@@ -213,7 +213,7 @@ class SmokeTest(unittest.TestCase):
                         )
 
                 # Validate the new row, again ignoring the timestamp column.
-                (ts, diff, a, b) = next(stream)
+                ts, diff, a, b = next(stream)
                 self.assertEqual(diff, 1)
                 self.assertEqual(a, 2)
                 self.assertEqual(b, "b")
@@ -246,7 +246,7 @@ class SmokeTest(unittest.TestCase):
                     )
 
                     # Ensure we see our own subscription in `mz_subscriptions`.
-                    (_ts, diff, pid) = next(metadata)
+                    _ts, diff, pid = next(metadata)
                     self.assertEqual(int(pid), metadata_session_id)
                     self.assertEqual(diff, 1)
 
@@ -266,7 +266,7 @@ class SmokeTest(unittest.TestCase):
 
                     # Ensure we see the dummy subscription added to
                     # `mz_subscriptions`.
-                    (_ts, diff, pid) = next(metadata)
+                    _ts, diff, pid = next(metadata)
                     self.assertEqual(int(pid), subscribe_session_id)
                     self.assertEqual(diff, 1)
 
@@ -276,7 +276,7 @@ class SmokeTest(unittest.TestCase):
 
                     # Ensure we see the dummy subscription removed from
                     # `mz_subscriptions`.
-                    (_ts, diff, pid) = next(metadata)
+                    _ts, diff, pid = next(metadata)
                     self.assertEqual(int(pid), subscribe_session_id)
                     self.assertEqual(diff, -1)
 

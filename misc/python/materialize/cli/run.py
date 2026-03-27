@@ -216,9 +216,7 @@ def main() -> int:
     if args.program in KNOWN_PROGRAMS:
         build_func = _cargo_build
 
-        (build_retcode, built_programs) = build_func(
-            args, extra_programs=[args.program]
-        )
+        build_retcode, built_programs = build_func(args, extra_programs=[args.program])
 
         if args.build_only:
             return build_retcode
@@ -347,7 +345,7 @@ def main() -> int:
             # Always enable soft assertions in SLTs for un-redacted debug formatting and additional testing.
             env["MZ_SOFT_ASSERTIONS"] = "1"
     elif args.program == "test":
-        (build_retcode, _) = _cargo_build(args)
+        build_retcode, _ = _cargo_build(args)
         if args.build_only:
             return build_retcode
 

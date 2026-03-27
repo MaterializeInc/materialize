@@ -273,16 +273,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     # Set up SSH connection.
-    c.sql(
-        """
+    c.sql("""
         CREATE DATABASE IF NOT EXISTS testdrive_no_reset_connections;
         CREATE CONNECTION IF NOT EXISTS testdrive_no_reset_connections.public.ssh TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
             PORT 22
         );
-    """
-    )
+    """)
     public_key = c.sql_query(
         "select public_key_1 from mz_ssh_tunnel_connections where id = 'u1';"
     )[0][0]
@@ -294,16 +292,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     # Set up backup SSH connection.
-    c.sql(
-        """
+    c.sql("""
         CREATE DATABASE IF NOT EXISTS testdrive_no_reset_connections;
         CREATE CONNECTION IF NOT EXISTS testdrive_no_reset_connections.public.ssh_backup TO SSH TUNNEL (
             HOST 'ssh-bastion-host',
             USER 'mz',
             PORT 22
         );
-    """
-    )
+    """)
     public_key = c.sql_query(
         "select public_key_1 from mz_ssh_tunnel_connections where id = 'u2';"
     )[0][0]

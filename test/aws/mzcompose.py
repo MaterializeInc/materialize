@@ -396,15 +396,13 @@ def test_s3tablesrest_region_mismatch(c: Composition, ctx: TestContext):
         # but the environment is running in us-east-1. The region check happens
         # during sink purification.
         try:
-            c.sql(
-                """CREATE SINK s3tables_sink
+            c.sql("""CREATE SINK s3tables_sink
                     FROM sink_test_table
                     INTO ICEBERG CATALOG CONNECTION s3tables_wrong_region (
                         NAMESPACE 'test_namespace',
                         TABLE 'test_table'
                     )
-                    USING AWS CONNECTION aws_wrong_region"""
-            )
+                    USING AWS CONNECTION aws_wrong_region""")
             raise AssertionError(
                 "Expected S3 Tables sink to fail due to region mismatch"
             )

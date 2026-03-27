@@ -266,18 +266,14 @@ class KafkaTopics(Generator):
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
         )
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS csr_conn
                 FOR CONFLUENT SCHEMA REGISTRY
                 URL '${testdrive.schema-registry-url}';
-                """
-        )
+                """)
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
-            """
-        )
+            """)
 
         for i in cls.all():
             topic = f"kafka-sources-{i}"
@@ -287,14 +283,12 @@ class KafkaTopics(Generator):
             )
             print(f'"{i}" {{"f1": "{i}"}}')
 
-            print(
-                f"""> CREATE SOURCE s{i}
+            print(f"""> CREATE SOURCE s{i}
                   IN CLUSTER single_replica_cluster
                   FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{topic}-${{testdrive.seed}}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE NONE;
-                  """
-            )
+                  """)
 
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM s{i}")
@@ -322,28 +316,22 @@ class KafkaSourcesSameTopic(Generator):
         )
         print('"123" {"f1": "123"}')
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${testdrive.schema-registry-url}';
-            """
-        )
+            """)
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
-            """
-        )
+            """)
 
         for i in cls.all():
-            print(
-                f"""> CREATE SOURCE s{i}
+            print(f"""> CREATE SOURCE s{i}
               IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-topic-${{testdrive.seed}}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
-              """
-            )
+              """)
 
         print("$ set-sql-timeout duration=600s")
 
@@ -377,27 +365,21 @@ class KafkaPartitions(Generator):
         for i in cls.all():
             print(f'"{i}" {{"f1": "{i}"}}')
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${testdrive.schema-registry-url}';
-            """
-        )
+            """)
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
-            """
-        )
+            """)
 
-        print(
-            """> CREATE SOURCE s1
+        print("""> CREATE SOURCE s1
             IN CLUSTER single_replica_cluster
             FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-partitions-${testdrive.seed}')
             FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
             ENVELOPE NONE;
-            """
-        )
+            """)
 
         print("> CREATE DEFAULT INDEX ON s1")
 
@@ -435,27 +417,21 @@ class KafkaRecordsEnvelopeNone(Generator):
         )
         print('{"f1": "123"}')
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${testdrive.schema-registry-url}';
-            """
-        )
+            """)
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
-            """
-        )
+            """)
 
-        print(
-            """> CREATE SOURCE kafka_records_envelope_none
+        print("""> CREATE SOURCE kafka_records_envelope_none
               IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-none-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE NONE;
-              """
-        )
+              """)
 
         cls.store_explain_and_run("SELECT COUNT(*) FROM kafka_records_envelope_none")
         print(f"{cls.COUNT}")
@@ -484,27 +460,21 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
         )
         print('{"key": "fish"} {"f1": "fish"}')
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${testdrive.schema-registry-url}';
-            """
-        )
+            """)
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
-            """
-        )
+            """)
 
-        print(
-            """> CREATE SOURCE kafka_records_envelope_upsert_same
+        print("""> CREATE SOURCE kafka_records_envelope_upsert_same
               IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-same-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
-              """
-        )
+              """)
 
         print("> SELECT * FROM kafka_records_envelope_upsert_same;\nfish fish")
         cls.store_explain_and_run(
@@ -537,27 +507,21 @@ class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
             '{"key": "${kafka-ingest.iteration}"} {"f1": "${kafka-ingest.iteration}"}'
         )
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${testdrive.schema-registry-url}';
-            """
-        )
+            """)
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS kafka_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS kafka_conn
             TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
-            """
-        )
+            """)
 
-        print(
-            """> CREATE SOURCE kafka_records_envelope_upsert_distinct
+        print("""> CREATE SOURCE kafka_records_envelope_upsert_distinct
               IN CLUSTER single_replica_cluster
               FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-records-envelope-upsert-distinct-${testdrive.seed}')
               FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
               ENVELOPE UPSERT;
-              """
-        )
+              """)
 
         cls.store_explain_and_run(
             "SELECT COUNT(*), COUNT(DISTINCT f1) FROM kafka_records_envelope_upsert_distinct"
@@ -590,17 +554,13 @@ class KafkaSinks(Generator):
         for i in cls.all():
             print(f"> CREATE MATERIALIZED VIEW v{i} (f1) AS VALUES ({i})")
 
-        print(
-            """> CREATE CONNECTION IF NOT EXISTS csr_conn
+        print("""> CREATE CONNECTION IF NOT EXISTS csr_conn
             FOR CONFLUENT SCHEMA REGISTRY
             URL '${testdrive.schema-registry-url}';
-            """
-        )
+            """)
 
         for i in cls.all():
-            print(
-                dedent(
-                    f"""
+            print(dedent(f"""
                      > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i}
@@ -610,19 +570,13 @@ class KafkaSinks(Generator):
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM;
                      $ kafka-verify-topic sink=materialize.public.s{i}
-                     """
-                )
-            )
+                     """))
 
         for i in cls.all():
-            print(
-                dedent(
-                    f"""
+            print(dedent(f"""
                     $ kafka-verify-data format=avro sink=materialize.public.s{i}
                     {{"before": null, "after": {{"row": {{"f1": {i}}}}}}}
-                    """
-                )
-            )
+                    """))
 
 
 class KafkaSinksSameSource(Generator):
@@ -645,9 +599,7 @@ class KafkaSinksSameSource(Generator):
         )
 
         for i in cls.all():
-            print(
-                dedent(
-                    f"""
+            print(dedent(f"""
                      > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
                      > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (URL '${{testdrive.schema-registry-url}}');
                      > CREATE SINK s{i}
@@ -657,9 +609,7 @@ class KafkaSinksSameSource(Generator):
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE DEBEZIUM
                      $ kafka-verify-topic sink=materialize.public.s{i}
-                     """
-                )
-            )
+                     """))
 
         for i in cls.all():
             print(
@@ -1329,8 +1279,7 @@ class ArrayAgg(Generator):
     def body(cls) -> None:
         print("$ set-sql-timeout duration=300s")
         print("> SET statement_timeout='300s'")
-        print(
-            f"""> CREATE TABLE t ({
+        print(f"""> CREATE TABLE t ({
             ", ".join(
                 ", ".join([
                     f"a{i} STRING",
@@ -1340,17 +1289,14 @@ class ArrayAgg(Generator):
                 ])
                 for i in cls.all()
             )
-        });"""
-        )
+        });""")
         print("> INSERT INTO t DEFAULT VALUES;")
-        print(
-            f"""> CREATE MATERIALIZED VIEW v2 AS SELECT {
+        print(f"""> CREATE MATERIALIZED VIEW v2 AS SELECT {
             ", ".join(
                 f"ARRAY_AGG(a{i} ORDER BY b1) FILTER (WHERE 's{i}' = ANY(d{i})) AS r{i}"
                 for i in cls.all()
             )
-        } FROM t GROUP BY a1;"""
-        )
+        } FROM t GROUP BY a1;""")
         print("> CREATE DEFAULT INDEX ON v2;")
 
         cls.store_explain_and_run("SELECT COUNT(*) FROM v2")
@@ -1562,26 +1508,20 @@ class PostgresSources(Generator):
             print(f"INSERT INTO t{i} VALUES ({i});")
         print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
         print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
-        print(
-            """> CREATE CONNECTION pg TO POSTGRES (
+        print("""> CREATE CONNECTION pg TO POSTGRES (
                 HOST postgres,
                 DATABASE postgres,
                 USER postgres,
                 PASSWORD SECRET pgpass
-            )"""
-        )
+            )""")
         for i in cls.all():
-            print(
-                f"""> CREATE SOURCE p{i}
+            print(f"""> CREATE SOURCE p{i}
               IN CLUSTER single_replica_cluster
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
-              """
-            )
-            print(
-                f"""> CREATE TABLE t{i}
+              """)
+            print(f"""> CREATE TABLE t{i}
               FROM SOURCE p{i} (REFERENCE t{i})
-              """
-            )
+              """)
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
             print(f"{i}")
@@ -1608,21 +1548,17 @@ class PostgresTables(Generator):
             print(f"INSERT INTO t{i} VALUES ({i});")
         print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
         print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
-        print(
-            """> CREATE CONNECTION pg TO POSTGRES (
+        print("""> CREATE CONNECTION pg TO POSTGRES (
                 HOST postgres,
                 DATABASE postgres,
                 USER postgres,
                 PASSWORD SECRET pgpass
-            )"""
-        )
-        print(
-            """> CREATE SOURCE p
+            )""")
+        print("""> CREATE SOURCE p
           IN CLUSTER single_worker_cluster
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
           FOR ALL TABLES
-          """
-        )
+          """)
         print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
@@ -1650,20 +1586,16 @@ class PostgresTablesOldSyntax(Generator):
             print(f"INSERT INTO t{i} VALUES ({i});")
         print("CREATE PUBLICATION mz_source FOR ALL TABLES;")
         print("> CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'")
-        print(
-            """> CREATE CONNECTION pg TO POSTGRES (
+        print("""> CREATE CONNECTION pg TO POSTGRES (
                 HOST postgres,
                 DATABASE postgres,
                 USER postgres,
                 PASSWORD SECRET pgpass
-            )"""
-        )
-        print(
-            """> CREATE SOURCE p
+            )""")
+        print("""> CREATE SOURCE p
           IN CLUSTER single_replica_cluster
           FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source') FOR SCHEMAS (public)
-          """
-        )
+          """)
         print("> SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';")
         for i in cls.all():
             print("$ set-sql-timeout duration=300s")
@@ -1699,25 +1631,19 @@ class MySqlSources(Generator):
         print(
             f"> CREATE SECRET IF NOT EXISTS mysqlpass AS '{MySql.DEFAULT_ROOT_PASSWORD}'"
         )
-        print(
-            """> CREATE CONNECTION mysql TO MYSQL (
+        print("""> CREATE CONNECTION mysql TO MYSQL (
                 HOST mysql,
                 USER root,
                 PASSWORD SECRET mysqlpass
-            )"""
-        )
+            )""")
         for i in cls.all():
-            print(
-                f"""> CREATE SOURCE m{i}
+            print(f"""> CREATE SOURCE m{i}
               IN CLUSTER single_replica_cluster
               FROM MYSQL CONNECTION mysql
-              """
-            )
-            print(
-                f"""> CREATE TABLE t{i}
+              """)
+            print(f"""> CREATE TABLE t{i}
               FROM SOURCE m{i} (REFERENCE public.t{i})
-              """
-            )
+              """)
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
             print(f"{i}")
@@ -1756,26 +1682,20 @@ class SqlServerSources(Generator):
         print(
             f"> CREATE SECRET IF NOT EXISTS sqlserverpass AS '{SqlServer.DEFAULT_SA_PASSWORD}'"
         )
-        print(
-            f"""> CREATE CONNECTION sqlserver TO SQL SERVER (
+        print(f"""> CREATE CONNECTION sqlserver TO SQL SERVER (
                 HOST 'sql-server',
                 DATABASE test,
                 USER {SqlServer.DEFAULT_USER},
                 PASSWORD SECRET sqlserverpass
-            )"""
-        )
+            )""")
         for i in cls.all():
-            print(
-                f"""> CREATE SOURCE m{i}
+            print(f"""> CREATE SOURCE m{i}
               IN CLUSTER single_replica_cluster
               FROM SQL SERVER CONNECTION sqlserver
-              """
-            )
-            print(
-                f"""> CREATE TABLE t{i}
+              """)
+            print(f"""> CREATE TABLE t{i}
               FROM SOURCE m{i} (REFERENCE t{i})
-              """
-            )
+              """)
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM t{i}")
             print(f"{i}")
@@ -2350,9 +2270,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         c.up(*node_names)
 
         # Increase resource limits
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 $ postgres-execute connection=postgres://mz_system@materialized:6877/materialize
                 ALTER SYSTEM SET max_clusters = {args.clusters * 10}
                 ALTER SYSTEM SET max_replicas_per_cluster = {args.replicas * 10}
@@ -2361,13 +2279,9 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                 GRANT ALL ON CLUSTER single_replica_cluster TO materialize;
                 GRANT ALL ON CLUSTER single_replica_cluster TO "{ADMIN_USER}";
                 GRANT ALL PRIVILEGES ON SCHEMA public TO "{ADMIN_USER}";
-                """
-            )
-        )
+                """))
         # Create some input data
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > CREATE TABLE ten (f1 INTEGER);
                 > INSERT INTO ten VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
 
@@ -2383,9 +2297,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                 $ kafka-ingest format=avro topic=instance-size schema=${schema} repeat=10000
                 {"f1": "fish"}
-                """
-            )
-        )
+                """))
 
         # Construct the required CREATE CLUSTER statements
         for cluster_id in range(1, args.clusters + 1):
@@ -2437,9 +2349,7 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
         for cluster_id in range(1, args.clusters + 1):
             cluster_name = f"cluster_u{cluster_id}"
 
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                      > SET cluster={cluster_name}
 
                      > CREATE DEFAULT INDEX ON ten;
@@ -2462,17 +2372,13 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
                      > CREATE TABLE s_{cluster_name}_tbl FROM SOURCE s_{cluster_name} (REFERENCE "testdrive-instance-size-${{testdrive.seed}}")
                        FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                        ENVELOPE NONE
-                 """
-                )
-            )
+                 """))
 
         # Validate that each individual cluster is operating properly
         for cluster_id in range(1, args.clusters + 1):
             cluster_name = f"cluster_u{cluster_id}"
 
-            c.testdrive(
-                dedent(
-                    f"""
+            c.testdrive(dedent(f"""
                      > SET cluster={cluster_name}
 
                      > SELECT c1 FROM v_{cluster_name};
@@ -2480,6 +2386,4 @@ def workflow_instance_size(c: Composition, parser: WorkflowArgumentParser) -> No
 
                      > SELECT COUNT(*) FROM s_{cluster_name}_tbl
                      10000
-                 """
-                )
-            )
+                 """))

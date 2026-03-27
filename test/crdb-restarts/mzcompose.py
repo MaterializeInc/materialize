@@ -38,8 +38,7 @@ COCKROACH_HEALTHCHECK_DISABLED = ServiceHealthcheck(
     start_period="30s",
 )
 
-INIT_SCRIPT = dedent(
-    """
+INIT_SCRIPT = dedent("""
     # This source will persist throughout the CRDB rolling restart
     > DROP CLUSTER IF EXISTS s_old_cluster CASCADE;
     > CREATE CLUSTER s_old_cluster SIZE = 'scale=4,workers=4';
@@ -57,11 +56,9 @@ INIT_SCRIPT = dedent(
 
     > SELECT COUNT(*) > 1 FROM s_new_tbl;
     true
-    """
-)
+    """)
 
-VALIDATE_SCRIPT = dedent(
-    """
+VALIDATE_SCRIPT = dedent("""
     > SELECT COUNT(*) > 1 FROM s_old_tbl;
     true
 
@@ -72,8 +69,7 @@ VALIDATE_SCRIPT = dedent(
 
     > SELECT COUNT(*) > 1 FROM s_new_tbl;
     true
-    """
-)
+    """)
 
 
 ALL_COCKROACH_NODES = ",".join(

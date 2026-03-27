@@ -64,8 +64,7 @@ def main():
         print(f"Creating {args.next_version}.md in the docs...")
         next_version_doc_file = doc_file_path(args.next_version)
         if not next_version_doc_file.exists():
-            next_version_doc_file.write_text(
-                f"""---
+            next_version_doc_file.write_text(f"""---
 title: Materialize {args.next_version}
 date: {args.next_date}
 released: false
@@ -75,8 +74,7 @@ publish_helm_chart: true
 build:
   render: never
 ---
-"""
-            )
+""")
             git.add_file(str(next_version_doc_file))
             git.commit_all_changed(f"release: create doc file for {args.next_version}")
 
