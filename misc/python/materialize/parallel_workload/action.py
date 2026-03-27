@@ -3116,6 +3116,34 @@ class HttpPostAction(Action):
         return True
 
 
+class SourceSinkStallCheckAction(Action):
+    def run(self, exe: Executor) -> bool:
+        if exe.db.scenario in (
+            Scenario.Kill,
+            Scenario.ZeroDowntimeDeploy,
+            Scenario.BackupRestore,
+        ):
+            return False
+
+        exe.execute(
+            "SELECT name, error FROM mz_internal.mz_sink_statuses WHERE status = 'stalled'"
+        )
+        stalled_sinks = exe.cur.fetchall()
+        if stalled_sinks:
+            details = "; ".join(f"{name}: {error}" for name, error in stalled_sinks)
+            raise ValueError(f"Sinks in stalled state: {details}")
+
+        exe.execute(
+            "SELECT name, error FROM mz_internal.mz_source_statuses WHERE status = 'stalled'"
+        )
+        stalled_sources = exe.cur.fetchall()
+        if stalled_sources:
+            details = "; ".join(f"{name}: {error}" for name, error in stalled_sources)
+            raise ValueError(f"Sources in stalled state: {details}")
+
+        return True
+
+
 class StatisticsAction(Action):
     def run(self, exe: Executor) -> bool:
         for typ, objs in [
@@ -3201,6 +3229,7 @@ dml_nontrans_action_list = ActionList(
         (SetClusterAction, 1),
         (ReconnectAction, 1),
         (FlipFlagsAction, 2),
+        (SourceSinkStallCheckAction, 4),
         # (TransactionIsolationAction, 1),
     ],
     autocommit=True,  # deletes can't be inside of transactions
