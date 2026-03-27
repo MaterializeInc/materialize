@@ -175,6 +175,10 @@ type DeltaWriterType = DeltaWriter<
     >,
 >;
 
+/// The precision needed to store all UInt64 values in a Decimal128.
+/// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
+const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
+
 /// Add Parquet field IDs to an Arrow schema. Iceberg requires field IDs in the
 /// Parquet metadata for schema evolution tracking. Field IDs are assigned
 /// recursively to all nested fields (structs, lists, maps) using a depth-first,
@@ -493,14 +497,45 @@ fn retrieve_upper_from_snapshots(
     Ok(None)
 }
 
+/// Type overrides for Iceberg-compatible Arrow schemas.
+///
+/// Iceberg doesn't support unsigned integer types, so we map them to compatible types:
+/// - UInt8, UInt16 -> Int32
+/// - UInt32 -> Int64
+/// - UInt64 -> Decimal128(20, 0)
+/// - MzTimestamp (which uses UInt64) -> Decimal128(20, 0)
+fn iceberg_type_overrides(scalar_type: &mz_repr::SqlScalarType) -> Option<(DataType, String)> {
+    use mz_repr::SqlScalarType;
+    match scalar_type {
+        SqlScalarType::UInt16 => Some((DataType::Int32, "uint2".to_string())),
+        SqlScalarType::UInt32 => Some((DataType::Int64, "uint4".to_string())),
+        SqlScalarType::UInt64 => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "uint8".to_string(),
+        )),
+        SqlScalarType::MzTimestamp => Some((
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
+            "mz_timestamp".to_string(),
+        )),
+        _ => None,
+    }
+}
+
 /// Convert a Materialize RelationDesc into Arrow and Iceberg schemas.
-/// Returns the Arrow schema (with field IDs) for writing Parquet files,
-/// and the Iceberg schema for table creation/validation.
+///
+/// Returns a tuple of:
+/// - The Arrow schema (with field IDs and Iceberg-compatible types) for writing Parquet files
+/// - The Iceberg schema for table creation/validation
+///
+/// Iceberg doesn't support unsigned integer types, so we use `iceberg_type_overrides`
+/// to map them to compatible types (e.g., UInt64 -> Decimal128(20,0)). The ArrowBuilder
+/// handles the cross-type conversion (Datum::UInt64 -> Decimal128Builder) automatically.
 fn relation_desc_to_iceberg_schema(
     desc: &mz_repr::RelationDesc,
 ) -> anyhow::Result<(ArrowSchema, SchemaRef)> {
-    let arrow_schema = mz_arrow_util::builder::desc_to_schema(desc)
-        .context("Failed to convert RelationDesc to Arrow schema")?;
+    let arrow_schema =
+        mz_arrow_util::builder::desc_to_schema_with_overrides(desc, iceberg_type_overrides)
+            .context("Failed to convert RelationDesc to Iceberg-compatible Arrow schema")?;
 
     let arrow_schema_with_ids = add_field_ids_to_arrow_schema(arrow_schema);
 
@@ -1529,6 +1564,67 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_repr::SqlScalarType;
+
+    #[mz_ore::test]
+    fn test_iceberg_type_overrides() {
+        // UInt16 should override to Int32
+        let result = iceberg_type_overrides(&SqlScalarType::UInt16);
+        assert_eq!(result.unwrap().0, DataType::Int32);
+
+        // UInt32 should override to Int64
+        let result = iceberg_type_overrides(&SqlScalarType::UInt32);
+        assert_eq!(result.unwrap().0, DataType::Int64);
+
+        // UInt64 should override to Decimal128(20, 0)
+        let result = iceberg_type_overrides(&SqlScalarType::UInt64);
+        assert_eq!(
+            result.unwrap().0,
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+        );
+
+        // MzTimestamp should override to Decimal128(20, 0)
+        let result = iceberg_type_overrides(&SqlScalarType::MzTimestamp);
+        assert_eq!(
+            result.unwrap().0,
+            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+        );
+
+        // Other types should return None (use default)
+        assert!(iceberg_type_overrides(&SqlScalarType::Int32).is_none());
+        assert!(iceberg_type_overrides(&SqlScalarType::String).is_none());
+        assert!(iceberg_type_overrides(&SqlScalarType::Bool).is_none());
+    }
+
+    #[mz_ore::test]
+    fn test_iceberg_schema_with_nested_uint64() {
+        // Test that desc_to_schema_with_overrides handles nested UInt64
+        // by using iceberg_type_overrides which applies recursively
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column(
+                "items",
+                SqlScalarType::List {
+                    element_type: Box::new(SqlScalarType::UInt64),
+                    custom_id: None,
+                }
+                .nullable(true),
+            )
+            .finish();
+
+        let schema =
+            mz_arrow_util::builder::desc_to_schema_with_overrides(&desc, iceberg_type_overrides)
+                .expect("schema conversion should succeed");
+
+        // The inner element should be Decimal128, not UInt64
+        if let DataType::List(field) = schema.field(0).data_type() {
+            assert_eq!(
+                field.data_type(),
+                &DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0)
+            );
+        } else {
+            panic!("Expected List type");
+        }
+    }
 
     #[mz_ore::test]
     fn equality_ids_follow_iceberg_field_ids() {
