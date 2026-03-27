@@ -132,9 +132,9 @@
       },
       {
         "name": "forcePromote",
-        "type": "Uuid",
+        "type": "String",
         "description": "If `forcePromote` is set to the same value as `requestRollout`, the\ncurrent rollout will skip waiting for clusters in the new\ngeneration to rehydrate before promoting the new environmentd to\nleader.",
-        "default": "00000000-0000-0000-0000-000000000000",
+        "default": "",
         "required": false,
         "deprecated": false
       },

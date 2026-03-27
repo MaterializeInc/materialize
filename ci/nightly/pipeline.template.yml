@@ -2344,6 +2344,32 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
+      - id: orchestratord-v1alpha2-opt-in
+        label: "Orchestratord v1alpha2 opt-in tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: v1alpha2-opt-in
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-manually-promote
+        label: "Orchestratord ManuallyPromote tests"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: manually-promote
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
   - id: emulator
     label: Materialize Emulator
     depends_on: build-aarch64
