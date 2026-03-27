@@ -62,6 +62,7 @@
 //! ```
 //!
 
+use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
@@ -159,7 +160,17 @@ where
             connection_id,
             uri,
         } => {
-            let source = AwsS3Source::new(connection, connection_id, connection_context, uri);
+            // Checksum validation does not work with GCS when using ranges, which happens with parquet.
+            // From here, there is no way to know if this is a connection to S3 or GCS, so we just disable checksum validation
+            // for all parquet ingestions.
+            let use_checksum = format != ContentFormat::Parquet;
+            let source = AwsS3Source::new(
+                connection,
+                connection_id,
+                connection_context,
+                uri,
+                use_checksum,
+            );
             SourceKind::AwsS3(source)
         }
     };
@@ -1069,7 +1080,11 @@ impl From<reqwest::header::ToStrError> for StorageErrorXKind {
 
 impl From<aws_smithy_types::byte_stream::error::Error> for StorageErrorXKind {
     fn from(err: aws_smithy_types::byte_stream::error::Error) -> Self {
-        StorageErrorXKind::AwsS3Request(err.to_string())
+        if let Some(err_source) = err.source() {
+            StorageErrorXKind::AwsS3Request(format!("{err}, source: {err_source}"))
+        } else {
+            StorageErrorXKind::AwsS3Request(err.to_string())
+        }
     }
 }
 
