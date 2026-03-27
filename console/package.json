@@ -129,7 +129,7 @@
     "@testing-library/react": "^16.0.1",
     "@testing-library/user-event": "^14.5.2",
     "@types/base32-encoding": "^1.0.2",
-    "@types/dagre": "^0.7.52",
+    "@types/dagre": "^0.7.54",
     "@types/jsonwebtoken": "^9",
     "@types/lodash.debounce": "^4.0.9",
     "@types/module-alias": "^2",
