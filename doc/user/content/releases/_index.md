@@ -19,24 +19,13 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-03-26* <br>
 *Released to Materialize Self-Managed: 2026-03-27* <br>
 
-This release includes significant DDL transaction performance improvements,
-fixes for Avro encoding correctness in both Kafka sinks and sources, a critical
-fix for a persist race condition that could cause read-time halts, and improved
-console shell disconnect behavior.
+This release includes performance improvements and bug fixes.
 
 ### Improvements {#v26.17-improvements}
 
-- DDL transactions (e.g., creating multiple tables from a source in a single
-  transaction) now execute significantly faster. An O(n^2) operation replay was
-  eliminated, and user ID allocation is now batched to reduce persist writes.
-- The console shell now preserves session variables across reconnects and no
-  longer shows disruptive notices about connection interruptions.
-- The dbt-materialize adapter now uses a single batched query instead of
-  per-cluster sequential polling during blue/green deploys, reducing catalog
-  server load.
-- Improved index planning performance for wide tables by hoisting repeated
-  column type construction out of loops and using direct column references
-  instead of name lookups.
+- **10% improved transactional DDL performance**: We've eliminated an O(n^2) operation replay. DDL transactions (such as creating multiple tables from a source in a single transaction) now execute faster.
+- **Reduced catalog server load during blue/green deploys**: The dbt-materialize adapter now uses a single batched query instead of
+  per-cluster sequential polling. This is especially useful when creating a large number of objects.
 
 ### Bug Fixes {#v26.17-bug-fixes}
 
@@ -78,6 +67,7 @@ console shell disconnect behavior.
 - Fixed SQL Server source `Transaction::drop` not sending ROLLBACK, leaving
   the SQL Server session in an open transaction after drop.
 - Fixed a panic in authentication when receiving a proof of unexpected length.
+- Fixed an issue causing console session variables to be lost after a reconnect.
 
 ## v26.16.0
 *Released to Materialize Cloud: 2026-03-19* <br>
