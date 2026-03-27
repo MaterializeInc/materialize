@@ -2787,7 +2787,7 @@ fn regexp_extract(a: Datum, r: &AnalyzedRegex) -> Option<(Row, Diff)> {
     Some((Row::pack(datums), Diff::ONE))
 }
 
-fn regexp_matches<'a: 'a>(
+fn regexp_matches<'a>(
     exprs: &[Datum<'a>],
 ) -> Result<impl Iterator<Item = (Row, Diff)> + 'a, EvalError> {
     // There are only two acceptable ways to call this function:
