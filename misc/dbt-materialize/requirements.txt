@@ -36,7 +36,7 @@ packaging==26.0
 parsedatetime==2.6
 pathspec==0.12.1
 pluggy==1.6.0
-protobuf==6.33.5
+protobuf==7.34.1
 psycopg2-binary==2.9.11
 pydantic==2.12.5
 pydantic_core==2.41.5
