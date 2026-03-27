@@ -15,7 +15,7 @@ use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
-use mz_expr::{CollectionPlan, ResultSpec};
+use mz_expr::{CollectionPlan, ResultSpec, RowSetFinishing};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
@@ -26,8 +26,10 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
-use mz_sql::plan::{self, Explainee, ExplaineeStatement, Plan, QueryWhen, SubscribePlan};
-use mz_sql::plan::{Params, SubscribeFrom};
+use mz_sql::plan::Params;
+use mz_sql::plan::{
+    self, Explainee, ExplaineeStatement, Plan, QueryWhen, SelectPlan, SubscribePlan,
+};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
@@ -329,13 +331,13 @@ impl PeekClient {
         let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
 
         /// What do we do with the result of the select?
-        enum OutputContext {
-            Default,
-            CopyTo(CopyToContext),
-            Subscribe { plan: SubscribePlan },
+        enum QueryPlan<'a> {
+            Select(&'a SelectPlan),
+            CopyTo(&'a SelectPlan, CopyToContext),
+            Subscribe(&'a SubscribePlan),
         }
 
-        let (select_plan, explain_ctx, output_ctx) = match &plan {
+        let (query_plan, explain_ctx) = match &plan {
             Plan::Select(select_plan) => {
                 let explain_ctx = if session.vars().emit_plan_insights_notice() {
                     let optimizer_trace = OptimizerTrace::new(ExplainStage::PlanInsights.paths());
@@ -343,14 +345,13 @@ impl PeekClient {
                 } else {
                     ExplainContext::None
                 };
-                (select_plan, explain_ctx, OutputContext::Default)
+                (QueryPlan::Select(select_plan), explain_ctx)
             }
             Plan::ShowColumns(show_columns_plan) => {
                 // ShowColumns wraps a SelectPlan, extract it and proceed as normal.
                 (
-                    &show_columns_plan.select_plan,
+                    QueryPlan::Select(&show_columns_plan.select_plan),
                     ExplainContext::None,
-                    OutputContext::Default,
                 )
             }
             Plan::ExplainPlan(plan::ExplainPlanPlan {
@@ -370,7 +371,7 @@ impl PeekClient {
                     desc: Some(desc.clone()),
                     optimizer_trace,
                 });
-                (plan, explain_ctx, OutputContext::Default)
+                (QueryPlan::Select(plan), explain_ctx)
             }
             // COPY TO S3
             Plan::CopyTo(plan::CopyToPlan {
@@ -396,9 +397,8 @@ impl PeekClient {
                 };
 
                 (
-                    select_plan,
+                    QueryPlan::CopyTo(select_plan, copy_to_ctx),
                     ExplainContext::None,
-                    OutputContext::CopyTo(copy_to_ctx),
                 )
             }
             Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee }) => {
@@ -410,7 +410,7 @@ impl PeekClient {
                         desc: _,
                     }) => {
                         let explain_ctx = ExplainContext::Pushdown;
-                        (plan, explain_ctx, OutputContext::Default)
+                        (QueryPlan::Select(plan), explain_ctx)
                     }
                     _ => {
                         // This shouldn't happen because we already checked for this at the AST
@@ -440,27 +440,7 @@ impl PeekClient {
                     .await?;
                 return Ok(Some(response));
             }
-            Plan::Subscribe(subscribe) => {
-                let select = match &subscribe.from {
-                    SubscribeFrom::Id(_) => {
-                        // This shouldn't happen because we already checked for this at the AST
-                        // level before calling `try_frontend_peek_inner`.
-                        soft_panic_or_log!(
-                            "Unexpected plan kind in frontend peek sequencing: {:?}",
-                            subscribe
-                        );
-                        return Ok(None);
-                    }
-                    SubscribeFrom::Query { select, .. } => select,
-                };
-                (
-                    select,
-                    ExplainContext::None,
-                    OutputContext::Subscribe {
-                        plan: subscribe.clone(),
-                    },
-                )
-            }
+            Plan::Subscribe(subscribe) => (QueryPlan::Subscribe(subscribe), ExplainContext::None),
             _ => {
                 // This shouldn't happen because we already checked for this at the AST
                 // level before calling `try_frontend_peek_inner`.
@@ -473,6 +453,24 @@ impl PeekClient {
                 );
                 return Ok(None);
             }
+        };
+
+        let when = match query_plan {
+            QueryPlan::Select(s) => &s.when,
+            QueryPlan::CopyTo(s, _) => &s.when,
+            QueryPlan::Subscribe(s) => &s.when,
+        };
+
+        let depends_on = match query_plan {
+            QueryPlan::Select(s) => s.source.depends_on(),
+            QueryPlan::CopyTo(s, _) => s.source.depends_on(),
+            QueryPlan::Subscribe(s) => s.from.depends_on(),
+        };
+
+        let contains_temporal = match query_plan {
+            QueryPlan::Select(s) => s.source.contains_temporal(),
+            QueryPlan::CopyTo(s, _) => s.source.contains_temporal(),
+            QueryPlan::Subscribe(s) => Ok(s.from.contains_temporal()),
         };
 
         // # From sequence_plan
@@ -558,14 +556,12 @@ impl PeekClient {
             })
             .transpose()?;
 
-        let source_ids = select_plan.source.depends_on();
+        let source_ids = depends_on;
         // TODO(peek-seq): validate_timeline_context can be expensive in real scenarios (not in
         // simple benchmarks), because it traverses transitive dependencies even of indexed views and
         // materialized views (also traversing their MIR plans).
         let mut timeline_context = catalog.validate_timeline_context(source_ids.iter().copied())?;
-        if matches!(timeline_context, TimelineContext::TimestampIndependent)
-            && select_plan.source.contains_temporal()?
-        {
+        if matches!(timeline_context, TimelineContext::TimestampIndependent) && contains_temporal? {
             // If the source IDs are timestamp independent but the query contains temporal functions,
             // then the timeline context needs to be upgraded to timestamp dependent. This is
             // required because `source_ids` doesn't contain functions.
@@ -586,7 +582,7 @@ impl PeekClient {
         let isolation_level = session.vars().transaction_isolation().clone();
         let timeline = Coordinator::get_timeline(&timeline_context);
         let needs_linearized_read_ts =
-            Coordinator::needs_linearized_read_ts(&isolation_level, &select_plan.when);
+            Coordinator::needs_linearized_read_ts(&isolation_level, when);
 
         let oracle_read_ts = match timeline {
             Some(timeline) if needs_linearized_read_ts => {
@@ -633,10 +629,8 @@ impl PeekClient {
         // peek sequencing still does a timedomain validation. The new peek sequencing does not do
         // timedomain validation for AS OF queries, which seems more natural. But I'm thinking that
         // it would be the cleanest to just simply disallow AS OF queries inside transactions.
-        let in_immediate_multi_stmt_txn = session
-            .transaction()
-            .in_immediate_multi_stmt_txn(&select_plan.when)
-            && !matches!(output_ctx, OutputContext::Subscribe { .. });
+        let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when)
+            && !matches!(query_plan, QueryPlan::Subscribe { .. });
 
         // Fetch or generate a timestamp for this query and fetch or acquire read holds.
         let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
@@ -721,7 +715,7 @@ impl PeekClient {
                     .frontend_determine_timestamp(
                         session,
                         determine_bundle,
-                        &select_plan.when,
+                        when,
                         target_cluster_id,
                         &timeline_context,
                         oracle_read_ts,
@@ -802,9 +796,9 @@ impl PeekClient {
         // depend on whether or not reads have occurred in the txn.
         let requires_linearization = (&explain_ctx).into();
         let mut transaction_determination = determination.clone();
-        if matches!(output_ctx, OutputContext::Subscribe { .. }) {
+        if matches!(query_plan, QueryPlan::Subscribe { .. }) {
             session.add_transaction_ops(TransactionOps::Subscribe)?;
-        } else if select_plan.when.is_transactional() {
+        } else if when.is_transactional() {
             session.add_transaction_ops(TransactionOps::Peeks {
                 determination: transaction_determination,
                 cluster_id: target_cluster_id,
@@ -838,7 +832,6 @@ impl PeekClient {
         let timestamp_context = determination.timestamp_context.clone();
         let session_meta = session.meta();
         let now = catalog.config().now.clone();
-        let select_plan = select_plan.clone();
         let target_cluster_name = target_cluster_name.clone();
         let needs_plan_insights = explain_ctx.needs_plan_insights();
         let determination_for_pushdown = if matches!(explain_ctx, ExplainContext::Pushdown) {
@@ -866,10 +859,11 @@ impl PeekClient {
         }
 
         let source_ids_for_closure = source_ids.clone();
-        let raw_expr = select_plan.source.clone();
 
-        let optimization_future: JoinHandle<Result<_, AdapterError>> = match output_ctx {
-            OutputContext::CopyTo(mut copy_to_ctx) => {
+        let optimization_future: JoinHandle<Result<_, AdapterError>> = match query_plan {
+            QueryPlan::CopyTo(select_plan, mut copy_to_ctx) => {
+                let raw_expr = select_plan.source.clone();
+
                 // COPY TO path: calculate output_batch_count and create copy_to optimizer
                 let worker_counts = cluster.replicas().map(|r| {
                     let loc = &r.config.location;
@@ -922,7 +916,10 @@ impl PeekClient {
                     },
                 )
             }
-            OutputContext::Default => {
+            QueryPlan::Select(select_plan) => {
+                let select_plan = select_plan.clone();
+                let raw_expr = select_plan.source.clone();
+
                 // SELECT/EXPLAIN path: create peek optimizer
                 let mut optimizer = optimize::peek::Optimizer::new(
                     Arc::clone(&catalog),
@@ -1052,6 +1049,8 @@ impl PeekClient {
                                     global_lir_plan,
                                     optimization_finished_at,
                                     plan_insights_optimizer_trace: None,
+                                    finishing: select_plan.finishing,
+                                    copy_to: select_plan.copy_to,
                                     insights_ctx: None,
                                 }),
                                 ExplainContext::PlanInsightsNotice(optimizer_trace) => {
@@ -1060,6 +1059,8 @@ impl PeekClient {
                                         global_lir_plan,
                                         optimization_finished_at,
                                         plan_insights_optimizer_trace: Some(optimizer_trace),
+                                        finishing: select_plan.finishing,
+                                        copy_to: select_plan.copy_to,
                                         insights_ctx,
                                     })
                                 }
@@ -1089,7 +1090,8 @@ impl PeekClient {
                     },
                 )
             }
-            OutputContext::Subscribe { plan } => {
+            QueryPlan::Subscribe(plan) => {
+                let plan = plan.clone();
                 let catalog: Arc<Catalog> = Arc::clone(&catalog);
                 let mut optimizer = optimize::subscribe::Optimizer::new(
                     catalog,
@@ -1232,6 +1234,8 @@ impl PeekClient {
                 global_lir_plan,
                 optimization_finished_at: _optimization_finished_at,
                 plan_insights_optimizer_trace,
+                finishing,
+                copy_to,
                 insights_ctx,
             } => {
                 // Continue with normal execution
@@ -1255,7 +1259,7 @@ impl PeekClient {
                         .into_plan_insights(
                             &features,
                             &catalog.for_session(session),
-                            Some(select_plan.finishing.clone()),
+                            Some(finishing.clone()),
                             Some(target_cluster),
                             df_meta.clone(),
                             insights_ctx,
@@ -1322,7 +1326,7 @@ impl PeekClient {
                         self.implement_fast_path_peek_plan(
                             fast_path_plan,
                             determination.timestamp_context.timestamp_or_default(),
-                            select_plan.finishing,
+                            finishing,
                             target_cluster_id,
                             target_replica,
                             typ,
@@ -1346,7 +1350,7 @@ impl PeekClient {
                         self.call_coordinator(|tx| Command::ExecuteSlowPathPeek {
                             dataflow_plan: Box::new(dataflow_plan),
                             determination,
-                            finishing: select_plan.finishing,
+                            finishing,
                             compute_instance: target_cluster_id,
                             target_replica,
                             intermediate_result_type: typ,
@@ -1376,7 +1380,7 @@ impl PeekClient {
                     session.add_notice(AdapterNotice::QueryTimestamp { explanation });
                 }
 
-                Ok(Some(match select_plan.copy_to {
+                Ok(Some(match copy_to {
                     None => response,
                     // COPY TO STDOUT
                     Some(format) => ExecuteResponse::CopyTo {
@@ -1719,6 +1723,8 @@ enum Execution {
         global_lir_plan: optimize::peek::GlobalLirPlan,
         optimization_finished_at: EpochMillis,
         plan_insights_optimizer_trace: Option<OptimizerTrace>,
+        finishing: RowSetFinishing,
+        copy_to: Option<plan::CopyFormat>,
         insights_ctx: Option<Box<PlanInsightsContext>>,
     },
     Subscribe {
