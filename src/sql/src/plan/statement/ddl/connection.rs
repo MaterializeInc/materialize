@@ -407,9 +407,10 @@ impl ConnectionOptionExtracted {
                     // backward compatibility."
                     None => tokio_postgres::config::SslMode::Require,
                     Some("disable") => {
-                        scx.catalog.add_notice(crate::plan::PlanNotice::PlaintextConnectionUsed {
-                            connection_type: "Postgres".into(),
-                        });
+                        scx.catalog
+                            .add_notice(crate::plan::PlanNotice::PlaintextConnectionUsed {
+                                connection_type: "Postgres".into(),
+                            });
                         tokio_postgres::config::SslMode::Disable
                     }
                     // "prefer" intentionally omitted because it has dubious security
@@ -515,9 +516,11 @@ impl ConnectionOptionExtracted {
                             )
                         }
                         if explicit_ssl_mode {
-                            scx.catalog.add_notice(crate::plan::PlanNotice::PlaintextConnectionUsed {
-                                connection_type: "MySQL".into(),
-                            });
+                            scx.catalog.add_notice(
+                                crate::plan::PlanNotice::PlaintextConnectionUsed {
+                                    connection_type: "MySQL".into(),
+                                },
+                            );
                         }
                         MySqlSslMode::Disabled
                     }
