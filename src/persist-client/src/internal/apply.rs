@@ -443,7 +443,6 @@ where
         };
 
         let NextState {
-            expected,
             diff,
             state,
             expiry_metrics,
@@ -467,18 +466,11 @@ where
         // retry even indeterminate errors. See
         // [Self::apply_unbatched_idempotent_cmd].
         let cas_res = state_versions
-            .try_compare_and_set_current(&cmd.name, shard_metrics, Some(expected), &state, &diff)
+            .try_compare_and_set_current(&cmd.name, shard_metrics, &state, &diff)
             .await;
 
         match cas_res {
             Ok((CaSResult::Committed, diff)) => {
-                assert!(
-                    expected <= state.seqno,
-                    "state seqno regressed: {} vs {}",
-                    expected,
-                    state.seqno
-                );
-
                 metrics
                     .lease
                     .timeout_read
@@ -501,7 +493,7 @@ where
                 ApplyCmdResult::Committed((diff, state, work_ret, maintenance))
             }
             Ok((CaSResult::ExpectationMismatch, _diff)) => {
-                ApplyCmdResult::ExpectationMismatch(expected)
+                ApplyCmdResult::ExpectationMismatch(state.seqno())
             }
             Err(err) => ApplyCmdResult::Indeterminate(err),
         }
@@ -606,8 +598,12 @@ where
             }
         }
 
+        assert_eq!(
+            expected.next(),
+            new_state.seqno(),
+            "successive states should have successive seqnos"
+        );
         Ok(NextState {
-            expected,
             diff,
             state: new_state,
             expiry_metrics,
@@ -724,7 +720,6 @@ enum ApplyCmdResult<K, V, T, D, R, E> {
 }
 
 struct NextState<K, V, T, D, R> {
-    expected: SeqNo,
     diff: StateDiff<T>,
     state: TypedState<K, V, T, D>,
     expiry_metrics: ExpiryMetrics,
