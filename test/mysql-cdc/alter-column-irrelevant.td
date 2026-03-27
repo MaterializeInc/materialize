@@ -24,6 +24,7 @@ $ set-sql-timeout duration=1s
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
+SET GLOBAL binlog_row_metadata = FULL;
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
@@ -56,10 +57,12 @@ INSERT INTO t1 VALUES (2, 2);
 # add a new column to t1 at the beginning of
 $ mysql-execute name=mysql
 ALTER TABLE t1 ADD COLUMN f3 INTEGER FIRST;
-INSERT INTO t1 VALUES (3, 3, 3);
+INSERT INTO t1 VALUES (0, 3, 3);
 
-! SELECT * FROM t1;
-contains:incompatible schema change
+> SELECT * FROM t1;
+1
+2
+3
 
 # add a new column to t2
 $ mysql-execute name=mysql
