@@ -9,7 +9,7 @@ rows:
     orchestratord version: v26.17.0
     environmentd version: v26.17.0
     Release date: "2026-03-27"
-    Notes: ""
+    Notes: See [v26.17.0 release notes](/releases/#v26170)
   - Materialize Operator: v26.16.0
     orchestratord version: v26.16.0
     environmentd version: v26.16.0

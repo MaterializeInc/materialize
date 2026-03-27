@@ -15,6 +15,60 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.17.0
+*Released to Materialize Cloud: 2026-03-26* <br>
+*Released to Materialize Self-Managed: 2026-03-27* <br>
+
+This release includes performance improvements and bug fixes.
+
+### Improvements {#v26.17-improvements}
+
+- **10% improved transactional DDL performance**: We've eliminated an O(n^2) operation. DDL transactions (such as creating multiple tables from a source in a single transaction) now execute faster.
+- **Reduced catalog server load during blue/green deploys**: The dbt-materialize adapter now uses a single batched query instead of
+  per-cluster sequential polling. This is especially useful when creating a large number of objects.
+
+### Bug Fixes {#v26.17-bug-fixes}
+
+- Fixed a correctness bug where LEFT JOIN, RIGHT JOIN, and FULL JOIN with an
+  empty relation produced incorrect results (empty instead of NULLs) due to
+  join identity elision.
+- Fixed Kafka sinks incorrectly writing negative Avro timestamps (pre-epoch
+  dates) by treating the timestamp microseconds as unsigned instead of signed.
+- Fixed Avro fixed-decimal encoding not left-padding unscaled bytes to the
+  schema's fixed size, which could cause `UnexpectedEof` errors or data
+  corruption in downstream consumers.
+- Fixed a race condition in persist where a batch could be selected before
+  obtaining a lease, potentially causing unexpected read-time halts.
+- Fixed PROXY protocol v2 header parsing failing when headers arrived across
+  multiple TCP segments, which could corrupt subsequent HTTP parsing between
+  balancerd and environmentd.
+- Fixed the Fivetran destination connector logging `app_password` in plaintext
+  in connection logs.
+- Fixed queries with expensive functions in subqueries (e.g., `UNION ALL`,
+  `EXISTS`, scalar subqueries) being incorrectly routed to `mz_catalog_server`
+  instead of the user's cluster.
+- Fixed webhook secret cache not invalidating when secrets are changed,
+  requiring a restart to pick up new secret values.
+- Fixed orchestratord image reference parsing treating registry ports (e.g.,
+  `gcr.io:443/...`) and digest separators (`@sha256:...`) as image tags,
+  producing invalid references for Self-Managed deployments.
+- Fixed optimizer feature flags being auto-enabled during item parsing, which
+  rendered plan caching ineffective.
+- Fixed `mz_catalog_raw` not being consistently readable under strict
+  serializable isolation by keeping the catalog shard's frontier up-to-date
+  with the oracle read timestamp.
+- Fixed a security vulnerability in the `lz4_flex` dependency
+  (RUSTSEC-2026-0041).
+- Fixed a bad assertion in oneshot source storage worker reconciliation that
+  could cause panics.
+- Fixed hydration check errors during 0dt upgrades for replica-targeted
+  collections, where non-target replicas would report `CollectionMissing`
+  errors.
+- Fixed SQL Server source `Transaction::drop` not sending ROLLBACK, leaving
+  the SQL Server session in an open transaction after drop.
+- Fixed a panic in authentication when receiving a proof of unexpected length.
+- Fixed an issue causing console session variables to be lost after a reconnect.
+
 ## v26.16.0
 *Released to Materialize Cloud: 2026-03-19* <br>
 *Released to Materialize Self-Managed: 2026-03-20* <br>
