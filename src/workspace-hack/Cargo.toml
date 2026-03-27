@@ -95,7 +95,7 @@ minimal-lexical = { version = "0.2.1", default-features = false, features = ["st
 moka = { version = "0.12.15", features = ["future", "sync"] }
 mysql_async = { version = "0.36.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["binlog", "chrono"] }
-native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
+native-tls = { version = "0.2.18", default-features = false, features = ["alpn"] }
 nix = { version = "0.30.1", features = ["fs", "signal"] }
 nom = { version = "7.1.3" }
 num-bigint = { version = "0.4.6", features = ["serde"] }
@@ -136,7 +136,7 @@ serde_json = { version = "1.0.149", features = ["alloc", "arbitrary_precision", 
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 simd-adler32 = { version = "0.3.8", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
-slab = { version = "0.4.9" }
+slab = { version = "0.4.12" }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 socket2 = { version = "0.5.10", default-features = false, features = ["all"] }
 subtle = { version = "2.6.1" }
@@ -225,7 +225,7 @@ serde_json = { version = "1.0.149", features = ["alloc", "arbitrary_precision", 
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 simd-adler32 = { version = "0.3.8", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
-slab = { version = "0.4.9" }
+slab = { version = "0.4.12" }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.109", features = ["extra-traits", "full", "visit", "visit-mut"] }
@@ -249,7 +249,7 @@ idna = { version = "1.1.0" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
-native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
+native-tls = { version = "0.2.18", default-features = false, features = ["vendored"] }
 openssl = { version = "0.10.76", features = ["vendored"] }
 openssl-sys = { version = "0.9.112", default-features = false, features = ["vendored"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
@@ -293,7 +293,7 @@ hyper-dff4ba8e3ae991db = { package = "hyper", version = "1.8.1", features = ["cl
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.1.0" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
-native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
+native-tls = { version = "0.2.18", default-features = false, features = ["vendored"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
