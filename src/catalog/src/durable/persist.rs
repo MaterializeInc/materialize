@@ -1749,6 +1749,20 @@ impl DurableCatalogState for PersistCatalogState {
             txn_batch: TransactionBatch,
             commit_ts: Timestamp,
         ) -> Result<Timestamp, CatalogError> {
+            // If the transaction is empty then we don't error, even in read-only mode.
+            // This is mostly for legacy reasons (i.e. with enough elbow grease this
+            // behavior can be changed without breaking any fundamental assumptions).
+            if catalog.mode == Mode::Readonly {
+                let updates: Vec<_> = StateUpdate::from_txn_batch(txn_batch).collect();
+                if !updates.is_empty() {
+                    return Err(DurableCatalogError::NotWritable(format!(
+                        "cannot commit a transaction in a read-only catalog: {updates:#?}"
+                    ))
+                    .into());
+                }
+                return Ok(catalog.upper);
+            }
+
             // If the current upper does not match the transaction's commit timestamp, then the
             // catalog must have changed since the transaction was started, making the transaction
             // invalid. When/if we want a multi-writer catalog, this will likely have to change
@@ -1783,18 +1797,7 @@ impl DurableCatalogState for PersistCatalogState {
                     catalog.upper = commit_ts.step_forward();
                     catalog.upper
                 }
-                Mode::Readonly => {
-                    // If the transaction is empty then we don't error, even in read-only mode.
-                    // This is mostly for legacy reasons (i.e. with enough elbow grease this
-                    // behavior can be changed without breaking any fundamental assumptions).
-                    if !updates.is_empty() {
-                        return Err(DurableCatalogError::NotWritable(format!(
-                            "cannot commit a transaction in a read-only catalog: {updates:#?}"
-                        ))
-                        .into());
-                    }
-                    catalog.upper
-                }
+                Mode::Readonly => unreachable!("handled above"),
             };
 
             Ok(next_upper)
