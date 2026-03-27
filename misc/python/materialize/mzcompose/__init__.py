@@ -649,6 +649,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_developer",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
+    "storage_shard_pool_enabled",
+    "storage_shard_pool_target_size",
+    "storage_shard_pool_replenish_interval",
 ]
 
 
