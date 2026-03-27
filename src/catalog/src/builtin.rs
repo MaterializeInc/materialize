@@ -11506,15 +11506,60 @@ FROM
     access: vec![PUBLIC_SELECT],
 });
 
-/// Data products exposed via MCP (Model Context Protocol) for AI agents.
+/// Lightweight data product discovery for MCP (Model Context Protocol).
 ///
-/// This view discovers indexes with comments that can be used as "data products"
-/// for AI agent access. Only indexes with SELECT privilege and cluster USAGE
-/// privilege are included.
+/// Lists indexed views with comments that the current user has privileges on.
+/// Used by the `get_data_products` and `read_data_product` MCP tools.
+/// Does not include schema details — use `mz_mcp_data_product_details` for that.
 pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_mcp_data_products",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MCP_DATA_PRODUCTS_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_name", SqlScalarType::String.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(false))
+        .with_column("description", SqlScalarType::String.nullable(true))
+        .with_key(vec![0, 1, 2])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_name",
+            "Fully qualified object name (database.schema.name).",
+        ),
+        ("cluster", "Cluster where the index is hosted."),
+        (
+            "description",
+            "Index comment (used as data product description).",
+        ),
+    ]),
+    sql: r#"
+SELECT DISTINCT
+    '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
+    c.name AS cluster,
+    cts.comment AS description
+FROM mz_internal.mz_show_my_object_privileges op
+JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
+JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
+JOIN mz_databases d ON d.name = op.database AND d.id = s.database_id
+JOIN mz_indexes i ON i.on_id = o.id
+JOIN mz_clusters c ON c.id = i.cluster_id
+JOIN mz_internal.mz_show_my_cluster_privileges cp ON cp.name = c.name
+LEFT JOIN mz_internal.mz_comments cts ON cts.id = i.id AND cts.object_sub_id IS NULL
+WHERE op.privilege_type = 'SELECT'
+  AND cp.privilege_type = 'USAGE'
+"#,
+    access: vec![PUBLIC_SELECT],
+});
+
+/// Full data product details with JSON Schema for MCP agents.
+///
+/// Extends `mz_mcp_data_products` with column types, index keys, and column
+/// comments, formatted as a JSON Schema object. Used by the
+/// `get_data_product_details` MCP tool.
+pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_mcp_data_product_details",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_MCP_DATA_PRODUCT_DETAILS_OID,
     desc: RelationDesc::builder()
         .with_column("object_name", SqlScalarType::String.nullable(false))
         .with_column("cluster", SqlScalarType::String.nullable(false))
@@ -14482,6 +14527,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::ContinualTask(&MZ_WALLCLOCK_LAG_HISTORY_CT),
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
+        Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
     ]);
 
     builtins.extend(notice::builtins());
