@@ -35,7 +35,7 @@ class NormalDistributionOverlap(TerminationCondition):
         self._data.append(measurement.value)
 
         if len(self._data) > 10:
-            (mu, sigma) = stats.norm.fit(self._data)
+            mu, sigma = stats.norm.fit(self._data)
             current_fit = statistics.NormalDist(mu=mu, sigma=sigma)
 
             if self._last_fit:

@@ -15,8 +15,7 @@ from materialize.checks.checks import Check, externally_idempotent
 @externally_idempotent(False)
 class RenameSource(Check):
     def _source_schema(self) -> str:
-        return dedent(
-            """
+        return dedent("""
             $ set rename-source-schema={
                  "type" : "record",
                  "name" : "test",
@@ -24,14 +23,10 @@ class RenameSource(Check):
                      {"name":"f1", "type":"string"}
                  ]
               }
-        """
-        )
+        """)
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            self._source_schema()
-            + dedent(
-                """
+        return Testdrive(self._source_schema() + dedent("""
                 $ kafka-create-topic topic=rename-source
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
@@ -50,9 +45,7 @@ class RenameSource(Check):
 
                 $ kafka-ingest format=avro topic=rename-source schema=${rename-source-schema}
                 {"f1": "C"}
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -76,9 +69,7 @@ class RenameSource(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM rename_source1_tbl;
                 A
                 B
@@ -96,6 +87,4 @@ class RenameSource(Check):
                 E
                 F
                 G
-           """
-            )
-        )
+           """))

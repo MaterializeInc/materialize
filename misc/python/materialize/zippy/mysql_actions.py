@@ -28,16 +28,14 @@ class MySqlStart(Action):
         c.up("mysql")
 
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
                 DROP DATABASE IF EXISTS public;
                 CREATE DATABASE public;
                 USE public;
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -98,16 +96,14 @@ class CreateMySqlTable(Action):
         if self.new_mysql_table:
             primary_key = "PRIMARY KEY" if self.mysql_table.has_pk else ""
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                     $ mysql-execute name=mysql
                     USE public;
                     CREATE TABLE {self.mysql_table.name} (f1 INTEGER {primary_key});
                     INSERT INTO {self.mysql_table.name} VALUES ({self.mysql_table.watermarks.max});
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -142,16 +138,14 @@ class MySqlInsert(MySqlDML):
         prev_max = self.mysql_table.watermarks.max
         self.mysql_table.watermarks.max = prev_max + self.delta
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
                 USE public;
                 SET @i:={prev_max};
                 INSERT INTO {self.mysql_table.name} SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.mysql_table.watermarks.max - prev_max};
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -163,15 +157,13 @@ class MySqlShiftForward(MySqlDML):
         if not self.mysql_table.has_pk:
             self.mysql_table.watermarks.shift(self.delta)
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                     $ mysql-execute name=mysql
                     USE public;
                     UPDATE {self.mysql_table.name} SET f1 = f1 + {self.delta};
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -183,15 +175,13 @@ class MySqlShiftBackward(MySqlDML):
         if not self.mysql_table.has_pk:
             self.mysql_table.watermarks.shift(-self.delta)
             c.testdrive(
-                dedent(
-                    f"""
+                dedent(f"""
                     $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                     $ mysql-execute name=mysql
                     USE public;
                     UPDATE {self.mysql_table.name} SET f1 = f1 - {self.delta};
-                    """
-                ),
+                    """),
                 mz_service=state.mz_service,
             )
 
@@ -205,15 +195,13 @@ class MySqlDeleteFromHead(MySqlDML):
             self.mysql_table.watermarks.min,
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
                 USE public;
                 DELETE FROM {self.mysql_table.name} WHERE f1 > {self.mysql_table.watermarks.max};
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )
 
@@ -227,14 +215,12 @@ class MySqlDeleteFromTail(MySqlDML):
             self.mysql_table.watermarks.max,
         )
         c.testdrive(
-            dedent(
-                f"""
+            dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
                 USE public;
                 DELETE FROM {self.mysql_table.name} WHERE f1 < {self.mysql_table.watermarks.min};
-                """
-            ),
+                """),
             mz_service=state.mz_service,
         )

@@ -615,7 +615,7 @@ class TestTargetDeploy:
 
         run_dbt(["run-operation", "deploy_init"])
 
-        (size, replication_factor) = project.run_sql(
+        size, replication_factor = project.run_sql(
             "SELECT size, replication_factor FROM mz_clusters WHERE name = 'prod_dbt_deploy'",
             fetch="one",
         )

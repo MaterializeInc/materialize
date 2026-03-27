@@ -14,9 +14,7 @@ from materialize.checks.checks import Check
 
 class RenameSchema(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE SCHEMA rename_me1;
             > CREATE SCHEMA rename_me2;
             > CREATE SCHEMA rename_me3;
@@ -30,9 +28,7 @@ class RenameSchema(Check):
             > INSERT INTO rename_me3.t3 VALUES (3);
 
             > ALTER SCHEMA rename_me1 RENAME TO renamed1;
-            """
-            )
-        )
+            """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -48,9 +44,7 @@ class RenameSchema(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SHOW SCHEMAS LIKE 'rename%';
                 renamed1 ""
                 renamed2 ""
@@ -70,6 +64,4 @@ class RenameSchema(Check):
 
                 > SELECT * FROM t3;
                 3
-                """
-            )
-        )
+                """))

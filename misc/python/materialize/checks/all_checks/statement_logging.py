@@ -15,14 +15,10 @@ from materialize.checks.checks import Check, supports_forced_migrations
 @supports_forced_migrations(False)
 class StatementLogging(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET statement_logging_max_sample_rate TO 1.0
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -45,22 +41,14 @@ class StatementLogging(Check):
 
     def validate(self) -> Testdrive:
         if self.base_version == self.current_version:
-            return Testdrive(
-                dedent(
-                    """
+            return Testdrive(dedent("""
                     > SELECT sql, finished_status FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst WHERE mseh.prepared_statement_id = mpsh.id AND mst.sql_hash = mpsh.sql_hash AND sql LIKE '%/* Btv was here */' ORDER BY mseh.began_at;
                     "SELECT 'hello' /* Btv was here */" success
                     "SELECT 'goodbye' /* Btv was here */" success
-                    """
-                )
-            )
+                    """))
         else:
             # Rows are expected to maybe disappear across versions
-            return Testdrive(
-                dedent(
-                    """
+            return Testdrive(dedent("""
                     > SELECT count(*) <= 2 FROM mz_internal.mz_statement_execution_history mseh, mz_internal.mz_prepared_statement_history mpsh, (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst WHERE mseh.prepared_statement_id = mpsh.id AND mpsh.sql_hash = mst.sql_hash AND sql LIKE '%/* Btv was here */'
                     true
-                    """
-                )
-            )
+                    """))

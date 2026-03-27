@@ -12,7 +12,6 @@ For now only tests that the Materialize emulator can start up with its
 defaults, regression test for https://github.com/MaterializeInc/materialize/pull/30964
 """
 
-
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
     MaterializeEmulator,

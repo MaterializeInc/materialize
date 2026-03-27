@@ -467,8 +467,7 @@ def print_cluster_replica_stats(
             cur.execute(f"SET cluster = '{cluster}';".encode())
             cur.execute(f"SET cluster_replica = '{replica}';".encode())
             print(f"--- {cluster}.{replica}: Expensive dataflows")
-            cur.execute(
-                """SELECT
+            cur.execute("""SELECT
                     mdo.id,
                     mdo.name,
                     mse.elapsed_ns / 1000 * '1 MICROSECONDS'::interval AS elapsed_time
@@ -476,8 +475,7 @@ def print_cluster_replica_stats(
                     mz_introspection.mz_dataflow_operators AS mdo,
                     mz_introspection.mz_dataflow_addresses AS mda
                 WHERE mse.id = mdo.id AND mdo.id = mda.id AND list_length(address) = 1
-                ORDER BY elapsed_ns DESC;"""
-            )
+                ORDER BY elapsed_ns DESC;""")
             rows = cur.fetchall()
             assert cur.description
             headers = [desc[0] for desc in cur.description]
@@ -488,8 +486,7 @@ def print_cluster_replica_stats(
             print(table)
 
             print(f"--- {cluster}.{replica}: Expensive operators")
-            cur.execute(
-                """SELECT
+            cur.execute("""SELECT
                     mdod.id,
                     mdod.name,
                     mdod.dataflow_name,
@@ -504,8 +501,7 @@ def print_cluster_replica_stats(
                         SELECT DISTINCT address[:list_length(address) - 1]
                         FROM mz_introspection.mz_dataflow_addresses
                     )
-                ORDER BY elapsed_ns DESC;"""
-            )
+                ORDER BY elapsed_ns DESC;""")
             rows = cur.fetchall()
             assert cur.description
             headers = [desc[0] for desc in cur.description]

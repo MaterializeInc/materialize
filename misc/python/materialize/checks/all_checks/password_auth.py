@@ -46,12 +46,10 @@ class PasswordAuth(Check):
     def validate(self) -> Testdrive:
         return Testdrive(
             # Test that user1 can login and select from the table they have privileges to select from
-            dedent(
-                """
+            dedent("""
                 $ postgres-execute connection=postgres://user1:password2@${testdrive.materialize-password-sql-addr}
                 SELECT * FROM materialize.schema1.t1
-                """
-            )
+                """)
         )
 
 
@@ -84,11 +82,7 @@ class SaslAuth(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ postgres-execute connection=postgres://user2:password2@${testdrive.materialize-sasl-sql-addr}
                 SELECT * FROM materialize.schema2.t1
-                """
-            )
-        )
+                """))

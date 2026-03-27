@@ -111,9 +111,7 @@ class MzClient:
                 async with conn.cursor(row_factory=dict_row) as cur:
                     logger.info("Starting background tool subscription")
                     await cur.execute("BEGIN")
-                    await cur.execute(
-                        dedent(
-                            """
+                    await cur.execute(dedent("""
                         DECLARE c CURSOR FOR
                         SUBSCRIBE (
                             SELECT count(*) AS eligible_tools
@@ -121,9 +119,7 @@ class MzClient:
                             JOIN mz_indexes i ON o.id = i.on_id
                             JOIN mz_internal.mz_comments cts ON cts.id = o.id
                         ) WITH (PROGRESS)
-                    """
-                        )
-                    )
+                    """))
                     while True:
                         await cur.execute("FETCH ALL c WITH (timeout = '5s')")
                         reload = False

@@ -35,9 +35,7 @@ class MySqlCdcBase:
         super().__init__(**kwargs)  # forward unused args to Check
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -67,9 +65,7 @@ class MySqlCdcBase:
                     USER mysql1{self.suffix},
                     PASSWORD SECRET mysqlpass1{self.suffix}
                   )
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -176,8 +172,7 @@ class MySqlCdcBase:
         ]
 
     def validate(self) -> Testdrive:
-        sql = dedent(
-            f"""
+        sql = dedent(f"""
             $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT SELECT ON mysql_source_tableA{self.suffix} TO materialize
             GRANT SELECT ON mysql_source_tableB{self.suffix} TO materialize
@@ -241,8 +236,7 @@ class MySqlCdcBase:
               - materialize.public.mysql_source_tablea{self.suffix}_primary_idx (*** full scan ***)
 
             Target cluster: quickstart
-            """
-        )
+            """)
 
         return Testdrive(sql)
 
@@ -262,9 +256,7 @@ class MySqlCdcNoWait(MySqlCdcBase, Check):
 @externally_idempotent(False)
 class MySqlCdcMzNow(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -301,9 +293,7 @@ class MySqlCdcMzNow(Check):
                 > CREATE MATERIALIZED VIEW mysql_mz_now_view AS
                   SELECT * FROM mysql_mz_now_table
                   WHERE mz_now() <= ROUND(EXTRACT(epoch FROM f1 + INTERVAL '60' SECOND) * 1000)
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -339,9 +329,7 @@ class MySqlCdcMzNow(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT COUNT(*) FROM mysql_mz_now_table;
                 13
 
@@ -371,9 +359,7 @@ class MySqlCdcMzNow(Check):
                 $ mysql-execute name=mysql
                 INSERT INTO mysql_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM mysql_mz_now_table WHERE f2 LIKE '%4%';
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
@@ -382,9 +368,7 @@ class MySqlBitType(Check):
         return self.base_version > MzVersion.parse_mz("v0.131.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -420,9 +404,7 @@ class MySqlBitType(Check):
                 # Return all rows
                 > CREATE MATERIALIZED VIEW mysql_bit_view AS
                   SELECT * FROM mysql_bit_table
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -446,9 +428,7 @@ class MySqlBitType(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT * FROM mysql_bit_table;
                 0 0
                 8 0
@@ -486,9 +466,7 @@ class MySqlBitType(Check):
                 30 1
                 1796 1
                 2047 0
-                """
-            )
-        )
+                """))
 
 
 @externally_idempotent(False)
@@ -497,9 +475,7 @@ class MySqlInvisibleColumn(Check):
         return self.base_version > MzVersion.parse_mz("v0.133.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 $ mysql-execute name=mysql
@@ -531,9 +507,7 @@ class MySqlInvisibleColumn(Check):
                 # Return all rows
                 > CREATE MATERIALIZED VIEW mysql_invisible_view AS
                   SELECT * FROM mysql_invisible_table
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -557,9 +531,7 @@ class MySqlInvisibleColumn(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                f"""
+        return Testdrive(dedent(f"""
                 > SELECT * FROM mysql_invisible_table;
                 1 0.1 2025-01-01 one
                 2 0.2 2025-02-02 two
@@ -587,9 +559,7 @@ class MySqlInvisibleColumn(Check):
                 1 0.1 2025-01-01 one
                 2 0.2 2025-02-02 two
                 3 0.3 2025-03-03 three
-                """
-            )
-        )
+                """))
 
 
 def remove_target_cluster_from_explain(sql: str) -> str:

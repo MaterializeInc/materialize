@@ -39,9 +39,7 @@ class CheckDatabaseCreate(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SHOW DATABASES LIKE 'to_be_created%';
                 to_be_created1  ""
                 to_be_created2  ""
@@ -65,9 +63,7 @@ class CheckDatabaseCreate(Check):
                 > SELECT * FROM t2;
                 1
                 > DROP TABLE t2;
-                """
-            )
-        )
+                """))
 
 
 class CheckDatabaseDrop(Check):
@@ -87,13 +83,9 @@ class CheckDatabaseDrop(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET DATABASE=to_be_dropped;
 
                 ! SELECT * FROM t1;
                 contains: unknown catalog item
-                """
-            )
-        )
+                """))

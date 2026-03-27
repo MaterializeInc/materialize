@@ -14,8 +14,7 @@ from materialize.checks.checks import Check
 
 class Owners(Check):
     def _create_objects(self, role: str, i: int, expensive: bool = False) -> str:
-        s = dedent(
-            f"""
+        s = dedent(f"""
             $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             GRANT CREATE ON DATABASE materialize TO {role}
             GRANT CREATE ON SCHEMA materialize.public TO {role}
@@ -32,24 +31,20 @@ class Owners(Check):
             CREATE VIEW owner_v{i} AS SELECT * FROM owner_t{i}
             CREATE MATERIALIZED VIEW owner_mv{i} AS SELECT * FROM owner_t{i}
             CREATE SECRET owner_secret{i} AS 'MY_SECRET'
-            """
-        )
+            """)
         if expensive:
-            s += dedent(
-                f"""
+            s += dedent(f"""
                 $ postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
                 CREATE SOURCE owner_source{i} FROM LOAD GENERATOR COUNTER
                 $ postgres-execute connection=postgres://{role}@${{testdrive.materialize-sql-addr}}
                 CREATE SINK owner_sink{i} FROM owner_mv{i} INTO KAFKA CONNECTION owner_kafka_conn{i} (TOPIC 'sink-sink-owner{i}') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION owner_csr_conn{i} ENVELOPE DEBEZIUM
                 CREATE CLUSTER owner_cluster{i} REPLICAS (owner_cluster_r{i} (SIZE 'scale=1,workers=4'))
-                """
-            )
+                """)
 
         return s
 
     def _alter_object_owners(self, i: int, expensive: bool = False) -> str:
-        s = dedent(
-            f"""
+        s = dedent(f"""
             $ postgres-execute connection=postgres://mz_system@${{testdrive.materialize-internal-sql-addr}}
             ALTER DATABASE owner_db{i} OWNER TO other_owner
             ALTER SCHEMA owner_schema{i} OWNER TO other_owner
@@ -61,16 +56,13 @@ class Owners(Check):
             ALTER VIEW owner_v{i} OWNER TO other_owner
             ALTER MATERIALIZED VIEW owner_mv{i} OWNER TO other_owner
             ALTER SECRET owner_secret{i} OWNER TO other_owner
-            """
-        )
+            """)
         if expensive:
-            s += dedent(
-                f"""
+            s += dedent(f"""
                 ALTER SOURCE owner_source{i} OWNER TO other_owner
                 ALTER SINK owner_sink{i} OWNER TO other_owner
                 ALTER CLUSTER owner_cluster{i} OWNER TO other_owner
-                """
-            )
+                """)
 
         return s
 
@@ -113,8 +105,7 @@ class Owners(Check):
 
     def initialize(self) -> Testdrive:
         return Testdrive(
-            dedent(
-                """
+            dedent("""
                 > SET SESSION enable_session_rbac_checks TO true
 
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
@@ -125,8 +116,7 @@ class Owners(Check):
                 GRANT CREATEDB, CREATECLUSTER ON SYSTEM TO owner_role_01
 
                 > CREATE ROLE other_owner
-                """
-            )
+                """)
             + self._create_objects("owner_role_01", 1, expensive=True)
             + self._create_objects("owner_role_01", 2, expensive=True)
             + self._alter_object_owners(2, expensive=True)
@@ -136,11 +126,9 @@ class Owners(Check):
         return [
             Testdrive(s)
             for s in [
-                dedent(
-                    """
+                dedent("""
                         > SET SESSION enable_session_rbac_checks TO true
-                    """
-                )
+                    """)
                 + self._create_objects("owner_role_01", 3)
                 + self._create_objects("owner_role_01", 4)
                 + self._alter_object_owners(4)
@@ -177,11 +165,9 @@ class Owners(Check):
 
     def validate(self) -> Testdrive:
         return Testdrive(
-            dedent(
-                """
+            dedent("""
                 > SET SESSION enable_session_rbac_checks TO true
-                """
-            )
+                """)
             +
             # materialize role is not allowed to drop the objects since it is
             # not the owner, verify this:
@@ -196,8 +182,7 @@ class Owners(Check):
             + self._create_objects("owner_role_01", 9)
             + self._create_objects("owner_role_02", 10)
             + self._create_objects("owner_role_03", 11)
-            + dedent(
-                """
+            + dedent("""
                 $ psql-execute command="\\l owner_db*"
                 \\                                                   List of databases
                     Name    |     Owner     | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
@@ -521,8 +506,7 @@ class Owners(Check):
                 owner_kafka_conn7  owner_role_02=U/owner_role_02
                 owner_kafka_conn8  other_owner=U/other_owner
                 owner_kafka_conn9  owner_role_01=U/owner_role_01
-                """
-            )
+                """)
             + self._drop_objects("owner_role_01", 9)
             + self._drop_objects("owner_role_02", 10)
             + self._drop_objects("owner_role_03", 11)

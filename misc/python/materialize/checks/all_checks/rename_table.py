@@ -14,15 +14,11 @@ from materialize.checks.checks import Check
 
 class RenameTable(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > CREATE TABLE rename_table1 (f1 INTEGER);
                 > INSERT INTO rename_table1 VALUES (1);
                 > CREATE MATERIALIZED VIEW rename_table_view AS SELECT DISTINCT f1 FROM rename_table1;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -42,9 +38,7 @@ class RenameTable(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM rename_table3;
                 1
                 2
@@ -58,6 +52,4 @@ class RenameTable(Check):
                 3
                 4
                 5
-           """
-            )
-        )
+           """))

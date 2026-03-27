@@ -20,6 +20,7 @@ just the right way. This stretches the limit of argparse, but that complexity
 has been carefully managed. If you are tempted to refactor the argument parsing
 code, please talk to me first!
 """
+
 from __future__ import annotations
 
 import argparse
@@ -428,12 +429,10 @@ class DescribeCommand(Command):
                 print(f"    {' ' * name_width}    {description}")
 
         print()
-        print(
-            """For help on a specific workflow, run:
+        print("""For help on a specific workflow, run:
 
     $ ./mzcompose run WORKFLOW --help
-"""
-        )
+""")
 
 
 class DescriptionCommand(Command):

@@ -184,7 +184,7 @@ class DockerSeries:
 
 
 def extract_docker_series(
-    docker_stats: list[tuple[int, dict[str, dict[str, Any]]]]
+    docker_stats: list[tuple[int, dict[str, dict[str, Any]]]],
 ) -> DockerSeries:
     """Extract materialized time series from Docker stats snapshots."""
     t0 = docker_stats[0][0]

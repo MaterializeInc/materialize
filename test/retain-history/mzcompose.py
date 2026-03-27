@@ -419,27 +419,21 @@ def _validate_count_of_counter_source(c: Composition, object_name: str) -> None:
 def workflow_index(c: Composition) -> None:
     setup(c)
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             > CREATE SOURCE retain_history_source
               FROM LOAD GENERATOR COUNTER
               (TICK INTERVAL '100ms');
             > CREATE DEFAULT INDEX retain_history_idx
               ON retain_history_source
               WITH (RETAIN HISTORY FOR '10s');
-            """
-        )
-    )
+            """))
     _validate_count_of_counter_source(c, "retain_history_source")
 
 
 def workflow_table(c: Composition) -> None:
     setup(c)
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             > CREATE TABLE time (time_index int, t timestamp);
             > CREATE TABLE table_with_retain_history (x int) WITH (RETAIN HISTORY FOR '10s');
             > INSERT INTO time VALUES (0, now());
@@ -460,17 +454,13 @@ def workflow_table(c: Composition) -> None:
             SELECT t::string FROM time WHERE time_index = 1
             > SELECT count(*) FROM table_with_retain_history AS OF '${time1}'::timestamp;
             1
-            """
-        )
-    )
+            """))
 
 
 def workflow_webhook_table(c: Composition) -> None:
     setup(c)
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             > CREATE TABLE webhook_retain_history FROM WEBHOOK BODY FORMAT TEXT;
 
             $ webhook-append name=webhook_retain_history
@@ -478,37 +468,29 @@ def workflow_webhook_table(c: Composition) -> None:
 
             > SELECT count(*) FROM webhook_retain_history;
             1
-            """
-        )
-    )
+            """))
 
     mz_time1 = fetch_now_from_mz(c)
     time.sleep(5)
 
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
             $ webhook-append name=webhook_retain_history
             hello_2
 
             > SELECT count(*) FROM webhook_retain_history;
             2
-            """
-        )
-    )
+            """))
 
     time.sleep(2)
 
     c.testdrive(
-        dedent(
-            f"""
+        dedent(f"""
             ! SELECT count(*) FROM webhook_retain_history AS OF '{mz_time1}'::TIMESTAMP;
             contains: could not find a valid timestamp for the query
 
             > SELECT count(*) FROM webhook_retain_history;
             2
-            """
-        ),
+            """),
     )
 
 
@@ -516,9 +498,7 @@ def workflow_gh_24479(c: Composition) -> None:
     setup(c)
 
     for seed, sleep_enabled in [(0, False), (1, True)]:
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 > CREATE TABLE time_{seed} (time_index INT, t TIMESTAMP);
 
                 > CREATE TABLE retain_history_table_{seed} (key INT, value INT);
@@ -534,9 +514,7 @@ def workflow_gh_24479(c: Composition) -> None:
 
                 > SELECT count(*) FROM retain_history_mv2_{seed} AS OF '${{time1_{seed}}}'::TIMESTAMP; -- time1_{seed} with sleep_enabled={sleep_enabled}
                 0
-                """
-            )
-        )
+                """))
 
 
 def fetch_now_from_mz(c: Composition) -> str:

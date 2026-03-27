@@ -357,9 +357,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
         # Set up the Postgres server with the initial records, set up the connection to
         # the Postgres server in Materialize.
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 ALTER USER postgres WITH replication;
                 DROP SCHEMA IF EXISTS public CASCADE;
@@ -376,19 +374,15 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
                 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
                 > DROP SOURCE IF EXISTS s1 CASCADE;
-                """
-            )
-        )
+                """))
 
     def make_inserts(c: Composition, start: int, batch_num: int):
         c.testdrive(
             args=["--no-reset"],
-            input=dedent(
-                f"""
+            input=dedent(f"""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT {start} + row_number() OVER (), 'name' || ({start} + row_number() OVER ()), ({start} + row_number() OVER ()) % 1000, ({start} + row_number() OVER ()) % 1000, ({start} + row_number() OVER ()) % 10, '2024-12-12'::DATE, repeat('x', 1000000) FROM generate_series(1, {batch_num});
-            """
-            ),
+            """),
         )
 
     num_rows = 100_000  # out of memory with 200_000 rows
@@ -399,27 +393,23 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
 
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            f"""
+        input=dedent(f"""
             > CREATE SOURCE s1
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')
             > CREATE TABLE products FROM SOURCE s1 (REFERENCE products);
             > SELECT COUNT(*) FROM products;
             {num_rows}
-            """
-        ),
+            """),
     )
 
     make_inserts(c, num_rows, 1)
 
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(
-            f"""
+        input=dedent(f"""
             > SELECT COUNT(*) FROM products;
             {num_rows + 1}
-            """
-        ),
+            """),
     )
 
 

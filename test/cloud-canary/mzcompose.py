@@ -145,19 +145,15 @@ class Redpanda:
         )
         cloud_conn.autocommit = True
         cloud_cursor = cloud_conn.cursor()
-        cloud_cursor.execute(
-            f"""CREATE CONNECTION privatelink_conn
+        cloud_cursor.execute(f"""CREATE CONNECTION privatelink_conn
             TO AWS PRIVATELINK (
                 SERVICE NAME '{self.aws_private_link}',
                 AVAILABILITY ZONES ('use1-az2')
-            );""".encode()
-        )
-        cloud_cursor.execute(
-            """SELECT principal
+            );""".encode())
+        cloud_cursor.execute("""SELECT principal
             FROM mz_aws_privatelink_connections plc
             JOIN mz_connections c on plc.id = c.id
-            WHERE c.name = 'privatelink_conn';"""
-        )
+            WHERE c.name = 'privatelink_conn';""")
         results = cloud_cursor.fetchone()
         assert results
         privatelink_principal = results[0]

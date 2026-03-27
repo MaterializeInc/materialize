@@ -50,12 +50,10 @@ def workflow_default(c: Composition) -> None:
             # seems to be failing CI.
             c.sleep(10)
             c.testdrive(
-                input=dedent(
-                    """
+                input=dedent("""
                     > SHOW max_connections
                     1000
-                """
-                ),
+                """),
             )
 
             system_params_2 = {
@@ -72,15 +70,13 @@ def workflow_default(c: Composition) -> None:
             # Wait for dyncfg to sync
             c.sleep(2)
             c.testdrive(
-                input=dedent(
-                    """
+                input=dedent("""
                     > SHOW max_connections
                     67
 
                     > SHOW allowed_cluster_replica_sizes
                     "\\"25cc\\", \\"50cc\\""
-                """
-                ),
+                """),
             )
     finally:
         # Clean up the config file

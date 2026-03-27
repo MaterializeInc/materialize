@@ -75,13 +75,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         while time.time() - start_time < args.runtime:
             count_chunk = count_chunk + 1
             try:
-                c.testdrive(
-                    dedent(
-                        """
+                c.testdrive(dedent("""
                             > DELETE FROM qa_canary_environment.public_table.table
-                        """
-                    )
-                )
+                        """))
 
                 conn1, cursor_on_table = create_connection_and_cursor(
                     host,
@@ -273,22 +269,16 @@ def perform_test(
 
 
 def update_data(c: Composition, i: int) -> None:
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
                 > SELECT 1
                 1
 
                 > INSERT INTO qa_canary_environment.public_table.table VALUES {", ".join(f"({i*100+j})" for j in range(100))}
-            """
-        )
-    )
+            """))
 
 
 def validate_updated_data(c: Composition, i: int) -> None:
-    c.testdrive(
-        dedent(
-            f"""
+    c.testdrive(dedent(f"""
                 > SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0
                 0
 
@@ -309,9 +299,7 @@ def validate_updated_data(c: Composition, i: int) -> None:
 
                 > SELECT min(c), max(c), count(*) FROM qa_canary_environment.public_table.table
                 0 {i * 100 + 99} {(i + 1) * 100}
-            """
-        )
-    )
+            """))
 
 
 def validate_cursor_on_table(

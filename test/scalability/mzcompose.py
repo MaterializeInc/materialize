@@ -446,7 +446,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         results_by_endpoint,
     ) in result.get_df_total_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 6))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_tps_per_connections(
             workload_name,
             subfigure,
@@ -465,7 +465,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         results_by_endpoint,
     ) in result.get_df_details_by_workload_and_endpoint().items():
         fig = plt.figure(layout="constrained", figsize=(16, 10))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_duration_by_connections_for_workload(
             workload_name,
             subfigure,
@@ -481,7 +481,7 @@ def create_plots(result: BenchmarkResult, baseline_endpoint: Endpoint | None) ->
         plt.close()
 
         fig = plt.figure(layout="constrained", figsize=(16, 10))
-        (subfigure) = fig.subfigures(1, 1)
+        subfigure = fig.subfigures(1, 1)
         plot_duration_by_endpoints_for_workload(
             workload_name,
             subfigure,

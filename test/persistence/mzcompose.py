@@ -177,9 +177,7 @@ def workflow_compaction(c: Composition) -> None:
 def workflow_inspect_shard(c: Composition) -> None:
     """Regression test for https://github.com/MaterializeInc/materialize/pull/21098"""
     c.up("materialized")
-    c.sql(
-        dedent(
-            """
+    c.sql(dedent("""
             CREATE TABLE foo (
                 big0 string, big1 string, big2 string, big3 string, big4 string, big5 string,
                 barTimestamp string,
@@ -191,9 +189,7 @@ def workflow_inspect_shard(c: Composition) -> None:
                 repeat('x', 1024), repeat('x', 1024)
             );
             SELECT * FROM foo;
-            """
-        )
-    )
+            """))
     json_dict = c.sql_query("INSPECT SHARD 'u1'", port=6877, user="mz_system")[0][0]
     parts = [
         part

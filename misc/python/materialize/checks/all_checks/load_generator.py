@@ -16,9 +16,7 @@ from materialize.mz_version import MzVersion
 
 class LoadGeneratorAsOfUpTo(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE SOURCE counter1 FROM LOAD GENERATOR COUNTER (AS OF 100, UP TO 200);
             > CREATE TABLE counter1_tbl FROM SOURCE counter1;
 
@@ -28,9 +26,7 @@ class LoadGeneratorAsOfUpTo(Check):
             > CREATE TABLE bids FROM SOURCE auction1 (REFERENCE bids);
             > CREATE TABLE organizations FROM SOURCE auction1 (REFERENCE organizations);
             > CREATE TABLE users FROM SOURCE auction1 (REFERENCE users);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -48,9 +44,7 @@ class LoadGeneratorAsOfUpTo(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*) FROM counter1_tbl;
                 200
                 > SELECT COUNT(*) FROM counter2_tbl;
@@ -59,9 +53,7 @@ class LoadGeneratorAsOfUpTo(Check):
                 11200
                 > SELECT COUNT(*) FROM users;
                 4076
-            """
-            )
-        )
+            """))
 
 
 class LoadGeneratorMultiReplica(Check):
@@ -69,16 +61,12 @@ class LoadGeneratorMultiReplica(Check):
         return self.base_version >= MzVersion.parse_mz("v0.134.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             >[version>=13800] CREATE CLUSTER multi_cluster1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
             >[version<13800] CREATE CLUSTER multi_cluster1 SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
             >[version>=13800] CREATE CLUSTER multi_cluster2 SIZE 'scale=1,workers=1', REPLICATION FACTOR 2;
             >[version<13800] CREATE CLUSTER multi_cluster2 SIZE 'scale=1,workers=1', REPLICATION FACTOR 1;
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -103,9 +91,7 @@ class LoadGeneratorMultiReplica(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT COUNT(*) FROM multi_counter1_tbl;
                 10
                 > SELECT COUNT(*) FROM multi_counter2_tbl;
@@ -114,6 +100,4 @@ class LoadGeneratorMultiReplica(Check):
                 10
                 > SELECT COUNT(*) FROM multi_counter4_tbl;
                 10
-            """
-            )
-        )
+            """))

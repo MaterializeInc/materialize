@@ -25,48 +25,30 @@ class SubscribeParallel(Scenario):
     def benchmark(self) -> MeasurementSource:
         return Td(
             self.create_subscribe_source()
-            + "\n".join(
-                [
-                    dedent(
-                        f"""
+            + "\n".join([dedent(f"""
                         $ postgres-connect name=conn{i} url=postgres://materialize:materialize@${{testdrive.materialize-sql-addr}}
                         $ postgres-execute connection=conn{i}
                         # STRICT SERIALIZABLE is affected by database-issues#5407
                         START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
                         DECLARE c{i} CURSOR FOR SUBSCRIBE s1
-                        """
-                    )
-                    for i in range(0, self.n())
-                ]
-            )
+                        """) for i in range(0, self.n())])
             + self.insert()
             # We measure from here ...
-            + dedent(
-                """
+            + dedent("""
                 > SELECT COUNT(*) FROM s1;
                   /* A */
                 1
-                """
-            )
-            + "\n".join(
-                [
-                    dedent(
-                        f"""
+                """)
+            + "\n".join([dedent(f"""
                         $ postgres-execute connection=conn{i}
                         FETCH ALL FROM c{i};
-                        """
-                    )
-                    for i in range(0, self.n())
-                ]
-            )
+                        """) for i in range(0, self.n())])
             # ... to here
-            + dedent(
-                """
+            + dedent("""
                 > SELECT 1
                   /* B */
                 1
-                """
-            )
+                """)
         )
 
     def create_subscribe_source(self) -> str:
@@ -78,12 +60,10 @@ class SubscribeParallel(Scenario):
 
 class SubscribeParallelTable(SubscribeParallel):
     def create_subscribe_source(self) -> str:
-        return dedent(
-            """
+        return dedent("""
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 TEXT);
-             """
-        )
+             """)
 
     def insert(self) -> str:
         return "> INSERT INTO s1 VALUES (REPEAT('x', 1024))\n"
@@ -91,13 +71,11 @@ class SubscribeParallelTable(SubscribeParallel):
 
 class SubscribeParallelTableWithIndex(SubscribeParallel):
     def create_subscribe_source(self) -> str:
-        return dedent(
-            """
+        return dedent("""
              > DROP TABLE IF EXISTS s1;
              > CREATE TABLE s1 (f1 INTEGER);
              > CREATE DEFAULT INDEX ON s1;
-             """
-        )
+             """)
 
     def insert(self) -> str:
         return "> INSERT INTO s1 VALUES (123)\n"
@@ -109,8 +87,7 @@ class SubscribeParallelKafka(SubscribeParallel):
         # we must always use a unique topic to ensure isolation between the individal
         # measurements
         self._unique_topic_id = getrandbits(64)
-        return dedent(
-            f"""
+        return dedent(f"""
              # Separate topic for each Mz instance
              $ kafka-create-topic topic=subscribe-kafka-{self._unique_topic_id}
 
@@ -129,16 +106,13 @@ class SubscribeParallelKafka(SubscribeParallel):
                FORMAT BYTES ENVELOPE NONE;
 
              > CREATE DEFAULT INDEX ON s1;
-             """
-        )
+             """)
 
     def insert(self) -> str:
-        return dedent(
-            f"""
+        return dedent(f"""
             $ kafka-ingest format=bytes topic=subscribe-kafka-{self._unique_topic_id}
             123
-            """
-        )
+            """)
 
 
 class SubscribeNoSnapshotTable(Scenario):
@@ -147,20 +121,14 @@ class SubscribeNoSnapshotTable(Scenario):
     SCALE = 6  # Controls the size of the snapshot we skip over.
 
     def benchmark(self) -> MeasurementSource:
-        subscribes = "\n".join(
-            [
-                """
+        subscribes = "\n".join(["""
              > START TRANSACTION ISOLATION LEVEL SERIALIZABLE;
              > DECLARE c1 CURSOR FOR SUBSCRIBE s1 WITH (SNAPSHOT false) AS OF ${mz_now};
              > FETCH 1 c1 WITH (TIMEOUT = '10s');
              <TIMESTAMP> 1 wow!
-             > COMMIT;"""
-                for _ in range(30)
-            ]
-        )
+             > COMMIT;""" for _ in range(30)])
 
-        return Td(
-            f"""
+        return Td(f"""
              $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
              ALTER SYSTEM SET max_result_size = '100GB';
 
@@ -183,8 +151,7 @@ class SubscribeNoSnapshotTable(Scenario):
              > SELECT 1
                /* B */
              1
-            """
-        )
+            """)
 
 
 class SubscribeNoSnapshotIndex(Scenario):
@@ -193,8 +160,7 @@ class SubscribeNoSnapshotIndex(Scenario):
     SCALE = 6  # Controls the size of the snapshot we skip over.
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
              $ set-regex match=\\d{{13}} replacement=<TIMESTAMP>
 
              $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
@@ -223,5 +189,4 @@ class SubscribeNoSnapshotIndex(Scenario):
              > SELECT 1
                /* B */
              1
-            """
-        )
+            """)

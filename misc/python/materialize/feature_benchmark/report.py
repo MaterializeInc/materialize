@@ -134,7 +134,7 @@ class Report:
 
 
 def determine_scenario_classes_with_regressions(
-    selected_report_by_scenario_name: dict[str, Report]
+    selected_report_by_scenario_name: dict[str, Report],
 ) -> list[type[Scenario]]:
     scenario_classes_with_regressions = set()
 

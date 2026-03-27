@@ -34,9 +34,7 @@ class CreateCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 $ set-sql-timeout duration=240s
 
                 > CREATE TABLE create_cluster1_table (f1 INTEGER);
@@ -74,9 +72,7 @@ class CreateCluster(Check):
 
                 > DROP TABLE create_cluster1_table CASCADE;
                 > DROP TABLE create_cluster2_table CASCADE;
-           """
-            )
-        )
+           """))
 
 
 class AlterCluster(Check):
@@ -103,9 +99,7 @@ class AlterCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=default
 
                 > SELECT * FROM alter_cluster1_table;
@@ -128,9 +122,7 @@ class AlterCluster(Check):
 
                 > SELECT name, introspection_debugging, introspection_interval FROM mz_catalog.mz_clusters WHERE name = 'alter_cluster1';
                 alter_cluster1 true "00:00:45"
-           """
-            )
-        )
+           """))
 
 
 class DropCluster(Check):
@@ -166,9 +158,7 @@ class DropCluster(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SET cluster=drop_cluster1
 
                 > SET cluster=drop_cluster2
@@ -186,6 +176,4 @@ class DropCluster(Check):
 
                 ! SELECT * FROM drop_cluster2_view;
                 contains: unknown catalog item 'drop_cluster2_view'
-           """
-            )
-        )
+           """))

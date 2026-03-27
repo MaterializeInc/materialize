@@ -105,7 +105,7 @@ def main(show: bool, diagram_file: str | None, roots: list[str]) -> None:
     member_meta["timely"] = {"has_bin": False, "description": ""}
 
     if roots:
-        (local_deps, areas) = filter_to_roots(areas, local_deps, roots)
+        local_deps, areas = filter_to_roots(areas, local_deps, roots)
 
     diagram_file_path = MZ_ROOT / diagram_file
     with NamedTemporaryFile(mode="w+", prefix="mz-arch-diagram-") as out:

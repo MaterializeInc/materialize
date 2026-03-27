@@ -14,16 +14,12 @@ from materialize.checks.checks import Check
 
 class NumericTypes(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
             > CREATE TABLE numeric_types_table (smallint_col SMALLINT, integer_col INTEGER, bigint_col BIGINT, numeric_col NUMERIC(39,16));
             > INSERT INTO numeric_types_table DEFAULT VALUES;
             > INSERT INTO numeric_types_table VALUES (-32768, -2147483648, -9223372036854775808, -12345678901234567890123.4567890123456789);
             > INSERT INTO numeric_types_table VALUES (32767, 2147483647, 9223372036854775807, 12345678901234567890123.4567890123456789);
-        """
-            )
-        )
+        """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -64,9 +60,7 @@ class NumericTypes(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM numeric_types_view1;
                 -32768 -32768 32767 -2147483648 -2147483648 2147483647 -9223372036854775808 -9223372036854775808 9223372036854775807 -12345678901234567890123.4567890123456789 -12345678901234567890123.4567890123456789 12345678901234567890123.4567890123456789
                 -32768 -32768 32767 -2147483648 -2147483648 2147483647 -9223372036854775808 -9223372036854775808 9223372036854775807 -12345678901234567890123.4567890123456789 -12345678901234567890123.4567890123456789 12345678901234567890123.4567890123456789
@@ -94,6 +88,4 @@ class NumericTypes(Check):
                 <null> -32768 32767 <null> -2147483648 2147483647 <null> -9223372036854775808 9223372036854775807 <null> -12345678901234567890123.4567890123456789 12345678901234567890123.4567890123456789
                 <null> -32768 32767 <null> -2147483648 2147483647 <null> -9223372036854775808 9223372036854775807 <null> -12345678901234567890123.4567890123456789 12345678901234567890123.4567890123456789
                 <null> -32768 32767 <null> -2147483648 2147483647 <null> -9223372036854775808 9223372036854775807 <null> -12345678901234567890123.4567890123456789 12345678901234567890123.4567890123456789
-            """
-            )
-        )
+            """))

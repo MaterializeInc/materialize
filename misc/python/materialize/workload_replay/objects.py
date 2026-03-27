@@ -293,9 +293,7 @@ def run_create_objects_part_1(
                     assert match, f"No database found in {connection['create_sql']}"
                     ref_database = match.group(2)
                     if ref_database not in existing_dbs["sql-server"]:
-                        c.testdrive(
-                            dedent(
-                                f"""
+                        c.testdrive(dedent(f"""
                                 $ sql-server-connect name=sql-server
                                 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
                                 $ sql-server-execute name=sql-server
@@ -303,9 +301,7 @@ def run_create_objects_part_1(
                                 USE test;
                                 EXEC sys.sp_cdc_enable_db;
                                 ALTER DATABASE {ref_database} SET ALLOW_SNAPSHOT_ISOLATION ON;
-                                """
-                            )
-                        )
+                                """))
                         existing_dbs["sql-server"].add(ref_database)
                     c.sql(
                         SQL(
@@ -521,9 +517,7 @@ def run_create_objects_part_1(
                             for column in child["columns"]
                         ]
                         if first:
-                            c.testdrive(
-                                dedent(
-                                    f"""
+                            c.testdrive(dedent(f"""
                                     $ sql-server-connect name=sql-server
                                     server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -531,13 +525,9 @@ def run_create_objects_part_1(
                                     IF DB_ID(N'{ref_database}') IS NULL BEGIN CREATE DATABASE {ref_database}; END
                                     USE {ref_database};
                                     IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'{ref_schema}')BEGIN EXEC(N'CREATE SCHEMA {ref_schema}'); END
-                                    """
-                                )
-                            )
+                                    """))
                             first = False
-                        c.testdrive(
-                            dedent(
-                                f"""
+                        c.testdrive(dedent(f"""
                             $ sql-server-connect name=sql-server
                             server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -545,9 +535,7 @@ def run_create_objects_part_1(
                             USE {ref_database};
                             CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)});
                             EXEC sys.sp_cdc_enable_table @source_schema = '{ref_schema}', @source_name = '{ref_table}', @role_name = 'SA', @supports_net_changes = 0;
-                                """
-                            )
-                        )
+                                """))
 
                 if source["type"] == "kafka":
                     topic = get_kafka_topic(source)

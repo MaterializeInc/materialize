@@ -49,16 +49,14 @@ class FastPathFilterNoIndex(FastPath):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > CREATE DEFAULT INDEX ON v1;
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
@@ -66,8 +64,7 @@ true
             "> SELECT * FROM v1 WHERE f2 < 0;" for _ in range(100)
         )
 
-        return Td(
-            f"""
+        return Td(f"""
 > SET auto_route_introspection_queries TO false
 
 > BEGIN
@@ -81,8 +78,7 @@ true
 > SELECT 1
   /* B */
 1
-"""
-        )
+""")
 
 
 class MFPPushdown(Scenario):
@@ -91,14 +87,12 @@ class MFPPushdown(Scenario):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 (f1, f2) AS SELECT generate_series AS f1, 1 AS f2 FROM generate_series(1, {self.n()});
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
@@ -106,8 +100,7 @@ true
             "> SELECT * FROM v1 WHERE f2 < 0;" for _ in range(100)
         )
 
-        return Td(
-            f"""
+        return Td(f"""
 > SET auto_route_introspection_queries TO false
 
 > BEGIN
@@ -121,8 +114,7 @@ true
 > SELECT 1
   /* B */
 1
-"""
-        )
+""")
 
 
 class FastPathFilterIndex(FastPath):
@@ -131,16 +123,14 @@ class FastPathFilterIndex(FastPath):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
 
 > CREATE DEFAULT INDEX ON v1;
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     # Since an individual query of this particular type being benchmarked takes 1ms to execute, the results are susceptible
@@ -152,8 +142,7 @@ true
             "> SELECT * FROM v1 WHERE f1 = 1;\n1\n" for i in range(0, 1000)
         )
 
-        return Td(
-            f"""
+        return Td(f"""
 > SET auto_route_introspection_queries TO false
 
 > BEGIN
@@ -167,8 +156,7 @@ true
 > SELECT 1
   /* B */
 1
-"""
-        )
+""")
 
 
 class FastPathOrderByLimit(FastPath):
@@ -177,29 +165,24 @@ class FastPathOrderByLimit(FastPath):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
 
 > CREATE DEFAULT INDEX ON v1;
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            """
+        return Td("""
 > SELECT 1;
   /* A */
 1
 > SELECT f1 FROM v1 ORDER BY f1 DESC LIMIT 1000
   /* B */
-"""
-            + "\n".join([str(x) for x in range(self.n() - 1000, self.n())])
-        )
+""" + "\n".join([str(x) for x in range(self.n() - 1000, self.n())]))
 
 
 class FastPathLimit(FastPath):
@@ -207,26 +190,19 @@ class FastPathLimit(FastPath):
 
     def init(self) -> list[Action]:
         return [
-            TdAction(
-                f"""
+            TdAction(f"""
                 > CREATE MATERIALIZED VIEW v1 AS SELECT * FROM generate_series(1, {self.n()})
-                """
-            ),
+                """),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            dedent(
-                """
+        return Td(dedent("""
                 > SELECT 1;
                   /* A */
                 1
                 > SELECT * FROM v1 LIMIT 100
                   /* B */
-                """
-            )
-            + "\n".join([str(x) for x in range(1, 101)])
-        )
+                """) + "\n".join([str(x) for x in range(1, 101)]))
 
 
 class DML(Scenario):
@@ -242,8 +218,7 @@ class Insert(DML):
         return self.table_ten()
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 17179869184;
@@ -255,8 +230,7 @@ ALTER SYSTEM SET max_result_size = 17179869184;
 
 > INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
   /* B */
-"""
-        )
+""")
 
 
 class ManySmallInserts(DML):
@@ -277,8 +251,7 @@ class ManySmallInserts(DML):
 
         insert_statements_str = "\n".join(statements)
 
-        return Td(
-            f"""
+        return Td(f"""
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)
@@ -286,8 +259,7 @@ class ManySmallInserts(DML):
 
 {insert_statements_str}
   /* B */
-"""
-        )
+""")
 
 
 class InsertBatch(DML):
@@ -300,8 +272,7 @@ class InsertBatch(DML):
             f"> INSERT INTO t1 VALUES ({i});" for i in range(0, self.n())
         )
 
-        return Td(
-            f"""
+        return Td(f"""
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)
@@ -315,8 +286,7 @@ class InsertBatch(DML):
 
 > COMMIT
   /* B */
-"""
-        )
+""")
 
 
 class InsertMultiRow(DML):
@@ -330,8 +300,7 @@ class InsertMultiRow(DML):
     def benchmark(self) -> MeasurementSource:
         values = ", ".join(f"({i})" for i in range(0, self.n()))
 
-        return Td(
-            f"""
+        return Td(f"""
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 INTEGER)
@@ -339,8 +308,7 @@ class InsertMultiRow(DML):
 
 > INSERT INTO t1 VALUES {values}
   /* B */
-"""
-        )
+""")
 
 
 class Update(DML):
@@ -349,28 +317,24 @@ class Update(DML):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE TABLE t1 (f1 BIGINT);
 
 > CREATE DEFAULT INDEX ON t1;
 
 > INSERT INTO t1 SELECT {self.unique_values()} FROM {self.join()}
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1
   /* A */
 1
 
 > UPDATE t1 SET f1 = f1 + {self.n()}
   /* B */
-"""
-        )
+""")
 
 
 class ManySmallUpdates(DML):
@@ -384,15 +348,13 @@ class ManySmallUpdates(DML):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                """
+            TdAction("""
 > CREATE TABLE t1 (f1 INT, f2 INT);
 
 > CREATE DEFAULT INDEX ON t1;
 
 > INSERT INTO t1 SELECT generate_series(1, 10);
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
@@ -406,16 +368,14 @@ class ManySmallUpdates(DML):
 
         update_statements_str = "\n".join(statements)
 
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1
   /* A */
 1
 
 {update_statements_str}
   /* B */
-"""
-        )
+""")
 
 
 class UpdateMultiNoIndex(DML):
@@ -424,19 +384,16 @@ class UpdateMultiNoIndex(DML):
     def before(self) -> Action:
         # Due to exterme variability in the results, we have no option but to drop and re-create
         # the table prior to each measurement
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP TABLE IF EXISTS t1;
 
 > CREATE TABLE t1 (f1 BIGINT);
 
 > INSERT INTO t1 SELECT * FROM generate_series(0, {self.n()})
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1
   /* A */
 1
@@ -446,8 +403,7 @@ class UpdateMultiNoIndex(DML):
 > SELECT COUNT(*) FROM t1 WHERE f1 > {self.n()}
   /* B */
 {self.n()}
-"""
-        )
+""")
 
 
 class InsertAndSelect(DML):
@@ -460,8 +416,7 @@ class InsertAndSelect(DML):
         return self.table_ten()
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 17179869184;
@@ -476,8 +431,7 @@ ALTER SYSTEM SET max_result_size = 17179869184;
 > SELECT 1 FROM t1 WHERE f1 = 1
   /* B */
 1
-"""
-        )
+""")
 
 
 class CopyFromStdin(DML):
@@ -529,8 +483,7 @@ class CopyFromS3(DML):
 
     def init(self) -> Action:
         n = self.n()
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > CREATE SECRET copy_from_s3_secret AS '${{arg.aws-secret-access-key}}'
 
 > CREATE CONNECTION copy_from_s3_conn TO AWS (
@@ -548,13 +501,11 @@ class CopyFromS3(DML):
 
 > COPY copy_from_s3_src TO '{self._s3_path}'
   WITH (AWS CONNECTION = copy_from_s3_conn, FORMAT = 'csv')
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
         n = self.n()
-        return Td(
-            f"""
+        return Td(f"""
 > DROP TABLE IF EXISTS copy_from_s3_dst
 
 > CREATE TABLE copy_from_s3_dst (f1 INTEGER, f2 TEXT, f3 DOUBLE, f4 BOOLEAN)
@@ -566,8 +517,7 @@ class CopyFromS3(DML):
 > SELECT COUNT(*) FROM copy_from_s3_dst
   /* B */
 {n}
-"""
-        )
+""")
 
 
 class Dataflow(Scenario):
@@ -585,8 +535,7 @@ class OrderBy(Dataflow):
         # inserts here so that the rows are assigned separate timestamps
         inserts = "\n\n".join(f"> INSERT INTO ten VALUES ({i})" for i in range(0, 10))
 
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > CREATE TABLE ten (f1 INTEGER);
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
@@ -595,13 +544,11 @@ class OrderBy(Dataflow):
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
         # Explicit LIMIT is needed for the ORDER BY to not be optimized away
-        return Td(
-            f"""
+        return Td(f"""
 > DROP MATERIALIZED VIEW IF EXISTS v2
   /* A */
 
@@ -610,27 +557,23 @@ true
 > SELECT COUNT(*) FROM v2
   /* B */
 {self.n()}
-"""
-        )
+""")
 
 
 class CountDistinct(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()};
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1
   /* A */
 1
@@ -638,27 +581,23 @@ true
 > SELECT COUNT(DISTINCT f1) AS f1 FROM v1
   /* B */
 {self.n()}
-"""
-        )
+""")
 
 
 class MinMax(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1
   /* A */
 1
@@ -666,8 +605,7 @@ true
 > SELECT MIN(f1), MAX(f1) AS f1 FROM v1
   /* B */
 0 {self.n()-1}
-"""
-        )
+""")
 
 
 class MinMaxMaintained(Dataflow):
@@ -677,19 +615,16 @@ class MinMaxMaintained(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()};
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP VIEW IF EXISTS v2
   /* A */
 
@@ -700,27 +635,23 @@ true
 > SELECT * FROM v2
   /* B */
 0 {self.n()-1}
-"""
-        )
+""")
 
 
 class GroupBy(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 
 > SELECT COUNT(*) = {self.n()} FROM v1
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1
   /* A */
 1
@@ -728,8 +659,7 @@ true
 > SELECT COUNT(*), MIN(f1_min), MAX(f1_max) FROM (SELECT f2, MIN(f1) AS f1_min, MAX(f1) AS f1_max FROM v1 GROUP BY f2)
   /* B */
 {self.n()} 0 {self.n()-1}
-"""
-        )
+""")
 
 
 class GroupByMaintained(Dataflow):
@@ -739,19 +669,16 @@ class GroupByMaintained(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 
 > SELECT COUNT(*) = {self.n()} FROM v1
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP VIEW IF EXISTS v2;
   /* A */
 
@@ -762,8 +689,7 @@ true
 > SELECT * FROM v2
   /* B */
 {self.n()} 0 {self.n()-1}
-"""
-        )
+""")
 
 
 class CrossJoin(Dataflow):
@@ -771,8 +697,7 @@ class CrossJoin(Dataflow):
         return self.view_ten()
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP MATERIALIZED VIEW IF EXISTS v1;
 
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} FROM {self.join()}
@@ -781,8 +706,7 @@ class CrossJoin(Dataflow):
 > SELECT COUNT(*) = {self.n()} AS f1 FROM v1;
   /* B */
 true
-"""
-        )
+""")
 
 
 class AccumulateReductions(Dataflow):
@@ -794,8 +718,7 @@ class AccumulateReductions(Dataflow):
         return ScenarioVersion.create(1, 1, 0)
 
     def before(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP TABLE IF EXISTS t CASCADE;
 > CREATE TABLE t (a int, b int, c int, d int);
 
@@ -817,8 +740,7 @@ class AccumulateReductions(Dataflow):
     sum(b) AS sum_b, count(b) as cnt_b
   FROM data
   GROUP BY a;
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
         sql = f"""
@@ -890,8 +812,7 @@ class Retraction(Dataflow):
     """Benchmark the time it takes to process a very large retraction"""
 
     def before(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP TABLE IF EXISTS ten CASCADE;
 
 > CREATE TABLE ten (f1 INTEGER);
@@ -902,12 +823,10 @@ class Retraction(Dataflow):
 
 > SELECT COUNT(*) = {self.n()} AS f1 FROM v1;
 true
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            """
+        return Td("""
 > SELECT 1
   /* A */
 1
@@ -917,8 +836,7 @@ true
 > SELECT COUNT(*) FROM v1
   /* B */
 0
-"""
-        )
+""")
 
 
 class CreateIndex(Dataflow):
@@ -929,21 +847,18 @@ class CreateIndex(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE TABLE t1 (f1 INTEGER, f2 INTEGER);
 > INSERT INTO t1 (f1) SELECT {self.unique_values()} FROM {self.join()}
 
 # Make sure the dataflow is fully hydrated
 > SELECT 1 FROM t1 WHERE f1 = 0;
 1
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            """
+        return Td("""
 > DROP INDEX IF EXISTS i1;
   /* A */
 
@@ -956,24 +871,20 @@ class CreateIndex(Dataflow):
   AND a2.f1 = 0
   /* B */
 1
-"""
-        )
+""")
 
 
 class DeltaJoin(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1;
   /* A */
 1
@@ -982,8 +893,7 @@ class DeltaJoin(Dataflow):
 > SELECT COUNT(*) FROM v1 AS a1 , v1 AS a2 , v1 AS a3 WHERE a1.f1 = a2.f1 AND a2.f1 = a3.f1
   /* B */
 {self.n()}
-"""
-        )
+""")
 
 
 class DeltaJoinMaintained(Dataflow):
@@ -994,16 +904,13 @@ class DeltaJoinMaintained(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1 FROM {self.join()}
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP VIEW IF EXISTS v2;
   /* A */
 
@@ -1015,24 +922,20 @@ class DeltaJoinMaintained(Dataflow):
 > SELECT * FROM v2
   /* B */
 {self.n()}
-"""
-        )
+""")
 
 
 class DifferentialJoin(Dataflow):
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1;
   /* A */
 1
@@ -1041,8 +944,7 @@ class DifferentialJoin(Dataflow):
 > SELECT COUNT(*) FROM v1 AS a1 JOIN v1 AS a2 USING (f1)
   /* B */
 {self.n()}
-"""
-        )
+""")
 
 
 class FullOuterJoin(Dataflow):
@@ -1053,9 +955,7 @@ class FullOuterJoin(Dataflow):
         columns_using = ", ".join([f"f{i+1}" for i in range(0, floor(self.scale()))])
         inserts = "\n".join([f"> INSERT INTO ten VALUES ({i+1})" for i in range(0, 10)])
 
-        return [
-            Td(
-                f"""
+        return [Td(f"""
 > DROP MATERIALIZED VIEW IF EXISTS v2 CASCADE;
 
 > DROP MATERIALIZED VIEW IF EXISTS v1 CASCADE;
@@ -1079,9 +979,7 @@ class FullOuterJoin(Dataflow):
 > SELECT * FROM v2;
   /* B */
 {self.n()} {self.n()}
-"""
-            )
-        ]
+""")]
 
 
 class Finish(Scenario):
@@ -1094,19 +992,16 @@ class FinishOrderByLimit(Finish):
     def init(self) -> list[Action]:
         return [
             self.view_ten(),
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE MATERIALIZED VIEW v1 AS SELECT {self.unique_values()} AS f1, {self.unique_values()} AS f2 FROM {self.join()}
 
 > SELECT COUNT(*) = {self.n()} FROM v1;
 true
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1
   /* A */
 1
@@ -1114,8 +1009,7 @@ true
 > SELECT f2 FROM v1 ORDER BY 1 DESC LIMIT 1
   /* B */
 {self.n()-1}
-"""
-        )
+""")
 
 
 class Kafka(Scenario):
@@ -1125,18 +1019,15 @@ class Kafka(Scenario):
 class KafkaEnvelopeNoneBytes(Kafka):
     def shared(self) -> Action:
         data = "a" * 512
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ kafka-create-topic topic=kafka-envelope-none-bytes
 
 $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 {data}
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
@@ -1156,16 +1047,12 @@ $ kafka-ingest format=bytes topic=kafka-envelope-none-bytes repeat={self.n()}
 > SELECT COUNT(*) = {self.n()} FROM s1_tbl
   /* B */
 true
-"""
-        )
+""")
 
 
 class KafkaUpsert(Kafka):
     def shared(self) -> Action:
-        return TdAction(
-            self.keyschema()
-            + self.schema()
-            + f"""
+        return TdAction(self.keyschema() + self.schema() + f"""
 $ kafka-create-topic topic=kafka-upsert
 
 $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
@@ -1173,12 +1060,10 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
 
 $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keyschema}} schema=${{schema}}
 {{"f1": 2}} {{"f2": 2}}
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
@@ -1203,26 +1088,20 @@ $ kafka-ingest format=avro topic=kafka-upsert key-format=avro key-schema=${{keys
   /* B */
 1
 2
-"""
-        )
+""")
 
 
 class KafkaUpsertUnique(Kafka):
     def shared(self) -> Action:
-        return TdAction(
-            self.keyschema()
-            + self.schema()
-            + f"""
+        return TdAction(self.keyschema() + self.schema() + f"""
 $ kafka-create-topic topic=upsert-unique partitions=16
 
 $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
@@ -1246,8 +1125,7 @@ $ kafka-ingest format=avro topic=upsert-unique key-format=avro key-schema=${{key
 > SELECT COUNT(*) FROM s1_tbl;
   /* B */
 {self.n()}
-"""
-        )
+""")
 
 
 class KafkaRestart(ScenarioDisabled):
@@ -1258,20 +1136,15 @@ class KafkaRestart(ScenarioDisabled):
     """
 
     def shared(self) -> Action:
-        return TdAction(
-            self.keyschema()
-            + self.schema()
-            + f"""
+        return TdAction(self.keyschema() + self.schema() + f"""
 $ kafka-create-topic topic=kafka-recovery partitions=8
 
 $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
-"""
-        )
+""")
 
     def init(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CONNECTION IF EXISTS s1_csr_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
@@ -1297,19 +1170,16 @@ $ kafka-ingest format=avro topic=kafka-recovery key-format=avro key-schema=${{ke
 
 # Give time for any background tasks (e.g. compaction) to settle down
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="10s"
-"""
-        )
+""")
 
     def benchmark(self) -> BenchmarkingSequence:
         return [
             Lambda(lambda e: e.RestartMzClusterd()),
-            Td(
-                f"""
+            Td(f"""
 > SELECT COUNT(*) /* {self.n()} */ FROM s1_tbl;
   /* B */
 {self.n()}
-"""
-            ),
+"""),
         ]
 
 
@@ -1355,8 +1225,7 @@ class KafkaRestartBig(ScenarioBig):
         ]
 
     def init(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > CREATE CONNECTION s1_kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
@@ -1376,19 +1245,16 @@ class KafkaRestartBig(ScenarioBig):
 
 > SELECT * FROM s1_is_complete;
 true
-"""
-        )
+""")
 
     def benchmark(self) -> BenchmarkingSequence:
         return [
             Lambda(lambda e: e.RestartMzClusterd()),
-            Td(
-                """
+            Td("""
 > SELECT * FROM s1_is_complete
   /* B */
 true
-"""
-            ),
+"""),
         ]
 
 
@@ -1406,11 +1272,9 @@ class KafkaEnvelopeNoneBytesScalability(ScenarioBig):
 
     def shared(self) -> list[Action]:
         return [
-            TdAction(
-                """
+            TdAction("""
 $ kafka-create-topic topic=kafka-scalability partitions=8
-"""
-            ),
+"""),
             Kgen(
                 topic="kafka-scalability",
                 args=[
@@ -1424,8 +1288,7 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP CONNECTION IF EXISTS s1_kafka_conn CASCADE
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
 
@@ -1448,8 +1311,7 @@ $ kafka-create-topic topic=kafka-scalability partitions=8
 > SELECT c = {self.n()} FROM v1
   /* B */
 true
-"""
-        )
+""")
 
 
 class Sink(Scenario):
@@ -1468,20 +1330,15 @@ class ExactlyOnce(Sink):
         return ScenarioVersion.create(1, 1, 0)
 
     def shared(self) -> Action:
-        return TdAction(
-            self.keyschema()
-            + self.schema()
-            + f"""
+        return TdAction(self.keyschema() + self.schema() + f"""
 $ kafka-create-topic topic=sink-input partitions=16
 
 $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keyschema}} schema=${{schema}} repeat={self.n()}
 {{"f1": ${{kafka-ingest.iteration}} }} {{"f2": ${{kafka-ingest.iteration}} }}
-"""
-        )
+""")
 
     def init(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > CREATE CONNECTION IF NOT EXISTS kafka_conn TO KAFKA (BROKER '${{testdrive.kafka-addr}}', SECURITY PROTOCOL PLAINTEXT);
 
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
@@ -1502,12 +1359,10 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 
 > SELECT COUNT(*) FROM source1_tbl;
 {self.n()}
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > DROP SINK IF EXISTS sink1;
 > DROP SOURCE IF EXISTS sink1_check CASCADE;
   /* A */
@@ -1540,9 +1395,7 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 > SELECT * FROM sink1_check_v
   /* B */
-"""
-            + str(self.n())
-        )
+""" + str(self.n()))
 
 
 class IcebergSink(Sink):
@@ -1571,8 +1424,7 @@ class IcebergSink(Sink):
 
     def init(self) -> Action:
         # Enable feature flag and set up connections
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > CREATE SECRET iceberg_secret AS '${{arg.s3-access-key}}';
 
 > CREATE CONNECTION aws_conn TO AWS (
@@ -1593,8 +1445,7 @@ class IcebergSink(Sink):
 > DROP CLUSTER IF EXISTS sink_cluster CASCADE
 
 > CREATE CLUSTER sink_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
-"""
-        )
+""")
 
     def before(self) -> Action:
         # Create a fresh source table and sink for each run.
@@ -1609,8 +1460,7 @@ class IcebergSink(Sink):
         )
         table_name = self._current_table_name
         source_name = self._current_source_name
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP SINK IF EXISTS iceberg_sink;
 
 > CREATE TABLE {source_name} (pk BIGINT, data BIGINT);
@@ -1639,8 +1489,7 @@ running
   JOIN mz_sinks ON mz_sink_statistics.id = mz_sinks.id
   WHERE mz_sinks.name = 'iceberg_sink';
 true
-"""
-        )
+""")
 
     def benchmark(self) -> MeasurementSource:
         # Measure only the time to stream data through the already-running sink.
@@ -1648,8 +1497,7 @@ true
         # Here we insert pk=1..n, so total rows = n+1.
         table_name = self._current_table_name
         source_name = self._current_source_name
-        return Td(
-            f"""
+        return Td(f"""
 > INSERT INTO {source_name} SELECT x, x * 2 FROM generate_series(1, {self.n()}) AS x;
   /* A */
 
@@ -1669,8 +1517,7 @@ SELECT COUNT(*) FROM iceberg_scan('s3://test-bucket/default_namespace/{table_nam
 {self.n() + 1}
 
 > DROP SINK iceberg_sink;
-"""
-        )
+""")
 
 
 class ManyKafkaSourcesOnSameCluster(Scenario):
@@ -1692,21 +1539,17 @@ class ManyKafkaSourcesOnSameCluster(Scenario):
         return ScenarioVersion.create(1, 2, 0)
 
     def shared(self) -> Action:
-        create_topics = "\n".join(
-            f"""
+        create_topics = "\n".join(f"""
 $ kafka-create-topic topic=many-kafka-sources-{i}
 
 $ kafka-ingest format=avro topic=many-kafka-sources-{i} schema=${{schema}} repeat={self.COUNT_SOURCE_ENTRIES}
 {{"f2": ${{kafka-ingest.iteration}}}}
-"""
-            for i in range(0, self.n())
-        )
+""" for i in range(0, self.n()))
 
         return TdAction(self.schema() + create_topics)
 
     def init(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_sources = {self.n() * 4};
@@ -1722,19 +1565,14 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
 
 > DROP CLUSTER IF EXISTS kafka_source_cluster CASCADE;
 > CREATE CLUSTER kafka_source_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
-"""
-        )
+""")
 
     def benchmark(self) -> BenchmarkingSequence:
-        drop_sources = "\n".join(
-            f"""
+        drop_sources = "\n".join(f"""
 > DROP SOURCE IF EXISTS kafka_source{i} CASCADE;
-"""
-            for i in range(0, self.n())
-        )
+""" for i in range(0, self.n()))
 
-        create_sources = "\n".join(
-            f"""
+        create_sources = "\n".join(f"""
 > CREATE SOURCE kafka_source{i}
   IN CLUSTER kafka_source_cluster
   FROM KAFKA CONNECTION s1_kafka_conn (TOPIC 'testdrive-many-kafka-sources-{i}-${{testdrive.seed}}');
@@ -1742,9 +1580,7 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
 > CREATE TABLE kafka_source{i}_tbl FROM SOURCE kafka_source{i} (REFERENCE "testdrive-many-kafka-sources-{i}-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE;
-"""
-            for i in range(0, self.n())
-        )
+""" for i in range(0, self.n()))
 
         check_sources = "\n".join(
             f"> SELECT COUNT(*) = {self.COUNT_SOURCE_ENTRIES} FROM kafka_source{i}_tbl;\ntrue"
@@ -1752,9 +1588,7 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
         )
 
         return [
-            Td(
-                self.schema()
-                + f"""
+            Td(self.schema() + f"""
 {drop_sources}
 
 > SELECT 1;
@@ -1767,8 +1601,7 @@ ALTER SYSTEM SET max_tables = {self.n() * 4};
 > SELECT 1;
   /* B */
 1
-"""
-            ),
+"""),
         ]
 
 
@@ -1781,8 +1614,7 @@ class PgCdcInitialLoad(PgCdc):
     when creating a materialized source"""
 
     def shared(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -1794,20 +1626,16 @@ CREATE PUBLICATION mz_source FOR ALL TABLES;
 CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
 INSERT INTO pk_table SELECT x, x*2 FROM generate_series(1, {2 * self.n()}) as x;
 ALTER TABLE pk_table REPLICA IDENTITY FULL;
-"""
-        )
+""")
 
     def before(self) -> Action:
-        return TdAction(
-            """
+        return TdAction("""
 > DROP SOURCE IF EXISTS mz_source_pgcdc CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
-            """
-        )
+            """)
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > CREATE SECRET IF NOT EXISTS pgpass AS 'postgres'
 
 > CREATE CONNECTION IF NOT EXISTS pg_conn TO POSTGRES (
@@ -1829,8 +1657,7 @@ ALTER TABLE pk_table REPLICA IDENTITY FULL;
 > SELECT count(*) FROM pk_table
   /* B */
 {2 * self.n()}
-            """
-        )
+            """)
 
 
 class PgCdcStreaming(PgCdc):
@@ -1839,8 +1666,7 @@ class PgCdcStreaming(PgCdc):
     SCALE = 5
 
     def shared(self) -> Action:
-        return TdAction(
-            """
+        return TdAction("""
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 ALTER USER postgres WITH replication;
 DROP SCHEMA IF EXISTS public CASCADE;
@@ -1848,12 +1674,10 @@ CREATE SCHEMA public;
 
 DROP PUBLICATION IF EXISTS p1;
 CREATE PUBLICATION p1 FOR ALL TABLES;
-"""
-        )
+""")
 
     def before(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP SOURCE IF EXISTS s1 CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE;
 
@@ -1878,8 +1702,7 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
   FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'p1');
 
 > CREATE TABLE t1 FROM SOURCE s1 (REFERENCE t1);
-            """
-        )
+            """)
 
     def benchmark(self) -> MeasurementSource:
         insertions = "\n".join(
@@ -1889,8 +1712,7 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
             ]
         )
 
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1;
   /* A */
 1
@@ -1901,8 +1723,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 > SELECT count(*) FROM t1
   /* B */
 {self.n()}
-            """
-        )
+            """)
 
 
 class MySqlCdc(Scenario):
@@ -1916,8 +1737,7 @@ class MySqlInitialLoad(MySqlCdc):
     FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
     def shared(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
 
 $ mysql-execute name=mysql
@@ -1928,20 +1748,16 @@ USE public;
 SET @i:=0;
 CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
 INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.n()};
-"""
-        )
+""")
 
     def before(self) -> Action:
-        return TdAction(
-            """
+        return TdAction("""
 > DROP SOURCE IF EXISTS mz_source_mysqlcdc CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
-            """
-        )
+            """)
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > CREATE SECRET IF NOT EXISTS mysqlpass AS '${{arg.mysql-root-password}}'
 > CREATE CONNECTION IF NOT EXISTS mysql_conn TO MYSQL (
     HOST mysql,
@@ -1960,8 +1776,7 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
 > SELECT count(*) FROM pk_table
   /* B */
 {self.n()}
-            """
-        )
+            """)
 
 
 class MySqlStreaming(MySqlCdc):
@@ -1970,20 +1785,17 @@ class MySqlStreaming(MySqlCdc):
     SCALE = 5
 
     def shared(self) -> Action:
-        return TdAction(
-            """
+        return TdAction("""
 $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
 
 $ mysql-execute name=mysql
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
-"""
-        )
+""")
 
     def before(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP SOURCE IF EXISTS s1 CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE;
 
@@ -2010,25 +1822,16 @@ CREATE TABLE t1 (pk SERIAL PRIMARY KEY, f2 BIGINT);
   FROM MYSQL CONNECTION mysql_conn;
 
 > CREATE TABLE t1 FROM SOURCE s1 (REFERENCE public.t1);
-            """
-        )
+            """)
 
     def benchmark(self) -> MeasurementSource:
-        insertions = "\n".join(
-            [
-                dedent(
-                    f"""
+        insertions = "\n".join([dedent(f"""
                     SET @i:=0;
                     INSERT INTO t1 (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {round(self.n()/1000)};
                     COMMIT;
-                    """
-                )
-                for i in range(0, 1000)
-            ]
-        )
+                    """) for i in range(0, 1000)])
 
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1;
   /* A */
 1
@@ -2042,8 +1845,7 @@ USE public;
 > SELECT count(*) FROM t1
   /* B */
 {self.n()}
-            """
-        )
+            """)
 
 
 class SqlServerCdc(Scenario):
@@ -2063,8 +1865,7 @@ class SqlServerInitialLoad(SqlServerCdc):
     }
 
     def shared(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
@@ -2076,20 +1877,16 @@ CREATE TABLE pk_table (pk BIGINT PRIMARY KEY, f2 BIGINT);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_table', @role_name = 'SA', @supports_net_changes = 0;
 
 WITH Numbers AS (SELECT TOP (1000000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS n FROM master.dbo.spt_values t1 CROSS JOIN master.dbo.spt_values t2) INSERT INTO pk_table (pk, f2) SELECT n, CAST(n AS bigint) * n FROM Numbers;
-"""
-        )
+""")
 
     def before(self) -> Action:
-        return TdAction(
-            """
+        return TdAction("""
 > DROP SOURCE IF EXISTS mz_source_sqlservercdc CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE
-            """
-        )
+            """)
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            f"""
+        return Td(f"""
 > CREATE SECRET IF NOT EXISTS sqlserverpass AS '${{arg.sql-server-sa-password}}'
 > CREATE CONNECTION IF NOT EXISTS sql_server_conn TO SQL SERVER (
     HOST 'sql-server',
@@ -2109,8 +1906,7 @@ WITH Numbers AS (SELECT TOP (1000000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL))
 > SELECT count(*) FROM pk_table
   /* B */
 {self.n()}
-            """
-        )
+            """)
 
 
 class SqlServerStreaming(SqlServerCdc):
@@ -2119,19 +1915,16 @@ class SqlServerStreaming(SqlServerCdc):
     SCALE = 5
 
     def shared(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
 
 $ sql-server-execute name=sql-server
 USE test;
-"""
-        )
+""")
 
     def before(self) -> Action:
-        return TdAction(
-            f"""
+        return TdAction(f"""
 > DROP SOURCE IF EXISTS s1 CASCADE;
 > DROP CLUSTER IF EXISTS source_cluster CASCADE;
 
@@ -2160,8 +1953,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_
   FROM SQL SERVER CONNECTION sql_server_conn;
 
 > CREATE TABLE t1 FROM SOURCE s1 (REFERENCE t1);
-            """
-        )
+            """)
 
     def benchmark(self) -> MeasurementSource:
         insertions = "\n".join(
@@ -2171,8 +1963,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 't1', @role_
             ]
         )
 
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1;
   /* A */
 1
@@ -2187,8 +1978,7 @@ USE test;
 > SELECT count(*) FROM t1
   /* B */
 {self.n()}
-            """
-        )
+            """)
 
 
 class Coordinator(Scenario):
@@ -2202,8 +1992,7 @@ class QueryLatency(Coordinator):
     def benchmark(self) -> MeasurementSource:
         selects = "\n".join("> SELECT 1\n1\n" for i in range(0, self.n()))
 
-        return Td(
-            f"""
+        return Td(f"""
 > SET auto_route_introspection_queries TO false
 
 > BEGIN
@@ -2217,8 +2006,7 @@ class QueryLatency(Coordinator):
 > SELECT 1;
   /* B */
 1
-"""
-        )
+""")
 
 
 class ConnectionLatency(Coordinator):
@@ -2227,16 +2015,12 @@ class ConnectionLatency(Coordinator):
     SCALE = 2  # Many connections * many measurements = TCP port exhaustion
 
     def benchmark(self) -> MeasurementSource:
-        connections = "\n".join(
-            """
+        connections = "\n".join("""
 $ postgres-execute connection=postgres://materialize:materialize@${testdrive.materialize-sql-addr}
 SELECT 1;
-"""
-            for i in range(0, 2 * self.n())
-        )
+""" for i in range(0, 2 * self.n()))
 
-        return Td(
-            f"""
+        return Td(f"""
 > SET auto_route_introspection_queries TO false
 
 > BEGIN
@@ -2250,8 +2034,7 @@ SELECT 1;
 > SELECT 1;
   /* B */
 1
-"""
-        )
+""")
 
 
 class Startup(Scenario):
@@ -2264,13 +2047,11 @@ class StartupEmpty(Startup):
     def benchmark(self) -> BenchmarkingSequence:
         return [
             Lambda(lambda e: e.RestartMzClusterd()),
-            Td(
-                """
+            Td("""
 > SELECT 1;
   /* B */
 1
-"""
-            ),
+"""),
         ]
 
 
@@ -2282,23 +2063,19 @@ class StartupLoaded(Scenario):
     MAX_SCALE = 1.5
 
     def shared(self) -> Action:
-        return TdAction(
-            self.schema()
-            + """
+        return TdAction(self.schema() + """
 $ kafka-create-topic topic=startup-time
 
 $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 {"f2": 1}
-"""
-        )
+""")
 
     def init(self) -> Action:
         create_tables = "\n".join(
             f"> CREATE TABLE t{i} (f1 INTEGER);\n> INSERT INTO t{i} DEFAULT VALUES;"
             for i in range(0, self.n())
         )
-        create_sources = "\n".join(
-            f"""
+        create_sources = "\n".join(f"""
 > DROP CLUSTER IF EXISTS source{i}_cluster CASCADE;
 > CREATE CLUSTER source{i}_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 
@@ -2309,9 +2086,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 > CREATE TABLE source{i}_tbl FROM SOURCE source{i} (REFERENCE "testdrive-startup-time-${{testdrive.seed}}")
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE NONE
-"""
-            for i in range(0, self.n())
-        )
+""" for i in range(0, self.n()))
         join = " ".join(
             f"LEFT JOIN source{i}_tbl USING (f2)"
             for i in range(1, (ceil(self.scale())))
@@ -2322,8 +2097,7 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
             for i in range(0, self.n())
         )
 
-        create_sinks = "\n".join(
-            f"""
+        create_sinks = "\n".join(f"""
 > DROP CLUSTER IF EXISTS sink{i}_cluster;
 > CREATE CLUSTER sink{i}_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
 > CREATE SINK sink{i}
@@ -2333,12 +2107,9 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
   KEY (f2)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION s1_csr_conn
   ENVELOPE DEBEZIUM
-"""
-            for i in range(0, self.n())
-        )
+""" for i in range(0, self.n()))
 
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_objects_per_schema = {self.n() * 10};
@@ -2360,8 +2131,7 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
 {create_sources}
 {create_views}
 {create_sinks}
-"""
-        )
+""")
 
     def benchmark(self) -> BenchmarkingSequence:
         check_tables = "\n".join(
@@ -2376,16 +2146,14 @@ ALTER SYSTEM SET max_clusters = {self.n() * 6};
 
         return [
             Lambda(lambda e: e.RestartMzClusterd()),
-            Td(
-                f"""
+            Td(f"""
 {check_views}
 {check_sources}
 {check_tables}
 > SELECT 1;
   /* B */
 1
-"""
-            ),
+"""),
         ]
 
 
@@ -2419,32 +2187,19 @@ class StartupTpch(Scenario):
             )
         ]
 
-        create_views = "\n".join(
-            f"""
+        create_views = "\n".join(f"""
 > CREATE VIEW v_{q}_{i} AS {query}
-"""
-            for q, query in enumerate(queries)
-            for i in range(0, self.n())
-        )
+""" for q, query in enumerate(queries) for i in range(0, self.n()))
 
-        create_indexes = "\n".join(
-            f"""
+        create_indexes = "\n".join(f"""
 > CREATE DEFAULT INDEX ON v_{q}_{i};
-"""
-            for q in range(0, len(queries))
-            for i in range(0, self.n())
-        )
+""" for q in range(0, len(queries)) for i in range(0, self.n()))
 
-        create_materialized_views = "\n".join(
-            f"""
+        create_materialized_views = "\n".join(f"""
 > CREATE MATERIALIZED VIEW mv_{q}_{i} AS {query}
-"""
-            for q, query in enumerate(queries)
-            for i in range(0, self.n())
-        )
+""" for q, query in enumerate(queries) for i in range(0, self.n()))
 
-        return TdAction(
-            f"""
+        return TdAction(f"""
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_objects_per_schema = {self.n() * 100};
@@ -2457,8 +2212,7 @@ ALTER SYSTEM SET max_tables = {self.n() * 100};
 {create_views}
 {create_indexes}
 {create_materialized_views}
-"""
-        )
+""")
 
     def benchmark(self) -> BenchmarkingSequence:
         num_queries = len(
@@ -2479,15 +2233,13 @@ ALTER SYSTEM SET max_tables = {self.n() * 100};
 
         return [
             Lambda(lambda e: e.RestartMzClusterd()),
-            Td(
-                f"""
+            Td(f"""
 {check_materialized_views}
 {check_views}
 > SELECT 1;
   /* B */
 1
-"""
-            ),
+"""),
         ]
 
 
@@ -2499,11 +2251,9 @@ class HydrateIndex(Scenario):
     def init(self) -> list[Action]:
         return [
             self.table_ten(),
-            TdAction(
-                """
+            TdAction("""
 > CREATE CLUSTER idx_cluster SIZE 'scale=1,workers=16', REPLICATION FACTOR 1
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
@@ -2612,8 +2362,7 @@ class SwapSchema(Scenario):
         )
 
         return [
-            TdAction(
-                f"""
+            TdAction(f"""
 > CREATE SCHEMA blue;
 > CREATE SCHEMA green;
 > CREATE SCHEMA noise;
@@ -2625,14 +2374,11 @@ class SwapSchema(Scenario):
 {green_views_on_table}
 {noise_views_on_blue_view}
 {noise_views_on_noise_view}
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            dedent(
-                """
+        return Td(dedent("""
                 > SELECT 1;
                   /* A */
                 1
@@ -2642,9 +2388,7 @@ class SwapSchema(Scenario):
                 > SELECT 1;
                   /* B */
                 1
-                """
-            )
-        )
+                """))
 
 
 class DdlTransactionBatch(Coordinator):
@@ -2663,16 +2407,12 @@ class DdlTransactionBatch(Coordinator):
         creates = "\n".join(
             f"> CREATE TABLE ddl_batch_t{i} (x INT);" for i in range(self.n())
         )
-        return [
-            TdAction(
-                f"""
+        return [TdAction(f"""
 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 ALTER SYSTEM SET max_tables = {self.n() + 200};
 
 {creates}
-"""
-            )
-        ]
+""")]
 
     def benchmark(self) -> MeasurementSource:
         renames_forward = "\n".join(
@@ -2684,8 +2424,7 @@ ALTER SYSTEM SET max_tables = {self.n() + 200};
             for i in range(self.n())
         )
 
-        return Td(
-            f"""
+        return Td(f"""
 > SELECT 1;
   /* A */
 1
@@ -2705,8 +2444,7 @@ ALTER SYSTEM SET max_tables = {self.n() + 200};
 > SELECT 1;
   /* B */
 1
-"""
-        )
+""")
 
 
 class ReplicaExpiration(Scenario):
@@ -2720,8 +2458,7 @@ class ReplicaExpiration(Scenario):
 
     def init(self) -> list[Action]:
         return [
-            TdAction(
-                """
+            TdAction("""
 > CREATE TABLE events_scale (
     scale INT NOT NULL,
     event_ts TIMESTAMP NOT NULL
@@ -2735,14 +2472,11 @@ class ReplicaExpiration(Scenario):
   WHERE mz_now() <= event_ts + INTERVAL '30 days';
 
 > CREATE DEFAULT INDEX ON last_30_days
-"""
-            ),
+"""),
         ]
 
     def benchmark(self) -> MeasurementSource:
-        return Td(
-            dedent(
-                f"""
+        return Td(dedent(f"""
                 > DELETE FROM events_scale;
 
                 > SELECT COUNT(*) FROM last_30_days
@@ -2760,6 +2494,4 @@ class ReplicaExpiration(Scenario):
                 > SELECT 1;
                   /* B */
                 1
-                """
-            )
-        )
+                """))

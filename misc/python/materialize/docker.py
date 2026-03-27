@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """Docker utilities."""
+
 import re
 import subprocess
 import time

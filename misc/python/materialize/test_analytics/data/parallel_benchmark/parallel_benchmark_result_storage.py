@@ -52,8 +52,7 @@ class ParallelBenchmarkResultStorage(BaseDataStorage):
 
         for result_entry in results:
             # TODO: remove NULL castings when database-issues#8100 is resolved
-            sql_statements.append(
-                f"""
+            sql_statements.append(f"""
                 INSERT INTO parallel_benchmark_result
                 (
                     build_job_id,
@@ -103,7 +102,6 @@ class ParallelBenchmarkResultStorage(BaseDataStorage):
                     {result_entry.std if isfinite(result_entry.std) else 'NULL::FLOAT'},
                     {result_entry.slope}
                 ;
-                """
-            )
+                """)
 
         self.database_connector.add_update_statements(sql_statements)

@@ -12,7 +12,7 @@
 --only-binary=confluent-kafka
 
 aiohttp==3.13.3
-black==24.4.2
+black==26.3.1
 # Pulls in dependencies that make launchdarkly/cloud tests fail, keep for now
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.41.5
 boto3==1.41.5

@@ -122,7 +122,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.td"],
         help="run against the specified files",
     )
-    (args, passthrough_args) = parser.parse_known_args()
+    args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
         "fivetran-destination",

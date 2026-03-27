@@ -579,7 +579,7 @@ impl Coordinator {
                     let _ = tx.send(Err(AdapterError::AuthenticationError(match login_status {
                         RoleLoginStatus::NonLogin => AuthenticationError::NonLogin,
                         RoleLoginStatus::NotFound => AuthenticationError::RoleNotFound,
-                        _ => AuthenticationError::InvalidCredentials,
+                        RoleLoginStatus::CanLogin => AuthenticationError::InvalidCredentials,
                     })));
                 }
             }

@@ -113,7 +113,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 def execute_operation(
-    args: tuple[Composition, Workload, Operation, int]
+    args: tuple[Composition, Workload, Operation, int],
 ) -> SuccessfulCommit | None:
     c, workload, operation, id = args
 
@@ -258,14 +258,12 @@ def run_workload(c: Composition, workload: Workload, args: argparse.Namespace) -
             if commit is None:
                 continue
             for target in ["table", "view"]:
-                cursor.execute(
-                    f"""
+                cursor.execute(f"""
                     SELECT id, COUNT(*) AS transaction_size
                     FROM {target}{commit.table_id}
                     WHERE id = {commit.row_id}
                     GROUP BY id
-                    """.encode()
-                )
+                    """.encode())
                 result = cursor.fetchall()
                 assert len(result) == 1
                 assert (

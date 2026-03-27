@@ -275,16 +275,14 @@ def run_one_scenario(
             )
         ):
             c.testdrive(
-                dedent(
-                    """
+                dedent("""
                     $[version<9000] postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     ALTER SYSTEM SET enable_unmanaged_cluster_replicas = true;
 
                     $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                     CREATE CLUSTER cluster_default REPLICAS (r1 (STORAGECTL ADDRESSES ['clusterd:2100'], STORAGE ADDRESSES ['clusterd:2103'], COMPUTECTL ADDRESSES ['clusterd:2101'], COMPUTE ADDRESSES ['clusterd:2102'], WORKERS 1));
                     ALTER SYSTEM SET cluster = cluster_default;
-                    GRANT ALL PRIVILEGES ON CLUSTER cluster_default TO materialize;"""
-                ),
+                    GRANT ALL PRIVILEGES ON CLUSTER cluster_default TO materialize;"""),
             )
 
             executor = Docker(
@@ -535,9 +533,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     args = parser.parse_args()
 
-    print(
-        dedent(
-            f"""
+    print(dedent(f"""
             this_tag: {args.this_tag}
             this_size: {args.this_size}
             this_balancerd: {args.this_balancerd}
@@ -546,9 +542,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             other_size: {args.other_size}
             other_balancerd: {args.other_balancerd}
 
-            root_scenario: {args.root_scenario}"""
-        )
-    )
+            root_scenario: {args.root_scenario}"""))
 
     specified_root_scenario = globals()[args.root_scenario]
 

@@ -97,8 +97,7 @@ class KafkaTransactionLogGreaterThan1:
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
         c.testdrive(
-            dedent(
-                """
+            dedent("""
                 > CREATE CONNECTION kafka_conn
                   TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
 
@@ -116,23 +115,18 @@ class KafkaTransactionLogGreaterThan1:
                   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-${testdrive.seed}')
                   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
                   ENVELOPE DEBEZIUM
-                """
-            ),
+                """),
         )
 
     def assert_error(self, c: Composition, error: str, hint: str) -> None:
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 $ set-sql-timeout duration=120s
                 > SELECT bool_or(error ~* '{error}'), bool_or(details::json#>>'{{hints,0}}' ~* '{hint}')
                   FROM mz_internal.mz_sink_status_history
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'kafka_sink' and status = 'stalled'
                 true true
-                """
-            )
-        )
+                """))
 
 
 @dataclass
@@ -170,9 +164,7 @@ class KafkaDisruption:
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 # We specify the progress topic explicitly so we can delete it in a test later,
                 # and confirm that the sink stalls. (Deleting the output topic is not enough if
                 # we're not actively publishing new messages to the sink.)
@@ -213,27 +205,19 @@ class KafkaDisruption:
                 # WITH ( REMOTE 'clusterd:2100' ) https://github.com/MaterializeInc/database-issues/issues/4800
 
                 $ kafka-verify-topic sink=materialize.public.sink1
-                """
-            )
-        )
+                """))
 
     def assert_error(self, c: Composition, error: str) -> None:
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 $ set-sql-timeout duration=60s
                 > SELECT status, error ~* '{error}'
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 stalled true
-                """
-            )
-        )
+                """))
 
     def assert_recovery(self, c: Composition) -> None:
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ kafka-ingest topic=source-topic format=bytes
                 ABC
 
@@ -244,9 +228,7 @@ class KafkaDisruption:
                   FROM mz_internal.mz_source_statuses
                   WHERE name = 'source1'
                 running <null>
-                """
-            )
-        )
+                """))
 
 
 @dataclass
@@ -284,10 +266,7 @@ class KafkaSinkDisruption:
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
-        c.testdrive(
-            schema()
-            + dedent(
-                """
+        c.testdrive(schema() + dedent("""
                 # We specify the progress topic explicitly so we can delete it in a test later,
                 # and confirm that the sink stalls. (Deleting the output topic is not enough if
                 # we're not actively publishing new messages to the sink.)
@@ -323,14 +302,10 @@ class KafkaSinkDisruption:
 
                 $ kafka-verify-data format=avro sink=materialize.public.sink1 sort-messages=true
                 {"before": null, "after": {"row":{"f1": "A"}}}
-                """
-            )
-        )
+                """))
 
     def assert_error(self, c: Composition, error: str) -> None:
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 # Takes > 60s following librdkafka update
                 $ set-sql-timeout duration=240s
                 # Sinks generally halt after receiving an error, which means that they may alternate
@@ -341,21 +316,15 @@ class KafkaSinkDisruption:
                   JOIN mz_sinks ON mz_sinks.id = sink_id
                   WHERE name = 'sink1' and status = 'stalled'
                 true true
-                """
-            )
-        )
+                """))
 
     def assert_recovery(self, c: Composition) -> None:
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > SELECT status, error
                   FROM mz_internal.mz_sink_statuses
                   WHERE name = 'sink1'
                 running <null>
-                """
-            )
-        )
+                """))
 
 
 @dataclass
@@ -393,9 +362,7 @@ class PgDisruption:
 
     def populate(self, c: Composition) -> None:
         # Create a source and a sink
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 > CREATE SECRET pgpass AS 'postgres'
                 > CREATE CONNECTION pg TO POSTGRES (
                     HOST postgres,
@@ -420,14 +387,10 @@ class PgDisruption:
                 > CREATE SOURCE "pg_source"
                   FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
                 > CREATE TABLE "source1_tbl" FROM SOURCE "pg_source" (REFERENCE "source1");
-                """
-            )
-        )
+                """))
 
     def assert_error(self, c: Composition, error: str) -> None:
-        c.testdrive(
-            dedent(
-                f"""
+        c.testdrive(dedent(f"""
                 $ set-sql-timeout duration=60s
                 # Postgres sources may halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
@@ -442,14 +405,10 @@ class PgDisruption:
                     ) AND (status = 'stalled' OR status = 'ceased')
                     ORDER BY occurred_at DESC LIMIT 1;
                 true
-                """
-            )
-        )
+                """))
 
     def assert_recovery(self, c: Composition) -> None:
-        c.testdrive(
-            dedent(
-                """
+        c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO source1 VALUES (3);
 
@@ -463,9 +422,7 @@ class PgDisruption:
                 1
                 2
                 3
-                """
-            )
-        )
+                """))
 
 
 disruptions: list[Disruption] = [
@@ -531,15 +488,11 @@ disruptions: list[Disruption] = [
     ),
     PgDisruption(
         name="drop-publication-postgres",
-        breakage=lambda c, _: c.testdrive(
-            dedent(
-                """
+        breakage=lambda c, _: c.testdrive(dedent("""
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 DROP PUBLICATION mz_source;
                 INSERT INTO source1 VALUES (3, NULL);
-                """
-            )
-        ),
+                """)),
         expected_error="publication .+ does not exist",
         # Can't recover when publication state is deleted.
         fixage=None,
@@ -586,38 +539,25 @@ def delete_sink_topic(c: Composition, seed: int) -> None:
     c.exec("redpanda", "rpk", "topic", "delete", f"testdrive-sink-topic-{seed}")
 
     # Write new data to source otherwise nothing will encounter the missing topic
-    c.testdrive(
-        schema()
-        + dedent(
-            """
+    c.testdrive(schema() + dedent("""
             $ kafka-ingest topic=source-topic format=avro schema=${schema}
             {"f1": "B"}
 
             > SELECT COUNT(*) FROM source1_tbl;
             2
-            """
-        )
-    )
+            """))
 
 
 def alter_pg_table(c: Composition) -> None:
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
                  ALTER TABLE source1 DROP COLUMN f1;
                  INSERT INTO source1 VALUES (NULL)
-                 """
-        )
-    )
+                 """))
 
 
 def unsupported_pg_table(c: Composition) -> None:
-    c.testdrive(
-        dedent(
-            """
+    c.testdrive(dedent("""
                  $ postgres-execute connection=postgres://postgres:postgres@postgres
                  INSERT INTO source1 VALUES (3, '[2:3]={2,2}')
-                 """
-        )
-    )
+                 """))

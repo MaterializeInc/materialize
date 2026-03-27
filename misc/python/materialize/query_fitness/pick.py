@@ -38,8 +38,7 @@ def dump_slt(conn: pg8000.Connection, query: str) -> None:
     assert row is not None
     cols = len(row)
     colspec = "I" * cols
-    print(
-        f"""
+    print(f"""
 
 query {colspec} rowsort
 {query}
@@ -49,8 +48,7 @@ query {colspec} rowsort
 query T multiline
 EXPLAIN {query}
 ----
-EOF"""
-    )
+EOF""")
 
 
 if __name__ == "__main__":

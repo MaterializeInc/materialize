@@ -21,10 +21,7 @@ def schemas() -> str:
 
 class Webhook(Check):
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 >[version>=14700] CREATE CLUSTER webhook_cluster REPLICATION FACTOR 2, SIZE 'scale=1,workers=1'
                 >[version<14700] CREATE CLUSTER webhook_cluster REPLICATION FACTOR 1, SIZE 'scale=1,workers=1'
 
@@ -44,9 +41,7 @@ class Webhook(Check):
 
                 $ webhook-append database=materialize schema=public name=webhook_bytes
                 \u0001
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -79,9 +74,7 @@ class Webhook(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SHOW COLUMNS FROM webhook_text
                 body false text ""
 
@@ -137,9 +130,7 @@ class Webhook(Check):
 
                 >[version<14000] SHOW CREATE SOURCE webhook_bytes
                 materialize.public.webhook_bytes "CREATE SOURCE \\"materialize\\".\\"public\\".\\"webhook_bytes\\" IN CLUSTER \\"webhook_cluster\\" FROM WEBHOOK BODY FORMAT BYTES"
-           """
-            )
-        )
+           """))
 
 
 class WebhookTable(Check):
@@ -147,10 +138,7 @@ class WebhookTable(Check):
         return self.base_version >= MzVersion.parse_mz("v0.130.0-dev")
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            schemas()
-            + dedent(
-                """
+        return Testdrive(schemas() + dedent("""
                 > CREATE CLUSTER webhook_table_cluster REPLICATION FACTOR 2, SIZE 'scale=1,workers=1'
                 > SET cluster = webhook_table_cluster
                 > CREATE TABLE webhook_table_text FROM WEBHOOK BODY FORMAT TEXT;
@@ -158,9 +146,7 @@ class WebhookTable(Check):
 
                 $ webhook-append database=materialize schema=public name=webhook_table_text
                 hello_world
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -178,9 +164,7 @@ class WebhookTable(Check):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                r"""
+        return Testdrive(dedent(r"""
                 > SELECT * FROM webhook_table_text
                 hello_world
                 anotha_one!
@@ -191,6 +175,4 @@ class WebhookTable(Check):
 
                 >[version<14000] SHOW CREATE TABLE webhook_table_text
                 materialize.public.webhook_table_text "CREATE TABLE \"materialize\".\"public\".\"webhook_table_text\" FROM WEBHOOK BODY FORMAT TEXT"
-           """
-            )
-        )
+           """))

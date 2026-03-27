@@ -18,12 +18,10 @@ from materialize.mzcompose.services.sql_server import SqlServer
 
 class TableFromSourceBase(Check):
     def generic_setup(self) -> str:
-        return dedent(
-            """
+        return dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_create_table_from_source = true
-                """
-        )
+                """)
 
 
 @externally_idempotent(False)
@@ -32,10 +30,7 @@ class TableFromPgSource(TableFromSourceBase):
 
     def initialize(self) -> Testdrive:
 
-        return Testdrive(
-            self.generic_setup()
-            + dedent(
-                f"""
+        return Testdrive(self.generic_setup() + dedent(f"""
                 > CREATE SECRET pgpass_{self.suffix} AS 'postgres'
 
                 > CREATE CONNECTION pg_conn_{self.suffix} TO POSTGRES (
@@ -67,9 +62,7 @@ class TableFromPgSource(TableFromSourceBase):
                 > CREATE SOURCE old_pg_source_{self.suffix} FROM POSTGRES CONNECTION pg_conn_{self.suffix}
                   (PUBLICATION 'mz_source_{self.suffix}', TEXT COLUMNS = (pg_table_1.c))
                   FOR TABLES (pg_table_1 AS pg_table_1_old_syntax);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -97,9 +90,7 @@ class TableFromPgSource(TableFromSourceBase):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM pg_table_1;
                 1 1234 <null>
                 2 0 x1
@@ -122,9 +113,7 @@ class TableFromPgSource(TableFromSourceBase):
                 2 0 x1
                 3 2345 x2
                 4 3456 x2
-           """
-            )
-        )
+           """))
 
 
 @externally_idempotent(False)
@@ -132,10 +121,7 @@ class TableFromMySqlSource(TableFromSourceBase):
     suffix = "tbl_from_mysql_source"
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            self.generic_setup()
-            + dedent(
-                f"""
+        return Testdrive(self.generic_setup() + dedent(f"""
                 $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
                 > CREATE SECRET mysqlpass_{self.suffix} AS 'p@ssw0rd';
@@ -162,9 +148,7 @@ class TableFromMySqlSource(TableFromSourceBase):
                 > CREATE SOURCE old_mysql_source_{self.suffix} FROM MYSQL CONNECTION mysql_conn_{self.suffix}
                   (TEXT COLUMNS = (public_{self.suffix}.mysql_source_table_1.y))
                   FOR TABLES (public_{self.suffix}.mysql_source_table_1 AS mysql_table_1_old_syntax);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -198,9 +182,7 @@ class TableFromMySqlSource(TableFromSourceBase):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM mysql_table_1;
                 1 1234 2024
                 2 0 2001
@@ -224,9 +206,7 @@ class TableFromMySqlSource(TableFromSourceBase):
                 2 0 2001
                 3 2345 2000
                 4 3456 <null>
-           """
-            )
-        )
+           """))
 
 
 @externally_idempotent(False)
@@ -240,10 +220,7 @@ class TableFromSqlServerSource(TableFromSourceBase):
         )
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            self.generic_setup()
-            + dedent(
-                f"""
+        return Testdrive(self.generic_setup() + dedent(f"""
                 > CREATE SECRET sql_serverpass_{self.suffix} AS '{SqlServer.DEFAULT_SA_PASSWORD}';
 
                 > CREATE CONNECTION sql_server_conn_{self.suffix} TO SQL SERVER (
@@ -270,9 +247,7 @@ class TableFromSqlServerSource(TableFromSourceBase):
 
                 > CREATE SOURCE old_sql_server_source_{self.suffix} FROM SQL SERVER CONNECTION sql_server_conn_{self.suffix}
                   FOR TABLES (sql_server_source_table_1 AS sql_server_table_1_old_syntax);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -306,9 +281,7 @@ class TableFromSqlServerSource(TableFromSourceBase):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT * FROM sql_server_table_1;
                 1 1234 2024
                 2 0 2001
@@ -332,23 +305,16 @@ class TableFromSqlServerSource(TableFromSourceBase):
                 2 0 2001
                 3 2345 2000
                 4 3456 <null>
-           """
-            )
-        )
+           """))
 
 
 class TableFromLoadGenSource(TableFromSourceBase):
     suffix = "tbl_from_lg_source"
 
     def initialize(self) -> Testdrive:
-        return Testdrive(
-            self.generic_setup()
-            + dedent(
-                f"""
+        return Testdrive(self.generic_setup() + dedent(f"""
                 > CREATE SOURCE auction_house_{self.suffix} FROM LOAD GENERATOR AUCTION (AS OF 300, UP TO 301);
-                """
-            )
-        )
+                """))
 
     def manipulate(self) -> list[Testdrive]:
         return [
@@ -364,14 +330,10 @@ class TableFromLoadGenSource(TableFromSourceBase):
         ]
 
     def validate(self) -> Testdrive:
-        return Testdrive(
-            dedent(
-                """
+        return Testdrive(dedent("""
                 > SELECT count(*) FROM bids_1;
                 255
 
                 > SELECT count(*) FROM bids_2;
                 255
-                """
-            )
-        )
+                """))

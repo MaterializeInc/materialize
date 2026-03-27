@@ -12,6 +12,7 @@ Testdrive is the basic framework and language for defining product tests under
 the expected-result/actual-result (aka golden testing) paradigm. A query is
 retried until it produces the desired result.
 """
+
 import glob
 import os
 
@@ -109,7 +110,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         default=["*.td"],
         help="run against the specified files",
     )
-    (args, passthrough_args) = parser.parse_known_args()
+    args, passthrough_args = parser.parse_known_args()
 
     dependencies = [
         "fivetran-destination",
@@ -290,7 +291,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="run against the specified files",
     )
 
-    (args, _) = parser.parse_known_args()
+    args, _ = parser.parse_known_args()
 
     matching_files = []
     for filter in args.files:
