@@ -7493,15 +7493,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dedent@npm:^1.5.3":
-  version: 1.5.3
-  resolution: "dedent@npm:1.5.3"
+"dedent@npm:^1.7.2":
+  version: 1.7.2
+  resolution: "dedent@npm:1.7.2"
   peerDependencies:
     babel-plugin-macros: ^3.1.0
   peerDependenciesMeta:
     babel-plugin-macros:
       optional: true
-  checksum: 10c0/d94bde6e6f780be4da4fd760288fcf755ec368872f4ac5218197200d86430aeb8d90a003a840bff1c20221188e3f23adced0119cb811c6873c70d0ac66d12832
+  checksum: 10c0/acaff07cac355b93f17b1b17ebbb84d3cc55af6ab4b7814c3f505e061903e168bc6bf9ddce331552d64dee1525f0b4c549c9ade46aebfac6f69caaed74e90751
   languageName: node
   linkType: hard
 
@@ -11384,7 +11384,7 @@ __metadata:
     date-fns: "npm:^4.1.0"
     date-fns-tz: "npm:^3.2.0"
     debug: "npm:^4.3.7"
-    dedent: "npm:^1.5.3"
+    dedent: "npm:^1.7.2"
     downshift: "npm:^9.0.8"
     eslint: "npm:^8.57.0"
     eslint-config-prettier: "npm:^9.1.0"

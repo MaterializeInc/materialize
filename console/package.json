@@ -148,7 +148,7 @@
     "cacheable-lookup": "7.0.0",
     "core-js": "^3.38.1",
     "debug": "^4.3.7",
-    "dedent": "^1.5.3",
+    "dedent": "^1.7.2",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.31.0",
