@@ -651,6 +651,8 @@ fn iceberg_type_overrides(scalar_type: &mz_repr::SqlScalarType) -> Option<(DataT
             DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
             "mz_timestamp".to_string(),
         )),
+        // Iceberg doesn't support interval types natively, so we store as string.
+        SqlScalarType::Interval => Some((DataType::LargeUtf8, "interval".to_string())),
         _ => None,
     }
 }
@@ -1698,6 +1700,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iceberg::spec::{PrimitiveType, Type};
     use mz_repr::SqlScalarType;
 
     #[mz_ore::test]
@@ -1758,6 +1761,61 @@ mod tests {
         } else {
             panic!("Expected List type");
         }
+    }
+
+    #[mz_ore::test]
+    fn test_iceberg_interval_override() {
+        // Interval should override to LargeUtf8 (string) for Iceberg
+        let result = iceberg_type_overrides(&SqlScalarType::Interval);
+        assert_eq!(result.unwrap().0, DataType::LargeUtf8);
+
+        // Test full schema conversion with interval column
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column("dur", SqlScalarType::Interval.nullable(true))
+            .finish();
+
+        let (arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        // Arrow schema should have LargeUtf8 for interval
+        assert_eq!(arrow_schema.field(1).data_type(), &DataType::LargeUtf8);
+
+        // Iceberg schema should have String type
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("dur")
+            .expect("field should exist");
+        assert_eq!(*field.field_type, Type::Primitive(PrimitiveType::String));
+    }
+
+    #[mz_ore::test]
+    fn test_iceberg_range_schema() {
+        // Test full schema conversion with range column
+        let desc = mz_repr::RelationDesc::builder()
+            .with_column("id", SqlScalarType::Int32.nullable(false))
+            .with_column(
+                "r",
+                SqlScalarType::Range {
+                    element_type: Box::new(SqlScalarType::Int32),
+                }
+                .nullable(true),
+            )
+            .finish();
+
+        let (_arrow_schema, iceberg_schema) =
+            relation_desc_to_iceberg_schema(&desc).expect("schema conversion should succeed");
+
+        // Iceberg schema should have a struct type for the range
+        let field = iceberg_schema
+            .as_struct()
+            .field_by_name("r")
+            .expect("field should exist");
+        assert!(
+            matches!(&*field.field_type, Type::Struct(_)),
+            "range should be struct, got: {:?}",
+            field.field_type
+        );
     }
 
     #[mz_ore::test]

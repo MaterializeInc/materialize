@@ -30,6 +30,7 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::JsonbPacker;
 use mz_repr::adt::numeric::Numeric;
+use mz_repr::adt::range::{Range, RangeLowerBound, RangeUpperBound};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, RelationDesc, Row, RowPacker, SharedRow, SqlScalarType};
 use ordered_float::OrderedFloat;
@@ -391,6 +392,49 @@ fn scalar_type_and_array_to_reader(
                 nulls: map_array.nulls().cloned(),
             })
         }
+        (SqlScalarType::Range { element_type }, DataType::Struct(_)) => {
+            let struct_array = downcast_array::<StructArray>(array);
+            let lower_array = struct_array
+                .column_by_name("lower")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'lower' field"))?;
+            let upper_array = struct_array
+                .column_by_name("upper")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'upper' field"))?;
+            let empty_array = struct_array
+                .column_by_name("empty")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'empty' field"))?;
+            let lower_inclusive_array = struct_array
+                .column_by_name("lower_inclusive")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'lower_inclusive' field"))?;
+            let upper_inclusive_array = struct_array
+                .column_by_name("upper_inclusive")
+                .ok_or_else(|| anyhow::anyhow!("range struct missing 'upper_inclusive' field"))?;
+
+            let lower_reader =
+                scalar_type_and_array_to_reader(element_type, Arc::clone(lower_array))
+                    .context("range lower")?;
+            let upper_reader =
+                scalar_type_and_array_to_reader(element_type, Arc::clone(upper_array))
+                    .context("range upper")?;
+
+            let empty = downcast_array::<BooleanArray>(Arc::clone(empty_array));
+            let lower_inclusive = downcast_array::<BooleanArray>(Arc::clone(lower_inclusive_array));
+            let upper_inclusive = downcast_array::<BooleanArray>(Arc::clone(upper_inclusive_array));
+
+            let lower_nulls = lower_array.nulls().cloned();
+            let upper_nulls = upper_array.nulls().cloned();
+
+            Ok(ColReader::Range {
+                lower: Box::new(lower_reader),
+                lower_nulls,
+                upper: Box::new(upper_reader),
+                upper_nulls,
+                lower_inclusive,
+                upper_inclusive,
+                empty,
+                nulls: struct_array.nulls().cloned(),
+            })
+        }
         (SqlScalarType::Interval, DataType::Interval(IntervalUnit::YearMonth)) => {
             Ok(ColReader::IntervalYearMonth(downcast_array::<
                 IntervalYearMonthArray,
@@ -493,6 +537,17 @@ enum ColReader {
         offsets: OffsetBuffer<i32>,
         keys: StringArray,
         values: Box<ColReader>,
+        nulls: Option<NullBuffer>,
+    },
+
+    Range {
+        lower: Box<ColReader>,
+        lower_nulls: Option<NullBuffer>,
+        upper: Box<ColReader>,
+        upper_nulls: Option<NullBuffer>,
+        lower_inclusive: BooleanArray,
+        upper_inclusive: BooleanArray,
+        empty: BooleanArray,
         nulls: Option<NullBuffer>,
     },
 
@@ -842,6 +897,81 @@ impl ColReader {
                     .context("pack map")?;
 
                 // Return early because we've already packed the necessary Datums.
+                return Ok(());
+            }
+            ColReader::Range {
+                lower,
+                lower_nulls,
+                upper,
+                upper_nulls,
+                lower_inclusive,
+                upper_inclusive,
+                empty,
+                nulls,
+            } => {
+                let is_valid = nulls.as_ref().map(|n| n.is_valid(idx)).unwrap_or(true);
+                if !is_valid {
+                    packer.push(Datum::Null);
+                    return Ok(());
+                }
+
+                if empty.value(idx) {
+                    packer.push(Datum::Range(Range { inner: None }));
+                    return Ok(());
+                }
+
+                let lower_is_infinite = lower_nulls
+                    .as_ref()
+                    .map(|n| !n.is_valid(idx))
+                    .unwrap_or(false);
+                let upper_is_infinite = upper_nulls
+                    .as_ref()
+                    .map(|n| !n.is_valid(idx))
+                    .unwrap_or(false);
+
+                // Read finite bound values into temporary rows
+                let lower_row = if lower_is_infinite {
+                    None
+                } else {
+                    let mut temp = SharedRow::get();
+                    lower.read(idx, &mut temp.packer())?;
+                    Some(temp.clone())
+                };
+
+                let upper_row = if upper_is_infinite {
+                    None
+                } else {
+                    let mut temp = SharedRow::get();
+                    upper.read(idx, &mut temp.packer())?;
+                    Some(temp.clone())
+                };
+
+                let lb_inclusive = lower_inclusive.value(idx);
+                let ub_inclusive = upper_inclusive.value(idx);
+
+                packer
+                    .push_range_with(
+                        RangeLowerBound {
+                            inclusive: lb_inclusive,
+                            bound: lower_row.as_ref().map(|row| {
+                                |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
+                                    packer.push(row.unpack_first());
+                                    Ok(())
+                                }
+                            }),
+                        },
+                        RangeUpperBound {
+                            inclusive: ub_inclusive,
+                            bound: upper_row.as_ref().map(|row| {
+                                |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
+                                    packer.push(row.unpack_first());
+                                    Ok(())
+                                }
+                            }),
+                        },
+                    )
+                    .context("pack range")?;
+
                 return Ok(());
             }
             ColReader::IntervalYearMonth(array) => array
