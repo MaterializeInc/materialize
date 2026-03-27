@@ -33,8 +33,10 @@ uuid = { version = "1.19.0", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
+aws-lc-rs = "1.16.2"
 axum = "0.8.8"
 mz-ore = { path = "../ore", features = ["network", "test"] }
+pem = "3.0.6"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 
 [package.metadata.cargo-udeps.ignore]
