@@ -206,7 +206,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 };
                 df_desc.export_sink(self.sink_id, sink_description);
             }
-            SubscribeFrom::Query { select, desc } => {
+            SubscribeFrom::Query { expr, desc } => {
                 // TODO: Change the `expr` type to be `HirRelationExpr` and run
                 // HIR ⇒ MIR lowering and decorrelation here. This would allow
                 // us implement something like `EXPLAIN RAW PLAN FOR SUBSCRIBE.`
@@ -222,9 +222,6 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     Some(&mut self.metrics),
                     Some(self.view_id),
                 );
-                let expr = select
-                    .source
-                    .lower(HirToMirConfig::from(&self.config), None)?;
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
                 df_builder.import_view_into_dataflow(
