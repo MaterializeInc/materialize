@@ -45,7 +45,7 @@
     "@hookform/resolvers": "^3.9.1",
     "@intercom/messenger-js-sdk": "^0.0.14",
     "@juggle/resize-observer": "^3.4.0",
-    "@lezer/common": "^1.2.3",
+    "@lezer/common": "^1.5.1",
     "@lezer/highlight": "^1.0.0",
     "@materializeinc/sql-lexer": "^26.16.0",
     "@materializeinc/sql-pretty": "^26.16.0",
