@@ -19,7 +19,6 @@ proptest = "1.10.0"
 static_assertions = "1.1"
 openssl = { version = "0.10.76", features = ["vendored"] }
 itertools = "0.14.0"
-zeroize = "1.8.2"
 
 [features]
 default = ["workspace-hack"]
