@@ -601,6 +601,13 @@ mod columnar {
         }
     }
 
+    impl<BC: Push<u64>> Push<Row> for Rows<BC> {
+        #[inline(always)]
+        fn push(&mut self, item: Row) {
+            self.values.extend_from_slice(item.data.as_slice());
+            self.bounds.push(u64::cast_from(self.values.len()));
+        }
+    }
     impl<BC: Push<u64>> Push<&Row> for Rows<BC> {
         #[inline(always)]
         fn push(&mut self, item: &Row) {

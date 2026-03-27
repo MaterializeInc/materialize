@@ -40,7 +40,7 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
     SharedLoggingState, Update,
 };
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::RowRowSealBuilder;
 use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.
@@ -436,7 +436,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
                     .mz_arrange_core::<
                         _,
                         Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
+                        RowRowSealBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >(exchange, &format!("Arrange {variant:?}"))
                     .trace;

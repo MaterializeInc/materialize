@@ -23,7 +23,6 @@ use mz_storage_types::errors::DataflowError;
 use timely::dataflow::ScopeParent;
 
 use crate::row_spine::RowValBuilder;
-use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
@@ -38,20 +37,32 @@ pub(crate) mod spines {
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use mz_timely_util::columnar::batcher::{
+        ColumnarKeyBatcher, ColumnarValBatcher, KeySealBuilder, ValSealBuilder,
+    };
 
     use crate::row_spine::OffsetOptimized;
-    use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
     /// A spine for generic keys and values.
     pub type ColValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<MzStack<((K, V), T, R)>>>>;
-    pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R>;
+    /// Columnar batcher for key-val data, accepting `Vec<((K,V),T,R)>` input.
+    pub type ColValBatcher<K, V, T, R> = ColumnarValBatcher<K, V, T, R, Vec<((K, V), T, R)>>;
+    /// Builder that converts columnar `ValStorage` into `OrdValBatch<MzStack<...>>`.
     pub type ColValBuilder<K, V, T, R> =
-        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, TimelyStack<((K, V), T, R)>>>;
+        RcBuilder<ValSealBuilder<K, V, T, R, MzStack<((K, V), T, R)>>>;
 
     /// A spine for generic keys
     pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>;
-    pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R>;
-    pub type ColKeyBuilder<K, T, R> =
+    /// Columnar batcher for key-only data, accepting `Vec<((K,()),T,R)>` input.
+    pub type ColKeyBatcher<K, T, R> = ColumnarKeyBatcher<K, T, R, Vec<((K, ()), T, R)>>;
+    /// Builder that converts columnar `KeyStorage` into `OrdKeyBatch<MzStack<...>>`.
+    pub type ColKeyBuilder<K, T, R> = RcBuilder<KeySealBuilder<K, T, R, MzStack<((K, ()), T, R)>>>;
+
+    /// Columnation-based val builder (used for error types that don't implement Columnar).
+    pub type ColumnationValBuilder<K, V, T, R> =
+        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, TimelyStack<((K, V), T, R)>>>;
+    /// Columnation-based key builder (used for error types that don't implement Columnar).
+    pub type ColumnationKeyBuilder<K, T, R> =
         RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, TimelyStack<((K, ()), T, R)>>>;
 
     /// A layout based on chunked timely stacks
@@ -102,16 +113,17 @@ pub type RowArrangement<S> = Arranged<S, RowAgent<<S as ScopeParent>::Timestamp,
 pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
 
 // Error specialized spines and agents.
+// DataflowError does not implement Columnar, so error types stay on the columnation path.
 pub type ErrSpine<T, R> = ColKeySpine<DataflowError, T, R>;
-pub type ErrBatcher<T, R> = ColKeyBatcher<DataflowError, T, R>;
-pub type ErrBuilder<T, R> = ColKeyBuilder<DataflowError, T, R>;
+pub type ErrBatcher<T, R> = KeyBatcher<DataflowError, T, R>;
+pub type ErrBuilder<T, R> = spines::ColumnationKeyBuilder<DataflowError, T, R>;
 
 pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
 pub type ErrEnter<T, TEnter> = TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, TEnter>;
 
 pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;
-pub type KeyErrBatcher<K, T, R> = ColValBatcher<K, DataflowError, T, R>;
-pub type KeyErrBuilder<K, T, R> = ColValBuilder<K, DataflowError, T, R>;
+pub type KeyErrBatcher<K, T, R> = KeyValBatcher<K, DataflowError, T, R>;
+pub type KeyErrBuilder<K, T, R> = spines::ColumnationValBuilder<K, DataflowError, T, R>;
 
 pub type RowErrSpine<T, R> = RowValSpine<DataflowError, T, R>;
 pub type RowErrBatcher<T, R> = RowValBatcher<DataflowError, T, R>;
@@ -124,7 +136,11 @@ pub type KeyValBatcher<K, V, T, D> =
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
 pub trait MzTimestamp:
-    MzData + timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::hash::Hash
+    MzData
+    + timely::progress::Timestamp
+    + differential_dataflow::lattice::Lattice
+    + std::hash::Hash
+    + Default
 {
 }
 
@@ -133,6 +149,7 @@ where
     T: MzData,
     T: timely::progress::Timestamp,
     T: differential_dataflow::lattice::Lattice + std::hash::Hash,
+    T: Default,
 {
 }
 
@@ -140,14 +157,16 @@ where
 /// columnation.
 pub trait MzData:
     differential_dataflow::containers::Columnation
-    + for<'a> columnar::Columnar<Container: Container<Ref<'a>: Copy + Ord> + Clone + Send>
+    + for<'a> columnar::Columnar<
+        Container: Container<Ref<'a>: Copy + Ord> + Clone + Send + columnar::Push<Self>,
+    >
 {
 }
 
 impl<T> MzData for T
 where
     T: differential_dataflow::containers::Columnation,
-    T: for<'a> columnar::Columnar<Container: Clone + Send>,
+    T: for<'a> columnar::Columnar<Container: Clone + Send + columnar::Push<T>>,
     for<'a> Ref<'a, T>: Copy + Ord,
 {
 }

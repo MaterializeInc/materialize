@@ -28,22 +28,26 @@ use columnar::common::IterOwn;
 use columnar::{Columnar, Ref};
 use columnar::{FromBytes, Index, Len};
 use differential_dataflow::Hashable;
-use differential_dataflow::containers::TimelyStack;
-use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
 use mz_ore::region::Region;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::ContainerBytes;
 
-/// A batcher for columnar storage.
-pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
-    Column<((K, V), T, R)>,
-    batcher::Chunker<TimelyStack<((K, V), T, R)>>,
-    ColMerger<(K, V), T, R>,
->;
+/// A batcher for columnar storage, accepting `Column<((K,V),T,R)>` input.
+pub type Col2ValBatcher<K, V, T, R> =
+    batcher::ColumnarValBatcher<K, V, T, R, Column<((K, V), T, R)>>;
 /// A batcher for columnar storage with unit values.
-pub type Col2KeyBatcher<K, T, R> = Col2ValBatcher<K, (), T, R>;
+pub type Col2KeyBatcher<K, T, R> = batcher::ColumnarKeyBatcher<K, T, R, Column<((K, ()), T, R)>>;
+
+/// Legacy MergeBatcher-based Col2 batcher, for use in contexts that need a flat container output
+/// (e.g., `consolidate_and_pack`).
+pub type Col2ValMergeBatcher<K, V, T, R> =
+    differential_dataflow::trace::implementations::merge_batcher::MergeBatcher<
+        Column<((K, V), T, R)>,
+        batcher::Chunker<differential_dataflow::containers::TimelyStack<((K, V), T, R)>>,
+        differential_dataflow::trace::implementations::merge_batcher::ColMerger<(K, V), T, R>,
+    >;
 
 /// A container based on a columnar store, encoded in aligned bytes.
 ///
