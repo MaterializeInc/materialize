@@ -317,6 +317,37 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
     "The time after which we delete per replica statistics (for sources and sinks) after there have been no updates.",
 );
 
+// Shard pool
+
+/// Whether the pre-opened shard pool is enabled. When enabled, shards are
+/// pre-opened in the background to reduce DDL latency.
+pub const SHARD_POOL_ENABLED: Config<bool> = Config::new(
+    "storage_shard_pool_enabled",
+    true,
+    "Whether the pre-opened shard pool is enabled for reducing DDL latency.",
+);
+
+/// Target number of pre-opened shards to maintain in the pool.
+///
+/// Each shard requires 2 CRDB round-trips to pre-open (upgrade_version +
+/// open_critical_since), so the full pool refills in ~300ms at typical
+/// latencies. A target of 10 covers DDL bursts (e.g., migration scripts
+/// creating multiple tables) while keeping the leak surface small; any
+/// unclaimed shards are GC'd on restart via the catalog tracking in
+/// `pre_allocated_shards`.
+pub const SHARD_POOL_TARGET_SIZE: Config<usize> = Config::new(
+    "storage_shard_pool_target_size",
+    10,
+    "Target number of pre-opened shards to maintain in the pool.",
+);
+
+/// How often the shard pool replenishment task checks and fills the pool.
+pub const SHARD_POOL_REPLENISH_INTERVAL: Config<Duration> = Config::new(
+    "storage_shard_pool_replenish_interval",
+    Duration::from_secs(1),
+    "Interval between shard pool replenishment checks.",
+);
+
 /// Adds the full set of all storage `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -355,5 +386,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES)
         .add(&crate::sources::sql_server::MAX_LSN_WAIT)
         .add(&crate::sources::sql_server::SNAPSHOT_PROGRESS_REPORT_INTERVAL)
+        .add(&SHARD_POOL_ENABLED)
+        .add(&SHARD_POOL_TARGET_SIZE)
+        .add(&SHARD_POOL_REPLENISH_INTERVAL)
         .add(&STATISTICS_RETENTION_DURATION)
 }

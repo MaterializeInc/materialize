@@ -1,0 +1,176 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for the pre-opened shard pool.
+# Exercises table creation with pool enabled and disabled,
+# verifies data correctness, and checks unique shard allocation.
+
+mode cockroach
+
+# Enable the shard pool and set a small target size for testing.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET storage_shard_pool_enabled = true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET storage_shard_pool_target_size = 3;
+----
+COMPLETE 0
+
+# Create tables with pool enabled.
+
+statement ok
+CREATE TABLE shard_pool_t1 (a INT)
+
+statement ok
+CREATE TABLE shard_pool_t2 (b TEXT)
+
+statement ok
+CREATE TABLE shard_pool_t3 (c BOOL)
+
+# Verify tables are usable.
+
+statement ok
+INSERT INTO shard_pool_t1 VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO shard_pool_t2 VALUES ('hello'), ('world')
+
+statement ok
+INSERT INTO shard_pool_t3 VALUES (true), (false)
+
+query I rowsort
+SELECT * FROM shard_pool_t1
+----
+1
+2
+3
+
+query T rowsort
+SELECT * FROM shard_pool_t2
+----
+hello
+world
+
+query B rowsort
+SELECT * FROM shard_pool_t3
+----
+false
+true
+
+# Disable the pool and create more tables.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET storage_shard_pool_enabled = false;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE shard_pool_t4 (d INT)
+
+statement ok
+INSERT INTO shard_pool_t4 VALUES (42)
+
+query I
+SELECT * FROM shard_pool_t4
+----
+42
+
+# Re-enable and create another table.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET storage_shard_pool_enabled = true;
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE shard_pool_t5 (e INT)
+
+statement ok
+INSERT INTO shard_pool_t5 VALUES (100)
+
+query I
+SELECT * FROM shard_pool_t5
+----
+100
+
+# All tables should have unique shard IDs.
+
+query I
+SELECT count(DISTINCT shard_id) FROM mz_internal.mz_storage_shards WHERE object_id IN (SELECT id FROM mz_tables WHERE name LIKE 'shard_pool_%')
+----
+5
+
+# Drop and recreate to exercise pool across allocation rounds.
+
+statement ok
+DROP TABLE shard_pool_t3
+
+statement ok
+DROP TABLE shard_pool_t4
+
+statement ok
+CREATE TABLE shard_pool_t3_new (c2 INT)
+
+statement ok
+CREATE TABLE shard_pool_t4_new (d2 INT)
+
+statement ok
+INSERT INTO shard_pool_t3_new VALUES (7)
+
+statement ok
+INSERT INTO shard_pool_t4_new VALUES (8)
+
+query I
+SELECT * FROM shard_pool_t3_new
+----
+7
+
+query I
+SELECT * FROM shard_pool_t4_new
+----
+8
+
+# Verify all remaining tables have unique shard IDs.
+
+query I
+SELECT count(DISTINCT shard_id) FROM mz_internal.mz_storage_shards WHERE object_id IN (SELECT id FROM mz_tables WHERE name LIKE 'shard_pool_%')
+----
+5
+
+# Cleanup.
+
+statement ok
+DROP TABLE shard_pool_t5
+
+statement ok
+DROP TABLE shard_pool_t4_new
+
+statement ok
+DROP TABLE shard_pool_t3_new
+
+statement ok
+DROP TABLE shard_pool_t2
+
+statement ok
+DROP TABLE shard_pool_t1
+
+# Reset dyncfgs.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET storage_shard_pool_enabled;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET storage_shard_pool_target_size;
+----
+COMPLETE 0

@@ -17,6 +17,32 @@ use mz_ore::metrics::{MetricsRegistry, UIntGauge};
 use mz_persist_types::ShardId;
 use prometheus::Counter;
 
+#[derive(Debug, Clone)]
+pub struct ShardPoolMetrics {
+    pub pool_size: UIntGauge,
+    pub hits: Counter,
+    pub misses: Counter,
+}
+
+impl ShardPoolMetrics {
+    pub fn register_into(registry: &MetricsRegistry) -> Self {
+        ShardPoolMetrics {
+            pool_size: registry.register(metric!(
+                name: "mz_shard_pool_size",
+                help: "current number of pre-opened shards in the pool",
+            )),
+            hits: registry.register(metric!(
+                name: "mz_shard_pool_hits_total",
+                help: "number of DDLs that used a pre-opened shard from the pool",
+            )),
+            misses: registry.register(metric!(
+                name: "mz_shard_pool_misses_total",
+                help: "number of DDLs that fell back to opening a new shard",
+            )),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct StorageCollectionsMetrics {
     pub finalization_outstanding: UIntGauge,
@@ -24,6 +50,7 @@ pub struct StorageCollectionsMetrics {
     pub finalization_started: Counter,
     pub finalization_succeeded: Counter,
     pub finalization_failed: Counter,
+    pub shard_pool: ShardPoolMetrics,
 }
 
 impl StorageCollectionsMetrics {
@@ -49,6 +76,7 @@ impl StorageCollectionsMetrics {
                 name: "mz_shard_finalization_op_failed",
                 help: "count of shard finalization operations that failed",
             )),
+            shard_pool: ShardPoolMetrics::register_into(registry),
         }
     }
 }
