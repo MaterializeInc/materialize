@@ -102,7 +102,7 @@ SERVICES = [
     Minio(setup_materialize=True, additional_directories=["copytos3"]),
     Azurite(),
     Mc(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     MySql(),
     SqlServer(),
     Zookeeper(),

@@ -41,7 +41,7 @@ SERVICES = [
     Zookeeper(),
     Kafka(),
     SchemaRegistry(),
-    Postgres(),
+    Postgres(volumes=["secrets:/certs:ro"]),
     MySql(),
     Cockroach(setup_materialize=True, in_memory=True),
     # Overridden below
