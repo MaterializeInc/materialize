@@ -38,6 +38,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, StreamVec};
+use timely::progress::operate::FrontierInterest;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
@@ -883,7 +884,7 @@ where
         let (passthrough_output, passthrough_stream) = builder.new_output();
         let mut passthrough_output = OutputBuilder::from(passthrough_output);
         let mut input = builder.new_input(oks.inner, Pipeline);
-        builder.set_notify(false);
+        builder.set_notify_for(0, FrontierInterest::Never);
         builder.build(move |_capabilities| {
             let mut key_buf = Row::default();
             let mut val_buf = Row::default();

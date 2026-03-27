@@ -17,7 +17,7 @@
 
 use std::collections::VecDeque;
 
-use columnar::bytes::{EncodeDecode, Indexed};
+use columnar::bytes::indexed;
 use columnar::{Clear, Columnar, Len, Push};
 use timely::container::PushInto;
 use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
@@ -46,7 +46,7 @@ where
         self.current.push(item);
         // If there is less than 10% slop with 2MB backing allocations, mint a container.
         use columnar::Borrow;
-        let words = Indexed::length_in_words(&self.current.borrow());
+        let words = indexed::length_in_words(&self.current.borrow());
         let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
         if round - words < round / 10 {
             /// Move the contents from `current` to an aligned allocation, and push it to `pending`.
@@ -60,8 +60,8 @@ where
                 C: Columnar,
             {
                 let mut alloc = crate::containers::alloc_aligned_zeroed(round);
-                let writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
-                Indexed::write(writer, &current.borrow()).unwrap();
+                let mut writer = std::io::Cursor::new(bytemuck::cast_slice_mut(&mut alloc[..]));
+                indexed::write(&mut writer, &current.borrow()).unwrap();
                 pending.push_back(Column::Align(alloc));
                 current.clear();
             }

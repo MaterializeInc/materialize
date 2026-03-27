@@ -191,6 +191,7 @@ mod columnar {
     }
 
     impl<'a, T: Copy, TC: FromBytes<'a>> FromBytes<'a> for Overflows<T, TC> {
+        const SLICE_COUNT: usize = TC::SLICE_COUNT;
         #[inline(always)]
         fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
             Self(TC::from_bytes(bytes), std::marker::PhantomData)
@@ -233,13 +234,6 @@ mod columnar {
         #[inline(always)]
         fn push(&mut self, item: &Overflowing<T>) {
             self.0.push(item.0);
-        }
-    }
-
-    impl<T, TC: columnar::HeapSize> columnar::HeapSize for Overflows<T, TC> {
-        #[inline(always)]
-        fn heap_size(&self) -> (usize, usize) {
-            self.0.heap_size()
         }
     }
 }

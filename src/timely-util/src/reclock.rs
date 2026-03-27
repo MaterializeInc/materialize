@@ -247,7 +247,7 @@ where
         // A stash of source updates for which we don't know the corresponding binding yet.
         let mut deferred_source_updates: Vec<ChainBatch<_, _, _>> = Vec::new();
         // The frontier of the `events` input
-        let mut source_frontier = MutableAntichain::new_bottom(FromTime::minimum());
+        let mut source_frontier = MutableAntichain::from_elem(FromTime::minimum());
 
         let mut binding_buffer = Vec::new();
 

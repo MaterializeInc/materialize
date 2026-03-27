@@ -428,7 +428,7 @@ mod columnation {
 mod columnar {
     use columnar::common::PushIndexAs;
     use columnar::{
-        AsBytes, Borrow, Clear, Columnar, Container, FromBytes, HeapSize, Index, IndexAs, Len, Push,
+        AsBytes, Borrow, Clear, Columnar, Container, FromBytes, Index, IndexAs, Len, Push,
     };
     use mz_ore::cast::CastFrom;
     use std::ops::Range;
@@ -550,6 +550,7 @@ mod columnar {
         }
     }
     impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {
+        const SLICE_COUNT: usize = BC::SLICE_COUNT + VC::SLICE_COUNT;
         #[inline(always)]
         fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
             Self {
@@ -620,14 +621,6 @@ mod columnar {
         fn clear(&mut self) {
             self.bounds.clear();
             self.values.clear();
-        }
-    }
-    impl<BC: HeapSize, VC: HeapSize> HeapSize for Rows<BC, VC> {
-        #[inline(always)]
-        fn heap_size(&self) -> (usize, usize) {
-            let (l0, c0) = self.bounds.heap_size();
-            let (l1, c1) = self.values.heap_size();
-            (l0 + l1, c0 + c1)
         }
     }
 }

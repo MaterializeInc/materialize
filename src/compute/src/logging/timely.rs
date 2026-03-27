@@ -194,7 +194,9 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                                 Datum::UInt64(u64::cast_from(source_port)),
                                 Datum::UInt64(u64::cast_from(target_node)),
                                 Datum::UInt64(u64::cast_from(target_port)),
-                                Datum::String(datum.typ),
+                                Datum::String(
+                                    std::str::from_utf8(datum.typ).expect("valid string"),
+                                ),
                             ]);
                             session.give((data, time, diff));
                         }

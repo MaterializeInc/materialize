@@ -35,6 +35,7 @@ use timely::dataflow::operators::generic::{
     InputHandleCore, OperatorInfo, OutputBuilder, OutputBuilderSession,
 };
 use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, ContainerBuilder, PartialOrder};
 
@@ -226,11 +227,11 @@ where
         P: ParallelizationContract<G::Timestamp, C1>,
     {
         let mut builder = OperatorBuilderRc::new(name.into(), self.scope());
-        builder.set_notify(false);
 
         let operator_info = builder.operator_info();
 
         let mut input = builder.new_input(self.clone(), pact);
+        builder.set_notify_for(0, FrontierInterest::Never);
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output = OutputBuilder::from(ok_output);
         let (err_output, err_stream) = builder.new_output();
@@ -700,13 +701,15 @@ where
         CB: ContainerBuilder + for<'a> PushInto<C::Item<'a>>,
     {
         let mut builder = OperatorBuilder::new("ConcatenateFlatten".to_string(), self.clone());
-        builder.set_notify(false);
 
         // create new input handles for each input stream.
         let mut handles = sources
             .into_iter()
             .map(|s| builder.new_input(s, Pipeline))
             .collect::<Vec<_>>();
+        for i in 0..handles.len() {
+            builder.set_notify_for(i, FrontierInterest::Never);
+        }
 
         // create one output handle for the concatenated results.
         let (output, result) = builder.new_output::<CB::Container>();
