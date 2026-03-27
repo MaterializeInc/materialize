@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 # Ensure definite error is set for the source
-> SELECT COUNT(*) > 0 FROM mz_internal.mz_source_statuses WHERE status = 'stalled' AND error LIKE '%database restored from point-in-time backup%';
+> SELECT COUNT(*) > 0 FROM mz_internal.mz_source_statuses WHERE status = 'stalled' AND error LIKE '%source must be dropped and recreated due to failure%';
 true
 
 ! SELECT * FROM t1;

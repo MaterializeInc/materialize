@@ -167,6 +167,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                 Ok(frontier) => frontier,
                 Err(err) => {
                     let err = DefiniteError::UnsupportedGtidState(err.to_string());
+                    tracing::warn!(%id, "Unable to determine GTID frontier from @@gtid_purged: {err}");
                     return Ok(
                         // If GTID intervals in the binlog are not available in a monotonic consecutive
                         // order this breaks all of our assumptions and there is nothing else we can do.
