@@ -25,6 +25,7 @@ mod scalar;
 
 pub mod explain;
 pub mod row;
+pub mod vectorized;
 pub mod virtual_syntax;
 pub mod visit;
 
@@ -49,6 +50,7 @@ pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, Variad
 pub use scalar::{
     EvalError, FilterCharacteristics, MirScalarExpr, ProtoDomainLimit, ProtoEvalError, like_pattern,
 };
+pub use vectorized::{MfpEval, VectorizedSafeMfpPlan};
 
 /// A [`MirRelationExpr`] that claims to have been optimized, e.g., by an
 /// `transform::Optimizer`.

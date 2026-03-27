@@ -311,6 +311,7 @@ where
                             false.then_some(|| unreachable!()),
                             async {},
                             error_handler,
+                            false,
                         );
                         (
                             stream.as_collection(),
