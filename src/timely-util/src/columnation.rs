@@ -25,8 +25,11 @@ use std::iter::FromIterator;
 use columnation::{Columnation, Region};
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Semigroup;
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
+use differential_dataflow::trace::implementations::{BatchContainer, BuilderInput};
 use timely::container::{ContainerBuilder, DrainContainer, PushInto, SizableContainer};
+use timely::progress::Timestamp;
 use timely::progress::frontier::{Antichain, AntichainRef};
 use timely::{Accountable, PartialOrder};
 
@@ -319,6 +322,108 @@ impl<T: Columnation> SizableContainer for ColumnationStack<T> {
         if self.capacity() < preferred {
             self.reserve(preferred - self.capacity());
         }
+    }
+}
+
+impl<T: Clone + Ord + Columnation + 'static> BatchContainer for ColumnationStack<T> {
+    type Owned = T;
+    type ReadItem<'a> = &'a T;
+
+    #[inline(always)]
+    fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
+        item.clone()
+    }
+    #[inline(always)]
+    fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+        other.clone_from(item);
+    }
+
+    fn reborrow<'b, 'a: 'b>(item: Self::ReadItem<'a>) -> Self::ReadItem<'b> {
+        item
+    }
+
+    fn push_ref(&mut self, item: Self::ReadItem<'_>) {
+        self.push_into(item)
+    }
+    fn push_own(&mut self, item: &Self::Owned) {
+        self.push_into(item)
+    }
+
+    fn clear(&mut self) {
+        self.clear()
+    }
+
+    fn with_capacity(size: usize) -> Self {
+        Self::with_capacity(size)
+    }
+    fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
+        let mut new = Self::default();
+        new.reserve_regions(std::iter::once(cont1).chain(std::iter::once(cont2)));
+        new
+    }
+    fn index(&self, index: usize) -> Self::ReadItem<'_> {
+        &self[index]
+    }
+    fn len(&self) -> usize {
+        self[..].len()
+    }
+}
+
+impl<K, V, T, R> BuilderInput<K, V> for ColumnationStack<((K::Owned, V::Owned), T, R)>
+where
+    K: for<'a> BatchContainer<
+            ReadItem<'a>: PartialEq<&'a K::Owned>,
+            Owned: Ord + Columnation + Clone + 'static,
+        >,
+    V: for<'a> BatchContainer<
+            ReadItem<'a>: PartialEq<&'a V::Owned>,
+            Owned: Ord + Columnation + Clone + 'static,
+        >,
+    T: Timestamp + Lattice + Columnation + Clone + 'static,
+    R: Ord + Clone + Semigroup + Columnation + 'static,
+{
+    type Key<'a> = &'a K::Owned;
+    type Val<'a> = &'a V::Owned;
+    type Time = T;
+    type Diff = R;
+
+    fn into_parts<'a>(
+        ((key, val), time, diff): Self::Item<'a>,
+    ) -> (Self::Key<'a>, Self::Val<'a>, Self::Time, Self::Diff) {
+        (key, val, time.clone(), diff.clone())
+    }
+
+    fn key_eq(this: &&K::Owned, other: K::ReadItem<'_>) -> bool {
+        K::reborrow(other) == *this
+    }
+
+    fn val_eq(this: &&V::Owned, other: V::ReadItem<'_>) -> bool {
+        V::reborrow(other) == *this
+    }
+
+    fn key_val_upd_counts(chain: &[Self]) -> (usize, usize, usize) {
+        let mut keys = 0;
+        let mut vals = 0;
+        let mut upds = 0;
+        let mut prev_keyval = None;
+        for link in chain.iter() {
+            for ((key, val), _, _) in link.iter() {
+                if let Some((p_key, p_val)) = prev_keyval {
+                    if p_key != key {
+                        keys += 1;
+                        vals += 1;
+                    } else if p_val != val {
+                        vals += 1;
+                    }
+                } else {
+                    keys += 1;
+                    vals += 1;
+                }
+                upds += 1;
+                prev_keyval = Some((key, val));
+            }
+        }
+        (keys, vals, upds)
     }
 }
 

@@ -6109,6 +6109,7 @@ dependencies = [
  "async-stream",
  "bytesize",
  "columnar",
+ "columnation",
  "core_affinity",
  "dec",
  "differential-dataflow",
