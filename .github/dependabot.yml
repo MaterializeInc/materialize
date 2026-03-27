@@ -200,6 +200,86 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+- package-ecosystem: pip
+  directory: /misc/mcp-materialize
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: pip
+  directory: /misc/mcp-materialize-agents
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: npm
+  directory: /misc/editor/vscode
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: npm
+  directory: /console/e2e-tests
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: npm
+  directory: /test/dataflow-visualizer
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: npm
   directory: /console
   schedule:
