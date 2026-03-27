@@ -638,9 +638,7 @@ fn retrieve_upper_from_snapshots(
 /// - UInt32 -> Int64
 /// - UInt64 -> Decimal128(20, 0)
 /// - MzTimestamp (which uses UInt64) -> Decimal128(20, 0)
-fn iceberg_type_overrides(
-    scalar_type: &mz_repr::SqlScalarType,
-) -> Option<(DataType, String)> {
+fn iceberg_type_overrides(scalar_type: &mz_repr::SqlScalarType) -> Option<(DataType, String)> {
     use mz_repr::SqlScalarType;
     match scalar_type {
         SqlScalarType::UInt16 => Some((DataType::Int32, "uint2".to_string())),
