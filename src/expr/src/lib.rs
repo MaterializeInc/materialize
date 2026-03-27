@@ -9,6 +9,7 @@
 
 //! Core expression language.
 
+#![recursion_limit = "256"]
 #![warn(missing_debug_implementations)]
 
 use std::collections::BTreeSet;
