@@ -2398,40 +2398,61 @@ WHERE data->>'kind' = 'Database'",
         access: vec![PUBLIC_SELECT],
     });
 
-pub static MZ_SCHEMAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_schemas",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SCHEMAS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("database_id", SqlScalarType::String.nullable(true))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the schema."),
-        ("oid", "A PostgreSQL-compatible oid for the schema."),
-        (
-            "database_id",
-            "The ID of the database containing the schema. Corresponds to `mz_databases.id`.",
-        ),
-        ("name", "The name of the schema."),
-        (
-            "owner_id",
-            "The role ID of the owner of the schema. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges belonging to the schema."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
+pub static MZ_SCHEMAS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_schemas",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_SCHEMAS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("database_id", SqlScalarType::String.nullable(true))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the schema."),
+            ("oid", "A PostgreSQL-compatible oid for the schema."),
+            (
+                "database_id",
+                "The ID of the database containing the schema. Corresponds to `mz_databases.id`.",
+            ),
+            ("name", "The name of the schema."),
+            (
+                "owner_id",
+                "The role ID of the owner of the schema. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the schema."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    CASE WHEN data->'value'->'database_id' != 'null'
+         THEN mz_internal.parse_catalog_id(data->'value'->'database_id')
+    END AS database_id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Schema'",
+        access: vec![PUBLIC_SELECT],
+    });
+
 pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_columns",
     schema: MZ_CATALOG_SCHEMA,
@@ -3028,69 +3049,112 @@ pub static MZ_CONTINUAL_TASKS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_network_policies",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_NETWORK_POLICIES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the network policy."),
-        ("name", "The name of the network policy."),
-        (
-            "owner_id",
-            "The role ID of the owner of the network policy. Corresponds to `mz_catalog.mz_roles.id`.",
-        ),
-        (
-            "privileges",
-            "The privileges belonging to the network policy.",
-        ),
-        ("oid", "A PostgreSQL-compatible OID for the network policy."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+
+pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_network_policies",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_NETWORK_POLICIES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![4])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the network policy."),
+            ("name", "The name of the network policy."),
+            (
+                "owner_id",
+                "The role ID of the owner of the network policy. Corresponds to `mz_catalog.mz_roles.id`.",
+            ),
+            (
+                "privileges",
+                "The privileges belonging to the network policy.",
+            ),
+            ("oid", "A PostgreSQL-compatible OID for the network policy."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL oid
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+    (data->'value'->>'oid')::oid AS oid
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'NetworkPolicy'",
+        access: vec![PUBLIC_SELECT],
+    }
 });
-pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_network_policy_rules",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_NETWORK_POLICY_RULES_OID,
-    desc: RelationDesc::builder()
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("policy_id", SqlScalarType::String.nullable(false))
-        .with_column("action", SqlScalarType::String.nullable(false))
-        .with_column("address", SqlScalarType::String.nullable(false))
-        .with_column("direction", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "name",
-            "The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier.",
-        ),
-        (
-            "policy_id",
-            "The ID the network policy the rule is part of. Corresponds to `mz_network_policy_rules.id`.",
-        ),
-        (
-            "action",
-            "The action of the rule. `allow` is the only supported action.",
-        ),
-        ("address", "The address the rule will take action on."),
-        (
-            "direction",
-            "The direction of traffic the rule applies to. `ingress` is the only supported direction.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+
+pub static MZ_NETWORK_POLICY_RULES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_network_policy_rules",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_NETWORK_POLICY_RULES_OID,
+        desc: RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("policy_id", SqlScalarType::String.nullable(false))
+            .with_column("action", SqlScalarType::String.nullable(false))
+            .with_column("address", SqlScalarType::String.nullable(false))
+            .with_column("direction", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "name",
+                "The name of the network policy rule. Can be combined with `policy_id` to form a unique identifier.",
+            ),
+            (
+                "policy_id",
+                "The ID the network policy the rule is part of. Corresponds to `mz_network_policy_rules.id`.",
+            ),
+            (
+                "action",
+                "The action of the rule. `allow` is the only supported action.",
+            ),
+            ("address", "The address the rule will take action on."),
+            (
+                "direction",
+                "The direction of traffic the rule applies to. `ingress` is the only supported direction.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL policy_id,
+    ASSERT NOT NULL action,
+    ASSERT NOT NULL address,
+    ASSERT NOT NULL direction
+) AS
+SELECT
+    rule->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'key'->'id') AS policy_id,
+    lower(rule->>'action') AS action,
+    rule->>'address' AS address,
+    lower(rule->>'direction') AS direction
+FROM
+    mz_internal.mz_catalog_raw,
+    jsonb_array_elements(data->'value'->'rules') AS rule
+WHERE data->>'kind' = 'NetworkPolicy'",
+        access: vec![PUBLIC_SELECT],
+    }
 });
+
 /// PostgreSQL-specific metadata about types that doesn't make sense to expose
 /// in the `mz_types` table as part of our public, stable API.
 pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -3228,32 +3292,50 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_role_members",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ROLE_MEMBERS_OID,
-    desc: RelationDesc::builder()
-        .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_column("member", SqlScalarType::String.nullable(false))
-        .with_column("grantor", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        (
-            "role_id",
-            "The ID of the role the `member` is a member of. Corresponds to `mz_roles.id`.",
-        ),
-        (
-            "member",
-            "The ID of the role that is a member of `role_id`. Corresponds to `mz_roles.id`.",
-        ),
-        (
-            "grantor",
-            "The ID of the role that granted membership of `member` to `role_id`. Corresponds to `mz_roles.id`.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+
+pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_role_members",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ROLE_MEMBERS_OID,
+        desc: RelationDesc::builder()
+            .with_column("role_id", SqlScalarType::String.nullable(false))
+            .with_column("member", SqlScalarType::String.nullable(false))
+            .with_column("grantor", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "role_id",
+                "The ID of the role the `member` is a member of. Corresponds to `mz_roles.id`.",
+            ),
+            (
+                "member",
+                "The ID of the role that is a member of `role_id`. Corresponds to `mz_roles.id`.",
+            ),
+            (
+                "grantor",
+                "The ID of the role that granted membership of `member` to `role_id`. Corresponds to `mz_roles.id`.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL role_id,
+    ASSERT NOT NULL member,
+    ASSERT NOT NULL grantor
+) AS
+SELECT
+    mz_internal.parse_catalog_id(entry->'key') AS role_id,
+    mz_internal.parse_catalog_id(data->'key'->'id') AS member,
+    mz_internal.parse_catalog_id(entry->'value') AS grantor
+FROM
+    mz_internal.mz_catalog_raw,
+    jsonb_array_elements(data->'value'->'membership'->'map') AS entry
+WHERE data->>'kind' = 'Role'",
+        access: vec![PUBLIC_SELECT],
+    }
 });
+
 pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_role_parameters",
     schema: MZ_CATALOG_SCHEMA,
@@ -3483,19 +3565,31 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_CLUSTER_WORKLOAD_CLASSES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_cluster_workload_classes",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_CLUSTER_WORKLOAD_CLASSES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("workload_class", SqlScalarType::String.nullable(true))
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
+pub static MZ_CLUSTER_WORKLOAD_CLASSES: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_cluster_workload_classes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_CLUSTER_WORKLOAD_CLASSES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("workload_class", SqlScalarType::String.nullable(true))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::new(),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'id') AS id,
+    CASE WHEN data->'value'->'config'->'workload_class' != 'null'
+         THEN data->'value'->'config'->>'workload_class'
+    END AS workload_class
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Cluster'",
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub const MZ_CLUSTER_WORKLOAD_CLASSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_cluster_workload_classes_ind",
@@ -3606,35 +3700,57 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_INTERNAL_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_internal_cluster_replicas",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_INTERNAL_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([(
-        "id",
-        "The ID of a cluster replica. Corresponds to `mz_cluster_replicas.id`.",
-    )]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
+pub static MZ_INTERNAL_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_internal_cluster_replicas",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_INTERNAL_CLUSTER_REPLICAS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([(
+            "id",
+            "The ID of a cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+        )]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id
+) AS
+SELECT mz_internal.parse_catalog_id(data->'key'->'id') AS id
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'ClusterReplica' AND
+    (data->'value'->'config'->'location'->'Managed'->>'internal')::bool = true",
+        access: vec![PUBLIC_SELECT],
+    });
 
-pub static MZ_PENDING_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_pending_cluster_replicas",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_PENDING_CLUSTER_REPLICAS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([(
-        "id",
-        "The ID of a cluster replica. Corresponds to `mz_cluster_replicas.id`.",
-    )]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
+pub static MZ_PENDING_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
+    LazyLock::new(|| BuiltinMaterializedView {
+        name: "mz_pending_cluster_replicas",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::MV_MZ_PENDING_CLUSTER_REPLICAS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([(
+            "id",
+            "The ID of a cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+        )]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id
+) AS
+SELECT mz_internal.parse_catalog_id(data->'key'->'id') AS id
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'ClusterReplica' AND
+    (data->'value'->'config'->'location'->'Managed'->>'pending')::bool = true",
+        access: vec![PUBLIC_SELECT],
+    });
 
 pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| {
     BuiltinSource {
@@ -14029,7 +14145,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
         Builtin::Table(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
-        Builtin::Table(&MZ_SCHEMAS),
+        Builtin::MaterializedView(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
         Builtin::Table(&MZ_INDEXES),
         Builtin::Table(&MZ_INDEX_COLUMNS),
@@ -14053,14 +14169,14 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_MAP_TYPES),
         Builtin::Table(&MZ_ROLES),
         Builtin::Table(&MZ_ROLE_AUTH),
-        Builtin::Table(&MZ_ROLE_MEMBERS),
+        Builtin::MaterializedView(&MZ_ROLE_MEMBERS),
         Builtin::Table(&MZ_ROLE_PARAMETERS),
         Builtin::Table(&MZ_PSEUDO_TYPES),
         Builtin::Table(&MZ_FUNCTIONS),
         Builtin::Table(&MZ_OPERATORS),
         Builtin::Table(&MZ_AGGREGATES),
         Builtin::Table(&MZ_CLUSTERS),
-        Builtin::Table(&MZ_CLUSTER_WORKLOAD_CLASSES),
+        Builtin::MaterializedView(&MZ_CLUSTER_WORKLOAD_CLASSES),
         Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::Table(&MZ_SECRETS),
         Builtin::Table(&MZ_CONNECTIONS),
@@ -14071,8 +14187,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
         Builtin::Source(&MZ_CLUSTER_REPLICA_STATUS_HISTORY),
         Builtin::View(&MZ_CLUSTER_REPLICA_STATUSES),
-        Builtin::Table(&MZ_INTERNAL_CLUSTER_REPLICAS),
-        Builtin::Table(&MZ_PENDING_CLUSTER_REPLICAS),
+        Builtin::MaterializedView(&MZ_INTERNAL_CLUSTER_REPLICAS),
+        Builtin::MaterializedView(&MZ_PENDING_CLUSTER_REPLICAS),
         Builtin::Table(&MZ_AUDIT_EVENTS),
         Builtin::Table(&MZ_STORAGE_USAGE_BY_SHARD),
         Builtin::Table(&MZ_EGRESS_IPS),
@@ -14086,8 +14202,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::Table(&MZ_CONTINUAL_TASKS),
-        Builtin::Table(&MZ_NETWORK_POLICIES),
-        Builtin::Table(&MZ_NETWORK_POLICY_RULES),
+        Builtin::MaterializedView(&MZ_NETWORK_POLICIES),
+        Builtin::MaterializedView(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
         Builtin::Table(&MZ_REPLACEMENTS),
         Builtin::View(&MZ_RELATIONS),

@@ -17,16 +17,14 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTER_WORKLOAD_CLASSES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS,
-    MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
-    MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
-    MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_CONTINUAL_TASKS,
+    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
+    MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
+    MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
-    MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
-    MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES,
-    MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
+    MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES,
+    MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS,
+    MZ_ROLES, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
     MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
     MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
     MZ_WEBHOOKS_SOURCES,
@@ -52,18 +50,15 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
-use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::refresh_schedule::RefreshEvery;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
 };
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
-use mz_sql::catalog::{
-    CatalogCluster, CatalogSchema, CatalogType, DefaultPrivilegeObject, TypeCategory,
-};
+use mz_sql::catalog::{CatalogCluster, CatalogType, DefaultPrivilegeObject, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
-use mz_sql::names::{CommentObjectId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier};
+use mz_sql::names::{CommentObjectId, SchemaSpecifier};
 use mz_sql::plan::{ClusterSchedule, ConnectionDetails, SshKey};
 use mz_sql::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::SessionVars;
@@ -140,35 +135,6 @@ impl CatalogState {
             Datum::String(&dependee.to_string()),
         ]);
         BuiltinTableUpdate::row(&*MZ_OBJECT_DEPENDENCIES, row, diff)
-    }
-
-    pub(super) fn pack_schema_update(
-        &self,
-        database_spec: &ResolvedDatabaseSpecifier,
-        schema_id: &SchemaId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let (database_id, schema) = match database_spec {
-            ResolvedDatabaseSpecifier::Ambient => (None, &self.ambient_schemas_by_id[schema_id]),
-            ResolvedDatabaseSpecifier::Id(id) => (
-                Some(id.to_string()),
-                &self.database_by_id[id].schemas_by_id[schema_id],
-            ),
-        };
-        let row = self.pack_privilege_array_row(schema.privileges());
-        let privileges = row.unpack_first();
-        BuiltinTableUpdate::row(
-            &*MZ_SCHEMAS,
-            Row::pack_slice(&[
-                Datum::String(&schema_id.to_string()),
-                Datum::UInt32(schema.oid),
-                Datum::from(database_id.as_deref()),
-                Datum::String(&schema.name.schema),
-                Datum::String(&schema.owner_id.to_string()),
-                privileges,
-            ]),
-            diff,
-        )
     }
 
     pub(super) fn pack_role_auth_update(
@@ -282,29 +248,6 @@ impl CatalogState {
         }
     }
 
-    pub(super) fn pack_role_members_update(
-        &self,
-        role_id: RoleId,
-        member_id: RoleId,
-        diff: Diff,
-    ) -> BuiltinTableUpdate<&'static BuiltinTable> {
-        let grantor_id = self
-            .get_role(&member_id)
-            .membership
-            .map
-            .get(&role_id)
-            .expect("catalog out of sync");
-        BuiltinTableUpdate::row(
-            &*MZ_ROLE_MEMBERS,
-            Row::pack_slice(&[
-                Datum::String(&role_id.to_string()),
-                Datum::String(&member_id.to_string()),
-                Datum::String(&grantor_id.to_string()),
-            ]),
-            diff,
-        )
-    }
-
     pub(super) fn pack_cluster_update(
         &self,
         name: &str,
@@ -379,15 +322,6 @@ impl CatalogState {
             updates.push(BuiltinTableUpdate::row(&*MZ_CLUSTER_SCHEDULES, row, diff));
         }
 
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_CLUSTER_WORKLOAD_CLASSES,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::from(cluster.config.workload_class.as_deref()),
-            ]),
-            diff,
-        ));
-
         updates
     }
 
@@ -401,7 +335,7 @@ impl CatalogState {
         let id = cluster.replica_id(name).expect("Must exist");
         let replica = cluster.replica(id).expect("Must exist");
 
-        let (size, disk, az, internal, pending) = match &replica.config.location {
+        let (size, disk, az) = match &replica.config.location {
             // TODO(guswynn): The column should be `availability_zones`, not
             // `availability_zone`.
             ReplicaLocation::Managed(ManagedReplicaLocation {
@@ -409,30 +343,26 @@ impl CatalogState {
                 availability_zones: ManagedReplicaAvailabilityZones::FromReplica(Some(az)),
                 allocation: _,
                 billed_as: _,
-                internal,
-                pending,
+                internal: _,
+                pending: _,
             }) => (
                 Some(&**size),
                 Some(self.cluster_replica_size_has_disk(size)),
                 Some(az.as_str()),
-                *internal,
-                *pending,
             ),
             ReplicaLocation::Managed(ManagedReplicaLocation {
                 size,
                 availability_zones: _,
                 allocation: _,
                 billed_as: _,
-                internal,
-                pending,
+                internal: _,
+                pending: _,
             }) => (
                 Some(&**size),
                 Some(self.cluster_replica_size_has_disk(size)),
                 None,
-                *internal,
-                *pending,
             ),
-            ReplicaLocation::Unmanaged(_) => (None, None, None, false, false),
+            ReplicaLocation::Unmanaged(_) => (None, None, None),
         };
 
         let cluster_replica_update = BuiltinTableUpdate::row(
@@ -449,64 +379,7 @@ impl CatalogState {
             diff,
         );
 
-        let mut updates = vec![cluster_replica_update];
-
-        if internal {
-            let update = BuiltinTableUpdate::row(
-                &*MZ_INTERNAL_CLUSTER_REPLICAS,
-                Row::pack_slice(&[Datum::String(&id.to_string())]),
-                diff,
-            );
-            updates.push(update);
-        }
-
-        if pending {
-            let update = BuiltinTableUpdate::row(
-                &*MZ_PENDING_CLUSTER_REPLICAS,
-                Row::pack_slice(&[Datum::String(&id.to_string())]),
-                diff,
-            );
-            updates.push(update);
-        }
-
-        updates
-    }
-
-    pub(crate) fn pack_network_policy_update(
-        &self,
-        policy_id: &NetworkPolicyId,
-        diff: Diff,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, Error> {
-        let policy = self.get_network_policy(policy_id);
-        let row = self.pack_privilege_array_row(&policy.privileges);
-        let privileges = row.unpack_first();
-        let mut updates = Vec::new();
-        for ref rule in policy.rules.clone() {
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_NETWORK_POLICY_RULES,
-                Row::pack_slice(&[
-                    Datum::String(&rule.name),
-                    Datum::String(&policy.id.to_string()),
-                    Datum::String(&rule.action.to_string()),
-                    Datum::String(&rule.address.to_string()),
-                    Datum::String(&rule.direction.to_string()),
-                ]),
-                diff,
-            ));
-        }
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_NETWORK_POLICIES,
-            Row::pack_slice(&[
-                Datum::String(&policy.id.to_string()),
-                Datum::String(&policy.name),
-                Datum::String(&policy.owner_id.to_string()),
-                privileges,
-                Datum::UInt32(policy.oid.clone()),
-            ]),
-            diff,
-        ));
-
-        Ok(updates)
+        vec![cluster_replica_update]
     }
 
     pub(super) fn pack_item_update(

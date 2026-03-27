@@ -1402,24 +1402,9 @@ impl CatalogState {
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let diff = diff.into();
         match kind {
-            StateUpdateKind::Role(role) => {
-                let mut builtin_table_updates = self.pack_role_update(role.id, diff);
-                for group_id in role.membership.map.keys() {
-                    builtin_table_updates
-                        .push(self.pack_role_members_update(*group_id, role.id, diff))
-                }
-                builtin_table_updates
-            }
+            StateUpdateKind::Role(role) => self.pack_role_update(role.id, diff),
             StateUpdateKind::RoleAuth(role_auth) => {
                 vec![self.pack_role_auth_update(role_auth.role_id, diff)]
-            }
-            StateUpdateKind::Database(_database) => {
-                // mz_databases is a materialized view over mz_catalog_raw.
-                vec![]
-            }
-            StateUpdateKind::Schema(schema) => {
-                let db_spec = schema.database_id.into();
-                vec![self.pack_schema_update(&db_spec, &schema.id, diff)]
             }
             StateUpdateKind::DefaultPrivilege(default_privilege) => {
                 vec![self.pack_default_privileges_update(
@@ -1469,10 +1454,10 @@ impl CatalogState {
                         .expect("could not pack audit log update"),
                 ]
             }
-            StateUpdateKind::NetworkPolicy(policy) => self
-                .pack_network_policy_update(&policy.id, diff)
-                .expect("could not pack audit log update"),
-            StateUpdateKind::StorageCollectionMetadata(_)
+            StateUpdateKind::Database(_)
+            | StateUpdateKind::Schema(_)
+            | StateUpdateKind::NetworkPolicy(_)
+            | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }
     }
