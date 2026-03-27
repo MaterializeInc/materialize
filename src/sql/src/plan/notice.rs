@@ -42,12 +42,21 @@ pub enum PlanNotice {
         name: String,
     },
     ReplicaDiskOptionDeprecated,
+    PlaintextConnectionUsed {
+        connection_type: String,
+    },
 }
 
 impl PlanNotice {
     /// Reports additional details about the notice, if any are available.
     pub fn detail(&self) -> Option<String> {
         match self {
+            PlanNotice::PlaintextConnectionUsed { .. } => Some(
+                "Connections with SSL MODE 'disable' transmit credentials and data in \
+                plaintext. Most cloud Postgres providers (AWS RDS, Azure, Neon, \
+                CockroachDB) require or default to SSL."
+                    .into(),
+            ),
             PlanNotice::UpsertSinkKeyNotEnforced { key, name } => {
                 let details = format!(
                     "Materialize did not validate that the specified upsert envelope key ({}) \
@@ -69,6 +78,11 @@ impl PlanNotice {
             PlanNotice::UpsertSinkKeyNotEnforced { .. } => {
                 Some("See: https://materialize.com/s/sink-key-selection".into())
             }
+            PlanNotice::PlaintextConnectionUsed { .. } => Some(
+                "Use SSL MODE 'require' or higher to encrypt the connection. \
+                To suppress this warning, explicitly set SSL MODE 'disable'."
+                    .into(),
+            ),
             _ => None,
         }
     }
@@ -101,6 +115,12 @@ impl fmt::Display for PlanNotice {
             }
             PlanNotice::ReplicaDiskOptionDeprecated => {
                 write!(f, "the DISK option is deprecated and has no effect")
+            }
+            PlanNotice::PlaintextConnectionUsed { connection_type } => {
+                write!(
+                    f,
+                    "{connection_type} connection using SSL MODE 'disable' transmits data in plaintext"
+                )
             }
         }
     }

@@ -398,7 +398,21 @@ impl ConnectionOptionExtracted {
                     ),
                 };
                 let tls_mode = match self.ssl_mode.as_ref().map(|m| m.as_str()) {
-                    None | Some("disable") => tokio_postgres::config::SslMode::Disable,
+                    // Default to `require` rather than `disable`. This matches the
+                    // security posture of major cloud providers (AWS RDS PG 15+, Azure
+                    // Database for PostgreSQL, Neon, CockroachDB) and Go's lib/pq, all
+                    // of which default to requiring SSL. Even the PostgreSQL docs note
+                    // that libpq's legacy `prefer` default "makes no sense from a
+                    // security point of view" and "is only provided as the default for
+                    // backward compatibility."
+                    None => tokio_postgres::config::SslMode::Require,
+                    Some("disable") => {
+                        scx.catalog
+                            .add_notice(crate::plan::PlanNotice::PlaintextConnectionUsed {
+                                connection_type: "Postgres".into(),
+                            });
+                        tokio_postgres::config::SslMode::Disable
+                    }
                     // "prefer" intentionally omitted because it has dubious security
                     // properties.
                     Some("require") | Some("required") => tokio_postgres::config::SslMode::Require,
@@ -488,6 +502,7 @@ impl ConnectionOptionExtracted {
                 };
                 // Accepts the same SSL Mode values as the MySQL Client
                 // https://dev.mysql.com/doc/refman/8.0/en/connection-options.html#option_general_ssl-mode
+                let explicit_ssl_mode = self.ssl_mode.is_some();
                 let tls_mode = match self
                     .ssl_mode
                     .map(|f| f.to_uppercase())
@@ -499,6 +514,13 @@ impl ConnectionOptionExtracted {
                             sql_bail!(
                                 "invalid CONNECTION: AWS IAM authentication requires SSL to be enabled"
                             )
+                        }
+                        if explicit_ssl_mode {
+                            scx.catalog.add_notice(
+                                crate::plan::PlanNotice::PlaintextConnectionUsed {
+                                    connection_type: "MySQL".into(),
+                                },
+                            );
                         }
                         MySqlSslMode::Disabled
                     }
