@@ -10650,18 +10650,24 @@ __metadata:
   languageName: node
   linkType: hard
 
-"jotai@npm:^2.9.3":
-  version: 2.9.3
-  resolution: "jotai@npm:2.9.3"
+"jotai@npm:^2.19.0":
+  version: 2.19.0
+  resolution: "jotai@npm:2.19.0"
   peerDependencies:
+    "@babel/core": ">=7.0.0"
+    "@babel/template": ">=7.0.0"
     "@types/react": ">=17.0.0"
     react: ">=17.0.0"
   peerDependenciesMeta:
+    "@babel/core":
+      optional: true
+    "@babel/template":
+      optional: true
     "@types/react":
       optional: true
     react:
       optional: true
-  checksum: 10c0/d7a2aedeebd84f332b930c5dc06f6827c11a70c3b6bae0817e0c778f7c34996f3a47d5c544ff1b7ed2662083feed55ea6d77b281adf2e0fba65ad93b1723d687
+  checksum: 10c0/2bd0a1c538b7adfd79ec757326b138c5c76e828e0ebdf54d67542891f42c49e87cad7eb632f02e0bccca7a7b0a03dd164c00f2cb23f5a13b0566e45edf1bd729
   languageName: node
   linkType: hard
 
@@ -11402,7 +11408,7 @@ __metadata:
     fast-xml-parser: "npm:^5.5.7"
     framer-motion: "npm:^12.38.0"
     intersection-observer: "npm:^0.12.2"
-    jotai: "npm:^2.9.3"
+    jotai: "npm:^2.19.0"
     jotai-devtools: "npm:^0.10.1"
     jsdom: "npm:^25.0.1"
     jsonwebtoken: "npm:^9.0.2"
