@@ -457,9 +457,10 @@
       description: |
         *Value:* `text`
 
-        Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
+        Sets the SSL mode for the connection. Valid values: `disable`, `require`,
+        `verify_ca`, `verify_full`.
 
-        Default: `disable`.
+        Default: `require`.
     - name: "`SSL CERTIFICATE AUTHORITY`"
       description: |
         *Value:* secret or `text`
