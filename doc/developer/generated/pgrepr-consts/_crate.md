@@ -13,5 +13,5 @@ Provides a single, stable registry of OID constants for all PostgreSQL and Mater
 
 ## Key dependencies and consumers
 
-The crate has no runtime dependencies beyond the `workspace-hack` feature shim.
+The crate has no runtime dependencies.
 Downstream consumers include crates that implement the PostgreSQL representation layer (e.g., `mz-pgrepr`) and the catalog (e.g., `mz-catalog`), which reference these constants to map Materialize types and built-in objects to stable OIDs.

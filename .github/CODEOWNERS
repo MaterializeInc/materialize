@@ -134,5 +134,4 @@
 /src/transform                      @MaterializeInc/cluster
 /src/txn-wal                        @aljoscha
 /src/walkabout                      @MaterializeInc/adapter
-/src/workspace-hack                 @MaterializeInc/testing
 /test

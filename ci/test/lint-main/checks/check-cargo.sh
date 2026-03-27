@@ -22,11 +22,6 @@ if ! cargo about --version > /dev/null 2>&1; then
   echo "hint: install it with: cargo install cargo-about"
 fi
 
-if ! cargo hakari --version > /dev/null 2>&1; then
-  echo "lint: cargo-hakari is not installed"
-  echo "hint: install it with: cargo install cargo-hakari"
-fi
-
 if ! cargo --list | grep --quiet deplint; then
   echo "lint: cargo-deplint is not installed"
   echo "hint: install it with: cargo install cargo-deplint"
@@ -35,8 +30,6 @@ fi
 try bin/lint-cargo
 
 try cargo --locked deny check licenses bans sources
-try cargo hakari generate --diff
-try cargo hakari manage-deps --dry-run
 try cargo deplint Cargo.lock ci/test/lint-deps.toml
 
 try_status_report

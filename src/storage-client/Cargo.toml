@@ -49,15 +49,13 @@ tokio = { version = "1.49.0", features = [
 ] }
 tracing = "0.1.44"
 uuid = "1.19.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 mz-build-info = { path = "../build-info" }
 mz-secrets = { path = "../secrets" }
 
 [features]
-default = ["workspace-hack"]
+default = []
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
-normal = ["inotify", "workspace-hack"]

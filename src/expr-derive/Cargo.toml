@@ -14,11 +14,7 @@ proc-macro = true
 
 [dependencies]
 mz-expr-derive-impl = { path = "../expr-derive-impl" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
 
 [features]
-default = ["workspace-hack"]
+default = []
 test = ["mz-expr-derive-impl/test"]

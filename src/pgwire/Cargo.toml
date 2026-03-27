@@ -40,11 +40,7 @@ tokio-openssl = "0.6.5"
 tokio-util = { version = "0.7.18", features = ["codec"] }
 tokio-metrics = "0.4.9"
 tracing = "0.1.44"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 uuid = { version = "1.19.0", features = ["v4"] }
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-
 [features]
-default = ["workspace-hack"]
+default = []

@@ -45,11 +45,10 @@ tower-http = "0.6.7"
 tracing = "0.1.44"
 urlencoding = "2.1.3"
 uuid = { version = "1.19", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["mz-alloc-default", "workspace-hack"]
+default = ["mz-alloc-default"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["mz-alloc", "mz-alloc-default", "workspace-hack"]
+normal = ["mz-alloc", "mz-alloc-default"]

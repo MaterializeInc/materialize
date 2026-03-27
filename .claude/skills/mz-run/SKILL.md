@@ -46,7 +46,6 @@ Other useful flags:
 Format Rust, Python, and Protobuf files with `bin/fmt`.
 Run `bin/lint` to check for lint errors.
 Run `cargo clippy --all-targets -- -D warnings` to check for Rust-specific warnings.
-If Rust dependencies were added or changed, run `cargo hakari generate`.
 
 ## Log filters
 

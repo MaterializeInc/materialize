@@ -203,7 +203,6 @@ wrappers = [
     "tracing",
     "tungstenite",
     "want",
-    "workspace-hack",
     "zopfli",
 ]
 

@@ -28,7 +28,6 @@ copyright_files=$(grep -vE \
     -e '(^|/)go\.sum$' \
     -e '(^|/)(Cargo|askama|config)\.toml$' \
     -e '^\.cargo/config$' \
-    -e '^\.config/hakari.toml$' \
     -e '^.devcontainer/.*' \
     -e '(^|/)Cargo\.lock$' \
     -e '^about\.toml$' \

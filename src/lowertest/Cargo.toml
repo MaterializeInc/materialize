@@ -16,14 +16,10 @@ proc-macro2 = "1.0.106"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.149"
 itertools = "0.14.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.102"
 datadriven = "0.9.0"
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-
 [features]
-default = ["workspace-hack"]
+default = []

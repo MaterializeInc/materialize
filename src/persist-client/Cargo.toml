@@ -34,7 +34,7 @@ arrow = { version = "57", default-features = false }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
 bytes = { version = "1.11.1", features = ["serde"] }
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.23", features = ["derive", "env"] }
 differential-dataflow = "0.20.0"
 futures = "0.3.32"
 futures-util = "0.3"
@@ -60,12 +60,11 @@ serde_json = "1.0.149"
 timely = "0.27.0"
 tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics = "0.4.9"
-tokio-stream = "0.1.18"
+tokio-stream = { version = "0.1.18", features = ["sync"] }
 tonic = "0.14.2"
 tonic-prost = "0.14.5"
 tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
@@ -81,9 +80,6 @@ prost-build = "0.14.3"
 tonic-prost-build = "0.14.5"
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["mz-build-tools/default"]
 turmoil = []
 foundationdb = ["mz-persist/foundationdb"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

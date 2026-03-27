@@ -40,13 +40,9 @@ timely = "0.27.0"
 tokio = "1.49.0"
 tracing = "0.1.44"
 uuid = { version = "1.19.0" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 bytesize = "2.1.0"
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-
 [features]
-default = ["workspace-hack"]
+default = []

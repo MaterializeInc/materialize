@@ -24,7 +24,6 @@ proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0" }
 serde = "1.0.219"
 tracing = "0.1.44"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 anyhow = "1.0.102"
@@ -36,8 +35,5 @@ mz-ore = { path = "../ore", features = ["test"] }
 proc-macro2 = "1.0.106"
 serde_json = "1.0.149"
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-
 [features]
-default = ["workspace-hack"]
+default = []

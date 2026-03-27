@@ -116,7 +116,6 @@ members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
-    "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
 ]
@@ -241,7 +240,6 @@ default-members = [
     "src/transform",
     "src/txn-wal",
     "src/walkabout",
-    "src/workspace-hack",
     "test/metabase/smoketest",
     "test/test-util",
 ]

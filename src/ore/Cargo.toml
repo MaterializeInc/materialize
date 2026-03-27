@@ -53,6 +53,7 @@ sentry = { version = "0.46.1", optional = true, default-features = false, featur
 sentry-panic = { version = "0.46.1", optional = true }
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.49.0", features = [
+    "fs",
     "io-util",
     "net",
     "rt-multi-thread",
@@ -76,7 +77,6 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 ], optional = true }
 uuid = { version = "1.19.0", optional = true, features = ["v4", "v7"] }
 url = { version = "2.5.8", features = ["serde"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 # For the `tracing` feature
 http = { version = "1.4.0", optional = true }
@@ -107,7 +107,7 @@ tokio-test = "0.4.5"
 tracing-subscriber = "0.3.23"
 
 [features]
-default = ["tokio-console", "workspace-hack", "mz-ore-proc/workspace-hack"]
+default = ["tokio-console"]
 async = [
     "async-trait",
     "futures",
@@ -177,5 +177,5 @@ harness = false
 required-features = ["bytes", "region", "tracing"]
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+# Only used in doc-tests.
 development = ["tokio-test"]
