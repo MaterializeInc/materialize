@@ -26,7 +26,7 @@ arrow-cast = { version = "57.2.0", default-features = false, features = ["pretty
 arrow-data = { version = "57.2.0", default-features = false, features = ["ffi"] }
 arrow-schema = { version = "57.2.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
-aws-config = { version = "1.8.13", default-features = false, features = ["sso"] }
+aws-config = { version = "1.8.15", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
 aws-runtime = { version = "1.6.0", default-features = false, features = ["event-stream", "http-02x", "http-1x"] }
 aws-sdk-sts = { version = "1.97.0", default-features = false, features = ["rt-tokio"] }
