@@ -93,7 +93,7 @@
     "oidc-client-ts": "^3.4.1",
     "openapi-fetch": "^0.17.0",
     "papaparse": "^5.4.1",
-    "pg-error-enum": "^0.7.3",
+    "pg-error-enum": "^2.0.1",
     "popper-max-size-modifier": "^0.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
