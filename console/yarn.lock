@@ -5736,7 +5736,16 @@ __metadata:
   languageName: node
   linkType: hard
 
-"acorn@npm:^8.4.1, acorn@npm:^8.5.0, acorn@npm:^8.8.1, acorn@npm:^8.8.2, acorn@npm:^8.9.0":
+"acorn@npm:^8.15.0":
+  version: 8.16.0
+  resolution: "acorn@npm:8.16.0"
+  bin:
+    acorn: bin/acorn
+  checksum: 10c0/c9c52697227661b68d0debaf972222d4f622aa06b185824164e153438afa7b08273432ca43ea792cadb24dada1d46f6f6bb1ef8de9956979288cc1b96bf9914e
+  languageName: node
+  linkType: hard
+
+"acorn@npm:^8.4.1, acorn@npm:^8.5.0, acorn@npm:^8.8.1, acorn@npm:^8.9.0":
   version: 8.11.3
   resolution: "acorn@npm:8.11.3"
   bin:
@@ -11452,7 +11461,7 @@ __metadata:
     string-width: "npm:^7.2.0"
     stripe: "npm:^18.0.0"
     style-mod: "npm:^4.1.2"
-    terser: "npm:^5.36.0"
+    terser: "npm:^5.46.1"
     ts-node: "npm:^10.9.2"
     typescript: "npm:^5.6.3"
     typescript-eslint-language-service: "npm:^5.0.5"
@@ -14581,17 +14590,17 @@ __metadata:
   languageName: node
   linkType: hard
 
-"terser@npm:^5.36.0":
-  version: 5.36.0
-  resolution: "terser@npm:5.36.0"
+"terser@npm:^5.46.1":
+  version: 5.46.1
+  resolution: "terser@npm:5.46.1"
   dependencies:
     "@jridgewell/source-map": "npm:^0.3.3"
-    acorn: "npm:^8.8.2"
+    acorn: "npm:^8.15.0"
     commander: "npm:^2.20.0"
     source-map-support: "npm:~0.5.20"
   bin:
     terser: bin/terser
-  checksum: 10c0/f4ed2bead19f64789ddcfb85b7cef78f3942f967b8890c54f57d1e35bc7d547d551c6a4c32210bce6ba45b1c738314bbfac6acbc6c762a45cd171777d0c120d9
+  checksum: 10c0/45ba6566af976c518ff4e140250348d606761af822e23ea28d95b30fcf60fb69d3fabd93c6fafa4085d9fe31b67207e58b8480a64370b6cca07066c434101602
   languageName: node
   linkType: hard
 
