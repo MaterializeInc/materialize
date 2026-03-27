@@ -152,6 +152,7 @@ impl StateUpdate {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            pre_allocated_shards,
             txn_wal_shard,
             audit_log_updates,
             upper: _,
@@ -184,6 +185,8 @@ impl StateUpdate {
             StateUpdateKind::StorageCollectionMetadata,
         );
         let unfinalized_shards = from_batch(unfinalized_shards, StateUpdateKind::UnfinalizedShard);
+        let pre_allocated_shards =
+            from_batch(pre_allocated_shards, StateUpdateKind::PreAllocatedShard);
         let txn_wal_shard = from_batch(txn_wal_shard, StateUpdateKind::TxnWalShard);
         let audit_logs = from_batch(audit_log_updates, StateUpdateKind::AuditLog);
 
@@ -207,6 +210,7 @@ impl StateUpdate {
             .chain(system_privileges)
             .chain(storage_collection_metadata)
             .chain(unfinalized_shards)
+            .chain(pre_allocated_shards)
             .chain(txn_wal_shard)
             .chain(audit_logs)
     }
@@ -249,6 +253,7 @@ pub enum StateUpdateKind {
         proto::StorageCollectionMetadataValue,
     ),
     UnfinalizedShard(proto::UnfinalizedShardKey, ()),
+    PreAllocatedShard(proto::PreAllocatedShardKey, ()),
     TxnWalShard((), proto::TxnWalShardValue),
 }
 
@@ -281,6 +286,7 @@ impl StateUpdateKind {
                 Some(CollectionType::StorageCollectionMetadata)
             }
             StateUpdateKind::UnfinalizedShard(_, _) => Some(CollectionType::UnfinalizedShard),
+            StateUpdateKind::PreAllocatedShard(_, _) => Some(CollectionType::PreAllocatedShard),
             StateUpdateKind::TxnWalShard(_, _) => Some(CollectionType::TxnWalShard),
         }
     }
@@ -544,6 +550,12 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                     unfinalized_shard,
                 ))
             }
+            StateUpdateKind::PreAllocatedShard(key, value) => {
+                let pre_allocated_shard = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::PreAllocatedShard(
+                    pre_allocated_shard,
+                ))
+            }
             // Not exposed to higher layers.
             StateUpdateKind::Config(_, _)
             | StateUpdateKind::FenceToken(_)
@@ -678,6 +690,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::UnfinalizedShard(key, ()) => {
                 proto::StateUpdateKind::UnfinalizedShard(proto::UnfinalizedShard { key })
             }
+            StateUpdateKind::PreAllocatedShard(key, ()) => {
+                proto::StateUpdateKind::PreAllocatedShard(proto::PreAllocatedShard { key })
+            }
             StateUpdateKind::TxnWalShard((), value) => {
                 proto::StateUpdateKind::TxnWalShard(proto::TxnWalShard { value })
             }
@@ -752,6 +767,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             ) => StateUpdateKind::StorageCollectionMetadata(key, value),
             proto::StateUpdateKind::UnfinalizedShard(proto::UnfinalizedShard { key }) => {
                 StateUpdateKind::UnfinalizedShard(key, ())
+            }
+            proto::StateUpdateKind::PreAllocatedShard(proto::PreAllocatedShard { key }) => {
+                StateUpdateKind::PreAllocatedShard(key, ())
             }
             proto::StateUpdateKind::TxnWalShard(proto::TxnWalShard { value }) => {
                 StateUpdateKind::TxnWalShard((), value)

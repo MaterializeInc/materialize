@@ -707,6 +707,22 @@ pub struct UnfinalizedShardKey {
     Eq,
     PartialOrd,
     Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
+pub struct PreAllocatedShardKey {
+    pub shard: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
     Serialize,
     Deserialize,
     Arbitrary
@@ -2533,6 +2549,7 @@ pub enum StateUpdateKind {
     SystemPrivileges(SystemPrivileges),
     TxnWalShard(TxnWalShard),
     UnfinalizedShard(UnfinalizedShard),
+    PreAllocatedShard(PreAllocatedShard),
 }
 
 #[derive(
@@ -2886,6 +2903,21 @@ pub struct StorageCollectionMetadata {
 )]
 pub struct UnfinalizedShard {
     pub key: UnfinalizedShardKey,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Arbitrary
+)]
+pub struct PreAllocatedShard {
+    pub key: PreAllocatedShardKey,
 }
 
 #[derive(

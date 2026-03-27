@@ -1386,6 +1386,20 @@ where
         )
         .await?;
 
+        // Crash recovery: pre-allocated shards were pre-opened by the shard pool
+        // in a previous epoch but never claimed by a DDL operation (e.g., the
+        // process crashed between pre-opening and use). Move them to
+        // unfinalized_shards so finalize_shards_task will GC them.
+        let pre_allocated = txn.get_pre_allocated_shards();
+        if !pre_allocated.is_empty() {
+            info!(
+                ?pre_allocated,
+                "moving unclaimed pre-allocated shards to unfinalized for GC"
+            );
+            txn.insert_unfinalized_shards(pre_allocated.clone())?;
+            txn.remove_pre_allocated_shards(pre_allocated.clone());
+        }
+
         // All shards that belong to collections dropped in the last epoch are
         // eligible for finalization.
         //
@@ -1743,6 +1757,14 @@ where
             SHARD_POOL_ENABLED.get(config.config_set())
         };
 
+        // Flush newly pre-opened shards to the catalog for crash recovery tracking.
+        let pending_inserts = self.shard_pool.drain_pending_inserts();
+        if !pending_inserts.is_empty() {
+            debug!(count = pending_inserts.len(), "persisting pre-allocated shards to catalog");
+            txn.insert_pre_allocated_shards(pending_inserts)?;
+        }
+
+        let mut claimed_shards = BTreeSet::new();
         let mut pending = self.pending_pre_opened.lock().expect("lock poisoned");
         let new_mappings: BTreeMap<_, _> = ids_to_add
             .into_iter()
@@ -1751,6 +1773,7 @@ where
                     if let Some(pre_opened) = self.shard_pool.take() {
                         let shard_id = pre_opened.shard_id;
                         debug!(%id, %shard_id, "using pre-opened shard from pool");
+                        claimed_shards.insert(shard_id);
                         pending.insert(shard_id, pre_opened);
                         return (id, shard_id);
                     }
@@ -1759,6 +1782,11 @@ where
             })
             .collect();
         drop(pending);
+
+        // Remove claimed shards from the pre-allocated catalog collection.
+        if !claimed_shards.is_empty() {
+            txn.remove_pre_allocated_shards(claimed_shards);
+        }
 
         txn.insert_collection_metadata(new_mappings)?;
         txn.insert_collection_metadata(ids_to_register)?;

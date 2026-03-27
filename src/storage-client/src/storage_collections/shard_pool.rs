@@ -16,8 +16,17 @@
 //!
 //! The write handle still needs `RelationDesc` (the table schema), so it
 //! cannot be pre-opened and stays on the critical path.
+//!
+//! ## Crash Recovery
+//!
+//! Pre-opened shard IDs are tracked in a `pre_allocated_shards` catalog
+//! collection (same pattern as `unfinalized_shards`). On restart,
+//! `initialize_state` moves any unclaimed pre-allocated shards to
+//! `unfinalized_shards` for GC by `finalize_shards_task`. This prevents
+//! shard leaks when shards are pre-opened but the process crashes before
+//! they are claimed by a DDL operation.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
 
@@ -60,6 +69,9 @@ where
     T: TimelyTimestamp + Lattice + Codec64,
 {
     inner: Mutex<VecDeque<PreOpenedShard<T>>>,
+    /// Shard IDs that have been put into the pool but not yet persisted
+    /// to the catalog. Drained during `prepare_state` to batch catalog writes.
+    pending_catalog_inserts: Mutex<BTreeSet<ShardId>>,
     metrics: ShardPoolMetrics,
 }
 
@@ -71,6 +83,7 @@ where
     pub fn new(metrics: ShardPoolMetrics) -> Self {
         ShardPool {
             inner: Mutex::new(VecDeque::new()),
+            pending_catalog_inserts: Mutex::new(BTreeSet::new()),
             metrics,
         }
     }
@@ -93,11 +106,30 @@ where
 
     /// Returns a pre-opened shard to the pool.
     pub fn put(&self, shard: PreOpenedShard<T>) {
+        self.pending_catalog_inserts
+            .lock()
+            .expect("lock poisoned")
+            .insert(shard.shard_id);
         let mut inner = self.inner.lock().expect("lock poisoned");
         inner.push_back(shard);
         self.metrics
             .pool_size
             .set(u64::cast_from(inner.len()));
+    }
+
+    /// Drains shard IDs that have been added to the pool but not yet persisted
+    /// to the catalog. Called during `prepare_state` to batch catalog writes.
+    ///
+    /// # Atomicity
+    ///
+    /// The caller must ensure the returned shard IDs are persisted within the
+    /// same catalog transaction that claims or drops them. If the catalog
+    /// transaction fails, the in-memory pool state becomes stale, but that
+    /// is acceptable because a failed catalog transaction will halt the
+    /// process, and on restart `initialize_state` will move any unclaimed
+    /// pre-allocated shards to `unfinalized_shards` for GC.
+    pub fn drain_pending_inserts(&self) -> BTreeSet<ShardId> {
+        std::mem::take(&mut *self.pending_catalog_inserts.lock().expect("lock poisoned"))
     }
 
     /// Returns the current number of shards in the pool.
@@ -462,5 +494,39 @@ mod tests {
 
         pool.take();
         assert_eq!(pool.metrics.pool_size.get(), 0);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_drain_pending_inserts() {
+        let (_cache, client) = test_persist_client().await;
+        let epoch = NonZeroI64::new(1).unwrap();
+        let pool = ShardPool::<mz_repr::Timestamp>::new(test_metrics());
+
+        // Empty pool has no pending inserts.
+        assert!(pool.drain_pending_inserts().is_empty());
+
+        // Put two shards, both should appear in pending inserts.
+        let shard_a = pre_open_shard::<mz_repr::Timestamp>(&client, epoch)
+            .await
+            .expect("pre_open_shard");
+        let shard_b = pre_open_shard::<mz_repr::Timestamp>(&client, epoch)
+            .await
+            .expect("pre_open_shard");
+        let id_a = shard_a.shard_id;
+        let id_b = shard_b.shard_id;
+        pool.put(shard_a);
+        pool.put(shard_b);
+
+        let pending = pool.drain_pending_inserts();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.contains(&id_a));
+        assert!(pending.contains(&id_b));
+
+        // Drain is idempotent; second call returns empty.
+        assert!(pool.drain_pending_inserts().is_empty());
+
+        // Pool still has the shards.
+        assert_eq!(pool.len(), 2);
     }
 }

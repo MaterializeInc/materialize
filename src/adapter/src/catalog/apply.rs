@@ -343,6 +343,10 @@ impl CatalogState {
             StateUpdateKind::UnfinalizedShard(unfinalized_shard) => {
                 self.apply_unfinalized_shard_update(unfinalized_shard, diff, retractions);
             }
+            StateUpdateKind::PreAllocatedShard(_) => {
+                // Pre-allocated shards are managed entirely by the storage controller.
+                // No in-memory catalog state to update.
+            }
         }
 
         Ok(())
@@ -1458,7 +1462,8 @@ impl CatalogState {
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
+            | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::PreAllocatedShard(_) => Vec::new(),
         }
     }
 
@@ -2064,7 +2069,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::SourceReferences(_)
             | StateUpdateKind::AuditLog(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
-            | StateUpdateKind::UnfinalizedShard(_) => push_update(
+            | StateUpdateKind::UnfinalizedShard(_)
+            | StateUpdateKind::PreAllocatedShard(_) => push_update(
                 update,
                 diff,
                 &mut post_item_retractions,
@@ -2402,7 +2408,8 @@ impl ApplyState {
             | Comment(_)
             | AuditLog(_)
             | StorageCollectionMetadata(_)
-            | UnfinalizedShard(_) => Self::Updates(vec![update]),
+            | UnfinalizedShard(_)
+            | PreAllocatedShard(_) => Self::Updates(vec![update]),
         }
     }
 
