@@ -270,6 +270,7 @@ where
         SqlScalarType::UInt16 => (DataType::UInt16, "uint2"),
         SqlScalarType::UInt32 => (DataType::UInt32, "uint4"),
         SqlScalarType::UInt64 => (DataType::UInt64, "uint8"),
+        SqlScalarType::Oid => (DataType::UInt32, "oid"),
         SqlScalarType::Float32 => (DataType::Float32, "real"),
         SqlScalarType::Float64 => (DataType::Float64, "double"),
         SqlScalarType::Date => (DataType::Date32, "date"),
