@@ -24,7 +24,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker, ready};
 
-use differential_dataflow::containers::{Columnation, TimelyStack};
+use crate::columnation::ColumnationStack;
+use differential_dataflow::containers::Columnation;
 use futures_util::Stream;
 use futures_util::task::ArcWake;
 use timely::communication::{Pull, Push};
@@ -314,7 +315,8 @@ where
     }
 }
 
-impl<T, D> AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<D>>>>
+impl<T, D>
+    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<ColumnationStack<D>>>>
 where
     D: Clone + 'static + Columnation,
     T: Timestamp,
@@ -325,7 +327,7 @@ where
     /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
     pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2)
     where
-        TimelyStack<D>: PushInto<D2>,
+        ColumnationStack<D>: PushInto<D2>,
     {
         let should_yield = {
             let mut handle = self.inner.borrow_mut();

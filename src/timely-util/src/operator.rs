@@ -19,7 +19,7 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::containers::{Columnation, TimelyStack};
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder, Description};
@@ -38,6 +38,8 @@ use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 use timely::{Container, ContainerBuilder, PartialOrder};
+
+use crate::columnation::ColumnationStack;
 
 /// Extension methods for timely [`Stream`]s.
 pub trait StreamExt<G, C1>
@@ -183,7 +185,7 @@ where
         G::Timestamp: Lattice + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static;
 
@@ -195,7 +197,7 @@ where
         G::Timestamp: Lattice + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static;
 }
@@ -433,7 +435,7 @@ where
         G::Timestamp: Lattice + Ord + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static,
     {
@@ -493,7 +495,7 @@ where
         G::Timestamp: Lattice + Ord + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static,
     {
