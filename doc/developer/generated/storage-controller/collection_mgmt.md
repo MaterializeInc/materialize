@@ -1,6 +1,6 @@
 ---
 source: src/storage-controller/src/collection_mgmt.rs
-revision: 82d92a7fad
+revision: 8f136c6f83
 ---
 
 # storage-controller::collection_mgmt
