@@ -24,7 +24,7 @@ mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
 mz-sql-parser = { path = "../sql-parser" }
 open = "5.3.3"
-openssl-probe = "0.1.6"
+openssl-probe = "0.2.1"
 hyper = "1.4.1"
 reqwest = { version = "0.12.28", features = ["blocking", "json", "default-tls", "charset", "http2"], default-features = false }
 rpassword = "7.4.0"
