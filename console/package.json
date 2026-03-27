@@ -42,7 +42,7 @@
     "@emotion/styled": "^11.14.1",
     "@fontsource/roboto-mono": "^5.1.0",
     "@frontegg/react": "^7.2.0",
-    "@hookform/resolvers": "^3.9.1",
+    "@hookform/resolvers": "^5.2.2",
     "@intercom/messenger-js-sdk": "^0.0.14",
     "@juggle/resize-observer": "^3.4.0",
     "@lezer/common": "^1.2.3",
