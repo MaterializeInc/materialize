@@ -155,7 +155,7 @@
     "eslint-plugin-jest-formatting": "^3.1.0",
     "eslint-plugin-prettier": "^5.2.1",
     "eslint-plugin-react": "^7.37.5",
-    "eslint-plugin-react-compiler": "0.0.0-experimental-7670337-20240918",
+    "eslint-plugin-react-compiler": "0.0.0-experimental-9627644-20250520",
     "eslint-plugin-react-hooks": "^5.0.0",
     "eslint-plugin-react-refresh": "^0.4.14",
     "eslint-plugin-simple-import-sort": "^12.1.1",
