@@ -20,11 +20,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
 use differential_dataflow::Collection;
-use differential_dataflow::containers::TimelyStack;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::columnation::ColumnationStack;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, ScopeParent, StreamVec};
@@ -54,7 +54,7 @@ pub enum ProgressStatisticsUpdate {
 }
 
 pub type StackedCollection<G, T> =
-    Collection<G, TimelyStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
+    Collection<G, ColumnationStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {

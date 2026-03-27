@@ -17,7 +17,6 @@ use std::rc::Rc;
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::Hashable;
-use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -31,6 +30,7 @@ use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use mz_timely_util::columnation::ColumnationStack;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -59,7 +59,7 @@ mod pgcopy;
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
 pub fn copy_to<G, F>(
-    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
+    input_collection: StreamVec<G, Vec<ColumnationStack<((Row, ()), G::Timestamp, Diff)>>>,
     err_stream: StreamVec<G, (DataflowError, G::Timestamp, Diff)>,
     up_to: Antichain<G::Timestamp>,
     connection_details: S3UploadInfo,
@@ -297,7 +297,7 @@ fn render_upload_operator<G, T>(
     connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
-    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
+    input_collection: StreamVec<G, Vec<ColumnationStack<((Row, ()), G::Timestamp, Diff)>>>,
     up_to: Antichain<G::Timestamp>,
     start_stream: StreamVec<G, Result<(), String>>,
     params: CopyToParameters,
