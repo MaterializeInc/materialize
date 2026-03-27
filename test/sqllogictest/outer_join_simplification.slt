@@ -602,18 +602,17 @@ Explained Query:
                 Get l1 // { keys: "([0])" }
     cte l1 =
       TopK group_by=[#0{a}] limit=1 // { keys: "([0])" }
-        Distinct project=[#0{a}..=#4{u}] // { keys: "([0, 1, 2, 3, 4])" }
-          Union // { keys: "()" }
-            Map (null, null) // { keys: "()" }
-              Union // { keys: "()" }
-                Negate // { keys: "()" }
-                  Project (#0{a}..=#2{u}) // { keys: "()" }
-                    Get l0 // { keys: "()" }
-                ReadStorage materialize.public.foo_raw // { keys: "()" }
-            Project (#0{a}..=#2{u}, #0{a}, #3) // { keys: "()" }
-              Get l0 // { keys: "()" }
-            Project (#0{a}..=#2{u}, #0{a}, #2{u}) // { keys: "()" }
+        Union // { keys: "()" }
+          Map (null, null) // { keys: "()" }
+            Union // { keys: "()" }
+              Negate // { keys: "()" }
+                Project (#0{a}..=#2{u}) // { keys: "()" }
+                  Get l0 // { keys: "()" }
               ReadStorage materialize.public.foo_raw // { keys: "()" }
+          Project (#0{a}..=#2{u}, #0{a}, #3) // { keys: "()" }
+            Get l0 // { keys: "()" }
+          Project (#0{a}..=#2{u}, #0{a}, #2{u}) // { keys: "()" }
+            ReadStorage materialize.public.foo_raw // { keys: "()" }
   Return // { keys: "([0])" }
     Get l1 // { keys: "([0])" }
 
