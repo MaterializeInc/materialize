@@ -35,11 +35,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
 url = { version = "2.5.8", features = ["serde"] }
 walkdir = "2.5"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 zip = { version = "6.0.0", default-features = false, features=["deflate-flate2"]}
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-
 [features]
-default = ["workspace-hack"]
+default = []

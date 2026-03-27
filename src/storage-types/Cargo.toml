@@ -74,7 +74,6 @@ tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tracing = "0.1.44"
 url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 base64 = "0.22.1"
 iceberg = "0.7.0"
 iceberg-catalog-rest = "0.7.0"
@@ -90,7 +89,4 @@ mz-build-tools = { path = "../build-tools", default-features = false, features =
 prost-build = "0.14.3"
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = ["mz-build-tools/default"]

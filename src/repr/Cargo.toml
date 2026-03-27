@@ -36,7 +36,7 @@ columnar = "0.11.1"
 columnation = "0.1.2"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 compact_bytes = "0.2.1"
-dec = "0.4.8"
+dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = "0.20.0"
 enum-kinds = "0.5.1"
 hex = "0.4.3"
@@ -80,7 +80,6 @@ tracing = { version = "0.1.44" }
 
 # for the tracing feature
 tracing-subscriber = { version = "0.3.23", default-features = false, optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 bincode = "1.3.3"
@@ -99,9 +98,5 @@ default = [
     "mz-persist-types/default",
     "mz-pgtz/default",
     "mz-proto/default",
-    "workspace-hack",
-]
+    ]
 tracing = ["tracing-subscriber"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

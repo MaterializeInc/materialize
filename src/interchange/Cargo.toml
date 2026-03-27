@@ -38,7 +38,6 @@ timely = "0.27.0"
 tokio = { version = "1.49.0", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
 tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["serde"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio"] }
@@ -49,7 +48,4 @@ mz-build-tools = { path = "../build-tools", default-features = false, features =
 prost-build = "0.14.3"
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = ["mz-build-tools/default"]

@@ -24,7 +24,6 @@ thiserror = "2.0.18"
 tracing = "0.1.44"
 uncased = "0.9.7"
 unicode-width = { version = "0.2.2", optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["assert"] }
@@ -39,8 +38,5 @@ mz-ore-build = { path = "../ore-build", default-features = false }
 mz-walkabout = { path = "../walkabout", default-features = false }
 
 [features]
-default = ["workspace-hack", "mz-sql-lexer/workspace-hack"]
+default = []
 test = ["datadriven", "unicode-width"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

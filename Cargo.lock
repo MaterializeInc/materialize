@@ -5521,7 +5521,6 @@ dependencies = [
  "toml_edit 0.22.26",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5621,7 +5620,6 @@ dependencies = [
  "turmoil",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5636,7 +5634,6 @@ dependencies = [
  "serde_json",
  "timely",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5647,7 +5644,6 @@ dependencies = [
  "mz-prof",
  "mz-prof-http",
  "tikv-jemallocator",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5655,7 +5651,6 @@ name = "mz-alloc-default"
 version = "0.0.0"
 dependencies = [
  "mz-alloc",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5675,7 +5670,6 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5689,7 +5683,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5704,7 +5697,6 @@ dependencies = [
  "proptest-derive",
  "serde",
  "static_assertions",
- "workspace-hack",
  "zeroize",
 ]
 
@@ -5725,7 +5717,6 @@ dependencies = [
  "tokio-postgres",
  "tracing",
  "url",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5749,7 +5740,6 @@ dependencies = [
  "snap",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5768,7 +5758,6 @@ dependencies = [
  "mz-secrets",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5792,7 +5781,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5846,7 +5834,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5857,7 +5844,6 @@ dependencies = [
  "compile-time-run",
  "hex",
  "semver",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5867,7 +5853,6 @@ dependencies = [
  "cfg-if",
  "protobuf-src",
  "which",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5933,7 +5918,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5961,7 +5945,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -5986,7 +5969,6 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "similar-asserts",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6010,7 +5992,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6026,15 +6007,11 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "url",
- "workspace-hack",
 ]
 
 [[package]]
 name = "mz-cloud-provider"
 version = "0.1.0"
-dependencies = [
- "workspace-hack",
-]
 
 [[package]]
 name = "mz-cloud-resources"
@@ -6057,7 +6034,6 @@ dependencies = [
  "serde_json",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6080,7 +6056,6 @@ dependencies = [
  "tracing-subscriber",
  "turmoil",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6094,7 +6069,6 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6136,7 +6110,6 @@ dependencies = [
  "tokio",
  "tower 0.5.3",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6179,7 +6152,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6216,7 +6188,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6235,7 +6206,6 @@ dependencies = [
  "serde",
  "timely",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6272,7 +6242,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6282,7 +6251,6 @@ dependencies = [
  "mz-cluster-client",
  "mz-compute-types",
  "mz-dyncfg",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6314,7 +6282,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "walkdir",
- "workspace-hack",
  "zip",
 ]
 
@@ -6339,7 +6306,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6351,7 +6317,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6366,7 +6331,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6382,7 +6346,6 @@ dependencies = [
  "mz-ore",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6397,7 +6360,6 @@ dependencies = [
  "mz-persist-client",
  "mz-storage-types",
  "mz-txn-wal",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6529,7 +6491,6 @@ dependencies = [
  "tungstenite",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6595,7 +6556,6 @@ dependencies = [
  "uncased",
  "unicode-normalization",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6603,7 +6563,6 @@ name = "mz-expr-derive"
 version = "0.0.0"
 dependencies = [
  "mz-expr-derive-impl",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6617,7 +6576,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6630,7 +6588,6 @@ dependencies = [
  "mz-repr",
  "proc-macro2",
  "syn 2.0.114",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6647,7 +6604,6 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6687,7 +6643,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6698,7 +6653,6 @@ dependencies = [
  "foundationdb",
  "mz-ore",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6726,7 +6680,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6743,7 +6696,6 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6768,7 +6720,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6792,7 +6743,6 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6825,7 +6775,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6860,7 +6809,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6880,7 +6828,6 @@ dependencies = [
  "tokio",
  "utoipa",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6895,7 +6842,6 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6905,7 +6851,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6924,7 +6869,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower-lsp",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6934,7 +6878,6 @@ dependencies = [
  "custom-labels",
  "mz-clusterd",
  "mz-environmentd",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6943,7 +6886,6 @@ version = "0.0.0"
 dependencies = [
  "reqwest",
  "serde",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6957,7 +6899,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -6974,7 +6915,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7011,7 +6951,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7026,7 +6965,6 @@ dependencies = [
  "sha2",
  "tar",
  "walkdir",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7045,7 +6983,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7060,7 +6997,6 @@ dependencies = [
  "futures-core",
  "mz-ore",
  "serde",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7087,7 +7023,6 @@ dependencies = [
  "sha2",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7115,7 +7050,6 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7141,7 +7075,6 @@ dependencies = [
  "tracing",
  "tracing-capture",
  "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7183,7 +7116,6 @@ dependencies = [
  "tracing",
  "urlencoding",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7250,16 +7182,12 @@ dependencies = [
  "turmoil",
  "url",
  "uuid",
- "workspace-hack",
  "yansi",
 ]
 
 [[package]]
 name = "mz-ore-build"
 version = "0.1.0"
-dependencies = [
- "workspace-hack",
-]
 
 [[package]]
 name = "mz-ore-proc"
@@ -7269,7 +7197,6 @@ dependencies = [
  "quote",
  "syn 2.0.114",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7328,7 +7255,6 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7380,7 +7306,6 @@ dependencies = [
  "tonic-prost-build",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7390,7 +7315,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7416,7 +7340,6 @@ dependencies = [
  "timely",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7431,7 +7354,6 @@ dependencies = [
  "mz-repr",
  "proptest",
  "serde",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7449,15 +7371,11 @@ dependencies = [
  "mz-repr",
  "postgres-types",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
 name = "mz-pgrepr-consts"
 version = "0.0.0"
-dependencies = [
- "workspace-hack",
-]
 
 [[package]]
 name = "mz-pgtest"
@@ -7472,7 +7390,6 @@ dependencies = [
  "postgres-protocol",
  "serde",
  "serde_json",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7490,7 +7407,6 @@ dependencies = [
  "phf_codegen 0.13.1",
  "serde",
  "uncased",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7528,7 +7444,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7546,7 +7461,6 @@ dependencies = [
  "tokio-openssl",
  "tokio-postgres",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7560,7 +7474,6 @@ dependencies = [
  "prometheus",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7590,7 +7503,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7611,7 +7523,6 @@ dependencies = [
  "tikv-jemalloc-ctl",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7639,7 +7550,6 @@ dependencies = [
  "serde",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7663,7 +7573,6 @@ dependencies = [
  "serde_json",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7674,7 +7583,6 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "postgres",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7732,7 +7640,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7746,7 +7653,6 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "proc-macro2",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7768,7 +7674,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7779,7 +7684,6 @@ dependencies = [
  "mz-ore",
  "serde",
  "uncased",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7798,7 +7702,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7811,7 +7714,6 @@ dependencies = [
  "mz-repr",
  "tokio",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7826,7 +7728,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7851,7 +7752,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7884,7 +7784,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "turmoil",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7965,7 +7864,6 @@ dependencies = [
  "tracing-subscriber",
  "uncased",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -7980,7 +7878,6 @@ dependencies = [
  "phf_codegen 0.13.1",
  "serde",
  "uncased",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8004,7 +7901,6 @@ dependencies = [
  "tracing",
  "uncased",
  "unicode-width 0.2.2",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8017,7 +7913,6 @@ dependencies = [
  "mz-sql-parser",
  "pretty",
  "thiserror 2.0.18",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8057,7 +7952,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8111,7 +8005,6 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8135,7 +8028,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "workspace-hack",
  "zeroize",
 ]
 
@@ -8223,7 +8115,6 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8260,7 +8151,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8301,7 +8191,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8355,7 +8244,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8428,7 +8316,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8444,7 +8331,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8526,7 +8412,6 @@ dependencies = [
  "url",
  "uuid",
  "walkdir",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8552,7 +8437,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8577,7 +8461,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8592,7 +8475,6 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8603,7 +8485,6 @@ dependencies = [
  "serde",
  "tracing",
  "tracing-subscriber",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8631,7 +8512,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8659,7 +8539,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -8674,7 +8553,6 @@ dependencies = [
  "quote",
  "syn 2.0.114",
  "tempfile",
- "workspace-hack",
 ]
 
 [[package]]
@@ -9459,7 +9337,6 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "workspace-hack",
 ]
 
 [[package]]
@@ -13691,181 +13568,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags 2.11.0",
-]
-
-[[package]]
-name = "workspace-hack"
-version = "0.0.0"
-dependencies = [
- "ahash 0.8.12",
- "aho-corasick",
- "arrayvec 0.7.6",
- "arrow",
- "arrow-array",
- "arrow-cast",
- "arrow-data",
- "arrow-schema",
- "async-compression",
- "aws-config",
- "aws-credential-types",
- "aws-runtime",
- "aws-sdk-sts",
- "aws-sigv4",
- "aws-smithy-async",
- "aws-smithy-http 0.63.3",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "axum",
- "axum-core",
- "base16ct",
- "bindgen",
- "bit-set",
- "bit-vec",
- "bitflags 2.11.0",
- "brotli",
- "bstr",
- "bytemuck",
- "bytes",
- "cast",
- "cc",
- "chrono",
- "clang-sys",
- "clap",
- "clap_builder",
- "concurrent-queue",
- "criterion",
- "crossbeam-deque",
- "crossbeam-epoch",
- "crossbeam-queue",
- "crossbeam-utils",
- "csv-async",
- "darling_core 0.20.11",
- "dec",
- "deranged",
- "digest",
- "either",
- "event-listener 5.4.1",
- "event-listener-strategy",
- "fastrand 2.3.0",
- "flate2",
- "form_urlencoded",
- "futures-channel",
- "futures-core",
- "futures-executor",
- "futures-io",
- "futures-sink",
- "futures-task",
- "futures-util",
- "getrandom 0.2.16",
- "getrandom 0.3.3",
- "half 2.6.0",
- "hashbrown 0.14.5",
- "hashbrown 0.15.3",
- "hashbrown 0.16.1",
- "hyper 0.14.32",
- "hyper 1.8.1",
- "hyper-util",
- "idna",
- "indexmap 2.11.4",
- "insta",
- "itertools 0.13.0",
- "jiff",
- "libc",
- "libz-sys",
- "linux-raw-sys 0.4.15",
- "linux-raw-sys 0.9.4",
- "lock_api",
- "log",
- "lru 0.16.3",
- "memchr",
- "minimal-lexical",
- "miniz_oxide",
- "moka",
- "mysql_async",
- "mysql_common",
- "native-tls",
- "nix 0.30.1",
- "nom",
- "num-bigint",
- "num-integer",
- "num-traits",
- "once_cell",
- "openssl",
- "openssl-sys",
- "parking_lot",
- "parquet",
- "percent-encoding",
- "phf 0.13.1",
- "phf_shared 0.11.3",
- "phf_shared 0.13.1",
- "portable-atomic",
- "postgres",
- "postgres-types",
- "predicates 3.1.4",
- "prettyplease",
- "proc-macro2",
- "proptest",
- "proptest-derive",
- "prost",
- "prost-build",
- "prost-reflect",
- "prost-types",
- "quote",
- "rand 0.8.5",
- "rand_chacha 0.9.0",
- "rand_core 0.6.4",
- "rdkafka-sys",
- "regex",
- "regex-automata",
- "regex-syntax",
- "reqwest",
- "rustix 0.38.44",
- "rustix 1.0.7",
- "schemars",
- "scopeguard",
- "security-framework",
- "semver",
- "serde",
- "serde_core",
- "serde_json",
- "sha2",
- "simd-adler32",
- "similar",
- "slab",
- "smallvec",
- "socket2 0.5.10",
- "spin 0.10.0",
- "subtle",
- "syn 1.0.109",
- "syn 2.0.114",
- "time",
- "time-macros",
- "timely",
- "tokio",
- "tokio-postgres",
- "tokio-stream",
- "tokio-util",
- "toml_datetime",
- "toml_edit 0.22.26",
- "tonic",
- "tower 0.5.3",
- "tower-http",
- "tracing",
- "tracing-core",
- "tracing-subscriber",
- "tungstenite",
- "twox-hash",
- "uncased",
- "unicode-bidi",
- "unicode-normalization",
- "url",
- "uuid",
- "zeroize",
- "zip",
- "zstd",
- "zstd-safe",
- "zstd-sys",
 ]
 
 [[package]]

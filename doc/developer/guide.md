@@ -418,7 +418,6 @@ Linting requires the following tools and Cargo packages to be installed:
 * helm-docs (`brew install norwoodj/tap/helm-docs`)
 * trufflehog (`brew install trufflehog`)
 * cargo-about (`cargo install cargo-about`)
-* cargo-hakari (`cargo install cargo-hakari`)
 * cargo-deplint (`cargo install cargo-deplint`)
 * cargo-deny (`cargo install cargo-deny`)
 
@@ -478,25 +477,6 @@ specifying the `--roots` flag with a comma separated list of crates:
 ```shell
 bin/crate-diagram --roots mz-sql,mz-dataflow
 ```
-
-#### `workspace-hack`
-
-The [`workspace-hack`](../../src/workspace-hack/) crate speeds up rebuilds by
-ensuring that all crates use the same features of all transitive dependencies in
-the graph. This prevents Cargo from recompiling huge chunks of the dependency
-graph when you move between crates in the workspace. For details, see the
-[hakari documentation].
-
-If you add or remove dependencies on crates, you will likely need to regenerate
-the `workspace-hack` crate. You can do this by running:
-
-```
-cargo install --locked cargo-hakari
-cargo hakari generate
-cargo hakari manage-deps
-```
-
-CI will enforce that the `workspace-hack` crate is kept up to date.
 
 ## Other repositories
 
@@ -643,7 +623,6 @@ fpath=(/path/to/materialize/misc/completions/zsh $fpath)
 [Docker Compose]: https://docs.docker.com/compose/
 [github-https]: https://help.github.com/en/github/authenticating-to-github/creating-a-personal-access-token-for-the-command-line
 [graphviz]: https://graphviz.org/
-[hakari documentation]: https://docs.rs/cargo-hakari/latest/cargo_hakari/about/index.html
 [Homebrew]: https://brew.sh
 [forked-cockroach-tap]: https://github.com/materializeInc/homebrew-cockroach
 [Kubernetes]: https://kubernetes.io

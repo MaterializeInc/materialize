@@ -13,7 +13,7 @@ A lightweight utility crate for Materialize build scripts, kept separate from `m
 
 ## Dependencies
 
-The crate has no substantive runtime dependencies beyond the workspace-hack shim; it is intentionally minimal so it compiles quickly as a build-script dependency.
+The crate has no substantive runtime dependencies; it is intentionally minimal so it compiles quickly as a build-script dependency.
 
 ## Consumers
 

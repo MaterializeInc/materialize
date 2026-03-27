@@ -21,7 +21,6 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.149"
 tracing = "0.1.43"
 url = "2.5.7"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
@@ -31,7 +30,6 @@ serde_json = "1.0"
 workspace = true
 
 [features]
-default = ["workspace-hack"]
+default = []
 
 [package.metadata.cargo-udeps.ignore]
-normal = ["mz-server-core", "workspace-hack"]

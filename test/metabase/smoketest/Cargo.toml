@@ -17,7 +17,3 @@ mz-ore = { path = "../../../src/ore", features = ["network", "async", "test"] }
 tokio = { version = "1.49.0", features = ["macros"] }
 tokio-postgres = { version = "0.7.15" }
 tracing = "0.1.44"
-workspace-hack = { version = "0.0.0", path = "../../../src/workspace-hack" }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

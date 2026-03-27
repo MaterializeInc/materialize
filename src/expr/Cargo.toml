@@ -71,7 +71,6 @@ unicode-normalization = "0.1.25"
 uuid = { version = "1.19.0", features = ["v5"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 smallvec = { version = "1.15.1" }
 
 [dev-dependencies]
@@ -89,7 +88,4 @@ mz-build-tools = { path = "../build-tools", default-features = false, features =
 prost-build = "0.14.3"
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = ["mz-build-tools/default"]

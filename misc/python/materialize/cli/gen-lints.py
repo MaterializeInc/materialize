@@ -223,7 +223,7 @@ MESSAGE_LINT_MISSING = (
 )
 MESSAGE_LINT_INHERIT = "The lint section in {} does not inherit from the workspace, "
 
-EXCLUDE_CRATES = ["workspace-hack"]
+EXCLUDE_CRATES: list[str] = []
 
 CHECK_CFGS = "stamped, coverage, nightly_doc_features, release, tokio_unstable"
 

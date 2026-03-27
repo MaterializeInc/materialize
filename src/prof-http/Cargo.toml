@@ -29,14 +29,13 @@ pprof_util = "0.8.2"
 serde = { version = "1.0.219", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["time"] }
 tracing = { version = "0.1.44", optional = true }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 anyhow = "1.0.102"
 mz-npm = { path = "../npm", default-features = false }
 
 [features]
-default = ["workspace-hack"]
+default = []
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
 # request rather than compiled into the binary. This vastly speeds up the
 # iteration cycle when developing the web UI.
@@ -49,4 +48,3 @@ jemalloc = ["mz-prof/jemalloc", "jemalloc_pprof"]
 
 [package.metadata.cargo-udeps.ignore]
 # "bytesize" not used on linux
-normal = ["bytesize", "workspace-hack"]

@@ -28,10 +28,6 @@ tokio = "1.49.0"
 tokio-stream = "0.1.18"
 tracing = "0.1.44"
 zeroize = { version = "1.8.2", features = ["serde"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
 
 [features]
-default = ["workspace-hack"]
+default = []

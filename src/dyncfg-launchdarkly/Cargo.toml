@@ -20,10 +20,6 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 tokio = { version = "1.49.0", default-features = false }
 tracing = "0.1.44"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
 
 [features]
-default = ["workspace-hack"]
+default = []

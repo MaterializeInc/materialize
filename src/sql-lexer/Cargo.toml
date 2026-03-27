@@ -11,7 +11,6 @@ workspace = true
 
 [dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 serde = { version = "1.0.219", features = ["derive"] }
 phf = { version = "0.13.1", features = ["uncased"] }
 uncased = "0.9.7"
@@ -28,7 +27,4 @@ phf_codegen = "0.13.1"
 uncased = "0.9.7"
 
 [features]
-default = ["workspace-hack", "mz-ore/workspace-hack"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
+default = []

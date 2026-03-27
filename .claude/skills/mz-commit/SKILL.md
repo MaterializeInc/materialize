@@ -19,7 +19,6 @@ Before committing, run these and fix any warnings:
 1. `bin/fmt` (formats `.rs`, `.py`, and `.proto` files)
 2. `bin/lint` (can error if tools are missing; use `bin/ci-builder run stable bin/lint` as an alternative)
 3. `cargo clippy --all-targets -- -D warnings`
-4. `cargo hakari generate` (only needed when dependencies changed)
 
 Do not manually update `*.snap` files.
 Use `cargo test` followed by `cargo insta accept` to update snapshot files.

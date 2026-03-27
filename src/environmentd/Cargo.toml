@@ -129,7 +129,6 @@ tracing-subscriber = "0.3.23"
 tungstenite = { version = "0.28.0" }
 url = "2.5.8"
 uuid = "1.19.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2.1.2"
@@ -163,7 +162,7 @@ serde_json = "1.0.149"
 serde_urlencoded = "0.7.1"
 similar-asserts = "1.7"
 timely = "0.27.0"
-tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4"] }
+tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4", "with-serde_json-1"] }
 
 [build-dependencies]
 anyhow = "1.0.102"
@@ -171,7 +170,7 @@ cc = "1.2.57"
 mz-npm = { path = "../npm" }
 
 [features]
-default = ["tokio-console", "mz-alloc-default", "workspace-hack"]
+default = ["tokio-console", "mz-alloc-default"]
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
 # request rather than compiled into the binary. This vastly speeds up the
 # iteration cycle when developing the web UI.
@@ -197,4 +196,4 @@ foundationdb = ["mz-adapter/foundationdb", "mz-persist-client/foundationdb"]
 
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.
-normal = ["mz-alloc-default", "sysctl", "workspace-hack"]
+normal = ["mz-alloc-default", "sysctl"]

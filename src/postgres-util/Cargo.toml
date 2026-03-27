@@ -37,10 +37,9 @@ thiserror = "2.0.18"
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync"] }
 tokio-postgres = { version = "0.7.15" }
 tracing = "0.1.44"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack", "replication", "schemas", "tunnel"]
+default = ["mz-build-tools/default", "replication", "schemas", "tunnel"]
 replication = ["tunnel"]
 schemas = ["prost", "serde", "proptest", "mz-proto", "tunnel"]
 tunnel = [
@@ -55,6 +54,3 @@ tunnel = [
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.14.3"
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

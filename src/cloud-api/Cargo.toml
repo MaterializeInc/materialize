@@ -19,10 +19,6 @@ thiserror = "2.0.18"
 tokio = "1.49.0"
 mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
 
 [features]
-default = ["workspace-hack"]
+default = []

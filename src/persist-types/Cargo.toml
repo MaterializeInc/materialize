@@ -20,7 +20,7 @@ hex = "0.4.3"
 itertools = "0.14.0"
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }
 mz-proto = { path = "../proto", default-features = false }
-parquet = { version = "57", default-features = false, features = ["arrow"] }
+parquet = { version = "57", default-features = false, features = ["arrow", "flate2", "flate2-zlib-rs"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
@@ -29,7 +29,6 @@ serde_json = { version = "1.0.149" }
 timely = "0.27.0"
 tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["v4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
@@ -38,8 +37,5 @@ proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 prost-build = "0.14.3"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
-
 [features]
-default = ["mz-build-tools/default", "mz-proto/default", "workspace-hack"]
+default = ["mz-build-tools/default", "mz-proto/default"]

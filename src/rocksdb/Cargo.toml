@@ -28,14 +28,10 @@ tracing = "0.1.44"
 # https://github.com/lz4/lz4/blob/dev/LICENSE
 # https://github.com/facebook/zstd
 rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
-default = ["workspace-hack"]
+default = []
 
 [dev-dependencies]
 tempfile = "3.23.0"
 prometheus = { version = "0.14.0", default-features = false }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]

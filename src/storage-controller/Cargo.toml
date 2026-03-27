@@ -44,10 +44,6 @@ tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tokio-stream = "0.1.18"
 tracing = "0.1.44"
 uuid = "1.19.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
 
 [features]
-default = ["workspace-hack"]
+default = []

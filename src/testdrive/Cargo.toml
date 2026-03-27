@@ -83,7 +83,6 @@ tonic-prost = "0.14.5"
 url = "2.5.8"
 uuid = "1.19.0"
 walkdir = "2.5.0"
-workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
@@ -91,8 +90,5 @@ prost-build = "0.14.3"
 tonic-prost-build = "0.14.5"
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["mz-build-tools/default"]
 foundationdb = ["mz-persist-client/foundationdb"]
-
-[package.metadata.cargo-udeps.ignore]
-normal = ["workspace-hack"]
