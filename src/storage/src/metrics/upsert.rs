@@ -35,15 +35,16 @@ pub(crate) struct UpsertMetricDefs {
     pub(crate) merge_snapshot_updates: IntCounterVec,
     pub(crate) merge_snapshot_inserts: IntCounterVec,
     pub(crate) merge_snapshot_deletes: IntCounterVec,
-    pub(crate) upsert_inserts: IntCounterVec,
-    pub(crate) upsert_updates: IntCounterVec,
-    pub(crate) upsert_deletes: IntCounterVec,
     pub(crate) multi_get_latency: HistogramVec,
     pub(crate) multi_get_size: IntCounterVec,
     pub(crate) multi_get_result_count: IntCounterVec,
     pub(crate) multi_get_result_bytes: IntCounterVec,
-    pub(crate) multi_put_latency: HistogramVec,
-    pub(crate) multi_put_size: IntCounterVec,
+
+    // These are used by `stash`.
+    pub(crate) stash_stage_latency: HistogramVec,
+    pub(crate) stash_stage_size: IntCounterVec,
+    pub(crate) stash_drain_latency: HistogramVec,
+    pub(crate) stash_drain_size: IntCounterVec,
 
     // These are used by `rocksdb`.
     pub(crate) rocksdb_multi_get_latency: HistogramVec,
@@ -121,21 +122,6 @@ impl UpsertMetricDefs {
                     for this source.",
                 var_labels: ["source_id", "worker_id"],
             )),
-            upsert_inserts: registry.register(metric!(
-                name: "mz_storage_upsert_inserts_total",
-                help: "The number of inserts done by the upsert operator",
-                var_labels: ["source_id", "worker_id"],
-            )),
-            upsert_updates: registry.register(metric!(
-                name: "mz_storage_upsert_updates_total",
-                help: "The number of updates done by the upsert operator",
-                var_labels: ["source_id", "worker_id"],
-            )),
-            upsert_deletes: registry.register(metric!(
-                name: "mz_storage_upsert_deletes_total",
-                help: "The number of deletes done by the upsert operator.",
-                var_labels: ["source_id", "worker_id"],
-            )),
             multi_get_latency: registry.register(metric!(
                 name: "mz_storage_upsert_multi_get_latency",
                 help: "The latencies, in fractional seconds, \
@@ -167,21 +153,28 @@ impl UpsertMetricDefs {
                     metrics about sub-batches.",
                 var_labels: ["source_id", "worker_id"],
             )),
-            multi_put_latency: registry.register(metric!(
-                name: "mz_storage_upsert_multi_put_latency",
-                help: "The latencies, in fractional seconds, \
-                    of getting values into the upsert state for this source. \
-                    Specific implementations of upsert state may have more detailed \
-                    metrics about sub-batches.",
+            stash_stage_latency: registry.register(metric!(
+                name: "mz_storage_upsert_stash_stage_latency",
+                help: "The latency, in fractional seconds, of staging updates into the \
+                    upsert stash for this source.",
                 var_labels: ["source_id"],
                 buckets: histogram_seconds_buckets(0.000_500, 32.0),
             )),
-            multi_put_size: registry.register(metric!(
-                name: "mz_storage_upsert_multi_put_size_total",
-                help: "The batch size, \
-                    of getting values into the upsert state for this source. \
-                    Specific implementations of upsert state may have more detailed \
-                    metrics about sub-batches.",
+            stash_stage_size: registry.register(metric!(
+                name: "mz_storage_upsert_stash_stage_size_total",
+                help: "The number of updates staged into the upsert stash for this source.",
+                var_labels: ["source_id", "worker_id"],
+            )),
+            stash_drain_latency: registry.register(metric!(
+                name: "mz_storage_upsert_stash_drain_latency",
+                help: "The latency, in fractional seconds, of draining updates from the \
+                    upsert stash for this source.",
+                var_labels: ["source_id"],
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            stash_drain_size: registry.register(metric!(
+                name: "mz_storage_upsert_stash_drain_size_total",
+                help: "The number of updates drained from the upsert stash for this source.",
                 var_labels: ["source_id", "worker_id"],
             )),
             shared,
@@ -297,7 +290,8 @@ impl UpsertMetricDefs {
 pub(crate) struct UpsertSharedMetrics {
     pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<Vec<String>>,
     pub(crate) multi_get_latency: DeleteOnDropHistogram<Vec<String>>,
-    pub(crate) multi_put_latency: DeleteOnDropHistogram<Vec<String>>,
+    pub(crate) stash_stage_latency: DeleteOnDropHistogram<Vec<String>>,
+    pub(crate) stash_drain_latency: DeleteOnDropHistogram<Vec<String>>,
 }
 
 impl UpsertSharedMetrics {
@@ -311,8 +305,11 @@ impl UpsertSharedMetrics {
             multi_get_latency: metrics
                 .multi_get_latency
                 .get_delete_on_drop_metric(vec![source_id.clone()]),
-            multi_put_latency: metrics
-                .multi_put_latency
+            stash_stage_latency: metrics
+                .stash_stage_latency
+                .get_delete_on_drop_metric(vec![source_id.clone()]),
+            stash_drain_latency: metrics
+                .stash_drain_latency
                 .get_delete_on_drop_metric(vec![source_id.clone()]),
         }
     }
@@ -363,13 +360,11 @@ pub struct UpsertMetrics {
     pub(crate) merge_snapshot_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) merge_snapshot_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) upsert_inserts: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) upsert_updates: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) upsert_deletes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) multi_get_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_bytes: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub(crate) multi_get_result_count: DeleteOnDropCounter<AtomicU64, Vec<String>>,
-    pub(crate) multi_put_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) stash_stage_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub(crate) stash_drain_size: DeleteOnDropCounter<AtomicU64, Vec<String>>,
 
     pub(crate) shared: Arc<UpsertSharedMetrics>,
     pub(crate) rocksdb_shared: Arc<mz_rocksdb::RocksDBSharedMetrics>,
@@ -408,15 +403,6 @@ impl UpsertMetrics {
             merge_snapshot_deletes: defs
                 .merge_snapshot_deletes
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            upsert_inserts: defs
-                .upsert_inserts
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            upsert_updates: defs
-                .upsert_updates
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            upsert_deletes: defs
-                .upsert_deletes
-                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
             multi_get_size: defs
                 .multi_get_size
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
@@ -426,8 +412,11 @@ impl UpsertMetrics {
             multi_get_result_bytes: defs
                 .multi_get_result_bytes
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
-            multi_put_size: defs
-                .multi_put_size
+            stash_stage_size: defs
+                .stash_stage_size
+                .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
+            stash_drain_size: defs
+                .stash_drain_size
                 .get_delete_on_drop_metric(vec![source_id_s.clone(), worker_id.clone()]),
 
             shared: defs.shared(&source_id),
