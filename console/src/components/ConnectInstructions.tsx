@@ -20,20 +20,35 @@ import TerminalIcon from "~/svg/Terminal";
 
 import { CopyableBox, TabbedCodeBlock } from "./copyableComponents";
 
+export interface ConnectInstructionsProps extends BoxProps {
+  /** The user string to display. Falls back to user.email if not provided. */
+  userStr?: string;
+  /** Frontegg user object. Required for cloud mode. */
+  user?: User;
+  /** Override the environmentd address (host:port). */
+  environmentdAddress?: string;
+  /** Override the query params in the psql connection string. */
+  psqlQueryParams?: string;
+}
+
 const ConnectInstructions = ({
   user,
   ...props
-}: BoxProps & { userStr: string | undefined; user: User }): JSX.Element => {
+}: ConnectInstructionsProps): JSX.Element => {
   const [currentEnvironment] = useAtom(currentEnvironmentState);
   const { clusterName } = useParams<ClusterDetailParams>();
 
-  if (!currentEnvironment || currentEnvironment.state !== "enabled") {
+  const envAddress =
+    props.environmentdAddress ??
+    (currentEnvironment?.state === "enabled"
+      ? currentEnvironment.sqlAddress
+      : undefined);
+
+  if (!envAddress) {
     return <Spinner />;
   }
 
-  const userStr = props.userStr || user.email;
-
-  const environmentdAddress = currentEnvironment.sqlAddress;
+  const userStr = props.userStr || user?.email || "";
 
   const defaultClusterOptionString = clusterName
     ? `&options=--cluster%3D${clusterName}`
@@ -43,11 +58,14 @@ const ConnectInstructions = ({
   // attacks, but that mode requires specifying `sslrootcert=/path/to/cabundle`,
   // and that path varies by platform. So instead we use `require`, which is
   // at least better than the default of `prefer`.
+  const queryParams =
+    props.psqlQueryParams ?? `sslmode=require${defaultClusterOptionString}`;
+
   const psqlCopyString = `psql "postgres://${encodeURIComponent(
     userStr,
-  )}@${environmentdAddress}/materialize?sslmode=require${defaultClusterOptionString}"`;
+  )}@${envAddress}/materialize?${queryParams}"`;
 
-  const [host, port] = environmentdAddress.split(":");
+  const [host, port] = envAddress.split(":");
   return (
     <TabbedCodeBlock
       data-testid="connection-options"
