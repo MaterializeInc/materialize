@@ -12,13 +12,11 @@
 use std::marker::PhantomData;
 
 use differential_dataflow::Hashable;
-use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::implementations::merge_batcher::container::ColInternalMerger;
 use differential_dataflow::trace::{Batcher, Builder, Description};
+use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker, ColumnationStack};
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
@@ -194,8 +192,8 @@ where
         }
     }
 
-    /// Reveal the contents of the `MergeBatcher`, returning a vector of `TimelyStack`s.
-    fn done(mut self) -> Vec<TimelyStack<(D, T, R)>> {
+    /// Reveal the contents of the `MergeBatcher`, returning a vector of `ColumnationStack`s.
+    fn done(mut self) -> Vec<ColumnationStack<(D, T, R)>> {
         self.inner.seal::<CapturingBuilder<_, _>>(Antichain::new())
     }
 }
