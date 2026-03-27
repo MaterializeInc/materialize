@@ -50,7 +50,7 @@
     "@materializeinc/sql-lexer": "^26.16.0",
     "@materializeinc/sql-pretty": "^26.16.0",
     "@rehookify/datepicker": "^6.6.7",
-    "@segment/analytics-next": "^1.75.0",
+    "@segment/analytics-next": "^1.82.0",
     "@sentry/react": "^8.38.0",
     "@stripe/react-stripe-js": "^3.6.0",
     "@stripe/stripe-js": "^7.1.0",

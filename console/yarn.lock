@@ -3876,15 +3876,15 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@segment/analytics-core@npm:1.8.0":
-  version: 1.8.0
-  resolution: "@segment/analytics-core@npm:1.8.0"
+"@segment/analytics-core@npm:1.8.2":
+  version: 1.8.2
+  resolution: "@segment/analytics-core@npm:1.8.2"
   dependencies:
     "@lukeed/uuid": "npm:^2.0.0"
     "@segment/analytics-generic-utils": "npm:1.2.0"
     dset: "npm:^3.1.4"
     tslib: "npm:^2.4.1"
-  checksum: 10c0/ca7040a726cb17c46374409192bef1cac458fc6c17ea3694f0f1a5bc6bbeefaccd7cdcc66720949971b77b8ed482e2c43ca838341679259111cc76b3f8ee115c
+  checksum: 10c0/4f20736f1b40a22e22691098b7fb620ee4db2bce6c557d52444afa2a093bc35defe673218b220a110a2e7b0d993fed7866216991de0179cc95baeed21f1b88a1
   languageName: node
   linkType: hard
 
@@ -3897,13 +3897,14 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@segment/analytics-next@npm:^1.75.0":
-  version: 1.75.0
-  resolution: "@segment/analytics-next@npm:1.75.0"
+"@segment/analytics-next@npm:^1.82.0":
+  version: 1.82.0
+  resolution: "@segment/analytics-next@npm:1.82.0"
   dependencies:
     "@lukeed/uuid": "npm:^2.0.0"
-    "@segment/analytics-core": "npm:1.8.0"
+    "@segment/analytics-core": "npm:1.8.2"
     "@segment/analytics-generic-utils": "npm:1.2.0"
+    "@segment/analytics-page-tools": "npm:1.0.0"
     "@segment/analytics.js-video-plugins": "npm:^0.2.1"
     "@segment/facade": "npm:^3.4.9"
     dset: "npm:^3.1.4"
@@ -3911,7 +3912,16 @@ __metadata:
     node-fetch: "npm:^2.6.7"
     tslib: "npm:^2.4.1"
     unfetch: "npm:^4.1.0"
-  checksum: 10c0/ff1a0c551cf94f37faa784317680fb5175045646579afe125282b6aa232174afa60472a6d3dba872f27b4dda57ad692a5b8fc23f227a24889d0ee610ba85dc17
+  checksum: 10c0/533ee3273bf70d27b44a33c1061685dbd9ee7945e25e604ddfd65248be48bcbd5e6d40ff1b746dc0f2b093b59d3c8b2095689044bbe446ed3a4b02bd7eb87800
+  languageName: node
+  linkType: hard
+
+"@segment/analytics-page-tools@npm:1.0.0":
+  version: 1.0.0
+  resolution: "@segment/analytics-page-tools@npm:1.0.0"
+  dependencies:
+    tslib: "npm:^2.4.1"
+  checksum: 10c0/4f9fa9489c7a299501bbbf646f6b791de97932dd55a5486e9aa8b19d182b632991defabb33b8c2914f719876591871cef85b94ee1fe1158851b21d3bd88a229a
   languageName: node
   linkType: hard
 
@@ -10993,7 +11003,7 @@ __metadata:
     "@materializeinc/sql-pretty": "npm:^26.16.0"
     "@playwright/test": "npm:^1.48.2"
     "@rehookify/datepicker": "npm:^6.6.7"
-    "@segment/analytics-next": "npm:^1.75.0"
+    "@segment/analytics-next": "npm:^1.82.0"
     "@sentry/react": "npm:^8.38.0"
     "@sentry/vite-plugin": "npm:^2.22.6"
     "@stripe/react-stripe-js": "npm:^3.6.0"
