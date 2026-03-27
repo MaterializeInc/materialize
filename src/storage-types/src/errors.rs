@@ -1012,13 +1012,13 @@ mod columnation {
 
     #[cfg(test)]
     mod tests {
-        use differential_dataflow::containers::TimelyStack;
+        use mz_timely_util::columnation::ColumnationStack;
         use proptest::prelude::*;
 
         use super::*;
 
-        fn columnation_roundtrip<T: Columnation>(item: &T) -> TimelyStack<T> {
-            let mut container = TimelyStack::with_capacity(1);
+        fn columnation_roundtrip<T: Columnation>(item: &T) -> ColumnationStack<T> {
+            let mut container = ColumnationStack::with_capacity(1);
             container.copy(item);
             container
         }
