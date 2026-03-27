@@ -12,8 +12,10 @@ from enum import Enum
 
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
+    RANGE_TYPES,
     Boolean,
     Bytea,
+    Char,
     DataType,
     Date,
     Double,
@@ -32,9 +34,11 @@ from materialize.data_ingest.data_type import (
     TextTextMap,
     Time,
     Timestamp,
+    TimestampTz,
     UInt2,
     UInt4,
     UInt8,
+    VarChar,
 )
 from materialize.parallel_workload.column import (
     Column,
@@ -74,13 +78,21 @@ for dt in DATA_TYPES:
     if dt != Bytea:
         FUNC_OPS[Text] += [FuncOp("cast({} as text)", [dt])]
 
-    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb, Text):
+    if dt not in (
+        IntList,
+        IntArray,
+        TextTextMap,
+        Bytea,
+        Jsonb,
+        Text,
+        *RANGE_TYPES,
+    ):
         FUNC_OPS[Text] += [
             FuncOp("{} || {}", [dt, Text]),
             FuncOp("{} || {}", [Text, dt]),
         ]
 
-    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb):
+    if dt not in (IntList, IntArray, TextTextMap, Bytea, Jsonb, *RANGE_TYPES):
         FUNC_OPS[Boolean] += [
             FuncOp("{} > {}", [dt, dt]),
             FuncOp("{} < {}", [dt, dt]),
@@ -227,11 +239,20 @@ FUNC_OPS[Timestamp] += [
     FuncOp("now()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("current_timestamp()", [], unsupported=ExprKind.MATERIALIZABLE),
     FuncOp("cast({} as timestamp)", [MzTimestamp]),
+    FuncOp("cast({} as timestamp)", [TimestampTz]),
+]
+
+FUNC_OPS[TimestampTz] += [
+    FuncOp("{} + {}", [TimestampTz, Interval]),
+    FuncOp("{} - {}", [TimestampTz, Interval]),
+    FuncOp("cast({} as timestamptz)", [Date]),
+    FuncOp("cast({} as timestamptz)", [Timestamp]),
 ]
 
 FUNC_OPS[Date] += [
     # FuncOp("cast({} as date)", [Text]),
     FuncOp("cast({} as date)", [Timestamp]),
+    FuncOp("cast({} as date)", [TimestampTz]),
 ]
 
 FUNC_OPS[MzTimestamp] += [
@@ -240,6 +261,7 @@ FUNC_OPS[MzTimestamp] += [
 
 FUNC_OPS[Interval] += [
     FuncOp("{} - {}", [Timestamp, Timestamp]),
+    FuncOp("{} - {}", [TimestampTz, TimestampTz]),
     FuncOp("{} - {}", [Time, Time]),
     # FuncOp("cast({} as interval)", [Text]),
     FuncOp("cast({} as interval)", [Time]),
@@ -258,6 +280,40 @@ FUNC_OPS[IntList] += [
     FuncOp("list_prepend({}, {})", [Int, IntList]),
     FuncOp("list_cat({}, {})", [IntList, IntList]),
 ]
+
+FUNC_OPS[Char] += [
+    FuncOp("cast({} as char(1))", [Text]),
+]
+
+FUNC_OPS[VarChar] += [
+    FuncOp("cast({} as varchar(1024))", [Text]),
+    FuncOp("lower{}", [VarChar]),
+    FuncOp("upper{}", [VarChar]),
+]
+
+FUNC_OPS[Text] += [
+    FuncOp("cast({} as text)", [Char]),
+    FuncOp("cast({} as text)", [VarChar]),
+]
+
+# Range type operations
+for rt in RANGE_TYPES:
+    FUNC_OPS[Boolean] += [
+        FuncOp("{} @> {}", [rt, rt]),
+        FuncOp("{} <@ {}", [rt, rt]),
+        FuncOp("{} && {}", [rt, rt]),
+        FuncOp("{} << {}", [rt, rt]),
+        FuncOp("{} >> {}", [rt, rt]),
+        FuncOp("isempty{}", [rt]),
+        FuncOp("lower_inc{}", [rt]),
+        FuncOp("upper_inc{}", [rt]),
+        FuncOp("lower_inf{}", [rt]),
+        FuncOp("upper_inf{}", [rt]),
+    ]
+    FUNC_OPS[rt] += [
+        # range union ({} + {}) omitted: errors on non-overlapping ranges
+        FuncOp("{} * {}", [rt, rt]),
+    ]
 
 # uuid_generate_v5 can return NULL
 # FUNC_OPS[UUID] += [
