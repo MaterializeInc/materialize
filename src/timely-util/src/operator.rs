@@ -662,11 +662,12 @@ pub trait ConcatenateFlatten<G: Scope, C: Container + DrainContainer> {
     ///
     /// timely::example(|scope| {
     ///
-    ///     let streams = vec![(0..10).to_stream(scope),
-    ///                        (0..10).to_stream(scope),
-    ///                        (0..10).to_stream(scope)];
+    ///     let streams: Vec<timely::dataflow::StreamVec<_, i32>> =
+    ///         vec![(0..10).to_stream(scope),
+    ///              (0..10).to_stream(scope),
+    ///              (0..10).to_stream(scope)];
     ///
-    ///     scope.concatenate_flatten::<_, CapacityContainerBuilder<Vec<_>>>(streams)
+    ///     scope.concatenate_flatten::<_, CapacityContainerBuilder<Vec<i32>>>(streams)
     ///          .inspect(|x| println!("seen: {:?}", x));
     /// });
     /// ```
