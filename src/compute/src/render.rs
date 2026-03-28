@@ -134,7 +134,6 @@ use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
@@ -157,6 +156,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
+use crate::render::errors::DataflowErrorSer;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
@@ -282,7 +282,7 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
+                    let (mut ok_stream, err_stream, token) = persist_source::persist_source::<_, DataflowErrorSer>(
                         inner,
                         *source_id,
                         Arc::clone(&compute_state.persist_clients),
@@ -967,9 +967,9 @@ where
                     oks = VecCollection::new(in_limit);
                     if !limit.return_at_limit {
                         err = err.concat(VecCollection::new(over_limit).map(move |_data| {
-                            DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
+                            DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
                                 format!("{}", limit.max_iters.get()).into(),
-                            )))
+                            ))
                         }));
                     }
                 }
@@ -1202,7 +1202,7 @@ where
                     .into_iter()
                     .map(move |e| {
                         (
-                            DataflowError::from(e),
+                            DataflowErrorSer::from(e),
                             <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
                             Diff::ONE,
                         )

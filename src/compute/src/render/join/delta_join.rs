@@ -24,7 +24,7 @@ use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, Del
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
-use mz_storage_types::errors::DataflowError;
+use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
@@ -277,7 +277,7 @@ where
                                     final_closure
                                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                                         .map(|row| row.cloned())
-                                        .map_err(DataflowError::from)
+                                        .map_err(DataflowErrorSer::from)
                                         .transpose()
                                 }
                             });
@@ -325,7 +325,7 @@ fn build_halfjoin<G, Tr, CF>(
     closure: JoinClosure,
 ) -> (
     VecCollection<G, (Row, G::Timestamp), Diff>,
-    VecCollection<G, DataflowError, Diff>,
+    VecCollection<G, DataflowErrorSer, Diff>,
 )
 where
     G: Scope,
@@ -400,7 +400,7 @@ where
             // TODO(mcsherry): consider `ok_err()` for `Collection`.
             match data_time {
                 (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
-                (Err(err), _time) => Err((DataflowError::from(err), init_time, diff)),
+                (Err(err), _time) => Err((DataflowErrorSer::from(err), init_time, diff)),
             }
         });
 
@@ -467,7 +467,7 @@ fn build_update_stream<G, Tr>(
     initial_closure: JoinClosure,
 ) -> (
     VecCollection<G, Row, Diff>,
-    VecCollection<G, DataflowError, Diff>,
+    VecCollection<G, DataflowErrorSer, Diff>,
 )
 where
     G: Scope,
@@ -566,6 +566,6 @@ where
 
     (
         ok_stream.as_collection(),
-        err_stream.as_collection().map(DataflowError::from),
+        err_stream.as_collection().map(DataflowErrorSer::from),
     )
 }

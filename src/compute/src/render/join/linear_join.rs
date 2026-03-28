@@ -24,7 +24,7 @@ use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan}
 use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
-use mz_storage_types::errors::DataflowError;
+use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -270,7 +270,7 @@ where
                             closure
                                 .apply(&mut datums_local, &temp_storage, &mut row_builder)
                                 .map(|row| row.cloned())
-                                .map_err(DataflowError::from)
+                                .map_err(DataflowErrorSer::from)
                                 .transpose()
                         }
                     });
@@ -314,7 +314,7 @@ where
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
                             .map(|row| row.cloned())
-                            .map_err(DataflowError::from)
+                            .map_err(DataflowErrorSer::from)
                             .transpose()
                     }
                 });
@@ -347,7 +347,7 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<VecCollection<S, DataflowError, Diff>>,
+        errors: &mut Vec<VecCollection<S, DataflowErrorSer, Diff>>,
     ) -> VecCollection<S, Row, Diff>
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -479,7 +479,7 @@ where
         closure: JoinClosure,
     ) -> (
         VecCollection<S, Row, Diff>,
-        Option<VecCollection<S, DataflowError, Diff>>,
+        Option<VecCollection<S, DataflowErrorSer, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -509,7 +509,7 @@ where
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                         .map(|row| row.cloned())
-                        .map_err(DataflowError::from)
+                        .map_err(DataflowErrorSer::from)
                         .transpose()
                 })
                 .inner

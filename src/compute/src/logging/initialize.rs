@@ -18,7 +18,7 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
-use mz_storage_types::errors::DataflowError;
+use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
@@ -184,7 +184,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             collections.extend(prometheus_collections);
 
             let errs = scope.scoped("logging errors", |scope| {
-                let collection: KeyCollection<_, DataflowError, Diff> =
+                let collection: KeyCollection<_, DataflowErrorSer, Diff> =
                     VecCollection::empty(scope).into();
                 collection
                     .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")

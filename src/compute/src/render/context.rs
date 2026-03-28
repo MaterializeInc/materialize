@@ -27,7 +27,7 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
+use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::CollectionExt;
@@ -267,7 +267,7 @@ where
         &self,
     ) -> (
         VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
     ) {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq| {
@@ -305,7 +305,7 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowErrorSer, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -402,7 +402,7 @@ where
 {
     pub collection: Option<(
         VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
     )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
@@ -415,7 +415,7 @@ where
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
         oks: VecCollection<S, Row, Diff>,
-        errs: VecCollection<S, DataflowError, Diff>,
+        errs: VecCollection<S, DataflowErrorSer, Diff>,
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
@@ -526,7 +526,7 @@ where
         config_set: &ConfigSet,
     ) -> (
         VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
     ) {
         // Any operator that uses this method was told to use a particular
         // collection during LIR planning, where we should have made
@@ -576,7 +576,7 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowErrorSer, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -713,7 +713,7 @@ where
         config_set: &ConfigSet,
     ) -> (
         VecCollection<S, mz_repr::Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
     ) {
         mfp.optimize();
         let mfp_plan = mfp.clone().into_plan().unwrap();
@@ -868,7 +868,7 @@ where
         thinning: Vec<usize>,
     ) -> (
         Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
         VecCollection<S, Row, Diff>,
     ) {
         // This operator implements a `map_fallible`, but produces columnar updates for the ok

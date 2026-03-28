@@ -168,7 +168,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
+use crate::render::errors::DataflowErrorSer;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::CollectionExt;
@@ -270,10 +270,10 @@ impl ContinualTaskSourceTransformer {
     pub fn transform<S: Scope<Timestamp = Timestamp>>(
         &self,
         oks: VecCollection<S, Row, Diff>,
-        errs: VecCollection<S, DataflowError, Diff>,
+        errs: VecCollection<S, DataflowErrorSer, Diff>,
     ) -> (
         VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
         VecCollection<S, (), Diff>,
     ) {
         use ContinualTaskSourceTransformer::*;
@@ -435,7 +435,7 @@ where
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
         oks: VecCollection<G, Row, Diff>,
-        errs: VecCollection<G, DataflowError, Diff>,
+        errs: VecCollection<G, DataflowErrorSer, Diff>,
         append_times: Option<VecCollection<G, (), Diff>>,
         flow_control_probe: &probe::Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
@@ -443,7 +443,7 @@ where
 
         let to_append = oks
             .map(|x| SourceData(Ok(x)))
-            .concat(errs.map(|x| SourceData(Err(x))));
+            .concat(errs.map(|x| SourceData(Err(x.deserialize()))));
         let append_times = append_times.expect("should be provided by ContinualTaskCtx");
 
         let write_handle = {
