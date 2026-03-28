@@ -137,14 +137,20 @@ use timely::PartialOrder;
 use timely::container::SizableContainer;
 use timely::progress::Antichain;
 
-use crate::sink::correction::{Logging, SizeMetrics};
+use crate::sink::correction::{ChannelLogging, SizeMetrics};
 
 /// Determines the size factor of subsequent chains required by the chain invariant.
 const CHAIN_PROPORTIONALITY: usize = 3;
 
 /// Convenient alias for use in data trait bounds.
-pub trait Data: differential_dataflow::Data + Columnation {}
-impl<D: differential_dataflow::Data + Columnation> Data for D {}
+pub trait Data:
+    differential_dataflow::Data + Columnation<InnerRegion: Send + Sync> + Send + Sync
+{
+}
+impl<D: differential_dataflow::Data + Columnation<InnerRegion: Send + Sync> + Send + Sync> Data
+    for D
+{
+}
 
 /// A data structure used to store corrections in the MV sink implementation.
 ///
@@ -172,7 +178,7 @@ pub(super) struct CorrectionV2<D: Data> {
     /// Per-worker persist sink metrics.
     worker_metrics: SinkWorkerMetrics,
     /// Introspection logging.
-    logging: Option<Logging>,
+    logging: Option<ChannelLogging>,
 }
 
 impl<D: Data> CorrectionV2<D> {
@@ -180,7 +186,7 @@ impl<D: Data> CorrectionV2<D> {
     pub fn new(
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
-        logging: Option<Logging>,
+        logging: Option<ChannelLogging>,
     ) -> Self {
         Self {
             chains: Default::default(),
@@ -260,7 +266,7 @@ impl<D: Data> CorrectionV2<D> {
     pub fn updates_before<'a>(
         &'a mut self,
         upper: &Antichain<Timestamp>,
-    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + 'a {
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + 'a {
         let mut result = None;
 
         if !PartialOrder::less_than(&self.since, upper) {
@@ -991,11 +997,11 @@ struct Stage<D> {
     /// We want to report the number of records in the stage. To do so, we pretend that the stage
     /// is a chain, and every time the number of updates inside changes, the chain gets dropped and
     /// re-created.
-    logging: Option<Logging>,
+    logging: Option<ChannelLogging>,
 }
 
 impl<D: Data> Stage<D> {
-    fn new(logging: Option<Logging>) -> Self {
+    fn new(logging: Option<ChannelLogging>) -> Self {
         // Make sure that the `Stage` has the same capacity as a `Chunk`.
         let chunk = Chunk::<D>::default();
         let data = Vec::with_capacity(chunk.capacity());
