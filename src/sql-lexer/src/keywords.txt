@@ -124,6 +124,7 @@ Cse
 Csv
 Current
 Cursor
+Data
 Database
 Databases
 Datums
@@ -288,6 +289,7 @@ Message
 Metadata
 Minute
 Minutes
+Mock
 Mode
 Month
 Months
@@ -471,6 +473,7 @@ Task
 Tasks
 Temp
 Temporary
+Test
 Text
 Then
 Tick
@@ -498,6 +501,7 @@ Unbounded
 Uncommitted
 Union
 Unique
+Unit
 Unknown
 Unnest
 Until

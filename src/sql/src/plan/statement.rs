@@ -257,6 +257,18 @@ pub fn describe(
             scl::describe_inspect_shard(&scx, stmt)?
         }
         Statement::ValidateConnection(stmt) => validate::describe_validate_connection(&scx, stmt)?,
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
+        Statement::CreateConstraint(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "CREATE CONSTRAINT statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     let desc = desc.with_params(scx.finalize_param_types()?);
@@ -444,6 +456,18 @@ pub fn plan(
         Statement::Raise(stmt) => raise::plan_raise(scx, stmt),
         Statement::Show(ShowStatement::InspectShard(stmt)) => scl::plan_inspect_shard(scx, stmt),
         Statement::ValidateConnection(stmt) => validate::plan_validate_connection(scx, stmt),
+        Statement::ExecuteUnitTest(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "EXECUTE UNIT TEST statement".to_string(),
+                discussion_no: None,
+            });
+        }
+        Statement::CreateConstraint(_) => {
+            return Err(PlanError::Unsupported {
+                feature: "CREATE CONSTRAINT statement".to_string(),
+                discussion_no: None,
+            });
+        }
     };
 
     if let Ok(plan) = &plan {
@@ -1146,6 +1170,8 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Raise(_) => Other,
             Statement::Show(ShowStatement::InspectShard(_)) => Other,
             Statement::ValidateConnection(_) => Other,
+            Statement::ExecuteUnitTest(_) => Other,
+            Statement::CreateConstraint(_) => DDL,
         }
     }
 }

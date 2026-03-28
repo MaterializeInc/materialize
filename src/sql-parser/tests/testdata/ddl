@@ -3473,3 +3473,4 @@ DROP NETWORK POLICY if exists q
 DROP NETWORK POLICY IF EXISTS q
 =>
 DropObjects(DropObjectsStatement { object_type: NetworkPolicy, if_exists: true, names: [NetworkPolicy(Ident("q"))], cascade: false })
+

@@ -1,0 +1,72 @@
+name: Test
+
+on:
+  pull_request:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    env:
+      MZ_DEPLOY_PROFILE: ci
+      MZ_DEPLOY_PROFILES_DIR: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mz-deploy
+        run: # TODO: install mz-deploy
+
+      - name: Abort stale staging
+        continue-on-error: true
+        run: mz-deploy abort "pr-${{ github.event.pull_request.number }}" --yes
+
+      - name: Test
+        run: mz-deploy test --junit-xml results.xml
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: results.xml
+
+      - name: Preview infrastructure changes
+        id: preview
+        run: |
+          mz-deploy apply --dry-run --output json > apply-plan.json
+          echo 'plan<<EOF' >> "$GITHUB_OUTPUT"
+          cat apply-plan.json | jq -r '
+            if length == 0 then "No infrastructure changes detected."
+            else . | to_entries | map("\(.value.action) \(.value.object)") | join("\n")
+            end
+          ' >> "$GITHUB_OUTPUT"
+          echo 'EOF' >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const plan = `${{ steps.preview.outputs.plan }}`;
+            const body = `## Infrastructure Changes\n\n\`\`\`\n${plan}\n\`\`\`\n\nComment \`/deploy\` to stage these changes.`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes('## Infrastructure Changes'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }

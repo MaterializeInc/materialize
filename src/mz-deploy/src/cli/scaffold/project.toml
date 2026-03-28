@@ -1,0 +1,26 @@
+## Name of the connection profile from profiles.toml to use for deployments.
+profile = "default"
+
+## Materialize version to use for local type-checking.
+## Use "cloud" (or omit) to target the latest cloud release,
+## or pin a specific version like "v26.0.0".
+mz_version = "cloud"
+
+## Per-profile configuration:
+# [profiles.default]
+## Suffix to append to all database names for this profile.
+# suffix = "_staging"
+## Suffix to append to all cluster names for this profile.
+# cluster_suffix = "_staging"
+#
+## psql-style variables resolved in SQL files before parsing.
+## Use :var, :'var', or :"var" syntax in SQL to reference these.
+# [profiles.default.variables]
+# cluster = "default_cluster"
+# pg_host = "localhost"
+#
+# [profiles.default.security]
+## AWS profile name for resolving aws_secret() references in secret files.
+## When set, enables the aws_secret() provider so CREATE SECRET statements
+## can pull values from AWS Secrets Manager at deploy time.
+# aws_profile = "my-aws-profile"

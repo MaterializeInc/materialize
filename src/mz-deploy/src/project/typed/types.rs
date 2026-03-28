@@ -1,0 +1,642 @@
+//! Core type definitions for the typed representation.
+//!
+//! This module contains the primary types used to represent a validated
+//! Materialize project structure.
+
+use super::super::ast::Statement;
+use super::super::normalize::{ClusterTransformer, NameTransformer, NormalizingVisitor};
+use super::super::object_id::ObjectId;
+use crate::project::SchemaQualifier;
+use crate::project::error::ValidationError;
+use crate::project::error::ValidationErrorKind;
+use mz_sql_parser::ast::*;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+
+/// Fully qualified name parsed from file path structure.
+///
+/// Represents the canonical `database.schema.object` name based on directory structure.
+/// File path format: `<root>/<database>/<schema>/<object>.sql`
+///
+/// This struct is created during typed validation and is used to:
+/// - Normalize statement names to be fully qualified
+/// - Validate that SQL statement names match the directory structure
+/// - Provide a consistent FQN for error messages and validation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FullyQualifiedName {
+    id: ObjectId,
+    pub path: PathBuf,
+    item_name: UnresolvedItemName,
+}
+
+impl FullyQualifiedName {
+    /// Get the database name.
+    #[inline]
+    pub fn database(&self) -> &str {
+        self.id.database()
+    }
+
+    /// Get the schema name.
+    #[inline]
+    pub fn schema(&self) -> &str {
+        self.id.schema()
+    }
+
+    /// Get the object name.
+    #[inline]
+    pub fn object(&self) -> &str {
+        self.id.object()
+    }
+
+    /// Get the ObjectId.
+    pub fn object_id(&self) -> &ObjectId {
+        &self.id
+    }
+
+    /// Get the UnresolvedItemName for updating statement names.
+    pub fn to_item_name(&self) -> UnresolvedItemName {
+        self.item_name.clone()
+    }
+
+    /// Create a FullyQualifiedName with explicit database and schema names.
+    ///
+    /// Unlike `TryFrom<(&Path, &str)>` which derives names from the file path,
+    /// this constructor accepts the names directly. This is needed when a suffix
+    /// has been applied to the database name, so the path-derived name no longer
+    /// matches the desired database name.
+    pub fn with_names(
+        path: &std::path::Path,
+        object_name: &str,
+        database: &str,
+        schema: &str,
+    ) -> Result<Self, ValidationError> {
+        let database_ident = Ident::new(database).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: database.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let schema_ident = Ident::new(schema).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: schema.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let object_ident = Ident::new(object_name).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: object_name.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let item_name = UnresolvedItemName(vec![database_ident, schema_ident, object_ident]);
+
+        let id = ObjectId::new(
+            database.to_string(),
+            schema.to_string(),
+            object_name.to_string(),
+        );
+
+        Ok(FullyQualifiedName {
+            id,
+            path: path.to_path_buf(),
+            item_name,
+        })
+    }
+}
+
+impl From<UnresolvedItemName> for FullyQualifiedName {
+    fn from(value: UnresolvedItemName) -> Self {
+        let id = ObjectId::new(
+            value.0[0].to_string(),
+            value.0[1].to_string(),
+            value.0[2].to_string(),
+        );
+        Self {
+            id,
+            path: PathBuf::new(),
+            item_name: value,
+        }
+    }
+}
+
+impl TryFrom<(&std::path::Path, &str)> for FullyQualifiedName {
+    type Error = ValidationError;
+
+    /// Extract fully qualified name from file path.
+    ///
+    /// Path format: `<root>/<database>/<schema>/<object>.sql`
+    /// Returns error if path structure is invalid.
+    fn try_from(value: (&std::path::Path, &str)) -> Result<Self, Self::Error> {
+        let (path, object_name) = value;
+
+        // Extract schema (parent directory)
+        let schema = path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| {
+                ValidationError::with_file(
+                    ValidationErrorKind::SchemaExtractionFailed,
+                    path.to_path_buf(),
+                )
+            })?;
+
+        // Extract database (parent of schema directory)
+        let database = path
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| {
+                ValidationError::with_file(
+                    ValidationErrorKind::DatabaseExtractionFailed,
+                    path.to_path_buf(),
+                )
+            })?;
+
+        // Create Ident instances for each component
+        let database_ident = Ident::new(database).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: database.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let schema_ident = Ident::new(schema).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: schema.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        let object_ident = Ident::new(object_name).map_err(|e| {
+            ValidationError::with_file(
+                ValidationErrorKind::InvalidIdentifier {
+                    name: object_name.to_string(),
+                    reason: e.to_string(),
+                },
+                path.to_path_buf(),
+            )
+        })?;
+
+        // Create the UnresolvedItemName
+        let item_name = UnresolvedItemName(vec![database_ident, schema_ident, object_ident]);
+
+        // Create ObjectId
+        let id = ObjectId::new(
+            database.to_string(),
+            schema.to_string(),
+            object_name.to_string(),
+        );
+
+        Ok(FullyQualifiedName {
+            id,
+            path: path.to_path_buf(),
+            item_name,
+        })
+    }
+}
+
+/// The primary CREATE statement for a database object.
+impl Statement {
+    /// Normalizes the statement name to be fully qualified.
+    pub fn normalize_stmt(self, fqn: &FullyQualifiedName) -> Self {
+        let mut visitor = NormalizingVisitor::fully_qualifying(fqn);
+        self.normalize_name_with(&visitor, &fqn.to_item_name())
+            .normalize_dependencies_with(&mut visitor)
+    }
+
+    /// Normalizes the statement name using a custom transformer.
+    pub fn normalize_name_with<T: NameTransformer>(
+        self,
+        visitor: &NormalizingVisitor<T>,
+        item_name: &UnresolvedItemName,
+    ) -> Self {
+        let transformed_name = visitor.transformer().transform_own_name(item_name);
+
+        match self {
+            Statement::CreateSink(mut s) => {
+                s.name = Some(transformed_name);
+                Statement::CreateSink(s)
+            }
+            Statement::CreateView(mut s) => {
+                s.definition.name = transformed_name;
+                Statement::CreateView(s)
+            }
+            Statement::CreateMaterializedView(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateMaterializedView(s)
+            }
+            Statement::CreateTable(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateTable(s)
+            }
+            Statement::CreateTableFromSource(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateTableFromSource(s)
+            }
+            Statement::CreateSource(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateSource(s)
+            }
+            Statement::CreateSecret(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateSecret(s)
+            }
+            Statement::CreateConnection(mut s) => {
+                s.name = transformed_name;
+                Statement::CreateConnection(s)
+            }
+        }
+    }
+
+    /// Normalizes all object references within the statement using a custom transformer.
+    pub fn normalize_dependencies_with<T: NameTransformer>(
+        self,
+        visitor: &mut NormalizingVisitor<T>,
+    ) -> Self {
+        match self {
+            Statement::CreateView(mut s) => {
+                visitor.normalize_query(&mut s.definition.query);
+                Statement::CreateView(s)
+            }
+            Statement::CreateMaterializedView(mut s) => {
+                visitor.normalize_query(&mut s.query);
+                Statement::CreateMaterializedView(s)
+            }
+            Statement::CreateTableFromSource(mut s) => {
+                visitor.normalize_raw_item_name(&mut s.source);
+                Statement::CreateTableFromSource(s)
+            }
+            Statement::CreateSink(mut s) => {
+                visitor.normalize_raw_item_name(&mut s.from);
+                visitor.normalize_sink_connection(&mut s.connection);
+                Statement::CreateSink(s)
+            }
+            Statement::CreateConnection(mut s) => {
+                visitor.normalize_connection_options(&mut s.values);
+                Statement::CreateConnection(s)
+            }
+            Statement::CreateSource(mut s) => {
+                visitor.normalize_source_connection(&mut s.connection);
+                Statement::CreateSource(s)
+            }
+            // These statements don't have dependencies on other database objects
+            Statement::CreateTable(_) | Statement::CreateSecret(_) => self,
+        }
+    }
+
+    /// Normalize cluster references using a ClusterTransformer.
+    ///
+    /// This method is separate from normalize_dependencies_with because cluster
+    /// normalization is only needed for staging environments, not regular deployments.
+    pub fn normalize_cluster_with<T: ClusterTransformer>(
+        self,
+        visitor: &NormalizingVisitor<T>,
+    ) -> Self {
+        match self {
+            Statement::CreateMaterializedView(mut s) => {
+                visitor.normalize_cluster_name(&mut s.in_cluster);
+                Statement::CreateMaterializedView(s)
+            }
+            Statement::CreateSink(mut s) => {
+                visitor.normalize_cluster_name(&mut s.in_cluster);
+                Statement::CreateSink(s)
+            }
+            Statement::CreateSource(mut s) => {
+                visitor.normalize_cluster_name(&mut s.in_cluster);
+                Statement::CreateSource(s)
+            }
+            // These statements don't have cluster references
+            Statement::CreateView(_)
+            | Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_) => self,
+        }
+    }
+}
+
+/// A validated database object with its primary statement and supporting declarations.
+///
+/// Represents a single database object (table, view, source, etc.) that has been
+/// validated to ensure:
+/// - Exactly one primary CREATE statement exists
+/// - The object name matches the file name
+/// - All supporting statements (indexes, grants, comments) reference this object
+/// - Object types are consistent across statements
+///
+/// # Structure
+///
+/// Each `DatabaseObject` is loaded from a single `.sql` file and contains:
+/// - One primary statement (CREATE TABLE, CREATE VIEW, etc.)
+/// - Zero or more CREATE INDEX statements (for indexable objects)
+/// - Zero or more GRANT statements
+/// - Zero or more COMMENT statements
+///
+/// # Example
+///
+/// For a file `my_schema/users.sql`:
+/// ```sql
+/// CREATE TABLE users (
+///     id INT,
+///     name TEXT
+/// );
+///
+/// CREATE INDEX users_id_idx ON users (id);
+/// GRANT SELECT ON users TO analyst_role;
+/// COMMENT ON TABLE users IS 'User account information';
+/// ```
+///
+/// This would be validated and represented as a single `DatabaseObject`.
+#[derive(Debug)]
+pub struct DatabaseObject {
+    /// Path to the source `.sql` file that defined this object.
+    ///
+    /// Carried from [`raw::ObjectVariant::path`](super::super::raw::ObjectVariant)
+    /// through validation so downstream consumers (LSP, diagnostics) can cite
+    /// the source file without reconstructing it from the object's name.
+    pub path: PathBuf,
+    /// The primary CREATE statement for this object
+    pub stmt: Statement,
+    /// Indexes defined on this object
+    pub indexes: Vec<CreateIndexStatement<Raw>>,
+    /// Constraints defined on this object.
+    ///
+    /// Constraints come in two flavors:
+    /// - **Not-enforced**: metadata-only, carried through for documentation
+    ///   and catalog purposes but never executed.
+    /// - **Enforced**: lowered into companion materialized views during the
+    ///   `typed → planned` conversion. See [`crate::project::constraint`] for
+    ///   the lowering rules.
+    ///
+    /// Both kinds are stored here after typed validation. The lowering step
+    /// reads enforced constraints from this vec to generate companion MVs.
+    pub constraints: Vec<CreateConstraintStatement<Raw>>,
+    /// Grant statements for this object
+    pub grants: Vec<GrantPrivilegesStatement<Raw>>,
+    /// Comment statements for this object or its columns
+    pub comments: Vec<CommentStatement<Raw>>,
+    /// Unit tests for this object
+    pub tests: Vec<ExecuteUnitTestStatement<Raw>>,
+}
+
+impl DatabaseObject {
+    pub fn clusters(&self) -> BTreeSet<String> {
+        let mut cluster_set = BTreeSet::new();
+
+        let in_cluster = match &self.stmt {
+            Statement::CreateMaterializedView(mv) => mv.in_cluster.as_ref(),
+            Statement::CreateSink(sink) => sink.in_cluster.as_ref(),
+            Statement::CreateSource(source) => source.in_cluster.as_ref(),
+            Statement::CreateView(_)
+            | Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_) => None,
+        };
+        if let Some(RawClusterName::Unresolved(cluster_name)) = in_cluster {
+            cluster_set.insert(cluster_name.to_string());
+        }
+
+        for index in &self.indexes {
+            if let Some(RawClusterName::Unresolved(cluster_name)) = &index.in_cluster {
+                cluster_set.insert(cluster_name.to_string());
+            }
+        }
+        for constraint in &self.constraints {
+            if let Some(RawClusterName::Unresolved(cluster_name)) = &constraint.in_cluster {
+                cluster_set.insert(cluster_name.to_string());
+            }
+        }
+        cluster_set
+    }
+
+    /// Convert the statement to a `Query<Raw>` for type checking purposes.
+    pub fn to_query(&self) -> Option<Query<Raw>> {
+        match &self.stmt {
+            Statement::CreateView(stmt) => Some(stmt.definition.query.clone()),
+            Statement::CreateMaterializedView(stmt) => Some(stmt.query.clone()),
+            Statement::CreateTable(_)
+            | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSink(_)
+            | Statement::CreateSource(_) => None,
+        }
+    }
+
+    /// Rewrite cluster references using the given cluster name map.
+    ///
+    /// For any `RawClusterName::Unresolved(ident)` where the ident matches a key
+    /// in the map, replace it with the suffixed name. This applies to `IN CLUSTER`
+    /// clauses in the main statement and in index definitions.
+    pub fn rewrite_cluster_references(&mut self, cluster_map: &BTreeMap<String, String>) {
+        // Rewrite IN CLUSTER on the main statement
+        match &mut self.stmt {
+            Statement::CreateMaterializedView(s) => {
+                rewrite_in_cluster(&mut s.in_cluster, cluster_map);
+            }
+            Statement::CreateSink(s) => {
+                rewrite_in_cluster(&mut s.in_cluster, cluster_map);
+            }
+            Statement::CreateSource(s) => {
+                rewrite_in_cluster(&mut s.in_cluster, cluster_map);
+            }
+            Statement::CreateView(_)
+            | Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSecret(_)
+            | Statement::CreateConnection(_) => {}
+        }
+
+        // Rewrite IN CLUSTER on indexes
+        for index in &mut self.indexes {
+            rewrite_in_cluster(&mut index.in_cluster, cluster_map);
+        }
+
+        // Rewrite IN CLUSTER on constraints
+        for constraint in &mut self.constraints {
+            rewrite_in_cluster(&mut constraint.in_cluster, cluster_map);
+        }
+    }
+
+    /// Rewrite cross-database references using the given database name map.
+    ///
+    /// For any 3-part `UnresolvedItemName` where the database part matches an
+    /// original name in the map, replace it with the suffixed name. External
+    /// databases (not in the map) are untouched.
+    pub fn rewrite_database_references(&mut self, db_map: &BTreeMap<String, String>) {
+        let ident = self.stmt.ident();
+        let database = ident.database.as_deref().unwrap_or("unknown");
+        let schema = ident.schema.as_deref().unwrap_or("unknown");
+        let fqn = FullyQualifiedName::from(UnresolvedItemName(vec![
+            Ident::new(database).expect("valid ident"),
+            Ident::new(schema).expect("valid ident"),
+            Ident::new(&ident.object).expect("valid ident"),
+        ]));
+        let mut visitor = NormalizingVisitor::fully_qualifying_with_db_map(&fqn, Some(db_map));
+        self.stmt = self.stmt.clone().normalize_dependencies_with(&mut visitor);
+
+        visitor.normalize_index_references(&mut self.indexes);
+        visitor.normalize_constraint_references(&mut self.constraints);
+        visitor.normalize_grant_references(&mut self.grants);
+        visitor.normalize_comment_references(&mut self.comments);
+    }
+}
+
+/// A validated schema containing multiple database objects.
+///
+/// Represents a schema directory in the project structure. Each schema contains
+/// multiple database objects (tables, views, sources, etc.) that have all been
+/// validated.
+///
+/// # Directory Mapping
+///
+/// A schema corresponds to a directory in the project structure:
+/// ```text
+/// database_name/
+///   schema_name/        <- Schema
+///     object1.sql       <- DatabaseObject
+///     object2.sql       <- DatabaseObject
+///     mod.sql           (optional, not represented in HIR)
+/// ```
+///
+/// Note: `mod.sql` files are parsed in the raw representation but not carried
+/// forward to the HIR, as they typically contain schema-level setup statements.
+#[derive(Debug)]
+pub struct Schema {
+    /// The name of the schema (directory name)
+    pub name: String,
+    /// All validated database objects in this schema
+    pub objects: Vec<DatabaseObject>,
+    /// Optional module-level statements (from schema.sql file)
+    pub mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
+}
+
+/// A validated database containing multiple schemas.
+///
+/// Represents a database directory in the project structure. Each database contains
+/// multiple schemas, each of which contains multiple database objects.
+///
+/// # Directory Mapping
+///
+/// A database corresponds to a directory in the project structure:
+/// ```text
+/// project_root/
+///   database_name/      <- Database
+///     schema1/          <- Schema
+///       object1.sql
+///     schema2/          <- Schema
+///       object2.sql
+///     mod.sql           (optional, not represented in HIR)
+/// ```
+#[derive(Debug)]
+pub struct Database {
+    /// The name of the database (directory name)
+    pub name: String,
+    /// All validated schemas in this database
+    pub schemas: Vec<Schema>,
+    /// Optional module-level statements (from database.sql file)
+    pub mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
+}
+
+/// A fully validated Materialize project.
+///
+/// Represents the complete validated project structure, containing all databases,
+/// schemas, and objects. This is the top-level typed project that should be used after
+/// successfully loading and validating a project from the file system.
+///
+/// # Usage
+///
+/// ```no_run
+/// use mz_deploy::project::raw;
+/// use mz_deploy::project::typed::Project;
+/// use std::collections::BTreeMap;
+///
+/// // Load raw project from file system
+/// let raw_project = raw::load_project("./my_project", "default", None, &BTreeMap::new()).unwrap();
+///
+/// // Convert to validated typed project
+/// let typed_project = Project::try_from(raw_project).unwrap();
+/// ```
+///
+/// # Validation Guarantees
+///
+/// A successfully created `Project` guarantees:
+/// - All object names match their file names
+/// - All qualified names match the directory structure
+/// - All supporting statements reference the correct objects
+/// - All object types are consistent across statements
+/// - No unsupported statement types are present
+#[derive(Debug)]
+pub struct Project {
+    /// All validated databases in this project
+    pub databases: Vec<Database>,
+    /// Schemas that use replacement materialized views, derived from
+    /// `SET api = stable` statements.
+    /// Each entry is a `(database, schema)` pair.
+    pub replacement_schemas: BTreeSet<SchemaQualifier>,
+}
+
+impl Project {
+    /// Rewrite all cluster references in the project using the given cluster name map.
+    ///
+    /// Walks all objects in all databases/schemas and replaces cluster names in
+    /// `IN CLUSTER` clauses when the cluster name is a key in the map.
+    pub fn rewrite_cluster_references(&mut self, cluster_map: &BTreeMap<String, String>) {
+        for db in &mut self.databases {
+            for schema in &mut db.schemas {
+                for obj in &mut schema.objects {
+                    obj.rewrite_cluster_references(cluster_map);
+                }
+            }
+        }
+    }
+
+    /// Rewrite all cross-database references in the project using the given database name map.
+    ///
+    /// This walks all objects, mod_statements, etc. and replaces database names in
+    /// 3-part qualified references when the database is a project-owned database
+    /// that appears in the map.
+    pub fn rewrite_database_references(&mut self, db_map: &BTreeMap<String, String>) {
+        for db in &mut self.databases {
+            for schema in &mut db.schemas {
+                for obj in &mut schema.objects {
+                    obj.rewrite_database_references(db_map);
+                }
+            }
+        }
+    }
+}
+
+/// Rewrite an optional `RawClusterName::Unresolved` ident if it matches a key in the map.
+fn rewrite_in_cluster(
+    in_cluster: &mut Option<RawClusterName>,
+    cluster_map: &BTreeMap<String, String>,
+) {
+    if let Some(RawClusterName::Unresolved(ident)) = in_cluster {
+        let name = ident.to_string();
+        if let Some(suffixed) = cluster_map.get(&name) {
+            *ident = Ident::new(suffixed).expect("valid cluster identifier");
+        }
+    }
+}
