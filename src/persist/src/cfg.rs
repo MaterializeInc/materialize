@@ -22,6 +22,7 @@ use mz_postgres_client::PostgresClientKnobs;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 
 use crate::azure::{AzureBlob, AzureBlobConfig};
+use crate::dynamodb::DynamoConsensus;
 use crate::file::{FileBlob, FileBlobConfig};
 #[cfg(feature = "foundationdb")]
 use crate::foundationdb::{FdbConsensus, FdbConsensusConfig};
@@ -231,6 +232,8 @@ pub enum ConsensusConfig {
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
     Mem,
+    /// Hmmm.....
+    Dynamodb(SensitiveUrl),
     #[cfg(feature = "turmoil")]
     /// Config for [crate::turmoil::TurmoilConsensus].
     Turmoil(crate::turmoil::ConsensusConfig),
@@ -247,6 +250,7 @@ impl ConsensusConfig {
             ConsensusConfig::Postgres(config) => {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
+            ConsensusConfig::Dynamodb(url) => Ok(Arc::new(DynamoConsensus::open(url).await?)),
             ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
             #[cfg(feature = "turmoil")]
             ConsensusConfig::Turmoil(config) => {
@@ -276,6 +280,7 @@ impl ConsensusConfig {
                 }
                 Ok(ConsensusConfig::Mem)
             }
+            "dynamodb" => Ok(ConsensusConfig::Dynamodb(url.clone())),
             #[cfg(feature = "turmoil")]
             "turmoil" => {
                 let cfg = crate::turmoil::ConsensusConfig::new(url);
