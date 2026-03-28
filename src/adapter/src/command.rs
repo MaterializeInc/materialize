@@ -293,8 +293,15 @@ pub enum Command {
         plan: SideEffectingFunc,
         conn_id: ConnectionId,
         /// The current role of the session, used for RBAC checks.
-        current_role: RoleId,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    /// Look up the authenticated role for a connection by its raw connection ID.
+    /// Returns `Some(role_id)` if the connection exists, `None` otherwise.
+    /// Used by frontend peek sequencing to provide `active_conns` data to `rbac::check_plan`.
+    GetConnectionAuthenticatedRole {
+        connection_id: u32,
+        tx: oneshot::Sender<Option<RoleId>>,
     },
 
     /// Register a pending peek initiated by frontend sequencing. This is needed for:
@@ -367,6 +374,7 @@ impl Command {
             | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
+            | Command::GetConnectionAuthenticatedRole { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
@@ -404,6 +412,7 @@ impl Command {
             | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
+            | Command::GetConnectionAuthenticatedRole { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
