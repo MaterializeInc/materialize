@@ -198,6 +198,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "persist_shard_source_sync",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_password_auth",
             "true",
             ["true", "false"],

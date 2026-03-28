@@ -81,6 +81,7 @@ pub mod operators {
     use mz_dyncfg::Config;
 
     pub mod shard_source;
+    mod shard_source_sync;
 
     // TODO(cfg): Move this next to the use.
     pub(crate) const STORAGE_SOURCE_DECODE_FUEL: Config<usize> = Config::new(
