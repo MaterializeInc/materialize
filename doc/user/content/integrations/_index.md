@@ -48,7 +48,8 @@ See also the following integration guides for BI tools:
 
 ## Coding agents
 
-- [MCP Server](/integrations/llm/)
+- [Built-in MCP Server](/integrations/mcp/)
+- [MCP Server (Python)](/integrations/llm/)
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 
 ## Foreign data wrapper
