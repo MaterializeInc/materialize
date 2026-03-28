@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
-use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -144,7 +144,7 @@ impl Subtime {
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G>(
+pub fn persist_source<G, E>(
     scope: &mut G,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -160,11 +160,12 @@ pub fn persist_source<G>(
     error_handler: ErrorHandler,
 ) -> (
     StreamVec<G, (Row, Timestamp, Diff)>,
-    StreamVec<G, (DataflowError, Timestamp, Diff)>,
+    StreamVec<G, (E, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
 {
     let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
 
@@ -279,7 +280,7 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<'g, G>(
+pub fn persist_source_core<'g, G, E>(
     scope: &RefinedScope<'g, G>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -298,7 +299,7 @@ pub fn persist_source_core<'g, G>(
     Stream<
         RefinedScope<'g, G>,
         Vec<(
-            Result<Row, DataflowError>,
+            Result<Row, E>,
             (mz_repr::Timestamp, Subtime),
             Diff,
         )>,
@@ -307,6 +308,7 @@ pub fn persist_source_core<'g, G>(
 )
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
 {
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
@@ -433,15 +435,16 @@ fn filter_result(
     }
 }
 
-pub fn decode_and_mfp<G>(
+pub fn decode_and_mfp<G, E>(
     cfg: PersistConfig,
     fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
+) -> StreamVec<G, (Result<Row, E>, G::Timestamp, Diff)>
 where
     G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
 {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
@@ -554,7 +557,7 @@ impl PendingPart {
 impl PendingWork {
     /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
     /// `yield_fn` whether more fuel is available.
-    fn do_work<YFn>(
+    fn do_work<YFn, E>(
         &mut self,
         work: &mut usize,
         name: &str,
@@ -569,7 +572,7 @@ impl PendingWork {
             (mz_repr::Timestamp, Subtime),
             ConsolidatingContainerBuilder<
                 Vec<(
-                    Result<Row, DataflowError>,
+                    Result<Row, E>,
                     (mz_repr::Timestamp, Subtime),
                     Diff,
                 )>,
@@ -578,6 +581,7 @@ impl PendingWork {
     ) -> bool
     where
         YFn: Fn(Instant, usize) -> bool,
+        E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
     {
         let mut session = output.session_with_builder(&self.capability);
         let fetched_part = self.part.part_mut();
@@ -676,7 +680,7 @@ impl PendingWork {
                 (SourceData(Err(err)), ()) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
-                    session.give((Err(err), emit_time, diff.into()));
+                    session.give((Err(E::from(err)), emit_time, diff.into()));
                     *work += 1;
                 }
             }
