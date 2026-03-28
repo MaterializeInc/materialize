@@ -16,7 +16,8 @@ use std::iter;
 
 use mz_expr::visit::Visit;
 use mz_expr::{
-    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
+    AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, RowComparator,
+    TableFunc, UnaryFunc,
 };
 use mz_repr::{Datum, Diff, ReprRelationType, Row, RowArena};
 
@@ -526,12 +527,10 @@ impl FoldConstants {
         rows: &'a mut [(Row, Diff)],
     ) {
         // helper functions for comparing elements by order_key and group_key
-        let mut lhs_datum_vec = mz_repr::DatumVec::new();
-        let mut rhs_datum_vec = mz_repr::DatumVec::new();
+        let comparator = RowComparator::new(order_key);
+
         let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-            let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
-            let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-            mz_expr::compare_columns(order_key, lhs_datums, rhs_datums, || lhs.cmp(rhs))
+            comparator.compare_rows(&lhs.0, &rhs.0, || lhs.cmp(rhs))
         };
         let mut cmp_group_key = {
             let group_key = group_key
@@ -545,12 +544,9 @@ impl FoldConstants {
                     nulls_last: false,
                 })
                 .collect::<Vec<ColumnOrder>>();
-            let mut lhs_datum_vec = mz_repr::DatumVec::new();
-            let mut rhs_datum_vec = mz_repr::DatumVec::new();
+            let comparator = RowComparator::new(group_key);
             move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
-                let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
-                let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
-                mz_expr::compare_columns(&group_key, lhs_datums, rhs_datums, || Ordering::Equal)
+                comparator.compare_rows(&lhs.0, &rhs.0, || Ordering::Equal)
             }
         };
 
@@ -562,7 +558,7 @@ impl FoldConstants {
             rows.sort_by(&mut cmp_group_key);
         };
 
-        let mut same_group_key =
+        let same_group_key =
             |lhs: &(Row, Diff), rhs: &(Row, Diff)| cmp_group_key(lhs, rhs) == Ordering::Equal;
 
         let mut cursor = 0;
