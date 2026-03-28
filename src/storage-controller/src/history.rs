@@ -321,6 +321,9 @@ mod tests {
             source_exports,
             instance_id: StorageInstanceId::system(0).expect("0 is a valid ID"),
             remap_collection_id: GlobalId::User(remap_collection_id),
+            metadata_collection_id: None,
+            metadata_collection_metadata: None,
+            metadata_schema: None,
         }
     }
 

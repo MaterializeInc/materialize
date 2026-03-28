@@ -954,6 +954,8 @@ pub enum DataSourceDesc {
     Ingestion {
         desc: SourceDesc<ReferencedConnection>,
         cluster_id: ClusterId,
+        // Optional metadata subsource for source-specific persistent state (e.g., timeline history)
+        metadata_subsource: Option<CatalogItemId>,
     },
     /// Receives data from an external system
     OldSyntaxIngestion {
@@ -962,6 +964,8 @@ pub enum DataSourceDesc {
         // If we're dealing with an old syntax ingestion the progress id will be some other collection
         // and the ingestion itself will have the data from an external reference
         progress_subsource: CatalogItemId,
+        // Optional metadata subsource for source-specific persistent state (e.g., timeline history)
+        metadata_subsource: Option<CatalogItemId>,
         data_config: SourceExportDataConfig<ReferencedConnection>,
         details: SourceExportDetails,
     },
@@ -995,6 +999,8 @@ pub enum DataSourceDesc {
     },
     /// Exposes the contents of the catalog shard.
     Catalog,
+    /// Receives dynamic state data from the source.
+    Metadata,
 }
 
 impl From<IntrospectionType> for DataSourceDesc {
@@ -1027,7 +1033,8 @@ impl DataSourceDesc {
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
-            | DataSourceDesc::Catalog => (None, None),
+            | DataSourceDesc::Catalog
+            | DataSourceDesc::Metadata => (None, None),
         }
     }
 
@@ -1075,7 +1082,8 @@ impl DataSourceDesc {
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
-            | DataSourceDesc::Catalog => None,
+            | DataSourceDesc::Catalog
+            | DataSourceDesc::Metadata => None,
         }
     }
 }
@@ -1121,15 +1129,20 @@ impl Source {
         Source {
             create_sql: Some(plan.source.create_sql),
             data_source: match plan.source.data_source {
-                mz_sql::plan::DataSourceDesc::Ingestion(desc) => DataSourceDesc::Ingestion {
+                mz_sql::plan::DataSourceDesc::Ingestion {
+                    desc,
+                    metadata_subsource,
+                } => DataSourceDesc::Ingestion {
                     desc,
                     cluster_id: plan
                         .in_cluster
                         .expect("ingestion-based sources must be given a cluster ID"),
+                    metadata_subsource,
                 },
                 mz_sql::plan::DataSourceDesc::OldSyntaxIngestion {
                     desc,
                     progress_subsource,
+                    metadata_subsource,
                     data_config,
                     details,
                 } => DataSourceDesc::OldSyntaxIngestion {
@@ -1138,6 +1151,7 @@ impl Source {
                         .in_cluster
                         .expect("ingestion-based sources must be given a cluster ID"),
                     progress_subsource,
+                    metadata_subsource,
                     data_config,
                     details,
                 },
@@ -1147,6 +1161,13 @@ impl Source {
                         "subsources must not have a host config or cluster_id defined"
                     );
                     DataSourceDesc::Progress
+                }
+                mz_sql::plan::DataSourceDesc::Metadata => {
+                    assert!(
+                        plan.in_cluster.is_none(),
+                        "subsources must not have a host config or cluster_id defined"
+                    );
+                    DataSourceDesc::Metadata
                 }
                 mz_sql::plan::DataSourceDesc::IngestionExport {
                     ingestion_id,
@@ -1206,6 +1227,7 @@ impl Source {
             DataSourceDesc::IngestionExport { .. } => "subsource",
             DataSourceDesc::Introspection(_) | DataSourceDesc::Catalog => "source",
             DataSourceDesc::Webhook { .. } => "webhook",
+            DataSourceDesc::Metadata => "metadata",
         }
     }
 
@@ -1218,7 +1240,8 @@ impl Source {
             | DataSourceDesc::Introspection(_)
             | DataSourceDesc::Webhook { .. }
             | DataSourceDesc::Progress
-            | DataSourceDesc::Catalog => None,
+            | DataSourceDesc::Catalog
+            | DataSourceDesc::Metadata => None,
         }
     }
 
@@ -1266,6 +1289,7 @@ impl Source {
             // shouldn't count toward their quota.
             DataSourceDesc::Introspection(_)
             | DataSourceDesc::Progress
+            | DataSourceDesc::Metadata
             | DataSourceDesc::Catalog => 0,
         }
     }
@@ -1842,7 +1866,8 @@ impl CatalogItem {
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Webhook { .. }
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Catalog => Ok(None),
+                | DataSourceDesc::Catalog
+                | DataSourceDesc::Metadata => Ok(None),
             },
             _ => Err(SqlCatalogError::UnexpectedType {
                 name: entry.name().item.to_string(),
@@ -2402,7 +2427,8 @@ impl CatalogItem {
                 DataSourceDesc::Webhook { cluster_id, .. } => Some(*cluster_id),
                 DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
-                | DataSourceDesc::Catalog => None,
+                | DataSourceDesc::Catalog
+                | DataSourceDesc::Metadata => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
             CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
@@ -2817,7 +2843,8 @@ impl CatalogEntry {
                 | DataSourceDesc::Introspection(_)
                 | DataSourceDesc::Progress
                 | DataSourceDesc::Webhook { .. }
-                | DataSourceDesc::Catalog => None,
+                | DataSourceDesc::Catalog
+                | DataSourceDesc::Metadata => None,
             },
             CatalogItem::Table(_)
             | CatalogItem::Log(_)

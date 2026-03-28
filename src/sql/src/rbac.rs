@@ -1635,7 +1635,7 @@ fn generate_required_source_privileges(
         (_, Some(id)) => {
             privileges.push((SystemObjectId::Object(id.into()), AclMode::CREATE, role_id))
         }
-        (DataSourceDesc::Ingestion(_), None) => {
+        (DataSourceDesc::Ingestion { .. }, None) => {
             privileges.push((SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id))
         }
         // Non-ingestion data-sources have meaningless cluster config's (for now...) and they need

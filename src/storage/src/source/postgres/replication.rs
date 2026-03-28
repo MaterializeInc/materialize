@@ -81,17 +81,23 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use differential_dataflow::AsCollection;
 use futures::{FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
-use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
+use mz_persist_client::Diagnostics;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_postgres_util::PostgresError;
+use mz_postgres_util::replication::MzPgTimelineHistory;
+use mz_postgres_util::replication::MzPgTimelineHistoryEntry;
 use mz_postgres_util::{Client, simple_query_opt};
+use mz_repr::Timestamp;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
+use mz_storage_types::StorageDiff;
 use mz_storage_types::dyncfgs::PG_SCHEMA_VALIDATION_INTERVAL;
-use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -108,6 +114,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
+use timely::progress::Timestamp as _;
 use tokio::sync::{mpsc, watch};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
@@ -158,6 +165,54 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
+
+    // let timeline_relation_desc = RelationDesc::builder()
+    //     .with_column("timeline_id", SqlScalarType::UInt64.nullable(false))
+    //     .with_column("switchpoint_lsn", SqlScalarType::UInt64.nullable(true))
+    //     .finish();
+
+    // let timeline_handles_fn = {
+    //     let cfg = config.clone();
+    //     let persist = cfg.persist_clients;
+    //     let relation_desc = timeline_relation_desc.clone();
+    //     let shard_meta = cfg
+    //         .source_exports
+    //         .first_key_value()
+    //         .unwrap()
+    //         .1
+    //         .storage_metadata
+    //         .clone();
+    //     let uuid = shard_meta.data_shard.to_string();
+    //     let uuid = uuid.strip_prefix('s').unwrap();
+    //     let uuid = Uuid::parse_str(uuid).expect("valid shard_id").as_u128();
+    //     let uuid = match uuid.checked_add(1) {
+    //         Some(inc_uuid) => inc_uuid,
+    //         None => uuid - 1,
+    //     };
+    //     let uuid = Uuid::from_u128(uuid);
+    //     let timeline_history_shard_id =
+    //         ShardId::from_str(&format!("s{}", uuid)).expect("timeline shard_id");
+    //     async move {
+    //         let client = persist.open(shard_meta.persist_location.clone()).await?;
+    //         let handles = client
+    //             .open::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+    //                 timeline_history_shard_id,
+    //                 Arc::new(relation_desc),
+    //                 Arc::new(UnitSchema),
+    //                 Diagnostics::from_purpose("timeline_history"),
+    //                 false,
+    //             )
+    //             .await?;
+    //         Ok::<
+    //             (
+    //                 WriteHandle<SourceData, (), mz_repr::Timestamp, i64>,
+    //                 ReadHandle<SourceData, (), mz_repr::Timestamp, i64>,
+    //             ),
+    //             anyhow::Error,
+    //         >(handles)
+    //     }
+    // };
+
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
@@ -629,7 +684,8 @@ async fn raw_stream<'a>(
         if let Err(err) = ensure_replication_timeline_id(
             &replication_client,
             expected_timeline_id,
-            config.config.config_set(),
+            &resume_lsn,
+            &config,
         )
         .await?
         {
@@ -1062,25 +1118,256 @@ async fn ensure_publication_exists(
 /// connection issues and an inner definite error if the timeline id does not match.
 async fn ensure_replication_timeline_id(
     replication_client: &Client,
-    expected_timeline_id: &u64,
-    config_set: &ConfigSet,
+    _expected_timeline_id: &u64,
+    resume_lsn: &MzOffset,
+    config: &RawSourceCreationConfig,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
     let timeline_id = mz_postgres_util::get_timeline_id(replication_client).await?;
-    if timeline_id == *expected_timeline_id {
-        Ok(Ok(()))
+    tracing::info!("upstream timeline = {timeline_id}");
+
+    tracing::info!(?config.metadata_collection_id, ?config.metadata_collection_metadata, "metadata info");
+
+    // TODO (maz): we need to always write out the timeline history. Should controller write it out
+    // when the source is created? For now, if there's not history, we assume we need to write it out.
+    // let (mut write_handle, mut read_handle) = timeline_handles_fn.await?;
+    let persist = Arc::clone(&config.persist_clients);
+    let shard_metadata = config
+        .metadata_collection_metadata
+        .as_ref()
+        .expect("metadata shard metadata");
+    let client = persist
+        .open(shard_metadata.persist_location.clone())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to acquire persist client: {}", e))?;
+    let (mut write_handle, mut read_handle) = client
+        .open::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+            shard_metadata.data_shard.clone(),
+            Arc::new(shard_metadata.relation_desc.clone()),
+            Arc::new(UnitSchema),
+            Diagnostics::from_purpose("timeline_history"),
+            false,
+        )
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to open metadata shard {}: {}",
+                shard_metadata.data_shard,
+                e
+            )
+        })?;
+
+    let upper_ts = write_handle
+        .fetch_recent_upper()
+        .await
+        .clone()
+        .into_element();
+
+    let since_ts = upper_ts.step_back().unwrap_or_else(Timestamp::minimum);
+    tracing::info!("timeline_history upper = {upper_ts} since = {since_ts}");
+
+    // It's possible this is the first time the shard is being accessed, in which case
+    // there is no data to read and we initialize our view of the timeline history as empty.
+    let mz_timeline_history = if upper_ts == Timestamp::minimum() {
+        MzPgTimelineHistory::default()
     } else {
-        if PG_SOURCE_VALIDATE_TIMELINE.get(config_set) {
-            Ok(Err(DefiniteError::InvalidTimelineId {
-                expected: *expected_timeline_id,
-                actual: timeline_id,
-            }))
-        } else {
-            tracing::warn!(
-                "Timeline ID mismatch ignored: expected={expected_timeline_id} actual={timeline_id}"
+        read_handle
+            .snapshot_and_fetch(Antichain::from_elem(since_ts))
+            .await
+            .map_err(|e| {
+                TransientError::Generic(anyhow::anyhow!("invalid since for timeline: {e:?}"))
+            })?
+            .into_iter()
+            .map(|((data, _val), _ts, _diff)| {
+                data.0.map(|row| {
+                    // TODO (maz): implement From<Row> for MzPgTimelineHistoryEntry
+                    let mut iter = row.into_iter();
+                    match (iter.next(), iter.next()) {
+                        (Some(Datum::UInt64(tli)), Some(Datum::UInt64(lsn))) => {
+                            MzPgTimelineHistoryEntry {
+                                timeline_id: tli,
+                                switchpoint_lsn: Some(PgLsn::from(lsn)),
+                            }
+                        }
+                        (Some(Datum::UInt64(tli)), Some(Datum::Null)) => MzPgTimelineHistoryEntry {
+                            timeline_id: tli,
+                            switchpoint_lsn: None,
+                        },
+                        _ => panic!("invalid timeline history schema"),
+                    }
+                })
+            })
+            .collect::<Result<MzPgTimelineHistory, _>>()
+            .map_err(|e| TransientError::Generic(anyhow::anyhow!("persist error: {e:?}")))?
+    };
+    read_handle.expire().await;
+
+    tracing::info!("mz timeline history = {mz_timeline_history:?}");
+
+    let upstream_timeline_history =
+        mz_postgres_util::get_timeline_history(replication_client, timeline_id).await?;
+
+    tracing::info!("upstream timeline history = {upstream_timeline_history:?}");
+
+    let result = validate_timeline_history(
+        &mz_timeline_history,
+        &upstream_timeline_history,
+        &resume_lsn.offset.into(),
+    )?;
+
+    if result.is_ok() && mz_timeline_history != upstream_timeline_history {
+        let new_upper_ts = upper_ts.step_forward();
+        let mut updates = vec![];
+        let mut row = Row::default();
+        let mut as_of_timeline = None;
+
+        // retraction for the last entry in mz_timeline_history, if we have ever comitted
+        // a history to persist
+        if let Some(last_mz_entry) = mz_timeline_history.history.last() {
+            assert_eq!(
+                last_mz_entry.switchpoint_lsn, None,
+                "last entry in timeline history must be None"
             );
-            Ok(Ok(()))
+            as_of_timeline = Some(last_mz_entry.timeline_id);
+            updates.push((
+                (
+                    SourceData(encode_timeline_entry(last_mz_entry, &mut row)),
+                    (),
+                ),
+                upper_ts,
+                -1,
+            ));
+        }
+
+        updates.extend(
+            upstream_timeline_history
+                .history
+                .iter()
+                .filter_map(|entry| {
+                    if as_of_timeline.is_none_or(|last_tli| last_tli <= entry.timeline_id) {
+                        Some((
+                            (SourceData(encode_timeline_entry(entry, &mut row)), ()),
+                            upper_ts,
+                            1,
+                        ))
+                    } else {
+                        None
+                    }
+                }),
+        );
+
+        tracing::info!(
+            "timeline history update count: {num_updates}",
+            num_updates = updates.len()
+        );
+        // generate the new history and write it out
+        write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(upper_ts),
+                Antichain::from_elem(new_upper_ts),
+            )
+            .await
+            .map_err(|e| TransientError::Generic(anyhow::anyhow!("persist error: {e:?}")))?
+            .map_err(|e| TransientError::Generic(anyhow::anyhow!("upper mismatch error: {e:?}")))?;
+    }
+
+    write_handle.expire().await;
+    Ok(result)
+}
+
+fn encode_timeline_entry(
+    entry: &MzPgTimelineHistoryEntry,
+    row: &mut Row,
+) -> Result<Row, DataflowError> {
+    let mut packer = row.packer();
+
+    packer.push(Datum::UInt64(entry.timeline_id));
+    packer.push(
+        entry
+            .switchpoint_lsn
+            .map(|lsn| Datum::UInt64(lsn.into()))
+            .unwrap_or(Datum::Null),
+    );
+    Ok(row.clone())
+}
+
+fn validate_timeline_history(
+    mz_timeline_history: &MzPgTimelineHistory,
+    upstream_timeline_history: &MzPgTimelineHistory,
+    resume_lsn: &PgLsn,
+) -> Result<Result<(), DefiniteError>, TransientError> {
+    // Source has not yet recorded a timeline history
+    if mz_timeline_history.is_empty() {
+        return Ok(Ok(()));
+    }
+
+    if let Err(e) = timeline_prefix_check(mz_timeline_history, upstream_timeline_history) {
+        return Ok(Err(e));
+    }
+
+    // which timeline is the resume_lsn from, i.e. the resume_timeline
+    let resume_timeline = mz_timeline_history
+        .timeline_of_resume_lsn(resume_lsn)
+        .expect("read from a valid timeline");
+
+    // validate the resume_timeline and resume_lsn against the timeline history
+    // at this point, the failure condition should be that MZ was consuming events from some
+    // timeline, lets say 3.  The upstream timeline ID changed, and when MZ reconnected,
+    // timeline 3 in the new history shows a switchpoint LSN that is less than the resume_lsn.
+    let resolved_upstream_timeline = upstream_timeline_history.timeline_of_resume_lsn(resume_lsn);
+
+    tracing::info!(
+        "resume_lsn = {resume_lsn} resume_timeline = {resume_timeline} upstream_timeline_for_lsn = {resolved_upstream_timeline:?}"
+    );
+
+    if resolved_upstream_timeline.is_none_or(|actual_timeline| resume_timeline != actual_timeline) {
+        return Ok(Err(DefiniteError::TimelineLsnMismatch {
+            lsn: (*resume_lsn).into(),
+            expected: resume_timeline,
+            actual: resolved_upstream_timeline,
+        }));
+    }
+
+    Ok(Ok(()))
+}
+
+/// Validates the first timeline history is a prefix of the second. Histories are expected to be
+/// in ascending order by entry.
+///
+/// An entry is considered a match if both histories have an entry for the same timeline in the
+/// same order and
+/// - the switchpoint LSN matches between the 2 timelines
+/// - the switchpoint LSN of the first is None (i.e. only the timeline ids match)
+fn timeline_prefix_check(
+    mz_history: &MzPgTimelineHistory,
+    pg_history: &MzPgTimelineHistory,
+) -> Result<(), DefiniteError> {
+    // there is no additional check for mz.switchpoint_lsn being None because that will be the
+    // last entry in the history
+    for (i, mz) in mz_history.history.iter().enumerate() {
+        if let Some(pg) = pg_history.history.get(i) {
+            if mz.timeline_id != pg.timeline_id
+                || mz
+                    .switchpoint_lsn
+                    .is_some_and(|sp_a| pg.switchpoint_lsn.is_none_or(|sp_b| sp_a != sp_b))
+            {
+                return Err(DefiniteError::TimelineHistoryMismatch {
+                    expected_timeline: mz.timeline_id,
+                    expected_lsn: mz.switchpoint_lsn.map(u64::from),
+                    actual_timeline: Some(pg.timeline_id),
+                    actual_lsn: pg.switchpoint_lsn.map(u64::from),
+                });
+            }
+        } else {
+            return Err(DefiniteError::TimelineHistoryMismatch {
+                expected_timeline: mz.timeline_id,
+                expected_lsn: mz.switchpoint_lsn.map(u64::from),
+                actual_timeline: None,
+                actual_lsn: None,
+            });
         }
     }
+    Ok(())
 }
 
 enum SchemaValidationError {
@@ -1151,4 +1438,321 @@ fn spawn_schema_validator(
     });
 
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_postgres_util::replication::{MzPgTimelineHistory, MzPgTimelineHistoryEntry};
+    use tokio_postgres::types::PgLsn;
+
+    fn make_entry(timeline_id: u64, switchpoint_lsn: Option<u64>) -> MzPgTimelineHistoryEntry {
+        MzPgTimelineHistoryEntry {
+            timeline_id,
+            switchpoint_lsn: switchpoint_lsn.map(PgLsn::from),
+        }
+    }
+
+    fn make_history(entries: Vec<(u64, Option<u64>)>) -> MzPgTimelineHistory {
+        MzPgTimelineHistory {
+            history: entries
+                .into_iter()
+                .map(|(tli, lsn)| make_entry(tli, lsn))
+                .collect(),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_empty_mz_history() {
+        // When mz has no timeline history recorded, validation should succeed
+        let mz = MzPgTimelineHistory::default();
+        let upstream = make_history(vec![(1, None)]);
+        let resume_lsn = PgLsn::from(1000u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_exact_match_single_timeline() {
+        // Single timeline with exact match
+        let mz = make_history(vec![(1, None)]);
+        let upstream = make_history(vec![(1, None)]);
+        let resume_lsn = PgLsn::from(1000u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_exact_match_multiple_timelines() {
+        // Multiple timelines with exact match
+        let mz = make_history(vec![(1, Some(1000)), (2, Some(2000)), (3, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, Some(2000)), (3, None)]);
+        let resume_lsn = PgLsn::from(2500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_mz_is_prefix_of_upstream() {
+        // mz history is a prefix of upstream (upstream has progressed further)
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, Some(2000)), (3, None)]);
+        let resume_lsn = PgLsn::from(500u64); // Resume from timeline 1
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_resume_lsn_on_first_timeline() {
+        // Resume LSN is within the first timeline
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, None)]);
+        let resume_lsn = PgLsn::from(500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_resume_lsn_at_switchpoint() {
+        // Resume LSN is exactly at the switchpoint (should be on timeline 1)
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, None)]);
+        let resume_lsn = PgLsn::from(1000u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_resume_lsn_after_switchpoint() {
+        // Resume LSN is just after the switchpoint (should be on timeline 2)
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, None)]);
+        let resume_lsn = PgLsn::from(1001u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_resume_lsn_on_final_timeline() {
+        // Resume LSN is on the final timeline
+        let mz = make_history(vec![(1, Some(1000)), (2, Some(2000)), (3, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, Some(2000)), (3, None)]);
+        let resume_lsn = PgLsn::from(3000u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_mz_none_switchpoint_matches_any() {
+        // mz has None switchpoint for current timeline, should match upstream with specific value
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, Some(2000)), (3, None)]);
+        let resume_lsn = PgLsn::from(1500u64); // On timeline 2
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_ok());
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_timeline_id_mismatch() {
+        // Timeline IDs don't match at same position
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (3, None)]);
+        let resume_lsn = PgLsn::from(500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        let inner = result.unwrap();
+        assert!(inner.is_err());
+        match inner.unwrap_err() {
+            DefiniteError::TimelineHistoryMismatch {
+                expected_timeline,
+                actual_timeline,
+                expected_lsn,
+                actual_lsn,
+            } => {
+                assert_eq!(expected_timeline, 2);
+                assert_eq!(expected_lsn, None);
+                assert_eq!(actual_timeline, Some(3));
+                assert_eq!(actual_lsn, None);
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_switchpoint_lsn_mismatch() {
+        // Switchpoint LSN doesn't match
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(2000)), (2, None)]); // Different switchpoint
+        let resume_lsn = PgLsn::from(500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        let inner = result.unwrap();
+        assert!(inner.is_err());
+        match inner.unwrap_err() {
+            DefiniteError::TimelineHistoryMismatch {
+                expected_timeline,
+                expected_lsn,
+                actual_lsn,
+                actual_timeline,
+            } => {
+                assert_eq!(expected_timeline, 1);
+                assert_eq!(expected_lsn, Some(1000));
+                assert_eq!(actual_timeline, Some(1));
+                assert_eq!(actual_lsn, Some(2000));
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_upstream_missing_entries() {
+        // Upstream is missing entries that mz has (upstream doesn't have timeline 2 at all)
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000))]);
+        let resume_lsn = PgLsn::from(500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        let inner = result.unwrap();
+        assert!(inner.is_err());
+        match inner.unwrap_err() {
+            DefiniteError::TimelineHistoryMismatch {
+                expected_timeline,
+                actual_timeline,
+                expected_lsn,
+                actual_lsn,
+            } => {
+                assert_eq!(expected_timeline, 2);
+                assert_eq!(expected_lsn, None);
+                assert_eq!(actual_timeline, None);
+                assert_eq!(actual_lsn, None);
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_upstream_has_different_first_timeline() {
+        // First timeline ID is different
+        let mz = make_history(vec![(1, None)]);
+        let upstream = make_history(vec![(2, None)]);
+        let resume_lsn = PgLsn::from(500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        let inner = result.unwrap();
+        assert!(inner.is_err());
+        match inner.unwrap_err() {
+            DefiniteError::TimelineHistoryMismatch {
+                expected_timeline,
+                actual_timeline,
+                expected_lsn,
+                actual_lsn,
+            } => {
+                assert_eq!(expected_timeline, 1);
+                assert_eq!(expected_lsn, None);
+                assert_eq!(actual_timeline, Some(2));
+                assert_eq!(actual_lsn, None);
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_upstream_empty() {
+        // Upstream has no history but mz does
+        let mz = make_history(vec![(1, None)]);
+        let upstream = MzPgTimelineHistory::default();
+        let resume_lsn = PgLsn::from(500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        let inner = result.unwrap();
+        assert!(inner.is_err());
+        match inner.unwrap_err() {
+            DefiniteError::TimelineHistoryMismatch {
+                expected_timeline,
+                expected_lsn,
+                actual_timeline,
+                actual_lsn,
+            } => {
+                assert_eq!(expected_timeline, 1);
+                assert_eq!(expected_lsn, None);
+                assert_eq!(actual_timeline, None);
+                assert_eq!(actual_lsn, None);
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_validate_timeline_history_resume_lsn_not_on_expected_timeline() {
+        // Resume LSN is beyond the valid range for mz's recorded history
+        // mz thinks resume_lsn 2500 should be on timeline 2 (switchpoint at None)
+        // upstream has switched timeline 2 at LSN 2000, so 2500 is on timeline 3
+        let mz = make_history(vec![(1, Some(1000)), (2, None)]);
+        let upstream = make_history(vec![(1, Some(1000)), (2, Some(2000)), (3, None)]);
+        let resume_lsn = PgLsn::from(2500u64);
+
+        let result = validate_timeline_history(&mz, &upstream, &resume_lsn);
+        assert!(result.is_ok());
+        let inner = result.unwrap();
+        assert!(inner.is_err());
+        match inner.unwrap_err() {
+            DefiniteError::TimelineLsnMismatch {
+                lsn,
+                expected,
+                actual,
+            } => {
+                assert_eq!(lsn, 2500);
+                assert_eq!(expected, 2);
+                assert_eq!(actual, Some(3));
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_timeline_prefix_check_mz_has_switchpoint_pg_none() {
+        // mz has specific switchpoint, pg has None.
+        let mz = make_history(vec![(1, Some(1000))]);
+        let pg = make_history(vec![(1, None)]);
+
+        let result = timeline_prefix_check(&mz, &pg);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            DefiniteError::TimelineHistoryMismatch {
+                expected_timeline,
+                expected_lsn,
+                actual_timeline,
+                actual_lsn,
+            } => {
+                assert_eq!(expected_timeline, 1);
+                assert_eq!(expected_lsn, Some(1000));
+                assert_eq!(actual_timeline, Some(1));
+                assert_eq!(actual_lsn, None);
+            }
+            e => panic!("unexpected error: {:?}", e),
+        }
+    }
 }

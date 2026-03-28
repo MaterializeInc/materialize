@@ -209,6 +209,8 @@ pub enum PurifiedStatement {
     PurifiedCreateSource {
         // The progress subsource, if we are offloading progress info to a separate relation
         create_progress_subsource_stmt: Option<CreateSubsourceStatement<Aug>>,
+        // The metadata subsource, for source-specific persistent state (e.g., timeline history)
+        create_metadata_subsource_stmt: Option<CreateSubsourceStatement<Aug>>,
         create_source_stmt: CreateSourceStatement<Aug>,
         // Map of subsource names to external details
         subsources: BTreeMap<UnresolvedItemName, PurifiedSourceExport>,
@@ -712,6 +714,7 @@ async fn purify_create_source(
         include_metadata,
         external_references,
         progress_subsource,
+        metadata_subsource, // TODO(maz)- decision is made by this guy
         with_options,
         ..
     } = &mut create_source_stmt;
@@ -747,6 +750,7 @@ async fn purify_create_source(
             &mz_storage_types::sources::load_generator::LOAD_GEN_PROGRESS_DESC
         }
     };
+
     let scx = StatementContext::new(None, &catalog);
 
     // Depending on if the user must or can use the `CREATE TABLE .. FROM SOURCE` statement
@@ -1310,8 +1314,78 @@ async fn purify_create_source(
     )
     .await?;
 
+    // Generate metadata subsource for PostgreSQL sources (for timeline history tracking)
+    let create_metadata_subsource_stmt =
+        if matches!(source_connection, CreateSourceConnection::Postgres { .. }) {
+            tracing::info!(?metadata_subsource, "create_metadata_subsource_stmt");
+            let name = match metadata_subsource {
+                Some(name) => match name {
+                    DeferredItemName::Deferred(name) => name.clone(),
+                    DeferredItemName::Named(_) => unreachable!("already checked for this value"),
+                },
+                None => {
+                    let (item, prefix) = source_name.0.split_last().unwrap();
+                    let item_name =
+                        Ident::try_generate_name(item.to_string(), "_metadata", |candidate| {
+                            let mut suggested_name = prefix.to_vec();
+                            suggested_name.push(candidate.clone());
+
+                            let partial = normalize::unresolved_item_name(UnresolvedItemName(
+                                suggested_name,
+                            ))?;
+                            let qualified = scx.allocate_qualified_name(partial)?;
+                            let item_exists = scx.catalog.get_item_by_name(&qualified).is_some();
+                            let type_exists = scx.catalog.get_type_by_name(&qualified).is_some();
+                            Ok::<_, PlanError>(!item_exists && !type_exists)
+                        })?;
+
+                    let mut full_name = prefix.to_vec();
+                    full_name.push(item_name);
+                    let full_name = normalize::unresolved_item_name(UnresolvedItemName(full_name))?;
+                    let qualified_name = scx.allocate_qualified_name(full_name)?;
+                    let full_name = scx.catalog.resolve_full_name(&qualified_name);
+
+                    UnresolvedItemName::from(full_name.clone())
+                }
+            };
+
+            let (columns, constraints) = scx.relation_desc_into_table_defs(
+                &mz_storage_types::sources::postgres::PG_TIMELINE_HISTORY_DESC,
+            )?;
+
+            // Create the subsource statement with metadata option
+            let mut metadata_with_options: Vec<_> = with_options
+                .iter()
+                .filter_map(|opt| match opt.name {
+                    CreateSourceOptionName::TimestampInterval => None,
+                    CreateSourceOptionName::RetainHistory => Some(CreateSubsourceOption {
+                        name: CreateSubsourceOptionName::RetainHistory,
+                        value: opt.value.clone(),
+                    }),
+                })
+                .collect();
+
+            // Mark this as a metadata subsource (similar to progress subsource)
+            metadata_with_options.push(CreateSubsourceOption {
+                name: CreateSubsourceOptionName::Metadata,
+                value: Some(WithOptionValue::Value(Value::Boolean(true))),
+            });
+
+            Some(CreateSubsourceStatement {
+                name,
+                columns,
+                of_source: None,
+                constraints,
+                if_not_exists: false,
+                with_options: metadata_with_options,
+            })
+        } else {
+            None
+        };
+
     Ok(PurifiedStatement::PurifiedCreateSource {
         create_progress_subsource_stmt,
+        create_metadata_subsource_stmt,
         create_source_stmt,
         subsources: requested_subsource_map,
         available_source_references: retrieved_source_references.available_source_references(),

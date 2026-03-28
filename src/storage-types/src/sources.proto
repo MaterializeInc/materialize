@@ -38,3 +38,13 @@ message ProtoSourceExportStatementDetails {
     mz_storage_types.sources.kafka.ProtoKafkaSourceExportStatementDetails kafka = 4;
   }
 }
+
+message ProtoSourceMetadataSchema {
+  oneof kind {
+    ProtoPostgresTimelineHistorySchema postgres_timeline_history = 1;
+  }
+}
+
+message ProtoPostgresTimelineHistorySchema {
+  // Empty - schema is fixed, just need to identify the type
+}

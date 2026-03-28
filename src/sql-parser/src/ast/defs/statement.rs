@@ -1018,6 +1018,8 @@ pub struct CreateSourceStatement<T: AstInfo> {
     pub with_options: Vec<CreateSourceOption<T>>,
     pub external_references: Option<ExternalReferences>,
     pub progress_subsource: Option<DeferredItemName<T>>,
+    /// Optional metadata subsource for source-specific persistent state (e.g., timeline history)
+    pub metadata_subsource: Option<DeferredItemName<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
@@ -1068,6 +1070,11 @@ impl<T: AstInfo> AstDisplay for CreateSourceStatement<T> {
         if let Some(progress) = &self.progress_subsource {
             f.write_str(" EXPOSE PROGRESS AS ");
             f.write_node(progress);
+        }
+
+        if let Some(metadata) = &self.metadata_subsource {
+            f.write_str(" EXPOSE METADATA AS ");
+            f.write_node(metadata);
         }
 
         if !self.with_options.is_empty() {
@@ -1143,6 +1150,8 @@ pub enum CreateSubsourceOptionName {
     /// `DETAILS` for this subsource, hex-encoded protobuf type
     /// `mz_storage_types::sources::SourceExportStatementDetails`
     Details,
+    /// An internal metadata subsource, similar to progress but much more fun
+    Metadata,
 }
 
 impl AstDisplay for CreateSubsourceOptionName {
@@ -1154,6 +1163,7 @@ impl AstDisplay for CreateSubsourceOptionName {
             CreateSubsourceOptionName::TextColumns => "TEXT COLUMNS",
             CreateSubsourceOptionName::ExcludeColumns => "EXCLUDE COLUMNS",
             CreateSubsourceOptionName::Details => "DETAILS",
+            CreateSubsourceOptionName::Metadata => "METADATA",
         })
     }
 }
@@ -1171,7 +1181,8 @@ impl WithOptionName for CreateSubsourceOptionName {
             | CreateSubsourceOptionName::RetainHistory
             | CreateSubsourceOptionName::Details
             | CreateSubsourceOptionName::TextColumns
-            | CreateSubsourceOptionName::ExcludeColumns => false,
+            | CreateSubsourceOptionName::ExcludeColumns
+            | CreateSubsourceOptionName::Metadata => false,
         }
     }
 }

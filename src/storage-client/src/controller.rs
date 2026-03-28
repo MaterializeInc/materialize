@@ -133,6 +133,9 @@ pub enum DataSource<T> {
     Introspection(IntrospectionType),
     /// Data comes from the source's remapping/reclock operator.
     Progress,
+    /// Data comes from source-specific metadata tracking (e.g., timeline history).
+    /// The ingestion_id identifies which source this metadata belongs to.
+    SourceMetadata { ingestion_id: GlobalId },
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
     /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
@@ -142,6 +145,8 @@ pub enum DataSource<T> {
     Other,
     /// This collection is the output collection of a sink.
     Sink { desc: ExportDescription<T> },
+    /// Dynamic state data that comes from the source.
+    Metadata,
 }
 
 /// Describes a request to create a source.
@@ -756,7 +761,9 @@ impl<T> DataSource<T> {
             | DataSource::IngestionExport { .. }
             | DataSource::Introspection(_)
             | DataSource::Progress
-            | DataSource::Webhook => false,
+            | DataSource::SourceMetadata { .. }
+            | DataSource::Webhook
+            | DataSource::Metadata => false,
             DataSource::Sink { .. } => false,
         }
     }

@@ -1270,8 +1270,9 @@ fn humanize_sql_for_show_create(
                     CreateSubsourceOptionName::ExcludeColumns => true,
                     // Drop details, which does not roundtrip.
                     CreateSubsourceOptionName::Details => false,
-                    CreateSubsourceOptionName::ExternalReference => true,
-                    CreateSubsourceOptionName::Progress => true,
+                    CreateSubsourceOptionName::ExternalReference
+                    | CreateSubsourceOptionName::Progress
+                    | CreateSubsourceOptionName::Metadata => true,
                 }
             });
         }

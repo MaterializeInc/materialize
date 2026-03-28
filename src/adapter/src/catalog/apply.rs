@@ -197,6 +197,8 @@ impl CatalogState {
             "all timestamps should be equal: {updates:?}"
         );
 
+        tracing::info!("==== apply updates: {updates:?}");
+
         let mut update_system_config = false;
 
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
