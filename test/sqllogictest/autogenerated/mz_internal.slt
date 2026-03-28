@@ -705,6 +705,20 @@ lag  interval  The␠amount␠of␠time␠the␠object's␠write␠frontier␠la
 occurred_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠at␠which␠the␠event␠occurred.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_global_lag_history' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠table,␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_objects.id`.
+lag  interval  The␠minimum␠wallclock␠lag␠observed␠for␠the␠object␠during␠the␠minute.
+occurred_at  timestamp␠with␠time␠zone  The␠minute-aligned␠timestamp␠of␠the␠observation.
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_wallclock_global_lag_recent_history' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠table,␠source,␠materialized␠view,␠index,␠or␠sink.␠Corresponds␠to␠`mz_objects.id`.
+lag  interval  The␠minimum␠wallclock␠lag␠observed␠for␠the␠object␠during␠the␠minute.
+occurred_at  timestamp␠with␠time␠zone  The␠minute-aligned␠timestamp␠of␠the␠observation.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_webhook_sources' ORDER BY position
 ----
 id  text  The␠ID␠of␠the␠webhook␠source.␠Corresponds␠to␠`mz_sources.id`.

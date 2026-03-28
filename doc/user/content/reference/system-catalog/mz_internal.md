@@ -1313,8 +1313,29 @@ i.e., the [freshness](/concepts/reaction-time/#freshness), for each table, sourc
 | `lag`         | [`interval`] | The amount of time the object's write frontier lags behind wallclock time.
 | `occurred_at` | [`timestamp with time zone`] | Wall-clock timestamp at which the event occurred.
 
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_history -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_recent_history -->
+## `mz_wallclock_global_lag_history`
+
+The `mz_wallclock_global_lag_history` view contains historical wallclock lag for tables, sources, indexes, materialized views, and sinks, binned by minute.
+Unlike [`mz_wallclock_lag_history`](#mz_wallclock_lag_history), this view aggregates across replicas, reporting the minimum lag per object per minute.
+
+<!-- RELATION_SPEC mz_internal.mz_wallclock_global_lag_history -->
+| Field         | Type         | Meaning
+| --------------| -------------| --------
+| `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+| `lag`         | [`interval`] | The minimum wallclock lag observed for the object during the minute.
+| `occurred_at` | [`timestamp with time zone`] | The minute-aligned timestamp of the observation.
+
+## `mz_wallclock_global_lag_recent_history`
+
+The `mz_wallclock_global_lag_recent_history` view is a filtered subset of [`mz_wallclock_global_lag_history`](#mz_wallclock_global_lag_history) containing only the last 24 hours of data.
+
+<!-- RELATION_SPEC mz_internal.mz_wallclock_global_lag_recent_history -->
+| Field         | Type         | Meaning
+| --------------| -------------| --------
+| `object_id`   | [`text`]     | The ID of the table, source, materialized view, index, or sink. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).
+| `lag`         | [`interval`] | The minimum wallclock lag observed for the object during the minute.
+| `occurred_at` | [`timestamp with time zone`] | The minute-aligned timestamp of the observation.
+
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_wallclock_global_lag_histogram_raw -->
 
