@@ -34,9 +34,7 @@ use uuid::Uuid;
 use crate::metrics::Metrics;
 use crate::{ApiTokenArgs, AppPassword, Client, Error, FronteggCliArgs};
 
-/// SAFETY: Value is known to be non-zero.
-pub const DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE: NonZeroUsize =
-    unsafe { NonZeroUsize::new_unchecked(1024) };
+pub const DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE: NonZeroUsize = NonZeroUsize::new(1024).unwrap();
 
 /// If a session is dropped within [`DEFAULT_REFRESH_DROP_FACTOR`] `* valid_for` seconds of an
 /// authentication token expiring, then we'll continue to refresh the auth token, with the
