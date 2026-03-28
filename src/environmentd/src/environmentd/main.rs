@@ -361,6 +361,11 @@ pub struct Args {
     /// Where the persist library should store its blob data.
     #[clap(long, env = "PERSIST_BLOB_URL")]
     persist_blob_url: SensitiveUrl,
+    /// Optional fast-tier blob storage for latency-sensitive writes.
+    /// When set, latency-sensitive writes go to this blob while
+    /// background work stays on the standard --persist-blob-url.
+    #[clap(long, env = "PERSIST_FAST_TIER_BLOB_URL")]
+    persist_fast_tier_blob_url: Option<SensitiveUrl>,
     /// Where the persist library should perform consensus.
     #[clap(long, env = "PERSIST_CONSENSUS_URL")]
     persist_consensus_url: Option<SensitiveUrl>,
@@ -1030,6 +1035,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         persist_location: PersistLocation {
             blob_uri: args.persist_blob_url,
             consensus_uri,
+            fast_tier_blob_uri: args.persist_fast_tier_blob_url,
         },
         persist_clients: Arc::clone(&persist_clients),
         clusterd_image: args.clusterd_image.expect("clap enforced"),

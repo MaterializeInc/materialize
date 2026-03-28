@@ -639,6 +639,74 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
     }
 }
 
+/// Which storage tier a key should be routed to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobTier {
+    /// The base storage tier for non-latency-sensitive writes.
+    Base,
+    /// The fast storage tier for latency-sensitive writes.
+    Fast,
+}
+
+/// Routes blob operations to one of two storage tiers based on a caller-provided
+/// routing function. The routing function inspects each blob key and returns which
+/// tier should handle the operation.
+pub struct TieredStorageBlob {
+    /// The base storage tier for non-latency-sensitive writes.
+    pub base: Arc<dyn Blob>,
+    /// The fast storage tier for latency-sensitive writes.
+    pub fast: Arc<dyn Blob>,
+    /// Determines which tier a given blob key belongs to.
+    pub router: Arc<dyn Fn(&str) -> BlobTier + Send + Sync>,
+}
+
+impl std::fmt::Debug for TieredStorageBlob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TieredStorageBlob")
+            .field("base", &self.base)
+            .field("fast", &self.fast)
+            .finish_non_exhaustive()
+    }
+}
+
+impl TieredStorageBlob {
+    fn route(&self, key: &str) -> &dyn Blob {
+        match (self.router)(key) {
+            BlobTier::Base => &*self.base,
+            BlobTier::Fast => &*self.fast,
+        }
+    }
+}
+
+#[async_trait]
+impl Blob for TieredStorageBlob {
+    async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+        self.route(key).get(key).await
+    }
+
+    async fn list_keys_and_metadata(
+        &self,
+        key_prefix: &str,
+        f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+    ) -> Result<(), ExternalError> {
+        self.base.list_keys_and_metadata(key_prefix, f).await?;
+        self.fast.list_keys_and_metadata(key_prefix, f).await?;
+        Ok(())
+    }
+
+    async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+        self.route(key).set(key, value).await
+    }
+
+    async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+        self.route(key).delete(key).await
+    }
+
+    async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+        self.route(key).restore(key).await
+    }
+}
+
 /// Test helpers for the crate.
 #[cfg(test)]
 pub mod tests {
@@ -1162,5 +1230,160 @@ pub mod tests {
     fn timeout_error() {
         assert!(ExternalError::new_timeout(Instant::now()).is_timeout());
         assert!(!ExternalError::from(anyhow!("foo")).is_timeout());
+    }
+
+    mod tiered_storage_blob {
+        use crate::mem::MemBlobConfig;
+
+        use super::*;
+
+        fn test_router(key: &str) -> BlobTier {
+            if let Some((_shard, rest)) = key.split_once('/') {
+                if rest.starts_with('f') {
+                    return BlobTier::Fast;
+                }
+            }
+            BlobTier::Base
+        }
+
+        fn new_tiered() -> (TieredStorageBlob, Arc<dyn Blob>, Arc<dyn Blob>) {
+            let base: Arc<dyn Blob> =
+                Arc::new(crate::mem::MemBlob::open(MemBlobConfig::new(false)));
+            let fast: Arc<dyn Blob> =
+                Arc::new(crate::mem::MemBlob::open(MemBlobConfig::new(false)));
+            let tiered = TieredStorageBlob {
+                base: Arc::clone(&base),
+                fast: Arc::clone(&fast),
+                router: Arc::new(test_router),
+            };
+            (tiered, base, fast)
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn routes_base_tier_to_base() {
+            let (tiered, base, fast) = new_tiered();
+
+            let key = "shard/n0102300/part";
+            tiered.set(key, Bytes::from("hello")).await.unwrap();
+
+            assert_eq!(
+                base.get(key).await.unwrap(),
+                Some(SegmentedBytes::from(Bytes::from("hello")))
+            );
+            assert_eq!(fast.get(key).await.unwrap(), None);
+            assert_eq!(
+                tiered.get(key).await.unwrap(),
+                Some(SegmentedBytes::from(Bytes::from("hello")))
+            );
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn routes_fast_tier_to_fast() {
+            let (tiered, base, fast) = new_tiered();
+
+            let key = "shard/f0102300/part";
+            tiered.set(key, Bytes::from("world")).await.unwrap();
+
+            assert_eq!(base.get(key).await.unwrap(), None);
+            assert_eq!(
+                fast.get(key).await.unwrap(),
+                Some(SegmentedBytes::from(Bytes::from("world")))
+            );
+            assert_eq!(
+                tiered.get(key).await.unwrap(),
+                Some(SegmentedBytes::from(Bytes::from("world")))
+            );
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn routes_writer_id_to_base() {
+            let (tiered, base, fast) = new_tiered();
+
+            let key = "shard/w00000000-0000-0000-0000-000000000001/part";
+            tiered.set(key, Bytes::from("legacy")).await.unwrap();
+
+            assert_eq!(
+                base.get(key).await.unwrap(),
+                Some(SegmentedBytes::from(Bytes::from("legacy")))
+            );
+            assert_eq!(fast.get(key).await.unwrap(), None);
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn delete_routes_correctly() {
+            let (tiered, base, fast) = new_tiered();
+
+            let base_key = "shard/n001/part1";
+            let fast_key = "shard/f001/part2";
+
+            tiered.set(base_key, Bytes::from("a")).await.unwrap();
+            tiered.set(fast_key, Bytes::from("b")).await.unwrap();
+
+            let deleted = tiered.delete(base_key).await.unwrap();
+            assert_eq!(deleted, Some(1));
+            assert_eq!(base.get(base_key).await.unwrap(), None);
+            assert!(fast.get(fast_key).await.unwrap().is_some());
+
+            let deleted = tiered.delete(fast_key).await.unwrap();
+            assert_eq!(deleted, Some(1));
+            assert_eq!(fast.get(fast_key).await.unwrap(), None);
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn list_merges_both_tiers() {
+            let (tiered, _, _) = new_tiered();
+
+            tiered
+                .set("shard/n001/part1", Bytes::from("a"))
+                .await
+                .unwrap();
+            tiered
+                .set("shard/f001/part2", Bytes::from("b"))
+                .await
+                .unwrap();
+            tiered
+                .set("shard/n002/part3", Bytes::from("c"))
+                .await
+                .unwrap();
+
+            let mut keys = Vec::new();
+            tiered
+                .list_keys_and_metadata("shard/", &mut |entry| {
+                    keys.push(entry.key.to_string());
+                })
+                .await
+                .unwrap();
+            keys.sort();
+
+            assert_eq!(
+                keys,
+                vec!["shard/f001/part2", "shard/n001/part1", "shard/n002/part3"]
+            );
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn restore_routes_correctly() {
+            let (tiered, _, _) = new_tiered();
+
+            let base_key = "shard/n001/part1";
+            let fast_key = "shard/f001/part2";
+
+            tiered.set(base_key, Bytes::from("a")).await.unwrap();
+            tiered.set(fast_key, Bytes::from("b")).await.unwrap();
+
+            tiered.delete(base_key).await.unwrap();
+            let _ = tiered.restore(base_key).await;
+
+            tiered.delete(fast_key).await.unwrap();
+            let _ = tiered.restore(fast_key).await;
+        }
+
+        #[mz_ore::test(tokio::test)]
+        async fn get_nonexistent_returns_none() {
+            let (tiered, _, _) = new_tiered();
+
+            assert_eq!(tiered.get("shard/n001/missing").await.unwrap(), None);
+            assert_eq!(tiered.get("shard/f001/missing").await.unwrap(), None);
+        }
     }
 }

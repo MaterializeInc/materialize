@@ -39,6 +39,7 @@
 //! PersistLocation {
 //!     blob_uri: "turmoil://blob:7000".parse().unwrap(),
 //!     consensus_uri: "turmoil://consensus:7000".parse().unwrap(),
+//!     fast_tier_blob_uri: None,
 //! }
 //! ```
 

@@ -27,7 +27,7 @@ use mz_ore::url::SensitiveUrl;
 use mz_persist::cfg::{BlobConfig, ConsensusConfig};
 use mz_persist::location::{
     BLOB_GET_LIVENESS_KEY, Blob, CONSENSUS_HEAD_LIVENESS_KEY, Consensus, ExternalError, Tasked,
-    VersionedData,
+    TieredStorageBlob, VersionedData,
 };
 use mz_persist_types::{Codec, Codec64};
 use timely::progress::Timestamp;
@@ -39,6 +39,7 @@ use crate::error::{CodecConcreteType, CodecMismatch};
 use crate::internal::cache::BlobMemCache;
 use crate::internal::machine::retry_external;
 use crate::internal::metrics::{LockMetrics, Metrics, MetricsBlob, MetricsConsensus, ShardMetrics};
+use crate::internal::paths::WriterKey;
 use crate::internal::state::TypedState;
 use crate::internal::watch::{AwaitableState, StateWatchNotifier};
 use crate::rpc::{PubSubClientConnection, PubSubSender, ShardSubscriptionToken};
@@ -179,8 +180,25 @@ impl PersistClientCache {
     pub async fn open(&self, location: PersistLocation) -> Result<PersistClient, ExternalError> {
         let blob = self.open_blob(location.blob_uri).await?;
         let consensus = self.open_consensus(location.consensus_uri).await?;
+
+        let has_fast_tier = location.fast_tier_blob_uri.is_some();
+        let blob: Arc<dyn Blob> = match location.fast_tier_blob_uri {
+            Some(uri) => {
+                let fast = self.open_blob(uri).await?;
+                Arc::new(TieredStorageBlob {
+                    base: blob,
+                    fast,
+                    router: Arc::new(WriterKey::blob_tier),
+                })
+            }
+            None => blob,
+        };
+
+        let mut cfg = self.cfg.clone();
+        cfg.has_fast_tier_blob = has_fast_tier;
+
         PersistClient::new(
-            self.cfg.clone(),
+            cfg,
             blob,
             consensus,
             Arc::clone(&self.metrics),
@@ -833,6 +851,7 @@ mod tests {
             .open(PersistLocation {
                 blob_uri: SensitiveUrl::from_str("mem://blob_zero").expect("invalid URL"),
                 consensus_uri: SensitiveUrl::from_str("mem://consensus_zero").expect("invalid URL"),
+                fast_tier_blob_uri: None,
             })
             .await
             .expect("failed to open location");
@@ -845,6 +864,7 @@ mod tests {
             .open(PersistLocation {
                 blob_uri: SensitiveUrl::from_str("mem://blob_one").expect("invalid URL"),
                 consensus_uri: SensitiveUrl::from_str("mem://consensus_zero").expect("invalid URL"),
+                fast_tier_blob_uri: None,
             })
             .await
             .expect("failed to open location");
@@ -856,6 +876,7 @@ mod tests {
             .open(PersistLocation {
                 blob_uri: SensitiveUrl::from_str("mem://blob_one").expect("invalid URL"),
                 consensus_uri: SensitiveUrl::from_str("mem://consensus_one").expect("invalid URL"),
+                fast_tier_blob_uri: None,
             })
             .await
             .expect("failed to open location");
@@ -868,6 +889,7 @@ mod tests {
                 blob_uri: SensitiveUrl::from_str("mem://blob_one?foo").expect("invalid URL"),
                 consensus_uri: SensitiveUrl::from_str("mem://consensus_one/bar")
                     .expect("invalid URL"),
+                fast_tier_blob_uri: None,
             })
             .await
             .expect("failed to open location");
@@ -880,6 +902,7 @@ mod tests {
                 blob_uri: SensitiveUrl::from_str("mem://user@blob_one").expect("invalid URL"),
                 consensus_uri: SensitiveUrl::from_str("mem://@consensus_one:123")
                     .expect("invalid URL"),
+                fast_tier_blob_uri: None,
             })
             .await
             .expect("failed to open location");
@@ -1206,5 +1229,31 @@ mod tests {
         for _ in 0..(COUNT * 2) {
             futures.next().await.unwrap();
         }
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn tiered_storage_open() {
+        let cache = PersistClientCache::new_no_metrics();
+        let location = PersistLocation {
+            blob_uri: SensitiveUrl::from_str("mem://base").expect("valid"),
+            consensus_uri: SensitiveUrl::from_str("mem://consensus").expect("valid"),
+            fast_tier_blob_uri: Some(SensitiveUrl::from_str("mem://fast").expect("valid")),
+        };
+        let client = cache.open(location).await.expect("open");
+        assert!(client.cfg.has_fast_tier_blob);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn tiered_storage_open_none() {
+        let cache = PersistClientCache::new_no_metrics();
+        let location = PersistLocation {
+            blob_uri: SensitiveUrl::from_str("mem://base").expect("valid"),
+            consensus_uri: SensitiveUrl::from_str("mem://consensus").expect("valid"),
+            fast_tier_blob_uri: None,
+        };
+        let client = cache.open(location).await.expect("open");
+        assert!(!client.cfg.has_fast_tier_blob);
     }
 }
