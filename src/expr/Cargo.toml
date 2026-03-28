@@ -21,6 +21,22 @@ harness = false
 name = "window_functions"
 harness = false
 
+[[bench]]
+name = "bench_binary"
+harness = false
+
+[[bench]]
+name = "bench_unary"
+harness = false
+
+[[bench]]
+name = "bench_variadic"
+harness = false
+
+[[bench]]
+name = "bench_array"
+harness = false
+
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow = "1.0.102"
