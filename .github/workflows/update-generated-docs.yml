@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run Claude Code to update docs
         id: claude
@@ -66,6 +67,7 @@ jobs:
           source changes since each doc was last written.
 
           Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "$BRANCH"
           gh pr create \
             --title "doc: update generated developer documentation" \
