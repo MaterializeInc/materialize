@@ -850,7 +850,7 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
     }
 }
 
-/// Produce a `EagerUnaryFunc` implementation.
+/// Produce an `EagerScalarFunc` implementation for a unary function.
 fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
@@ -944,7 +944,15 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         }
     });
 
-    let is_monotone_fn = is_monotone.map(|is_monotone| {
+    let is_monotone_fn = is_monotone.as_ref().map(|is_monotone| {
+        quote! {
+            fn arg_is_monotone(&self, _index: usize) -> bool {
+                #is_monotone
+            }
+        }
+    });
+
+    let compat_is_monotone_fn = is_monotone.map(|is_monotone| {
         quote! {
             fn is_monotone(&self) -> bool {
                 #is_monotone
@@ -1004,6 +1012,40 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         )]
         pub struct #struct_name;
 
+        impl crate::EagerScalarFunc for #struct_name {
+            type Input<'a> = #input_ty;
+            type Output<'a> = #output_ty;
+
+            fn call<'a>(
+                &self,
+                a: Self::Input<'a>,
+                _temp_storage: &'a mz_repr::RowArena,
+            ) -> Self::Output<'a> {
+                #fn_name(a)
+            }
+
+            fn output_sql_type(
+                &self,
+                input_types: &[mz_repr::SqlColumnType]
+            ) -> mz_repr::SqlColumnType {
+                use mz_repr::AsColumnType;
+                let input_type = &input_types[0];
+                let output = #output_type;
+                let propagates_nulls = crate::EagerScalarFunc::propagates_nulls(self);
+                let nullable = output.nullable;
+                // The output is nullable if it is nullable by itself or the input is nullable
+                // and this function propagates nulls
+                output.nullable(nullable || (propagates_nulls && input_type.nullable))
+            }
+
+            #could_error_fn
+            #introduces_nulls_fn
+            #inverse_fn
+            #is_monotone_fn
+            #preserves_uniqueness_fn
+        }
+
+        // Compat shim: EagerUnaryFunc for derive_unary! dispatch
         impl crate::func::EagerUnaryFunc for #struct_name {
             type Input<'a> = #input_ty;
             type Output<'a> = #output_ty;
@@ -1016,19 +1058,13 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
                 &self,
                 input_type: mz_repr::SqlColumnType
             ) -> mz_repr::SqlColumnType {
-                use mz_repr::AsColumnType;
-                let output = #output_type;
-                let propagates_nulls = crate::func::EagerUnaryFunc::propagates_nulls(self);
-                let nullable = output.nullable;
-                // The output is nullable if it is nullable by itself or the input is nullable
-                // and this function propagates nulls
-                output.nullable(nullable || (propagates_nulls && input_type.nullable))
+                crate::EagerScalarFunc::output_sql_type(self, &[input_type])
             }
 
             #could_error_fn
             #introduces_nulls_fn
             #inverse_fn
-            #is_monotone_fn
+            #compat_is_monotone_fn
             #preserves_uniqueness_fn
             #is_eliminable_cast_fn
         }
@@ -1044,7 +1080,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
     Ok(result)
 }
 
-/// Produce a `EagerBinaryFunc` implementation.
+/// Produce an `EagerScalarFunc` implementation for a binary function.
 fn binary_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
@@ -1136,7 +1172,20 @@ fn binary_func(
         }
     });
 
-    let is_monotone_fn = is_monotone.map(|is_monotone| {
+    let is_monotone_fn = is_monotone.as_ref().map(|is_monotone| {
+        quote! {
+            fn arg_is_monotone(&self, index: usize) -> bool {
+                let monotone: (bool, bool) = #is_monotone;
+                match index {
+                    0 => monotone.0,
+                    1 => monotone.1,
+                    _ => false,
+                }
+            }
+        }
+    });
+
+    let compat_is_monotone_fn = is_monotone.map(|is_monotone| {
         quote! {
             fn is_monotone(&self) -> (bool, bool) {
                 #is_monotone
@@ -1215,7 +1264,7 @@ fn binary_func(
         )]
         pub struct #struct_name;
 
-        impl crate::func::binary::EagerBinaryFunc for #struct_name {
+        impl crate::EagerScalarFunc for #struct_name {
             type Input<'a> = (#input1_ty, #input2_ty);
             type Output<'a> = #output_ty;
 
@@ -1234,7 +1283,7 @@ fn binary_func(
                 use mz_repr::AsColumnType;
                 let output = #output_type;
                 let propagates_nulls =
-                    crate::func::binary::EagerBinaryFunc::propagates_nulls(self);
+                    crate::EagerScalarFunc::propagates_nulls(self);
                 let nullable = output.nullable;
                 // The output is nullable if:
                 // 1. The function introduces nulls (output.nullable), or
@@ -1259,6 +1308,34 @@ fn binary_func(
             #propagates_nulls_fn
         }
 
+        // Compat shim: EagerBinaryFunc for derive_binary! dispatch
+        impl crate::func::EagerBinaryFunc for #struct_name {
+            type Input<'a> = (#input1_ty, #input2_ty);
+            type Output<'a> = #output_ty;
+
+            fn call<'a>(
+                &self,
+                (a, b): Self::Input<'a>,
+                temp_storage: &'a mz_repr::RowArena
+            ) -> Self::Output<'a> {
+                #fn_name(a, b #arena)
+            }
+
+            fn output_sql_type(
+                &self,
+                input_types: &[mz_repr::SqlColumnType],
+            ) -> mz_repr::SqlColumnType {
+                crate::EagerScalarFunc::output_sql_type(self, input_types)
+            }
+
+            #could_error_fn
+            #introduces_nulls_fn
+            #is_infix_op_fn
+            #compat_is_monotone_fn
+            #negate_fn
+            #propagates_nulls_fn
+        }
+
         impl std::fmt::Display for #struct_name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
                 f.write_str(#name)
@@ -1271,7 +1348,7 @@ fn binary_func(
     Ok(result)
 }
 
-/// Produce an `EagerVariadicFunc` implementation.
+/// Produce an `EagerScalarFunc` implementation for a variadic function.
 ///
 /// Two modes based on whether the function has a `&self` receiver:
 /// * `&self` present: struct defined externally, generates method impl + trait impl + Display
@@ -1471,7 +1548,15 @@ fn variadic_func(
         }
     });
 
-    let is_monotone_fn = is_monotone.map(|is_monotone| {
+    let is_monotone_fn = is_monotone.as_ref().map(|is_monotone| {
+        quote! {
+            fn arg_is_monotone(&self, _index: usize) -> bool {
+                #is_monotone
+            }
+        }
+    });
+
+    let compat_is_monotone_fn = is_monotone.map(|is_monotone| {
         quote! {
             fn is_monotone(&self) -> bool {
                 #is_monotone
@@ -1508,7 +1593,7 @@ fn variadic_func(
     let non_nullable_checks = non_nullable_position_checks(&param_types);
 
     let trait_impl = quote! {
-        impl crate::func::variadic::EagerVariadicFunc for #struct_name {
+        impl crate::EagerScalarFunc for #struct_name {
             type Input<'a> = #input_type;
             type Output<'a> = #output_ty;
 
@@ -1520,14 +1605,14 @@ fn variadic_func(
                 #call_expr
             }
 
-            fn output_type(
+            fn output_sql_type(
                 &self,
                 input_types: &[mz_repr::SqlColumnType],
             ) -> mz_repr::SqlColumnType {
                 use mz_repr::AsColumnType;
                 let output = #output_type_code;
                 let propagates_nulls =
-                    crate::func::variadic::EagerVariadicFunc::propagates_nulls(self);
+                    crate::EagerScalarFunc::propagates_nulls(self);
                 let nullable = output.nullable;
                 // The output is nullable if:
                 // 1. The function introduces nulls (output.nullable), or
@@ -1554,6 +1639,36 @@ fn variadic_func(
         }
     };
 
+    // Compat shim: EagerVariadicFunc for derive_variadic! dispatch
+    let compat_trait_impl = quote! {
+        impl crate::func::EagerVariadicFunc for #struct_name {
+            type Input<'a> = #input_type;
+            type Output<'a> = #output_ty;
+
+            fn call<'a>(
+                &self,
+                #destructure: Self::Input<'a>,
+                temp_storage: &'a mz_repr::RowArena,
+            ) -> Self::Output<'a> {
+                #call_expr
+            }
+
+            fn output_type(
+                &self,
+                input_types: &[mz_repr::SqlColumnType],
+            ) -> mz_repr::SqlColumnType {
+                crate::EagerScalarFunc::output_sql_type(self, input_types)
+            }
+
+            #could_error_fn
+            #introduces_nulls_fn
+            #is_infix_op_fn
+            #compat_is_monotone_fn
+            #is_associative_fn
+            #propagates_nulls_fn
+        }
+    };
+
     let display_impl = quote! {
         impl std::fmt::Display for #struct_name {
             fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -1569,6 +1684,7 @@ fn variadic_func(
                 #func
             }
             #trait_impl
+            #compat_trait_impl
             #display_impl
         }
     } else {
@@ -1582,6 +1698,7 @@ fn variadic_func(
             pub struct #struct_name;
 
             #trait_impl
+            #compat_trait_impl
             #display_impl
 
             #func
