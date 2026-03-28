@@ -33,6 +33,7 @@ import ClusterRoutes from "~/platform/clusters/ClusterRoutes";
 import BlockedState from "~/platform/environment-not-ready/BlockedState";
 import { EnvironmentNotReadyRoutes } from "~/platform/environment-not-ready/EnvironmentNotReadyRoutes";
 import { EnvironmentOverviewRoutes } from "~/platform/environment-overview/EnvironmentOverviewRoutes";
+import { MaintainedObjectsRoutes } from "~/platform/maintained-objects/MaintainedObjectsRoutes";
 import IntegrationsRoutes from "~/platform/integrations/IntegrationsRoutes";
 import { ObjectExplorerDetailRoutes } from "~/platform/object-explorer/ObjectExplorerDetailRoutes";
 import { ObjectExplorerRoutes } from "~/platform/object-explorer/ObjectExplorerRoutes";
@@ -333,6 +334,14 @@ const EnvironmentRoutes = () => {
             }
           />
         )}
+        <Route
+          path="maintained-objects/*"
+          element={
+            <BaseLayout>
+              <MaintainedObjectsRoutes />
+            </BaseLayout>
+          }
+        />
 
         <Route path="query-history">
           <Route
