@@ -26,9 +26,9 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::progress::Antichain;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 
+use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
-use crate::render::StartSignal;
 
 impl<G> SinkRender<G> for SubscribeSinkConnection
 where

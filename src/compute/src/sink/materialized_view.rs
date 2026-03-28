@@ -151,8 +151,8 @@ use tokio::sync::watch;
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
-use crate::render::errors::DataflowErrorSer;
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::sink::correction::{Correction, Logging};
 use crate::sink::refresh::apply_refresh;

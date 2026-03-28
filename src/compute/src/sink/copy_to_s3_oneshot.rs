@@ -27,9 +27,9 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
 
+use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
-use crate::render::StartSignal;
 use crate::typedefs::KeyBatcher;
 
 impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection

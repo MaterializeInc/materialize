@@ -186,8 +186,8 @@ use timely::progress::{Antichain, Timestamp as _};
 use tracing::debug;
 
 use crate::compute_state::ComputeState;
-use crate::render::errors::DataflowErrorSer;
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::sink::ConsolidatingVec;
 
