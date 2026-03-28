@@ -1506,7 +1506,6 @@ steps:
             # Cleanup runs in pre-exit hook
             args: [--no-cleanup]
             ci-builder: stable
-      skip: "Flaky because of materialize-terraform-self-managed#157"
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
 
     - id: terraform-azure
