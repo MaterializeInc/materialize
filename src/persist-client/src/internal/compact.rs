@@ -484,43 +484,24 @@ where
     ) -> Result<CompactRes<T>, anyhow::Error> {
         pin_mut!(stream);
 
-        let mut all_parts = vec![];
-        let mut all_run_splits = vec![];
-        let mut all_run_meta = vec![];
-        let mut len = 0;
+        let mut output = HollowBatch::empty(req.desc.clone());
 
         while let Some(res) = stream.next().await {
             let res = res?.output;
-            let (parts, updates, run_meta, run_splits) =
-                (res.parts, res.len, res.run_meta, res.run_splits);
-
-            if updates == 0 {
+            if res.len == 0 {
                 continue;
             }
-
-            let run_offset = all_parts.len();
-            if !all_parts.is_empty() {
-                all_run_splits.push(run_offset);
+            debug_assert_eq!(res.desc, output.desc);
+            for (meta, run) in res.runs() {
+                output.push_run(meta.clone(), run.iter().cloned());
             }
-            all_run_splits.extend(run_splits.iter().map(|r| r + run_offset));
-            all_run_meta.extend(run_meta);
-            all_parts.extend(parts);
-            len += updates;
+            output.len += res.len;
         }
 
         let batches = req.inputs.iter().map(|x| x.id).collect::<BTreeSet<_>>();
         let input = input_id_range(batches);
 
-        Ok(CompactRes {
-            output: HollowBatch::new(
-                req.desc.clone(),
-                all_parts,
-                len,
-                all_run_meta,
-                all_run_splits,
-            ),
-            input,
-        })
+        Ok(CompactRes { output, input })
     }
 
     pub async fn apply(
