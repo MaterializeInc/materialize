@@ -58,7 +58,8 @@ use crate::durable::objects::{
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    PreAllocatedShardKey, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -103,6 +104,7 @@ pub struct Transaction<'a> {
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
+    pre_allocated_shards: TableTransaction<PreAllocatedShardKey, ()>,
     txn_wal_shard: TableTransaction<(), TxnWalShardValue>,
     // Don't make this a table transaction so that it's not read into the
     // in-memory cache.
@@ -137,6 +139,7 @@ impl<'a> Transaction<'a> {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            pre_allocated_shards,
             txn_wal_shard,
         }: Snapshot,
         upper: mz_repr::Timestamp,
@@ -187,6 +190,7 @@ impl<'a> Transaction<'a> {
             system_privileges: TableTransaction::new(system_privileges)?,
             storage_collection_metadata: TableTransaction::new(storage_collection_metadata)?,
             unfinalized_shards: TableTransaction::new(unfinalized_shards)?,
+            pre_allocated_shards: TableTransaction::new(pre_allocated_shards)?,
             // Uniqueness violations for this value occur at the key rather than
             // the value (the key is the unit struct `()` so this is a singleton
             // value).
@@ -1052,6 +1056,7 @@ impl<'a> Transaction<'a> {
             system_privileges: self.system_privileges.current_items_proto(),
             storage_collection_metadata: self.storage_collection_metadata.current_items_proto(),
             unfinalized_shards: self.unfinalized_shards.current_items_proto(),
+            pre_allocated_shards: self.pre_allocated_shards.current_items_proto(),
             txn_wal_shard: self.txn_wal_shard.current_items_proto(),
         }
     }
@@ -2345,6 +2350,7 @@ impl<'a> Transaction<'a> {
             audit_log_updates,
             storage_collection_metadata,
             unfinalized_shards,
+            pre_allocated_shards,
             // Not representable as a `StateUpdate`.
             id_allocator: _,
             configs: _,
@@ -2440,6 +2446,11 @@ impl<'a> Transaction<'a> {
                 StateUpdateKind::UnfinalizedShard,
                 self.op_id,
             ))
+            .chain(get_collection_op_updates(
+                pre_allocated_shards,
+                StateUpdateKind::PreAllocatedShard,
+                self.op_id,
+            ))
             .chain(get_large_collection_op_updates(
                 audit_log_updates,
                 StateUpdateKind::AuditLog,
@@ -2499,6 +2510,7 @@ impl<'a> Transaction<'a> {
             system_privileges: self.system_privileges.pending(),
             storage_collection_metadata: self.storage_collection_metadata.pending(),
             unfinalized_shards: self.unfinalized_shards.pending(),
+            pre_allocated_shards: self.pre_allocated_shards.pending(),
             txn_wal_shard: self.txn_wal_shard.pending(),
             audit_log_updates,
             upper: self.upper,
@@ -2544,6 +2556,7 @@ impl<'a> Transaction<'a> {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            pre_allocated_shards,
             txn_wal_shard,
             audit_log_updates,
             upper: _,
@@ -2570,6 +2583,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(system_privileges);
         differential_dataflow::consolidation::consolidate_updates(storage_collection_metadata);
         differential_dataflow::consolidation::consolidate_updates(unfinalized_shards);
+        differential_dataflow::consolidation::consolidate_updates(pre_allocated_shards);
         differential_dataflow::consolidation::consolidate_updates(txn_wal_shard);
         differential_dataflow::consolidation::consolidate_updates(audit_log_updates);
 
@@ -2713,6 +2727,39 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
         let _ = self.unfinalized_shards.delete_by_keys(ks, self.op_id);
     }
 
+    fn get_pre_allocated_shards(&self) -> BTreeSet<ShardId> {
+        self.pre_allocated_shards
+            .items()
+            .into_iter()
+            .map(|(PreAllocatedShardKey { shard }, ())| *shard)
+            .collect()
+    }
+
+    fn insert_pre_allocated_shards(
+        &mut self,
+        s: BTreeSet<ShardId>,
+    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
+        for shard in s {
+            match self
+                .pre_allocated_shards
+                .insert(PreAllocatedShardKey { shard }, (), self.op_id)
+            {
+                // Inserting duplicate keys has no effect.
+                Ok(()) | Err(DurableCatalogError::DuplicateKey) => {}
+                Err(e) => Err(StorageError::Generic(anyhow::anyhow!(e)))?,
+            };
+        }
+        Ok(())
+    }
+
+    fn remove_pre_allocated_shards(&mut self, shards: BTreeSet<ShardId>) {
+        let ks: Vec<_> = shards
+            .into_iter()
+            .map(|shard| PreAllocatedShardKey { shard })
+            .collect();
+        let _ = self.pre_allocated_shards.delete_by_keys(ks, self.op_id);
+    }
+
     fn get_txn_wal_shard(&self) -> Option<ShardId> {
         self.txn_wal_shard
             .values()
@@ -2781,6 +2828,7 @@ pub struct TransactionBatch {
         Diff,
     )>,
     pub(crate) unfinalized_shards: Vec<(proto::UnfinalizedShardKey, (), Diff)>,
+    pub(crate) pre_allocated_shards: Vec<(proto::PreAllocatedShardKey, (), Diff)>,
     pub(crate) txn_wal_shard: Vec<((), proto::TxnWalShardValue, Diff)>,
     pub(crate) audit_log_updates: Vec<(proto::AuditLogKey, (), Diff)>,
     /// The upper of the catalog when the transaction started.
@@ -2810,6 +2858,7 @@ impl TransactionBatch {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            pre_allocated_shards,
             txn_wal_shard,
             audit_log_updates,
             upper: _,
@@ -2834,6 +2883,7 @@ impl TransactionBatch {
             && system_privileges.is_empty()
             && storage_collection_metadata.is_empty()
             && unfinalized_shards.is_empty()
+            && pre_allocated_shards.is_empty()
             && txn_wal_shard.is_empty()
             && audit_log_updates.is_empty()
     }

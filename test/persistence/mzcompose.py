@@ -174,6 +174,33 @@ def workflow_compaction(c: Composition) -> None:
     c.rm_volumes("mzdata")
 
 
+def workflow_shard_pool(c: Composition) -> None:
+    """Test that pre-opened shards from the shard pool survive a restart.
+
+    Crash recovery should move any unclaimed pre-allocated shards to
+    unfinalized_shards for GC, while tables created with pool shards
+    retain their data.
+    """
+
+    c.up("materialized")
+
+    c.run_testdrive_files("shard-pool/before-restart.td")
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Restart a second time for extra stress; ensures crash recovery
+    # handles an empty pre_allocated_shards collection gracefully.
+    c.kill("materialized")
+    c.up("materialized")
+
+    c.run_testdrive_files("shard-pool/after-restart.td")
+
+    c.kill("materialized")
+    c.rm("materialized", "testdrive", destroy_volumes=True)
+    c.rm_volumes("mzdata")
+
+
 def workflow_inspect_shard(c: Composition) -> None:
     """Regression test for https://github.com/MaterializeInc/materialize/pull/21098"""
     c.up("materialized")
