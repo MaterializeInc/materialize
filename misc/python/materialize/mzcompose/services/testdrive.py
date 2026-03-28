@@ -55,6 +55,8 @@ class Testdrive(Service):
         aws_endpoint: str | None = "http://minio:9000",
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
+        privatelink_service_name: str | None = None,
+        privatelink_azs: list[str] | None = None,
         no_consistency_checks: bool = False,
         check_statement_logging: bool = False,
         external_metadata_store: str | bool = EXTERNAL_METADATA_STORE_ADDRESS,
@@ -154,6 +156,13 @@ class Testdrive(Service):
 
         if kafka_default_partitions:
             entrypoint.append(f"--kafka-default-partitions={kafka_default_partitions}")
+
+        if privatelink_service_name:
+            entrypoint.append(
+                f"--privatelink-service-name={privatelink_service_name}"
+            )
+        if privatelink_azs:
+            entrypoint.append(f"--privatelink-azs={','.join(privatelink_azs)}")
 
         if forward_buildkite_shard:
             shard = buildkite.get_parallelism_index()

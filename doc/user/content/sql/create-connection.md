@@ -320,8 +320,33 @@ SSH bastion host.
 {{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 Depending on the hosted service you are connecting to, you might need to specify
-a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
-(e.g. Amazon MSK), or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. Redpanda Cloud).
+a PrivateLink connection and [per-availability-zone routing rules for brokers](#kafka-privatelinks) (e.g. Confluent Cloud),
+a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax) (e.g. Amazon MSK),
+or a single [default PrivateLink connection](#kafka-privatelink-default) (e.g. Redpanda Cloud).
+
+##### Dynamic broker discovery {#kafka-privatelinks}
+
+Confluent Cloud does not require listing every broker individually.
+Instead, specify wildcard patterns for routing dynamically discovered brokers
+to the correct availability-zone-specific PrivateLink endpoint.
+For bootstrap brokers, use exact-match patterns without wildcards.
+
+{{% include-syntax file="examples/create_connection" example="syntax-kafka-aws-privatelinks" %}}
+
+```mzsql
+CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+);
+
+CREATE CONNECTION kafka_connection TO KAFKA (
+    AWS PRIVATELINKS (
+        'lkc-xxx.domyyy.us-east-1.aws.confluent.cloud:9092' TO privatelink_svc (PORT 9092),
+        '*.use1-az1.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az1'),
+        '*.use1-az4.*' TO privatelink_svc (AVAILABILITY ZONE = 'use1-az4')
+    )
+);
+```
 
 ##### Broker connection syntax {#kafka-privatelink-syntax}
 
@@ -347,7 +372,7 @@ broker that you want to connect to via the tunnel.
 Field                                   | Value            | Required | Description
 ----------------------------------------|------------------|:--------:|-------------------------------
 `AWS PRIVATELINK`                       | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
-`AVAILABILITY ZONE`                     | `text`           |          | The ID of the availability zone of the AWS PrivateLink service in which the broker is accessible. If unspecified, traffic will be routed to each availability zone declared in the [AWS PrivateLink connection](#aws-privatelink) in sequence until the correct availability zone for the broker is discovered. If specified, Materialize will always route connections via the specified availability zone.
+`AVAILABILITY ZONE`                     | `text`           |          | The ID of the availability zone of the AWS PrivateLink service in which the broker is accessible.
 `PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 
 ##### Example {#kafka-privatelink-example}
@@ -387,13 +412,6 @@ PrivateLink connection and the port of the bootstrap server instead.
 ##### Default connection syntax {#kafka-privatelink-default-syntax}
 
 {{% include-syntax file="examples/create_connection" example="syntax-kafka-default-aws-privatelink" %}}
-
-##### Default connection options {#kafka-privatelink-default-options}
-
-Field                                   | Value            | Required | Description
-----------------------------------------|------------------|:--------:|-------------------------------
-`AWS PRIVATELINK`                       | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic for this broker should be routed.
-`PORT`                                  | `integer`        |          | The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 
 ##### Example {#kafka-privatelink-default-example}
 

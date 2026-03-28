@@ -387,14 +387,14 @@ contains:BROKER specified more than once
 ! CREATE CONNECTION no_broker TO KAFKA (
     SECURITY PROTOCOL PLAINTEXT
   );
-contains:must set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:must set one of BROKER, BROKERS, AWS PRIVATELINK, or AWS PRIVATELINKS
 
 ! CREATE CONNECTION ssl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
     BROKERS ['kafka:9092', 'kafka:9093'],
     SECURITY PROTOCOL PLAINTEXT
   );
-contains:can only set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:can only set one of BROKER, BROKERS, AWS PRIVATELINK, or AWS PRIVATELINKS
 
 ! CREATE CONNECTION ssl_underspeced TO KAFKA (
     BROKER 'kafka:9092',
@@ -477,6 +477,16 @@ contains: HOST option is required
 ## AWS PrivateLink
 
 ! CREATE CONNECTION conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}' USING AWS PRIVATELINK foo (PORT 9093), SECURITY PROTOCOL PLAINTEXT);
+contains: unknown catalog item 'foo'
+
+! CREATE CONNECTION conn1 TO KAFKA (
+    AWS PRIVATELINKS (
+        '*.use1-az1.*' TO foo (AVAILABILITY ZONE = 'use1-az1'),
+        '*.use1-az4.*' TO foo (PORT 9093, AVAILABILITY ZONE = 'use1-az4'),
+        foo
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
 contains: unknown catalog item 'foo'
 
 ! CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK foo, PORT 8080)

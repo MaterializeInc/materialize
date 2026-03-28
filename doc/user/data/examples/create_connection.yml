@@ -242,11 +242,50 @@
   syntax_elements:
     - name: "`AWS PRIVATELINK <privatelink_connection_name>`"
       description: |
+        *Value:* object name. Required.
+
         The name of an AWS PrivateLink connection through which network traffic
         should be routed.
     - name: "`PORT`"
       description: |
-        The port of the AWS PrivateLink service to connect to.
+        *Value:* `integer`
+
+        The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
+
+- name: "syntax-kafka-aws-privatelinks"
+  code: |
+    CREATE CONNECTION <connection_name> TO KAFKA (
+        AWS PRIVATELINKS (
+            '<broker_address>' TO <privatelink_connection> (PORT <port>),
+            '<pattern1>' TO <privatelink_connection1> (
+                PORT <port1>,
+                AVAILABILITY ZONE = '<az_id1>'
+            ),
+            '<pattern2>' TO <privatelink_connection2>
+        ),
+        ...
+    );
+  syntax_elements:
+    - name: "`'<pattern>' TO <connection_name>`"
+      description: |
+        Routes brokers whose advertised `host:port` matches `<pattern>` through
+        the named AWS PrivateLink connection.
+        A pattern may begin with `*` to match any prefix. A pattern may end with `*` to match any suffix.
+        All other characters in the pattern are matched literally.
+        Patterns without wildcards are used as bootstrap broker addresses.
+        Rules are evaluated in order. The first matching rule wins.
+        If no rule matches, Materialize will attempt to connect to the broker directly, without tunneling.
+    - name: "`AVAILABILITY ZONE`"
+      description: |
+        *Value:* `text`
+
+        The ID of the availability zone of the AWS PrivateLink service in which
+        the broker is accessible.
+    - name: "`PORT`"
+      description: |
+        *Value:* `integer`
+
+        The port of the AWS PrivateLink service to connect to. Defaults to the broker's port.
 
 - name: "syntax-csr"
   code: |
