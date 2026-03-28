@@ -30,8 +30,10 @@
 
 use std::sync::Arc;
 
+use mz_ore::metric;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::GlobalId;
+use prometheus::{Histogram, HistogramVec};
 
 use crate::statistics::{SinkStatisticsMetricDefs, SourceStatisticsMetricDefs};
 use mz_storage_operators::metrics::BackpressureMetrics;
@@ -61,6 +63,21 @@ pub struct StorageMetrics {
     // user-facing data.
     pub(crate) source_statistics: SourceStatisticsMetricDefs,
     pub(crate) sink_statistics: SinkStatisticsMetricDefs,
+
+    // Timings.
+    //
+    // Note that this particular metric unfortunately takes some care to
+    // interpret. It measures the duration of step_or_park calls, which
+    // undesirably includes the parking. This is probably fine because we
+    // regularly send progress information through persist sources, which likely
+    // means the parking is capped at a second or two in practice. It also
+    // doesn't do anything to let you pinpoint _which_ operator or worker isn't
+    // yielding, but it should hopefully alert us when there is something to
+    // look at.
+    //
+    // This mirrors an equivalent metric in the compute server
+    // (`mz_compute::metrics::ComputeMetrics`).
+    timely_step_duration_seconds: HistogramVec,
 }
 
 impl StorageMetrics {
@@ -74,6 +91,27 @@ impl StorageMetrics {
             sink_defs: sink::SinkMetricDefs::register_with(registry),
             source_statistics: SourceStatisticsMetricDefs::register_with(registry),
             sink_statistics: SinkStatisticsMetricDefs::register_with(registry),
+            // NB: This metric must have the same name, help text, and label
+            // names as the equivalent metric in `mz_compute::metrics`, as
+            // Prometheus requires identical metadata for metrics with the same
+            // name.
+            timely_step_duration_seconds: registry.register(metric!(
+                name: "mz_timely_step_duration_seconds",
+                help: "The time spent in each step_or_park call",
+                const_labels: {"cluster" => "storage"},
+                var_labels: ["worker_id"],
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 32.0),
+            )),
+        }
+    }
+
+    /// Get per-worker metrics for the given worker.
+    pub(crate) fn for_worker(&self, worker_id: usize) -> StorageWorkerMetrics {
+        let worker = worker_id.to_string();
+        StorageWorkerMetrics {
+            timely_step_duration_seconds: self
+                .timely_step_duration_seconds
+                .with_label_values(&[&worker]),
         }
     }
 
@@ -203,4 +241,11 @@ impl StorageMetrics {
     ) -> sink::iceberg::IcebergSinkMetrics {
         sink::iceberg::IcebergSinkMetrics::new(&self.sink_defs.iceberg_defs, sink_id, worker_id)
     }
+}
+
+/// Per-worker metrics for storage.
+#[derive(Clone, Debug)]
+pub struct StorageWorkerMetrics {
+    /// Histogram of Timely step timings.
+    pub(crate) timely_step_duration_seconds: Histogram,
 }
