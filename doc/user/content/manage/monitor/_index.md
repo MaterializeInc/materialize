@@ -32,7 +32,7 @@ prevent operational incidents. For alert rules guidelines, see
 
 ### Monitoring
 
-You can monitor the performance and overall health of your Self-Manaed
+You can monitor the performance and overall health of your Self-Managed
 Materialize.
 
 To help you get started, the following guides are available:
@@ -41,6 +41,10 @@ To help you get started, the following guides are available:
 
 - [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
 
+### Metrics reference
+
+- [Available metrics](/manage/monitor/metrics/) — Full list of Prometheus
+  metrics exposed by Self-Managed Materialize.
 
 ### Alerting
 

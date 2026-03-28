@@ -14,7 +14,7 @@ This section covers monitoring and alerting for Self-Managed Materialize.
 
 ### Monitoring
 
-You can monitor the performance and overall health of your Self-Manaed
+You can monitor the performance and overall health of your Self-Managed
 Materialize.
 
 To help you get started, the following guides are available:
@@ -23,6 +23,8 @@ To help you get started, the following guides are available:
 
 - [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
 
+For a full list of available Prometheus metrics, see the
+[Metrics reference](/manage/monitor/metrics/).
 
 ### Alerting
 
