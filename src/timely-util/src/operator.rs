@@ -18,8 +18,9 @@
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 
+use crate::columnation::ColumnationStack;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::containers::{Columnation, TimelyStack};
+use differential_dataflow::containers::Columnation;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder, Description};
@@ -183,7 +184,7 @@ where
         G::Timestamp: Lattice + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static;
 
@@ -195,7 +196,7 @@ where
         G::Timestamp: Lattice + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static;
 }
@@ -433,7 +434,7 @@ where
         G::Timestamp: Lattice + Ord + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static,
     {
@@ -493,7 +494,7 @@ where
         G::Timestamp: Lattice + Ord + Columnation,
         Ba: Batcher<
                 Input = Vec<((D1, ()), G::Timestamp, R)>,
-                Output = TimelyStack<((D1, ()), G::Timestamp, R)>,
+                Output = ColumnationStack<((D1, ()), G::Timestamp, R)>,
                 Time = G::Timestamp,
             > + 'static,
     {
@@ -661,11 +662,12 @@ pub trait ConcatenateFlatten<G: Scope, C: Container + DrainContainer> {
     ///
     /// timely::example(|scope| {
     ///
-    ///     let streams = vec![(0..10).to_stream(scope),
-    ///                        (0..10).to_stream(scope),
-    ///                        (0..10).to_stream(scope)];
+    ///     let streams: Vec<timely::dataflow::StreamVec<_, i32>> =
+    ///         vec![(0..10).to_stream(scope),
+    ///              (0..10).to_stream(scope),
+    ///              (0..10).to_stream(scope)];
     ///
-    ///     scope.concatenate_flatten::<_, CapacityContainerBuilder<Vec<_>>>(streams)
+    ///     scope.concatenate_flatten::<_, CapacityContainerBuilder<Vec<i32>>>(streams)
     ///          .inspect(|x| println!("seen: {:?}", x));
     /// });
     /// ```
