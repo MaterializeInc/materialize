@@ -120,7 +120,6 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
@@ -152,6 +151,7 @@ use tokio::sync::watch;
 use tracing::trace;
 
 use crate::compute_state::ComputeState;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
 use crate::sink::correction::{Correction, Logging};

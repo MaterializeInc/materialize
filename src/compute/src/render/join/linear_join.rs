@@ -13,7 +13,6 @@
 
 use std::time::{Duration, Instant};
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -37,6 +36,7 @@ use timely::progress::timestamp::Refines;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};

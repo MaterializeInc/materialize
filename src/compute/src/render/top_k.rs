@@ -15,7 +15,6 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -43,7 +42,7 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
-use crate::render::errors::MaybeValidatingRow;
+use crate::render::errors::{DataflowErrorSer, MaybeValidatingRow};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };

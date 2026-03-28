@@ -15,7 +15,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -37,6 +36,7 @@ use timely::progress::timestamp::Refines;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<G> Context<G>

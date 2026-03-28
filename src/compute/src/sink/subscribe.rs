@@ -12,7 +12,6 @@ use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::rc::Rc;
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
@@ -27,8 +26,9 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::progress::Antichain;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 
-use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
+use crate::render::StartSignal;
 
 impl<G> SinkRender<G> for SubscribeSinkConnection
 where

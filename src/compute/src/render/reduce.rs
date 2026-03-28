@@ -14,7 +14,6 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use crate::render::errors::DataflowErrorSer;
 use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
@@ -48,7 +47,7 @@ use tracing::warn;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{MzReduce, ReduceExt};
 use crate::render::context::{CollectionBundle, Context};
-use crate::render::errors::MaybeValidatingRow;
+use crate::render::errors::{DataflowErrorSer, MaybeValidatingRow};
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer};
 use crate::row_spine::{

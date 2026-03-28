@@ -11,7 +11,6 @@
 
 #![allow(dead_code, missing_docs)]
 
-use crate::render::errors::DataflowErrorSer;
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -23,6 +22,7 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use timely::dataflow::ScopeParent;
 
+use crate::render::errors::DataflowErrorSer;
 use crate::row_spine::RowValBuilder;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 

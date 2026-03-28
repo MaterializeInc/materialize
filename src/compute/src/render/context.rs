@@ -13,7 +13,6 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
@@ -44,7 +43,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
-use crate::render::errors::ErrorLogger;
+use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{

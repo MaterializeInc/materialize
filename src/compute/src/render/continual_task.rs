@@ -151,7 +151,6 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -187,6 +186,7 @@ use timely::progress::{Antichain, Timestamp as _};
 use tracing::debug;
 
 use crate::compute_state::ComputeState;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
 use crate::sink::ConsolidatingVec;

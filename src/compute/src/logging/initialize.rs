@@ -10,7 +10,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
@@ -37,6 +36,7 @@ use crate::arrangement::manager::TraceBundle;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
 use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.

@@ -11,7 +11,6 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
@@ -28,8 +27,9 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
 
-use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
+use crate::render::StartSignal;
 use crate::typedefs::KeyBatcher;
 
 impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection

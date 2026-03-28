@@ -13,7 +13,6 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::VecCollection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
@@ -32,6 +31,7 @@ use timely::progress::Antichain;
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::{RenderTimestamp, StartSignal};
 
 impl<'g, G, T> Context<Child<'g, G, T>>
