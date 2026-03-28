@@ -166,6 +166,7 @@ use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
+pub(crate) mod columnar;
 pub mod context;
 pub(crate) mod continual_task;
 mod errors;
@@ -375,9 +376,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter(region),
-                        errs.enter(region),
+                    let oks_entered = oks.enter(region);
+                    let errs_entered = errs.enter(region);
+                    let columnar_oks =
+                        crate::render::columnar::vec_to_columnar(oks_entered);
+                    let bundle = CollectionBundle::from_columnar_collections(
+                        columnar_oks,
+                        errs_entered,
                     );
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
@@ -485,9 +490,13 @@ pub fn build_compute_dataflow<A: Allocate>(
                     } else {
                         oks
                     };
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter_region(region),
-                        errs.enter_region(region),
+                    let oks_entered = oks.enter_region(region);
+                    let errs_entered = errs.enter_region(region);
+                    let columnar_oks =
+                        crate::render::columnar::vec_to_columnar(oks_entered);
+                    let bundle = CollectionBundle::from_columnar_collections(
+                        columnar_oks,
+                        errs_entered,
                     );
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
@@ -751,7 +760,7 @@ where
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
-                println!("collection available: {:?}", bundle.collection.is_none());
+                println!("columnar_collection available: {:?}", bundle.columnar_collection.is_some());
                 println!(
                     "keys available: {:?}",
                     bundle.arranged.keys().collect::<Vec<_>>()
@@ -847,7 +856,7 @@ where
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
-                println!("collection available: {:?}", bundle.collection.is_none());
+                println!("columnar_collection available: {:?}", bundle.columnar_collection.is_some());
                 println!(
                     "keys available: {:?}",
                     bundle.arranged.keys().collect::<Vec<_>>()
@@ -942,9 +951,8 @@ where
                 let last = rec_iter.peek().is_none();
                 let binding = BindingInfo::LetRec { id, last };
                 let bundle = self.render_recursive_plan(object_id, level + 1, value, binding);
-                // We need to ensure that the raw collection exists, but do not have enough information
-                // here to cause that to happen.
-                let (oks, mut err) = bundle.collection.clone().unwrap();
+                // Extract the raw collection as Vec for consolidation and variable setting.
+                let (oks, mut err) = bundle.as_vec_collection();
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -996,7 +1004,7 @@ where
             // Now extract each of the rec bindings into the outer scope.
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
-                let (oks, err) = bundle.collection.unwrap();
+                let (oks, err) = bundle.as_vec_collection();
                 self.insert_id(
                     Id::Local(id),
                     CollectionBundle::from_collections(
@@ -1210,7 +1218,10 @@ where
                     .to_stream(&mut self.scope)
                     .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                // Produce a columnar-only collection for downstream operators.
+                let columnar_oks =
+                    crate::render::columnar::vec_to_columnar(ok_collection);
+                CollectionBundle::from_columnar_collections(columnar_oks, err_collection)
             }
             Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
@@ -1226,7 +1237,7 @@ where
                                 .iter()
                                 .all(|(key, _, _)| collection.arranged.contains_key(key))
                         );
-                        assert!(keys.raw <= collection.collection.is_some());
+                        assert!(keys.raw <= collection.columnar_collection.is_some());
                         // Retain only those keys we want to import.
                         collection.arranged.retain(|key, _value| {
                             keys.arranged.iter().any(|(key2, _, _)| key2 == key)
@@ -1243,13 +1254,23 @@ where
                         CollectionBundle::from_collections(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            None,
-                            self.until.clone(),
-                            &self.config_set,
-                        );
-                        CollectionBundle::from_collections(oks, errs)
+                        if collection.columnar_collection.is_some() {
+                            let (oks, errs) = collection.as_columnar_collection_core(
+                                mfp,
+                                None,
+                                self.until.clone(),
+                                &self.config_set,
+                            );
+                            CollectionBundle::from_columnar_collections(oks, errs)
+                        } else {
+                            let (oks, errs) = collection.as_collection_core(
+                                mfp,
+                                None,
+                                self.until.clone(),
+                                &self.config_set,
+                            );
+                            CollectionBundle::from_collections(oks, errs)
+                        }
                     }
                 }
             }
@@ -1262,6 +1283,14 @@ where
                 // If `mfp` is non-trivial, we should apply it and produce a collection.
                 if mfp.is_identity() {
                     input
+                } else if input.columnar_collection.is_some() {
+                    let (oks, errs) = input.as_columnar_collection_core(
+                        mfp,
+                        input_key_val,
+                        self.until.clone(),
+                        &self.config_set,
+                    );
+                    CollectionBundle::from_columnar_collections(oks, errs)
                 } else {
                     let (oks, errs) = input.as_collection_core(
                         mfp,
@@ -1310,8 +1339,14 @@ where
             }
             Negate { input } => {
                 let input = expect_input(input);
-                let (oks, errs) = input.as_specific_collection(None, &self.config_set);
-                CollectionBundle::from_collections(oks.negate(), errs)
+                if let Some((col_oks, col_errs)) = input.columnar_collection() {
+                    let negated = crate::render::columnar::negate_columnar(col_oks.clone());
+                    CollectionBundle::from_columnar_collections(negated, col_errs.clone())
+                } else {
+                    let (oks, errs) =
+                        input.as_specific_collection(None, &self.config_set);
+                    CollectionBundle::from_collections(oks.negate(), errs)
+                }
             }
             Threshold {
                 input,
@@ -1324,23 +1359,58 @@ where
                 inputs,
                 consolidate_output,
             } => {
-                let mut oks = Vec::new();
-                let mut errs = Vec::new();
-                for input in inputs.into_iter() {
-                    let (os, es) =
-                        expect_input(input).as_specific_collection(None, &self.config_set);
-                    oks.push(os);
-                    errs.push(es);
+                let bundles: Vec<_> = inputs.into_iter().map(expect_input).collect();
+                let all_columnar = bundles.iter().all(|b| b.columnar_collection().is_some());
+
+                if all_columnar {
+                    let mut col_oks = Vec::new();
+                    let mut col_errs = Vec::new();
+                    for bundle in &bundles {
+                        let (oks, errs) = bundle.columnar_collection().unwrap();
+                        col_oks.push(oks.clone());
+                        col_errs.push(errs.clone());
+                    }
+                    let col_oks = differential_dataflow::collection::concatenate(
+                        &mut self.scope,
+                        col_oks,
+                    );
+                    let col_errs = differential_dataflow::collection::concatenate(
+                        &mut self.scope,
+                        col_errs,
+                    );
+                    if consolidate_output {
+                        // Consolidation requires Vec-based collections; convert, consolidate, convert back.
+                        let vec_oks = crate::render::columnar::columnar_to_vec(col_oks);
+                        let vec_oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                            vec_oks,
+                            "UnionConsolidation",
+                        );
+                        let col_oks = crate::render::columnar::vec_to_columnar(vec_oks);
+                        CollectionBundle::from_columnar_collections(col_oks, col_errs)
+                    } else {
+                        CollectionBundle::from_columnar_collections(col_oks, col_errs)
+                    }
+                } else {
+                    let mut oks = Vec::new();
+                    let mut errs = Vec::new();
+                    for bundle in bundles {
+                        let (os, es) =
+                            bundle.as_specific_collection(None, &self.config_set);
+                        oks.push(os);
+                        errs.push(es);
+                    }
+                    let mut oks =
+                        differential_dataflow::collection::concatenate(&mut self.scope, oks);
+                    if consolidate_output {
+                        oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
+                            oks,
+                            "UnionConsolidation",
+                        )
+                    }
+                    let errs =
+                        differential_dataflow::collection::concatenate(&mut self.scope, errs);
+                    CollectionBundle::from_collections(oks, errs)
                 }
-                let mut oks = differential_dataflow::collection::concatenate(&mut self.scope, oks);
-                if consolidate_output {
-                    oks = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(
-                        oks,
-                        "UnionConsolidation",
-                    )
-                }
-                let errs = differential_dataflow::collection::concatenate(&mut self.scope, errs);
-                CollectionBundle::from_collections(oks, errs)
             }
             ArrangeBy {
                 input_key,
@@ -1409,12 +1479,10 @@ where
                 }
             }
             None => {
-                let (oks, _) = bundle
-                    .collection
-                    .as_mut()
-                    .expect("CollectionBundle invariant");
-                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
-                *oks = stream.as_collection();
+                if let Some((oks, _)) = bundle.columnar_collection.as_mut() {
+                    let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
+                    *oks = stream.as_collection();
+                }
             }
         }
     }

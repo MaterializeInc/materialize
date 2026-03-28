@@ -302,7 +302,15 @@ where
                 differential_dataflow::collection::concatenate(inner, inner_errs).leave_region(),
             )
         });
-        CollectionBundle::from_collections(oks, errs)
+        // If any input had a columnar collection, produce columnar output for
+        // downstream operators. Delta joins operate entirely on arrangements, so
+        // the columnar→Vec conversion isn't needed for input; we only convert output.
+        if inputs.iter().any(|i| i.columnar_collection.is_some()) {
+            let col_oks = crate::render::columnar::vec_to_columnar(oks);
+            CollectionBundle::from_columnar_collections(col_oks, errs)
+        } else {
+            CollectionBundle::from_collections(oks, errs)
+        }
     }
 }
 

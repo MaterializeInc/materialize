@@ -71,8 +71,8 @@ where
         let bundle = self
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
-        let (ok_collection, mut err_collection) = if let Some(collection) = &bundle.collection {
-            collection.clone()
+        let (ok_collection, mut err_collection) = if bundle.columnar_collection.is_some() {
+            bundle.as_vec_collection()
         } else {
             let (key, _arrangement) = bundle
                 .arranged
