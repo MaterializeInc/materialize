@@ -184,6 +184,8 @@ module "database" {
 
   tier = local.database_config.tier
 
+  random_instance_name = true
+
   labels = var.labels
 }
 
