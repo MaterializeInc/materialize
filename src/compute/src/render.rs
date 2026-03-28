@@ -168,7 +168,7 @@ use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp}
 
 pub mod context;
 pub(crate) mod continual_task;
-mod errors;
+pub(crate) mod errors;
 mod flat_map;
 mod join;
 mod reduce;
