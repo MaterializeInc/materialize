@@ -51,5 +51,8 @@ uuid = { version = "1.19.0", features = ["serde", "v4"] }
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 core_affinity = "0.8.3"
 
+[dev-dependencies]
+proptest = { version = "1.10.0", default-features = false, features = ["std"] }
+
 [features]
 default = []

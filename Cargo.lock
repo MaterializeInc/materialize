@@ -6146,6 +6146,7 @@ dependencies = [
  "mz-timely-util",
  "mz-txn-wal",
  "prometheus",
+ "proptest",
  "prost",
  "scopeguard",
  "serde",

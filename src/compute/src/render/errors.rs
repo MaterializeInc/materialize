@@ -227,3 +227,38 @@ impl ErrorLogger {
         mz_ore::soft_panic_or_log!("{}", message);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mz_storage_types::errors::DataflowError;
+    use proptest::prelude::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn proptest_roundtrip_canonical() {
+        proptest!(|(err in any::<DataflowError>())| {
+            let ser = DataflowErrorSer::from(err.clone());
+
+            // Round-trip: ser -> deser -> ser must produce identical bytes.
+            let deserialized = ser.deserialize();
+            let re_serialized = DataflowErrorSer::from(deserialized);
+            prop_assert_eq!(ser.as_bytes(), re_serialized.as_bytes(),
+                "Canonicality violation: round-trip produced different bytes");
+
+            // Equality: equal errors must produce equal bytes.
+            let ser2 = DataflowErrorSer::from(err);
+            prop_assert_eq!(ser.as_bytes(), ser2.as_bytes(),
+                "Canonicality violation: same error produced different bytes");
+        });
+    }
+
+    #[mz_ore::test]
+    fn display_roundtrip() {
+        let eval_err = EvalError::DivisionByZero;
+        let dfe = DataflowError::from(eval_err.clone());
+        let ser = DataflowErrorSer::from(eval_err);
+
+        assert_eq!(dfe.to_string(), ser.to_string());
+    }
+}
