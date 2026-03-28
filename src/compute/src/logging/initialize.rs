@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
@@ -18,7 +19,6 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;

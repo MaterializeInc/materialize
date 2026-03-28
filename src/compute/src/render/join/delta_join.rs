@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
@@ -24,7 +25,6 @@ use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, Del
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;

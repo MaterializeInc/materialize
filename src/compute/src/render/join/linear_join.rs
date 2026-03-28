@@ -13,6 +13,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
@@ -24,7 +25,6 @@ use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan}
 use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};

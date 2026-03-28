@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use crate::render::errors::DataflowErrorSer;
 use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
@@ -36,7 +37,6 @@ use mz_expr::{
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::Container;
@@ -128,7 +128,11 @@ where
                         key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
                     let key = match key {
                         Err(e) => {
-                            return Some((Err(DataflowErrorSer::from(e)), time.clone(), diff.clone()));
+                            return Some((
+                                Err(DataflowErrorSer::from(e)),
+                                time.clone(),
+                                diff.clone(),
+                            ));
                         }
                         Ok(Some(key)) => key.clone(),
                         Ok(None) => panic!("Row expected as no predicate was used"),
@@ -141,7 +145,11 @@ where
                         val_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
                     let val = match val {
                         Err(e) => {
-                            return Some((Err(DataflowErrorSer::from(e)), time.clone(), diff.clone()));
+                            return Some((
+                                Err(DataflowErrorSer::from(e)),
+                                time.clone(),
+                                diff.clone(),
+                            ));
                         }
                         Ok(Some(val)) => val.clone(),
                         Ok(None) => panic!("Row expected as no predicate was used"),
@@ -355,7 +363,10 @@ where
         aggrs: Vec<AggregateExpr>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowErrorSer, Diff>)
+    ) -> (
+        RowRowArrangement<S>,
+        VecCollection<S, DataflowErrorSer, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -816,7 +827,10 @@ where
         }: BucketedPlan,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowErrorSer, Diff>)
+    ) -> (
+        RowRowArrangement<S>,
+        VecCollection<S, DataflowErrorSer, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -1153,7 +1167,10 @@ where
             must_consolidate,
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowErrorSer, Diff>)
+    ) -> (
+        RowRowArrangement<S>,
+        VecCollection<S, DataflowErrorSer, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -1278,7 +1295,10 @@ where
         }: AccumulablePlan,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowErrorSer, Diff>)
+    ) -> (
+        RowRowArrangement<S>,
+        VecCollection<S, DataflowErrorSer, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {

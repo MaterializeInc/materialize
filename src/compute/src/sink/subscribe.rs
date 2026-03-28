@@ -12,13 +12,13 @@ use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::rc::Rc;
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::PartialOrder;
 use timely::dataflow::Scope;

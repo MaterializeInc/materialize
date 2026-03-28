@@ -120,6 +120,7 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
@@ -135,7 +136,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use crate::render::errors::DataflowErrorSer;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
@@ -398,21 +398,22 @@ where
     let until = Antichain::new();
     let map_filter_project = None;
 
-    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source::<_, DataflowErrorSer>(
-        scope,
-        sink_id,
-        Arc::clone(&compute_state.persist_clients),
-        &compute_state.txns_ctx,
-        target,
-        None,
-        as_of,
-        SnapshotMode::Include,
-        until,
-        map_filter_project,
-        compute_state.dataflow_max_inflight_bytes(),
-        start_signal,
-        ErrorHandler::Halt("compute persist sink"),
-    );
+    let (ok_stream, err_stream, token) =
+        mz_storage_operators::persist_source::persist_source::<_, DataflowErrorSer>(
+            scope,
+            sink_id,
+            Arc::clone(&compute_state.persist_clients),
+            &compute_state.txns_ctx,
+            target,
+            None,
+            as_of,
+            SnapshotMode::Include,
+            until,
+            map_filter_project,
+            compute_state.dataflow_max_inflight_bytes(),
+            start_signal,
+            ErrorHandler::Halt("compute persist sink"),
+        );
 
     let streams = OkErr::new(ok_stream, err_stream);
     (streams, token)
@@ -1082,7 +1083,8 @@ mod write {
             let err_updates = self.corrections.err.updates_before(&desc.upper);
 
             let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
+            let errs = err_updates
+                .map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
             let mut updates = oks.chain(errs).peekable();
 
             // Don't write empty batches.

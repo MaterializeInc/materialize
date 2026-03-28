@@ -11,6 +11,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
@@ -20,7 +21,6 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::operator::consolidate_pact;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::Scope;

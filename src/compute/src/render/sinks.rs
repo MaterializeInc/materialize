@@ -13,6 +13,7 @@ use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::VecCollection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
@@ -21,7 +22,6 @@ use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
@@ -122,11 +122,9 @@ where
                         let datum = iter.nth(skip).unwrap();
                         idx += skip + 1;
                         if datum.is_null() {
-                            return Err(DataflowErrorSer::from(
-                                EvalError::MustNotBeNull(
-                                    format!("column {}", from_desc.get_name(i).quoted()).into(),
-                                ),
-                            ));
+                            return Err(DataflowErrorSer::from(EvalError::MustNotBeNull(
+                                format!("column {}", from_desc.get_name(i).quoted()).into(),
+                            )));
                         }
                     }
                     Ok(row)

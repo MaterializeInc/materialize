@@ -156,13 +156,13 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
-use crate::render::errors::DataflowErrorSer;
 use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
+use crate::render::errors::DataflowErrorSer;
 use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
@@ -282,21 +282,22 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source::<_, DataflowErrorSer>(
-                        inner,
-                        *source_id,
-                        Arc::clone(&compute_state.persist_clients),
-                        &compute_state.txns_ctx,
-                        import.desc.storage_metadata.clone(),
-                        read_schema,
-                        dataflow.as_of.clone(),
-                        snapshot_mode,
-                        until.clone(),
-                        mfp.as_mut(),
-                        compute_state.dataflow_max_inflight_bytes(),
-                        start_signal.clone(),
-                        ErrorHandler::Halt("compute_import"),
-                    );
+                    let (mut ok_stream, err_stream, token) =
+                        persist_source::persist_source::<_, DataflowErrorSer>(
+                            inner,
+                            *source_id,
+                            Arc::clone(&compute_state.persist_clients),
+                            &compute_state.txns_ctx,
+                            import.desc.storage_metadata.clone(),
+                            read_schema,
+                            dataflow.as_of.clone(),
+                            snapshot_mode,
+                            until.clone(),
+                            mfp.as_mut(),
+                            compute_state.dataflow_max_inflight_bytes(),
+                            start_signal.clone(),
+                            ErrorHandler::Halt("compute_import"),
+                        );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.

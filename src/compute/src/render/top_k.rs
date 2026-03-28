@@ -15,6 +15,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
@@ -31,7 +32,6 @@ use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};

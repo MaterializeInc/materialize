@@ -151,6 +151,7 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
@@ -168,7 +169,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use crate::render::errors::DataflowErrorSer;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::CollectionExt;

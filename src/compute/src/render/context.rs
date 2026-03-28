@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use crate::render::errors::DataflowErrorSer;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
@@ -27,7 +28,6 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
-use crate::render::errors::DataflowErrorSer;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::CollectionExt;
@@ -305,7 +305,10 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowErrorSer, Diff>)
+    ) -> (
+        StreamVec<S, I::Item>,
+        VecCollection<S, DataflowErrorSer, Diff>,
+    )
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -576,7 +579,10 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowErrorSer, Diff>)
+    ) -> (
+        StreamVec<S, I::Item>,
+        VecCollection<S, DataflowErrorSer, Diff>,
+    )
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,

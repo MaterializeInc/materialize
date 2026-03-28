@@ -296,14 +296,7 @@ pub fn persist_source_core<'g, G, E>(
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    Stream<
-        RefinedScope<'g, G>,
-        Vec<(
-            Result<Row, E>,
-            (mz_repr::Timestamp, Subtime),
-            Diff,
-        )>,
-    >,
+    Stream<RefinedScope<'g, G>, Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>>,
     Vec<PressOnDropButton>,
 )
 where
@@ -571,11 +564,7 @@ impl PendingWork {
             '_,
             (mz_repr::Timestamp, Subtime),
             ConsolidatingContainerBuilder<
-                Vec<(
-                    Result<Row, E>,
-                    (mz_repr::Timestamp, Subtime),
-                    Diff,
-                )>,
+                Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>,
             >,
         >,
     ) -> bool
