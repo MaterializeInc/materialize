@@ -1080,6 +1080,7 @@ impl SessionClient {
                 | Command::GetTransactionReadHoldsBundle { .. }
                 | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
+                | Command::ExecuteSubscribe { .. }
                 | Command::CopyToPreflight { .. }
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
@@ -1158,16 +1159,6 @@ impl SessionClient {
     /// channel.
     pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
         self.timeouts.recv().await
-    }
-
-    /// Returns a reference to the PeekClient used for frontend peek sequencing.
-    pub fn peek_client(&self) -> &PeekClient {
-        &self.peek_client
-    }
-
-    /// Returns a reference to the PeekClient used for frontend peek sequencing.
-    pub fn peek_client_mut(&mut self) -> &mut PeekClient {
-        &mut self.peek_client
     }
 
     /// Attempt to sequence a peek from the session task.
