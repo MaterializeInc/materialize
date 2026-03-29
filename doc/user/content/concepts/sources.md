@@ -56,6 +56,19 @@ sources.
 
 See also [Operational guidelines](/manage/operational-guidelines/).
 
+## Timestamp interval
+
+The timestamp interval controls how frequently Materialize timestamps new data
+from a source. A shorter interval means fresher data but consumes more
+resources; a longer interval reduces load at the cost of data freshness.
+Changing the timestamp interval does not significantly affect load on the
+upstream system.
+
+The environment default is controlled by the `default_timestamp_interval`
+system parameter. To override per-source, see [`CREATE SOURCE`](/sql/create-source/) or
+[`ALTER SOURCE`](/sql/alter-source/).
+
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source)
+- [`ALTER SOURCE`](/sql/alter-source)
