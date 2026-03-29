@@ -226,7 +226,10 @@ impl Coordinator {
                 CatalogImplication::Table(CatalogImplicationKind::Altered {
                     prev: prev_table,
                     new: new_table,
-                }) => self.handle_alter_table(prev_table, new_table).await?,
+                }) => {
+                    self.handle_alter_table(catalog_id, prev_table, new_table)
+                        .await?
+                }
 
                 CatalogImplication::Table(CatalogImplicationKind::Dropped(table, full_name)) => {
                     let global_ids = table.global_ids();
@@ -258,13 +261,23 @@ impl Coordinator {
                     .await?
                 }
                 CatalogImplication::Source(CatalogImplicationKind::Altered {
-                    prev: (prev_source, _prev_connection),
-                    new: (new_source, _new_connection),
+                    prev: (prev_source, prev_connection),
+                    new: (new_source, new_connection),
                 }) => {
+                    if prev_source.custom_logical_compaction_window
+                        != new_source.custom_logical_compaction_window
+                    {
+                        let new_window = new_source
+                            .custom_logical_compaction_window
+                            .unwrap_or(CompactionWindow::Default);
+                        self.update_storage_read_policies(vec![(catalog_id, new_window.into())]);
+                    }
                     tracing::debug!(
                         ?prev_source,
+                        ?prev_connection,
                         ?new_source,
-                        "not handling AlterSource in here yet"
+                        ?new_connection,
+                        "not handling other source alterations (e.g., connection changes, subsource additions/drops) in here yet"
                     );
                 }
                 CatalogImplication::Source(CatalogImplicationKind::Dropped(
@@ -318,11 +331,18 @@ impl Coordinator {
                     prev: prev_index,
                     new: new_index,
                 }) => {
-                    tracing::debug!(
-                        ?prev_index,
-                        ?new_index,
-                        "not handling AlterIndex in here yet"
-                    );
+                    if prev_index.custom_logical_compaction_window
+                        != new_index.custom_logical_compaction_window
+                    {
+                        let new_window = new_index
+                            .custom_logical_compaction_window
+                            .unwrap_or(CompactionWindow::Default);
+                        self.update_compute_read_policy(
+                            new_index.cluster_id,
+                            catalog_id,
+                            new_window.into(),
+                        );
+                    }
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Dropped(index, full_name)) => {
                     indexes_to_drop.push((index.cluster_id, index.global_id()));
@@ -335,17 +355,24 @@ impl Coordinator {
                     prev: prev_mv,
                     new: new_mv,
                 }) => {
-                    // We get here for two reasons:
-                    //  * Name changes, like those caused by ALTER SCHEMA.
-                    //  * Replacement application.
+                    // We get here for three reasons:
+                    //  1. Name changes, like those caused by ALTER SCHEMA.
+                    //  2. Replacement application.
+                    //  3. Compaction window changes (ALTER ... SET (RETAIN HISTORY ...)).
                     //
-                    // In the first case, we don't have to do anything here. The second case is
-                    // tricky: Replacement application changes the `CatalogItemId` of the target to
-                    // that of the replacement and simultaneously drops the replacement. Which
-                    // means when we get here `prev_mv` is the replacement that should be dropped,
-                    // and `new_mv` is the target that already exists but under a different ID
-                    // (which will receive a `Dropped` event separately). We can sniff out this
+                    // 1. Name changes: We don't have to do anything here.
+                    //
+                    // 2. Replacement application: This is tricky: It changes the `CatalogItemId` of
+                    // the target to that of the replacement and simultaneously drops the replacement.
+                    // Which means when we get here `prev_mv` is the replacement that should be
+                    // dropped, and `new_mv` is the target that already exists but under a different
+                    // ID (which will receive a `Dropped` event separately). We can sniff out this
                     // case by checking for version differences.
+                    //
+                    // 3. Compaction window changes: We handle this in an `else if`, because if there
+                    // is also a replacement application, then the replacement's storage collections
+                    // already have the correct read policies from when they were created, so we
+                    // don't need to update them here.
                     if prev_mv.collections != new_mv.collections {
                         // Sanity check: The replacement's last (and only) version must be the same
                         // as the new target's last version.
@@ -363,6 +390,13 @@ impl Coordinator {
                         // but we need to prevent it from dropping the old storage collection as
                         // well, since that might still be depended on.
                         source_gids_to_keep.extend(new_mv.global_ids());
+                    } else if prev_mv.custom_logical_compaction_window
+                        != new_mv.custom_logical_compaction_window
+                    {
+                        let new_window = new_mv
+                            .custom_logical_compaction_window
+                            .unwrap_or(CompactionWindow::Default);
+                        self.update_storage_read_policies(vec![(catalog_id, new_window.into())]);
                     }
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Dropped(
@@ -394,14 +428,12 @@ impl Coordinator {
                     tracing::debug!(?ct, "not handling AddContinualTask in here yet");
                 }
                 CatalogImplication::ContinualTask(CatalogImplicationKind::Altered {
-                    prev: prev_ct,
-                    new: new_ct,
+                    prev: _prev_ct,
+                    new: _new_ct,
                 }) => {
-                    tracing::debug!(
-                        ?prev_ct,
-                        ?new_ct,
-                        "not handling AlterContinualTask in here yet"
-                    );
+                    // No action needed: continual task alterations (e.g.
+                    // renames, owner changes) are catalog-only and require
+                    // no controller changes.
                 }
                 CatalogImplication::ContinualTask(CatalogImplicationKind::Dropped(
                     ct,
@@ -1152,6 +1184,7 @@ impl Coordinator {
     #[instrument(level = "debug")]
     async fn handle_alter_table(
         &mut self,
+        catalog_id: CatalogItemId,
         prev_table: Table,
         new_table: Table,
     ) -> Result<(), AdapterError> {
@@ -1159,9 +1192,16 @@ impl Coordinator {
         let new_gid = new_table.global_id_writes();
 
         if existing_gid == new_gid {
-            // It's not an ALTER TABLE as far as the controller is concerned,
-            // because we still have the same GlobalId. This is likely a change
-            // from an ALTER SWAP.
+            // It's not an ALTER TABLE ADD COLUMN, because we still have the
+            // same GlobalId. It might be a compaction window change.
+            if prev_table.custom_logical_compaction_window
+                != new_table.custom_logical_compaction_window
+            {
+                let new_window = new_table
+                    .custom_logical_compaction_window
+                    .unwrap_or(CompactionWindow::Default);
+                self.update_storage_read_policies(vec![(catalog_id, new_window.into())]);
+            }
             return Ok(());
         }
 
