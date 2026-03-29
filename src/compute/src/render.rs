@@ -134,7 +134,6 @@ use mz_repr::explain::DummyHumanizer;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
@@ -163,12 +162,13 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
+use crate::render::errors::DataflowErrorSer;
 use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
 pub mod context;
 pub(crate) mod continual_task;
-mod errors;
+pub(crate) mod errors;
 mod flat_map;
 mod join;
 mod reduce;
@@ -282,21 +282,22 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
-                    let (mut ok_stream, err_stream, token) = persist_source::persist_source(
-                        inner,
-                        *source_id,
-                        Arc::clone(&compute_state.persist_clients),
-                        &compute_state.txns_ctx,
-                        import.desc.storage_metadata.clone(),
-                        read_schema,
-                        dataflow.as_of.clone(),
-                        snapshot_mode,
-                        until.clone(),
-                        mfp.as_mut(),
-                        compute_state.dataflow_max_inflight_bytes(),
-                        start_signal.clone(),
-                        ErrorHandler::Halt("compute_import"),
-                    );
+                    let (mut ok_stream, err_stream, token) =
+                        persist_source::persist_source::<_, DataflowErrorSer>(
+                            inner,
+                            *source_id,
+                            Arc::clone(&compute_state.persist_clients),
+                            &compute_state.txns_ctx,
+                            import.desc.storage_metadata.clone(),
+                            read_schema,
+                            dataflow.as_of.clone(),
+                            snapshot_mode,
+                            until.clone(),
+                            mfp.as_mut(),
+                            compute_state.dataflow_max_inflight_bytes(),
+                            start_signal.clone(),
+                            ErrorHandler::Halt("compute_import"),
+                        );
 
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
@@ -967,9 +968,9 @@ where
                     oks = VecCollection::new(in_limit);
                     if !limit.return_at_limit {
                         err = err.concat(VecCollection::new(over_limit).map(move |_data| {
-                            DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
+                            DataflowErrorSer::from(EvalError::LetRecLimitExceeded(
                                 format!("{}", limit.max_iters.get()).into(),
-                            )))
+                            ))
                         }));
                     }
                 }
@@ -1202,7 +1203,7 @@ where
                     .into_iter()
                     .map(move |e| {
                         (
-                            DataflowError::from(e),
+                            DataflowErrorSer::from(e),
                             <G::Timestamp as Refines<mz_repr::Timestamp>>::to_inner(error_time),
                             Diff::ONE,
                         )

@@ -20,9 +20,9 @@ use differential_dataflow::trace::implementations::merge_batcher::container::Col
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
-use mz_storage_types::errors::DataflowError;
 use timely::dataflow::ScopeParent;
 
+use crate::render::errors::DataflowErrorSer;
 use crate::row_spine::RowValBuilder;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
@@ -103,20 +103,20 @@ pub type RowArrangement<S> = Arranged<S, RowAgent<<S as ScopeParent>::Timestamp,
 pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
 
 // Error specialized spines and agents.
-pub type ErrSpine<T, R> = ColKeySpine<DataflowError, T, R>;
-pub type ErrBatcher<T, R> = ColKeyBatcher<DataflowError, T, R>;
-pub type ErrBuilder<T, R> = ColKeyBuilder<DataflowError, T, R>;
+pub type ErrSpine<T, R> = ColKeySpine<DataflowErrorSer, T, R>;
+pub type ErrBatcher<T, R> = ColKeyBatcher<DataflowErrorSer, T, R>;
+pub type ErrBuilder<T, R> = ColKeyBuilder<DataflowErrorSer, T, R>;
 
 pub type ErrAgent<T, R> = TraceAgent<ErrSpine<T, R>>;
 pub type ErrEnter<T, TEnter> = TraceEnter<TraceFrontier<ErrAgent<T, Diff>>, TEnter>;
 
-pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowError, T, R>;
-pub type KeyErrBatcher<K, T, R> = ColValBatcher<K, DataflowError, T, R>;
-pub type KeyErrBuilder<K, T, R> = ColValBuilder<K, DataflowError, T, R>;
+pub type KeyErrSpine<K, T, R> = ColValSpine<K, DataflowErrorSer, T, R>;
+pub type KeyErrBatcher<K, T, R> = ColValBatcher<K, DataflowErrorSer, T, R>;
+pub type KeyErrBuilder<K, T, R> = ColValBuilder<K, DataflowErrorSer, T, R>;
 
-pub type RowErrSpine<T, R> = RowValSpine<DataflowError, T, R>;
-pub type RowErrBatcher<T, R> = RowValBatcher<DataflowError, T, R>;
-pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
+pub type RowErrSpine<T, R> = RowValSpine<DataflowErrorSer, T, R>;
+pub type RowErrBatcher<T, R> = RowValBatcher<DataflowErrorSer, T, R>;
+pub type RowErrBuilder<T, R> = RowValBuilder<DataflowErrorSer, T, R>;
 
 // Batchers for consolidation
 pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;

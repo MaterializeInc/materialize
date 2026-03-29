@@ -22,8 +22,8 @@ use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 
-use crate::render::DataflowError;
 use crate::render::context::{CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 
 impl<G> Context<G>
 where
@@ -154,7 +154,7 @@ fn drain_through_mfp<T>(
         '_,
         '_,
         T,
-        ConsolidatingContainerBuilder<Vec<(DataflowError, T, Diff)>>,
+        ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>,
         Capability<T>,
     >,
     budget: &mut usize,

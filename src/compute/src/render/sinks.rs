@@ -21,7 +21,6 @@ use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
@@ -32,6 +31,7 @@ use timely::progress::Antichain;
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::{RenderTimestamp, StartSignal};
 
 impl<'g, G, T> Context<Child<'g, G, T>>
@@ -122,10 +122,8 @@ where
                         let datum = iter.nth(skip).unwrap();
                         idx += skip + 1;
                         if datum.is_null() {
-                            return Err(DataflowError::EvalError(Box::new(
-                                EvalError::MustNotBeNull(
-                                    format!("column {}", from_desc.get_name(i).quoted()).into(),
-                                ),
+                            return Err(DataflowErrorSer::from(EvalError::MustNotBeNull(
+                                format!("column {}", from_desc.get_name(i).quoted()).into(),
                             )));
                         }
                     }
@@ -188,7 +186,7 @@ where
         as_of: Antichain<mz_repr::Timestamp>,
         start_signal: StartSignal,
         sinked_collection: VecCollection<G, Row, Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
+        err_collection: VecCollection<G, DataflowErrorSer, Diff>,
         // TODO(ct2): Figure out a better way to smuggle this in, potentially by
         // removing the `SinkRender` trait entirely.
         ct_times: Option<VecCollection<G, (), Diff>>,

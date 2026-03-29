@@ -18,7 +18,6 @@ use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::PartialOrder;
 use timely::dataflow::Scope;
@@ -28,6 +27,7 @@ use timely::progress::Antichain;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 
 impl<G> SinkRender<G> for SubscribeSinkConnection
@@ -42,7 +42,7 @@ where
         as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
         sinked_collection: VecCollection<G, Row, Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
+        err_collection: VecCollection<G, DataflowErrorSer, Diff>,
         _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
@@ -84,7 +84,7 @@ where
 
 fn subscribe<G>(
     sinked_collection: VecCollection<G, Row, Diff>,
-    err_collection: VecCollection<G, DataflowError, Diff>,
+    err_collection: VecCollection<G, DataflowErrorSer, Diff>,
     sink_id: GlobalId,
     with_snapshot: bool,
     as_of: Antichain<G::Timestamp>,
@@ -202,7 +202,7 @@ impl SubscribeProtocol {
         &mut self,
         upper: Antichain<Timestamp>,
         rows: &mut Vec<(Timestamp, Row, Diff)>,
-        errors: &mut Vec<(Timestamp, DataflowError, Diff)>,
+        errors: &mut Vec<(Timestamp, DataflowErrorSer, Diff)>,
     ) {
         // Only send a batch if both conditions hold:
         //  a) `upper` has reached or passed the sink's `as_of` frontier.

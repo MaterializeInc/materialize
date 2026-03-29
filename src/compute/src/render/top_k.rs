@@ -31,7 +31,6 @@ use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -43,7 +42,7 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
-use crate::render::errors::MaybeValidatingRow;
+use crate::render::errors::{DataflowErrorSer, MaybeValidatingRow};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
 };
@@ -156,7 +155,7 @@ where
                             &format!("data={data:?}, diff={diff}"),
                         );
                         let m = "tried to build monotonic top-k on non-monotonic input".into();
-                        (DataflowError::from(EvalError::Internal(m)), Diff::ONE)
+                        (DataflowErrorSer::from(EvalError::Internal(m)), Diff::ONE)
                     });
                     err_collection = err_collection.concat(errs);
 
@@ -259,7 +258,7 @@ where
         buckets: Vec<u64>,
     ) -> (
         VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -392,7 +391,7 @@ where
         validating: bool,
     ) -> (
         VecCollection<S, (Row, Row), Diff>,
-        Option<VecCollection<S, DataflowError, Diff>>,
+        Option<VecCollection<S, DataflowErrorSer, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -457,7 +456,7 @@ where
         must_consolidate: bool,
     ) -> (
         VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowErrorSer, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
