@@ -270,18 +270,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
 
-        // Resolve all unmaterializable function calls except mz_now(), because
-        // we don't yet have a timestamp.
-        let style = ExprPrepOneShot {
-            logical_time: EvalTime::Deferred,
-            session,
-            catalog_state: self.catalog.state(),
-        };
-        df_desc.visit_children(
-            |r| style.prep_relation_expr(r),
-            |s| style.prep_scalar_expr(s),
-        )?;
-
         // TODO: Instead of conditioning here we should really
         // reconsider how to render multi-plan peek dataflows. The main
         // difficulty here is rendering the optional finishing bit.
