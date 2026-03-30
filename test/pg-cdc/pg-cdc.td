@@ -327,14 +327,14 @@ public          nonpk_table
 public          types_table
 public          nulls_table
 public          multipart_pk
-public          "\"space table\""
+public          "space table"
 public          tstzrange_table
-public          "\"таблица\""
+public          таблица
 public          array_types_table
 public          trailing_space_pk
 public          escaped_text_table
 public          trailing_space_nopk
-public          "\"\"\"literal_quotes\"\"\""
+public          "\"literal_quotes\""
 conflict_schema conflict_table
 
 # Ensure all ingestion export subsources have an ID greater than the primary source ID.

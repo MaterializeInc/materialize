@@ -173,8 +173,8 @@ $ kafka-ingest format=avro topic=upsert-topic key-format=avro key-schema=${keysc
 > COMMIT
 
 > SELECT topic, envelope_type, key_format, value_format FROM mz_internal.mz_kafka_source_tables
-"\"testdrive-none-topic-${testdrive.seed}\""     none            <null>       text
-"\"testdrive-upsert-topic-${testdrive.seed}\""   none            <null>       text
-"\"testdrive-none-topic-${testdrive.seed}\""     none            text         text
-"\"testdrive-dbzupsert-${testdrive.seed}\""      debezium        avro         avro
-"\"testdrive-upsert-topic-${testdrive.seed}\""   upsert          avro         avro
+testdrive-none-topic-${testdrive.seed}     none            <null>       text
+testdrive-upsert-topic-${testdrive.seed}   none            <null>       text
+testdrive-none-topic-${testdrive.seed}     none            text         text
+testdrive-dbzupsert-${testdrive.seed}      debezium        avro         avro
+testdrive-upsert-topic-${testdrive.seed}   upsert          avro         avro

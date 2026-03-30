@@ -439,25 +439,25 @@ impl CatalogState {
                                     // information is redundant because each
                                     // Postgres connection connects to only one
                                     // database.
-                                    let schema_name = external_reference[1].to_ast_string_simple();
-                                    let table_name = external_reference[2].to_ast_string_simple();
+                                    let schema_name = external_reference[1].as_str();
+                                    let table_name = external_reference[2].as_str();
 
                                     self.pack_postgres_source_tables_update(
                                         id,
-                                        &schema_name,
-                                        &table_name,
+                                        schema_name,
+                                        table_name,
                                         diff,
                                     )
                                 }
                                 "mysql" => {
                                     mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                    let schema_name = external_reference[0].to_ast_string_simple();
-                                    let table_name = external_reference[1].to_ast_string_simple();
+                                    let schema_name = external_reference[0].as_str();
+                                    let table_name = external_reference[1].as_str();
 
                                     self.pack_mysql_source_tables_update(
                                         id,
-                                        &schema_name,
-                                        &table_name,
+                                        schema_name,
+                                        table_name,
                                         diff,
                                     )
                                 }
@@ -467,13 +467,13 @@ impl CatalogState {
                                     // the database, but this information is redundant
                                     // because each SQL Server connection connects to
                                     // only one database.
-                                    let schema_name = external_reference[1].to_ast_string_simple();
-                                    let table_name = external_reference[2].to_ast_string_simple();
+                                    let schema_name = external_reference[1].as_str();
+                                    let table_name = external_reference[2].as_str();
 
                                     self.pack_sql_server_source_table_update(
                                         id,
-                                        &schema_name,
-                                        &table_name,
+                                        schema_name,
+                                        table_name,
                                         diff,
                                     )
                                 }
@@ -482,13 +482,13 @@ impl CatalogState {
                                 "load-generator" => vec![],
                                 "kafka" => {
                                     mz_ore::soft_assert_eq_no_log!(external_reference.len(), 1);
-                                    let topic = external_reference[0].to_ast_string_simple();
+                                    let topic = external_reference[0].as_str();
                                     let envelope = data_source.envelope();
                                     let (key_format, value_format) = data_source.formats();
 
                                     self.pack_kafka_source_tables_update(
                                         id,
-                                        &topic,
+                                        topic,
                                         envelope,
                                         key_format,
                                         value_format,
@@ -579,25 +579,25 @@ impl CatalogState {
                                 // information is redundant because each
                                 // Postgres connection connects to only one
                                 // database.
-                                let schema_name = external_reference[1].to_ast_string_simple();
-                                let table_name = external_reference[2].to_ast_string_simple();
+                                let schema_name = external_reference[1].as_str();
+                                let table_name = external_reference[2].as_str();
 
                                 self.pack_postgres_source_tables_update(
                                     id,
-                                    &schema_name,
-                                    &table_name,
+                                    schema_name,
+                                    table_name,
                                     diff,
                                 )
                             }
                             "mysql" => {
                                 mz_ore::soft_assert_eq_no_log!(external_reference.len(), 2);
-                                let schema_name = external_reference[0].to_ast_string_simple();
-                                let table_name = external_reference[1].to_ast_string_simple();
+                                let schema_name = external_reference[0].as_str();
+                                let table_name = external_reference[1].as_str();
 
                                 self.pack_mysql_source_tables_update(
                                     id,
-                                    &schema_name,
-                                    &table_name,
+                                    schema_name,
+                                    table_name,
                                     diff,
                                 )
                             }
@@ -607,13 +607,13 @@ impl CatalogState {
                                 // the database, but this information is redundant
                                 // because each SQL Server connection connects to
                                 // only one database.
-                                let schema_name = external_reference[1].to_ast_string_simple();
-                                let table_name = external_reference[2].to_ast_string_simple();
+                                let schema_name = external_reference[1].as_str();
+                                let table_name = external_reference[2].as_str();
 
                                 self.pack_sql_server_source_table_update(
                                     id,
-                                    &schema_name,
-                                    &table_name,
+                                    schema_name,
+                                    table_name,
                                     diff,
                                 )
                             }
