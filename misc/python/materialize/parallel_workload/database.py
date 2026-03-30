@@ -25,10 +25,6 @@ from materialize.data_ingest.data_type import (
     Boolean,
     Bytea,
     DataType,
-    Double,
-    Float,
-    IntArray,
-    IntList,
     Jsonb,
     Text,
     TextTextMap,
@@ -523,20 +519,10 @@ class IcebergSink(DBObject):
         self.cluster = cluster
         self.schema = schema
         self.base_object = base_object
-        # Iceberg equality deletes require primitive, non-float key columns.
-        # Filter out types that the iceberg-rust EqualityDeleteWriterConfig rejects:
-        # nested types (Map, List, Array/Struct) and floating-point types.
-        eligible_cols = [
-            col
-            for col in base_object.columns
-            if col.data_type not in (Float, Double, TextTextMap, IntList, IntArray)
-        ]
-        if not eligible_cols:
-            eligible_cols = base_object.columns
         key_cols = [
             column
             for column in rng.sample(
-                eligible_cols, k=rng.randint(1, len(eligible_cols))
+                base_object.columns, k=rng.randint(1, len(base_object.columns))
             )
         ]
         key_col_names = [column.name(True) for column in key_cols]
