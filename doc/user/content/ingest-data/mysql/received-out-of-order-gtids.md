@@ -26,10 +26,10 @@ the only safe action is to stop and rebuild from a clean snapshot.
 
 ## Common causes
 
-- **Multi-threaded replication without commit order preservation**: If the MySQL
-  instance Materialize is replicating from applies transactions in parallel,
-  transactions can be committed out of order unless commit ordering is preserved.
-  This can produce GTID sequences that Materialize cannot safely ingest.
+- **Out-of-order commits**: If the MySQL instance Materialize is replicating
+  from uses parallel transaction application or has preserve commit order disabled,
+  commits may occur out of order, producing GTID sequences that Materialize cannot
+  safely ingest.
 - **Incomplete GTID enablement across a replication chain**: If GTID mode was
   enabled part-way through a system's lifetime, or enabled on some nodes but not
   others, replicas can end up with a GTID/binlog history that violates the
@@ -67,10 +67,10 @@ SHOW VARIABLES LIKE 'replica_parallel_workers';
 ```
 
 - `replica_preserve_commit_order` should be `ON`
-- `replica_parallel_workers` should be `<= 1` (or `0` to disable parallel apply)
+- `replica_parallel_workers` should be ` 1` (or `0` to disable parallel apply)
 
-If `replica_parallel_workers > 1`, MySQL can still externalize transactions out
-of order ("gaps") even when commit-order preservation is enabled.
+If `replica_parallel_workers > 1`, MySQL can externalize transactions out
+of order ("gaps") even when `replica_preserve_commit_order` is `ON`.
 
 ### Verify GTID configuration is consistent end-to-end
 
@@ -147,7 +147,7 @@ production.
 **Best practices to avoid this error:**
 
 - If using MySQL replicas with parallel apply, ensure commit order is preserved
-  and set `replica_parallel_workers <= 1` (or disable parallel apply).
+  and set `replica_parallel_workers <= 1`.
 - If enabling GTIDs on an existing replication chain, follow the full end-to-end
   procedure and avoid partially-enabled states.
 - If using chained replication and/or filtering, validate your replication setup
@@ -175,15 +175,3 @@ externalized transaction set. MySQL defines gaps as:
 > A gap in the externalized transaction set appears when, given an ordered
 > sequence of transactions, a transaction that is later in the sequence is
 > applied before some other transaction that is prior in the sequence.
-
-### Recommended settings
-
-If this error is happening and Materialize is reading from a MySQL replica,
-consider (at minimum):
-
-- `replica_parallel_workers = 1`
-- `replica_preserve_commit_order = ON`
-
-If the error persists, consider disabling parallel apply entirely (for example,
-setting `replica_parallel_workers = 0`), and validate that the replication
-behavior matches the expectations of GTID-based CDC consumers.
