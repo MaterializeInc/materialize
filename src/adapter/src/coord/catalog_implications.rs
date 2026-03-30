@@ -38,7 +38,9 @@ use mz_catalog::memory::objects::{
     MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
+use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::response::PeekResponse;
+use mz_controller::clusters::{ClusterRole, ReplicaConfig};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -53,7 +55,9 @@ use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::connections::inline::{InlinedConnection, IntoInlineConnection};
 use mz_storage_types::sinks::StorageSinkConnection;
-use mz_storage_types::sources::{GenericSourceConnection, SourceExport, SourceExportDataConfig};
+use mz_storage_types::sources::{
+    GenericSourceConnection, SourceDesc, SourceExport, SourceExportDataConfig,
+};
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
@@ -88,6 +92,10 @@ impl Coordinator {
         let mut cluster_commands: BTreeMap<ClusterId, CatalogImplication> = BTreeMap::new();
         let mut cluster_replica_commands: BTreeMap<(ClusterId, ReplicaId), CatalogImplication> =
             BTreeMap::new();
+        let mut introspection_source_index_commands: BTreeMap<
+            (ClusterId, LogVariant),
+            CatalogImplication,
+        > = BTreeMap::new();
 
         for update in catalog_updates {
             tracing::trace!(?update, "got parsed state update");
@@ -126,6 +134,8 @@ impl Coordinator {
                 ParsedStateUpdateKind::ClusterReplica {
                     durable_cluster_replica,
                     parsed_cluster_replica: _,
+                    cluster_name: _,
+                    cluster_role: _,
                 } => {
                     let entry = cluster_replica_commands
                         .entry((
@@ -135,6 +145,16 @@ impl Coordinator {
                         .or_insert_with(|| CatalogImplication::None);
                     entry.absorb(update.clone());
                 }
+                ParsedStateUpdateKind::IntrospectionSourceIndex {
+                    cluster_id,
+                    log,
+                    index_id: _,
+                } => {
+                    let entry = introspection_source_index_commands
+                        .entry((*cluster_id, *log))
+                        .or_insert_with(|| CatalogImplication::None);
+                    entry.absorb(update);
+                }
             }
         }
 
@@ -142,6 +162,9 @@ impl Coordinator {
             ctx,
             catalog_implications.into_iter().collect_vec(),
             cluster_commands.into_iter().collect_vec(),
+            introspection_source_index_commands
+                .into_iter()
+                .collect_vec(),
             cluster_replica_commands.into_iter().collect_vec(),
         )
         .await?;
@@ -159,6 +182,7 @@ impl Coordinator {
         ctx: Option<&mut ExecuteContext>,
         implications: Vec<(CatalogItemId, CatalogImplication)>,
         cluster_commands: Vec<(ClusterId, CatalogImplication)>,
+        introspection_source_index_commands: Vec<((ClusterId, LogVariant), CatalogImplication)>,
         cluster_replica_commands: Vec<((ClusterId, ReplicaId), CatalogImplication)>,
     ) -> Result<(), AdapterError> {
         let mut tables_to_drop = BTreeSet::new();
@@ -201,6 +225,7 @@ impl Coordinator {
             BTreeMap::new();
         let mut source_export_data_configs_to_alter: BTreeMap<GlobalId, SourceExportDataConfig> =
             BTreeMap::new();
+        let mut source_descs_to_alter: BTreeMap<GlobalId, SourceDesc> = BTreeMap::new();
 
         // We're incrementally migrating the code that manipulates the
         // controller from closures in the sequencer. For some types of catalog
@@ -261,7 +286,7 @@ impl Coordinator {
                     .await?
                 }
                 CatalogImplication::Source(CatalogImplicationKind::Altered {
-                    prev: (prev_source, prev_connection),
+                    prev: (prev_source, _prev_connection),
                     new: (new_source, new_connection),
                 }) => {
                     if prev_source.custom_logical_compaction_window
@@ -272,13 +297,29 @@ impl Coordinator {
                             .unwrap_or(CompactionWindow::Default);
                         self.update_storage_read_policies(vec![(catalog_id, new_window.into())]);
                     }
-                    tracing::debug!(
-                        ?prev_source,
-                        ?prev_connection,
-                        ?new_source,
-                        ?new_connection,
-                        "not handling other source alterations (e.g., connection changes, subsource additions/drops) in here yet"
-                    );
+                    match (&prev_source.data_source, &new_source.data_source) {
+                        (
+                            DataSourceDesc::Ingestion {
+                                desc: prev_desc, ..
+                            }
+                            | DataSourceDesc::OldSyntaxIngestion {
+                                desc: prev_desc, ..
+                            },
+                            DataSourceDesc::Ingestion { desc: new_desc, .. }
+                            | DataSourceDesc::OldSyntaxIngestion { desc: new_desc, .. },
+                        ) => {
+                            if prev_desc != new_desc {
+                                let inlined_connection = new_connection
+                                    .expect("ingestion source should have inlined connection");
+                                let inlined_desc = SourceDesc {
+                                    connection: inlined_connection,
+                                    timestamp_interval: new_desc.timestamp_interval,
+                                };
+                                source_descs_to_alter.insert(new_source.global_id, inlined_desc);
+                            }
+                        }
+                        _ => {}
+                    }
                 }
                 CatalogImplication::Source(CatalogImplicationKind::Dropped(
                     (source, connection),
@@ -511,8 +552,13 @@ impl Coordinator {
                 CatalogImplication::None => {
                     // Nothing to do for None commands
                 }
-                CatalogImplication::Cluster(_) | CatalogImplication::ClusterReplica(_) => {
-                    unreachable!("clusters and cluster replicas are handled below")
+                CatalogImplication::Cluster(_)
+                | CatalogImplication::ClusterReplica(_)
+                | CatalogImplication::IntrospectionSourceIndex(_) => {
+                    unreachable!(
+                        "clusters, introspection source indexes, and \
+                         cluster replicas are handled below"
+                    )
                 }
                 CatalogImplication::Table(CatalogImplicationKind::None)
                 | CatalogImplication::Source(CatalogImplicationKind::None)
@@ -533,17 +579,32 @@ impl Coordinator {
 
             match command {
                 CatalogImplication::Cluster(CatalogImplicationKind::Added(cluster)) => {
-                    tracing::debug!(?cluster, "not handling AddCluster in here yet");
+                    self.controller
+                        .create_cluster(
+                            cluster_id,
+                            mz_controller::clusters::ClusterConfig {
+                                workload_class: cluster.config.workload_class.clone(),
+                            },
+                        )
+                        .expect("creating cluster must not fail");
+                    // Log collections and read policies are registered by
+                    // IntrospectionSourceIndex additions processed below.
                 }
                 CatalogImplication::Cluster(CatalogImplicationKind::Altered {
                     prev: prev_cluster,
                     new: new_cluster,
                 }) => {
-                    tracing::debug!(
-                        ?prev_cluster,
-                        ?new_cluster,
-                        "not handling AlterCluster in here yet"
-                    );
+                    // Replica adds/drops/renames from config changes arrive as
+                    // separate AddClusterReplica/DroppedClusterReplica/
+                    // AlterClusterReplica events, so the only cluster-level
+                    // side effect here is updating the workload class on the
+                    // controller when it changes.
+                    if prev_cluster.config.workload_class != new_cluster.config.workload_class {
+                        self.controller.update_cluster_workload_class(
+                            cluster_id,
+                            new_cluster.config.workload_class.clone(),
+                        );
+                    }
                 }
                 CatalogImplication::Cluster(CatalogImplicationKind::Dropped(
                     cluster,
@@ -564,25 +625,80 @@ impl Coordinator {
             }
         }
 
+        for ((cluster_id, log), command) in introspection_source_index_commands {
+            tracing::trace!(
+                ?command,
+                "have introspection source index command to apply!"
+            );
+
+            match command {
+                CatalogImplication::IntrospectionSourceIndex(CatalogImplicationKind::Added(
+                    index_id,
+                )) => {
+                    self.controller
+                        .add_log_source(cluster_id, log, index_id)
+                        .expect("cluster must exist");
+                    self.initialize_compute_read_policies(
+                        vec![index_id],
+                        cluster_id,
+                        CompactionWindow::Default,
+                    )
+                    .await;
+                }
+                CatalogImplication::IntrospectionSourceIndex(CatalogImplicationKind::Dropped(
+                    _,
+                    _,
+                )) => {
+                    // Introspection source indexes are dropped together
+                    // with their cluster; no separate handling needed.
+                }
+                CatalogImplication::IntrospectionSourceIndex(CatalogImplicationKind::Altered {
+                    ..
+                }) => {
+                    // Introspection source indexes are not altered.
+                }
+                CatalogImplication::IntrospectionSourceIndex(CatalogImplicationKind::None) => {
+                    unreachable!("will never leave None in place");
+                }
+                command => {
+                    unreachable!(
+                        "we only handle introspection source index commands in this map, got: {:?}",
+                        command
+                    );
+                }
+            }
+        }
+
         for ((cluster_id, replica_id), command) in cluster_replica_commands {
             tracing::trace!(?command, "have cluster replica command to apply!");
 
             match command {
-                CatalogImplication::ClusterReplica(CatalogImplicationKind::Added(replica)) => {
-                    tracing::debug!(?replica, "not handling AddClusterReplica in here yet");
+                CatalogImplication::ClusterReplica(CatalogImplicationKind::Added((
+                    replica,
+                    cluster_name,
+                    cluster_role,
+                ))) => {
+                    let replica_name = format!("{}.{}", cluster_name, replica.name);
+                    self.handle_create_cluster_replica(
+                        cluster_id,
+                        replica_id,
+                        cluster_role,
+                        cluster_name,
+                        replica_name,
+                        replica.config.clone(),
+                    )
+                    .await;
                 }
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Altered {
-                    prev: prev_replica,
-                    new: new_replica,
+                    prev: (_prev_replica, _prev_cluster_name, _prev_cluster_role),
+                    new: (_new_replica, _new_cluster_name, _new_cluster_role),
                 }) => {
-                    tracing::debug!(
-                        ?prev_replica,
-                        ?new_replica,
-                        "not handling AlterClusterReplica in here yet"
-                    );
+                    // No action needed: cluster replica alterations (e.g.
+                    // renames, owner changes, pending flag changes) are
+                    // catalog-only and require no controller changes.
                 }
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Dropped(
-                    _replica,
+                    (_replica, _cluster_name, _cluster_role),
                     _full_name,
                 )) => {
                     cluster_replicas_to_drop.push((cluster_id, replica_id));
@@ -659,6 +775,14 @@ impl Coordinator {
                 .alter_ingestion_export_data_configs(source_export_data_configs_to_alter)
                 .await
                 .unwrap_or_terminate("altering source export data configs after txn must succeed");
+        }
+
+        if !source_descs_to_alter.is_empty() {
+            self.controller
+                .storage
+                .alter_ingestion_source_desc(source_descs_to_alter)
+                .await
+                .unwrap_or_terminate("cannot fail to alter ingestion source desc");
         }
 
         // Apply source drop overwrites.
@@ -1478,6 +1602,34 @@ impl Coordinator {
             }
         }
     }
+
+    async fn handle_create_cluster_replica(
+        &mut self,
+        cluster_id: ClusterId,
+        replica_id: ReplicaId,
+        role: ClusterRole,
+        cluster_name: String,
+        replica_name: String,
+        replica_config: ReplicaConfig,
+    ) {
+        let enable_worker_core_affinity =
+            self.catalog().system_config().enable_worker_core_affinity();
+
+        self.controller
+            .create_replica(
+                cluster_id,
+                replica_id,
+                cluster_name,
+                replica_name,
+                role,
+                replica_config,
+                enable_worker_core_affinity,
+            )
+            .expect("creating replicas must not fail");
+
+        self.install_introspection_subscribes(cluster_id, replica_id)
+            .await;
+    }
 }
 
 /// A state machine for building catalog implications from catalog updates.
@@ -1498,7 +1650,8 @@ enum CatalogImplication {
     Secret(CatalogImplicationKind<Secret>),
     Connection(CatalogImplicationKind<Connection>),
     Cluster(CatalogImplicationKind<Cluster>),
-    ClusterReplica(CatalogImplicationKind<ClusterReplica>),
+    ClusterReplica(CatalogImplicationKind<(ClusterReplica, String, ClusterRole)>),
+    IntrospectionSourceIndex(CatalogImplicationKind<GlobalId>),
 }
 
 #[derive(Debug, Clone)]
@@ -1697,13 +1850,28 @@ impl CatalogImplication {
                 durable_cluster: _,
                 parsed_cluster,
             } => {
-                self.absorb_cluster(parsed_cluster, catalog_update.diff);
+                let name = parsed_cluster.name.clone();
+                self.absorb_cluster(parsed_cluster, Some(name), catalog_update.diff);
             }
             ParsedStateUpdateKind::ClusterReplica {
                 durable_cluster_replica: _,
                 parsed_cluster_replica,
+                cluster_name,
+                cluster_role,
             } => {
-                self.absorb_cluster_replica(parsed_cluster_replica, catalog_update.diff);
+                let name = parsed_cluster_replica.name.clone();
+                self.absorb_cluster_replica(
+                    (parsed_cluster_replica, cluster_name, cluster_role),
+                    Some(name),
+                    catalog_update.diff,
+                );
+            }
+            ParsedStateUpdateKind::IntrospectionSourceIndex {
+                cluster_id: _,
+                log: _,
+                index_id,
+            } => {
+                self.absorb_introspection_source_index(index_id, None, catalog_update.diff);
             }
         }
     }
@@ -1723,51 +1891,18 @@ impl CatalogImplication {
     impl_absorb_method!(absorb_secret, Secret, Secret);
     impl_absorb_method!(absorb_connection, Connection, Connection);
 
-    // Special case for cluster which uses the cluster's name field.
-    fn absorb_cluster(&mut self, cluster: Cluster, diff: StateDiff) {
-        let state = match self {
-            CatalogImplication::Cluster(state) => state,
-            CatalogImplication::None => {
-                *self = CatalogImplication::Cluster(CatalogImplicationKind::None);
-                match self {
-                    CatalogImplication::Cluster(state) => state,
-                    _ => unreachable!(),
-                }
-            }
-            _ => {
-                panic!("Unexpected command type for {:?}: Cluster {:?}", self, diff);
-            }
-        };
+    impl_absorb_method!(
+        absorb_introspection_source_index,
+        IntrospectionSourceIndex,
+        GlobalId
+    );
 
-        if let Err(e) = state.transition(cluster.clone(), Some(cluster.name), diff) {
-            panic!("invalid state transition for cluster: {}", e);
-        }
-    }
-
-    // Special case for cluster replica which uses the cluster replica's name field.
-    fn absorb_cluster_replica(&mut self, cluster_replica: ClusterReplica, diff: StateDiff) {
-        let state = match self {
-            CatalogImplication::ClusterReplica(state) => state,
-            CatalogImplication::None => {
-                *self = CatalogImplication::ClusterReplica(CatalogImplicationKind::None);
-                match self {
-                    CatalogImplication::ClusterReplica(state) => state,
-                    _ => unreachable!(),
-                }
-            }
-            _ => {
-                panic!(
-                    "Unexpected command type for {:?}: ClusterReplica {:?}",
-                    self, diff
-                );
-            }
-        };
-
-        if let Err(e) = state.transition(cluster_replica.clone(), Some(cluster_replica.name), diff)
-        {
-            panic!("invalid state transition for cluster replica: {}", e);
-        }
-    }
+    impl_absorb_method!(absorb_cluster, Cluster, Cluster);
+    impl_absorb_method!(
+        absorb_cluster_replica,
+        ClusterReplica,
+        (ClusterReplica, String, ClusterRole)
+    );
 }
 
 #[cfg(test)]

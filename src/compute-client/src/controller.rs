@@ -518,20 +518,10 @@ where
     pub fn create_instance(
         &mut self,
         id: ComputeInstanceId,
-        arranged_logs: BTreeMap<LogVariant, GlobalId>,
         workload_class: Option<String>,
     ) -> Result<(), InstanceExists> {
         if self.instances.contains_key(&id) {
             return Err(InstanceExists(id));
-        }
-
-        let mut collections = BTreeMap::new();
-        let mut logs = Vec::with_capacity(arranged_logs.len());
-        for (&log, &id) in &arranged_logs {
-            let collection = Collection::new_log();
-            let shared = collection.shared.clone();
-            collections.insert(id, collection);
-            logs.push((log, id, shared));
         }
 
         let client = InstanceClient::spawn(
@@ -539,7 +529,6 @@ where
             self.build_info,
             Arc::clone(&self.storage_collections),
             self.peek_stash_persist_location.clone(),
-            logs,
             self.metrics.for_instance(id),
             self.now.clone(),
             self.wallclock_lag.clone(),
@@ -549,7 +538,7 @@ where
             self.read_only,
         );
 
-        let instance = InstanceState::new(client, collections);
+        let instance = InstanceState::new(client, Default::default());
         self.instances.insert(id, instance);
 
         self.instance_workload_classes
@@ -566,6 +555,24 @@ where
         config_params.workload_class = Some(workload_class);
         instance.call(|i| i.update_configuration(config_params));
 
+        Ok(())
+    }
+
+    /// Registers a log source on a compute instance.
+    ///
+    /// Log sources are introspection collections produced by replicas.
+    /// They must be registered before replicas are added.
+    pub fn add_log_source(
+        &mut self,
+        id: ComputeInstanceId,
+        log: LogVariant,
+        global_id: GlobalId,
+    ) -> Result<(), InstanceMissing> {
+        let instance = self.instances.get_mut(&id).ok_or(InstanceMissing(id))?;
+        let collection = Collection::new_log();
+        let shared = collection.shared.clone();
+        instance.collections.insert(global_id, collection);
+        instance.call(move |i| i.add_log_source(log, global_id, shared));
         Ok(())
     }
 

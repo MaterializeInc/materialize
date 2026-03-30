@@ -49,11 +49,6 @@ use crate::Controller;
 
 /// Configures a cluster.
 pub struct ClusterConfig {
-    /// The logging variants to enable on the compute instance.
-    ///
-    /// Each logging variant is mapped to the identifier under which to register
-    /// the arrangement storing the log's data.
-    pub arranged_logs: BTreeMap<LogVariant, GlobalId>,
     /// An optional arbitrary string that describes the class of the workload
     /// this cluster is running (e.g., `production` or `staging`).
     pub workload_class: Option<String>,
@@ -267,6 +262,7 @@ impl ReplicaLocation {
 
 /// The "role" of a cluster, which is currently used to determine the
 /// severity of alerts for problems with its replicas.
+#[derive(Debug, Clone)]
 pub enum ClusterRole {
     /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
@@ -372,22 +368,35 @@ where
     ) -> Result<(), anyhow::Error> {
         self.storage
             .create_instance(id, config.workload_class.clone());
-        self.compute
-            .create_instance(id, config.arranged_logs, config.workload_class)?;
+        self.compute.create_instance(id, config.workload_class)?;
+        Ok(())
+    }
+
+    /// Registers a log source on a cluster's compute instance.
+    ///
+    /// Log sources are introspection collections produced by replicas.
+    /// They must be registered before replicas are added.
+    pub fn add_log_source(
+        &mut self,
+        id: ClusterId,
+        log: LogVariant,
+        global_id: GlobalId,
+    ) -> Result<(), anyhow::Error> {
+        self.compute.add_log_source(id, log, global_id)?;
         Ok(())
     }
 
     /// Updates the workload class for a cluster.
-    pub fn update_cluster_workload_class(
-        &mut self,
-        id: ClusterId,
-        workload_class: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
         self.compute
-            .update_instance_workload_class(id, workload_class)?;
-        Ok(())
+            .update_instance_workload_class(id, workload_class)
+            .expect("instance exists");
     }
 
     /// Drops the specified cluster.
