@@ -16,8 +16,9 @@ Perform a local code review of the current branch's changes against Materialize 
    - **git available**: `git diff <base>...HEAD` (default base: `main`)
    - **jj available**: `jj diff -r <revset>` (default: diff from trunk)
 3. Get the file list from the same diff (add `--stat` for git, `--stat` for jj, or `gh pr diff 123 --stat` for PR).
-4. Review the diff against the checklists below.
-5. Present findings organized as: **Blocking**, **Strong suggestions**, **Nits**.
+4. Read the [bug patterns checklist](bug-patterns.md) and `doc/developer/guide-changes.md`.
+5. Review the diff against the checklists.
+6. Present findings organized as: **Blocking**, **Strong suggestions**, **Nits**.
 
 ## Review checklist
 
@@ -37,6 +38,7 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - **Errors:** Structured with `thiserror`; no bare `anyhow!("...")`. `Display` should not print full error chain.
 - **Async:** Use `ore::task::spawn` / `spawn_blocking`, not raw `tokio::spawn`.
 - **Tests:** `#[mz_ore::test]`; panic in tests rather than returning `Result`.
+- **Numeric casts:** Prefer `From`, `TryFrom`, `CastFrom`/`CastInto` (from `mz_ore::cast`) over raw `as`. **Red flag:** `value as u8`, `value as usize` where source type is wider than target.
 
 ### Code style (SQL)
 - Keywords capitalized (`SELECT`, `FROM`); identifiers lowercase.
