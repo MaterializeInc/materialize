@@ -179,13 +179,14 @@ Metrics scoped to individual [clusters](/concepts/clusters/) and their replicas.
 |--------|------|--------|-------------|
 | `mz_cluster_cpu_utilization_ratio` | Gauge | `cluster`, `replica` | CPU utilization as a ratio (0.0-1.0). |
 | `mz_cluster_memory_utilization_ratio` | Gauge | `cluster`, `replica` | Memory utilization as a ratio (0.0-1.0). |
-| `mz_cluster_memory_bytes_used` | Gauge | `cluster`, `replica` | Memory bytes currently in use. |
-| `mz_cluster_memory_bytes_total` | Gauge | `cluster`, `replica` | Total memory bytes allocated to the cluster. |
 | `mz_cluster_swap_utilization_ratio` | Gauge | `cluster`, `replica` | Swap utilization as a ratio (0.0-1.0). |
-| `mz_cluster_disk_bytes_used` | Gauge | `cluster`, `replica` | Scratch disk bytes used. |
-| `mz_cluster_disk_bytes_total` | Gauge | `cluster`, `replica` | Total scratch disk bytes available. |
+| `mz_cluster_heap_utilization_ratio` | Gauge | `cluster`, `replica` | Heap memory utilization as a ratio (0.0-1.0). |
+| `mz_cluster_memory_bytes_used` | Gauge | `cluster`, `replica` | Memory bytes currently in use. |
+| `mz_cluster_swap_bytes_used` | Gauge | `cluster`, `replica` | Swap bytes currently in use. |
 | `mz_cluster_heap_bytes_used` | Gauge | `cluster`, `replica` | Heap memory bytes used. |
-| `mz_cluster_heap_bytes_limit` | Gauge | `cluster`, `replica` | Heap memory limit. |
+| `mz_cluster_memory_bytes_total` | Gauge | `cluster`, `replica` | Total memory bytes allocated to the cluster. |
+| `mz_cluster_swap_bytes_total` | Gauge | `cluster`, `replica` | Total swap bytes available. |
+| `mz_cluster_heap_bytes_total` | Gauge | `cluster`, `replica` | Total heap memory bytes available. |
 
 ### Replica health
 
