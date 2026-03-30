@@ -100,9 +100,9 @@ Select the instructions for your CRD API version:
 
 ## Version Specific Upgrade Notes
 
-### Upgrading to `v26.18` and later versions
+### Upgrading to `v26.19` and later versions
 
-{{< include-md file="shared-content/self-managed/upgrade-notes/v26.18.md" >}}
+{{< include-md file="shared-content/self-managed/upgrade-notes/v26.19.md" >}}
 
 ### Upgrading to `v26.1` and later versions
 
