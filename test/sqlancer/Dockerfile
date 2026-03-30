@@ -22,10 +22,10 @@ RUN apt-get update && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y -
     && rm -rf /var/lib/apt/lists/* \
     && rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/* /var/cache/* /var/log/*
 
-# TODO: Put this back when merged: https://github.com/sqlancer/sqlancer/pull/1293 & DQP
+# TODO: Put this back when merged: https://github.com/sqlancer/sqlancer/pull/1307 & DQP
 RUN git clone https://github.com/MaterializeInc/sqlancer \
     && cd sqlancer \
-    && git checkout 2f76065475da6c0c69411263f4ed2448463a1660 \
+    && git checkout 6176936dac34ae8b04d8497226394eabe1b28667 \
     && rm -rf .git \
     && mvn package -DskipTests
 # RUN git clone --depth=1 --single-branch https://github.com/sqlancer/sqlancer \
