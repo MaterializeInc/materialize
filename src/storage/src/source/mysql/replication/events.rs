@@ -93,10 +93,7 @@ pub(super) async fn handle_query_event(
                 for (err_output, err) in
                     verify_schemas(&mut *conn, btreemap! { &table => info }).await?
                 {
-                    trace!(%id, "timely-{worker_id} DDL change \
-                           verification error for {table:?}[{}]: {err:?}",
-                           err_output.output_index);
-                    tracing::info!(%id, "timely-{worker_id} DDL change \
+                    tracing::warn!(%id, "timely-{worker_id} DDL change \
                            verification error for {table:?}[{}]: {err:?}",
                            err_output.output_index);
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
