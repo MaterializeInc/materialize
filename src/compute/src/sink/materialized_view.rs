@@ -122,6 +122,7 @@ use std::sync::Arc;
 
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
+use mz_compute_types::dyncfgs::MV_SINK_ADVANCE_PERSIST_FRONTIERS;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
@@ -943,9 +944,9 @@ mod write {
 
             // Force a consolidation of `corrections` after the snapshot updates have been fully
             // processed, to ensure we get rid of those as quickly as possible.
-            let force_consolidation_after = Some(as_of);
+            let force_consolidation_after = Some(as_of.clone());
 
-            Self {
+            let mut state = Self {
                 sink_id,
                 worker_id,
                 persist_writer,
@@ -962,7 +963,21 @@ mod write {
                 persist_frontiers: OkErr::new_frontiers(),
                 batch_description: None,
                 force_consolidation_after,
+            };
+
+            // Immediately advance the persist frontier tracking to the `as_of`.
+            // This is important to ensure the persist sink doesn't get stuck if the output shard's
+            // initial frontier is less than the `as_of`. The `mint` operator first emits a batch
+            // description with `lower = as_of`, and the `write` operator only emits a batch when
+            // its observed persist frontier is >= the batch description's `lower`, which (assuming
+            // no other writers) would be never if we didn't advance the observed persist frontier
+            // to the `as_of`.
+            if MV_SINK_ADVANCE_PERSIST_FRONTIERS.get(worker_config) {
+                state.advance_persist_ok_frontier(as_of.clone());
+                state.advance_persist_err_frontier(as_of);
             }
+
+            state
         }
 
         fn trace<S: AsRef<str>>(&self, message: S) {
