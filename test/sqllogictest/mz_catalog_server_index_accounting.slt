@@ -79,7 +79,7 @@ mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_messag
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
-mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s803␠AS␠"mz_internal"."mz_notices"]␠("id")
+mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s804␠AS␠"mz_internal"."mz_notices"]␠("id")
 mz_object_dependencies_ind  CREATE␠INDEX␠"mz_object_dependencies_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s465␠AS␠"mz_internal"."mz_object_dependencies"]␠("object_id")
 mz_object_history_ind  CREATE␠INDEX␠"mz_object_history_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s534␠AS␠"mz_internal"."mz_object_history"]␠("id")
 mz_object_lifetimes_ind  CREATE␠INDEX␠"mz_object_lifetimes_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s535␠AS␠"mz_internal"."mz_object_lifetimes"]␠("id")

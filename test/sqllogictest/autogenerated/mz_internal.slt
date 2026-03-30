@@ -319,6 +319,13 @@ SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object 
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
 cluster  text  Cluster␠where␠the␠index␠is␠hosted.
 description  text  Index␠comment␠(used␠as␠data␠product␠description).
+
+query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_product_details' ORDER BY position
+----
+object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
+cluster  text  Cluster␠where␠the␠index␠is␠hosted.
+description  text  Index␠comment␠(used␠as␠data␠product␠description).
 schema  jsonb  JSON␠Schema␠describing␠the␠object's␠columns␠and␠types.
 
 query TTT
@@ -751,6 +758,7 @@ mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
+mz_mcp_data_product_details
 mz_mcp_data_products
 mz_mysql_source_tables
 mz_network_policies

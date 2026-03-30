@@ -542,11 +542,25 @@ each materialized view with a refresh strategy other than `on-commit`.
 
 ## `mz_mcp_data_products`
 
-The `mz_mcp_data_products` view exposes data products (indexed materialized views)
-available through the Model Context Protocol (MCP) server. Each data product
-represents a queryable dataset with a defined schema.
+The `mz_mcp_data_products` view lists data products (i.e., indexed materialized
+views) that are available through the Model Context Protocol (MCP) server and
+that the current user can access. This is a lightweight discovery view. Use
+[`mz_mcp_data_product_details`](#mz_mcp_data_product_details) for full column
+schema information.
 
 <!-- RELATION_SPEC mz_internal.mz_mcp_data_products -->
+| Field         | Type     | Meaning                                                                                  |
+| ------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
+| `cluster`     | [`text`] | Cluster where the index is hosted.                                                       |
+| `description` | [`text`] | Index comment (used as data product description).                                        |
+
+## `mz_mcp_data_product_details`
+
+The `mz_mcp_data_product_details` view extends [`mz_mcp_data_products`](#mz_mcp_data_products)
+with a JSON Schema describing each data product's columns and types.
+
+<!-- RELATION_SPEC mz_internal.mz_mcp_data_product_details -->
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
