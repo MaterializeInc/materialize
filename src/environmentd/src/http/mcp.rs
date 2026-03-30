@@ -45,7 +45,11 @@ use crate::http::AuthedClient;
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
+// Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
+// Details uses the full view with JSON schema.
+const DETAILS_QUERY_PREFIX: &str =
+    "SELECT * FROM mz_internal.mz_mcp_data_product_details WHERE object_name = ";
 
 /// MCP request errors, mapped to JSON-RPC error codes.
 #[derive(Debug, Error)]
@@ -660,10 +664,7 @@ async fn get_data_product_details(
 ) -> Result<McpResult, McpRequestError> {
     debug!(name = %name, "Executing get_data_product_details");
 
-    let query = format!(
-        "SELECT * FROM mz_internal.mz_mcp_data_products WHERE object_name = {}",
-        escaped_string_literal(name)
-    );
+    let query = format!("{}{}", DETAILS_QUERY_PREFIX, escaped_string_literal(name));
 
     let rows = execute_sql(client, &query).await?;
 
