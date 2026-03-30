@@ -20,7 +20,7 @@ use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeS
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::SubscribeFrom;
+use mz_sql::plan::{HirToMirConfig, SubscribeFrom};
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
@@ -222,6 +222,8 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     Some(&mut self.metrics),
                     Some(self.view_id),
                 );
+
+                let expr = expr.lower(HirToMirConfig::from(&self.config), None)?;
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
 
                 df_builder.import_view_into_dataflow(

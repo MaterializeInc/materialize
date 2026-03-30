@@ -1650,7 +1650,7 @@ pub fn plan_subscribe(
             } = query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
             expr.bind_parameters(scx, QueryLifetime::Subscribe, params)?;
             let query = query::PlannedRootQuery {
-                expr: expr.lower(scx.catalog.system_vars(), None)?,
+                expr,
                 desc,
                 finishing,
                 scope,

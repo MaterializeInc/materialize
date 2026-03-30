@@ -37,9 +37,7 @@ use ipnet::IpNet;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_controller_types::{ClusterId, ReplicaId};
-use mz_expr::{
-    CollectionPlan, ColumnOrder, MapFilterProject, MirRelationExpr, MirScalarExpr, RowSetFinishing,
-};
+use mz_expr::{CollectionPlan, ColumnOrder, MapFilterProject, MirScalarExpr, RowSetFinishing};
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
@@ -927,7 +925,7 @@ pub enum SubscribeFrom {
     Id(GlobalId),
     /// Query to subscribe to.
     Query {
-        expr: MirRelationExpr,
+        expr: HirRelationExpr,
         desc: RelationDesc,
     },
 }
@@ -943,7 +941,9 @@ impl SubscribeFrom {
     pub fn contains_temporal(&self) -> bool {
         match self {
             SubscribeFrom::Id(_) => false,
-            SubscribeFrom::Query { expr, .. } => expr.contains_temporal(),
+            SubscribeFrom::Query { expr, .. } => expr
+                .contains_temporal()
+                .expect("Unexpected error in `visit_scalars` call"),
         }
     }
 }
