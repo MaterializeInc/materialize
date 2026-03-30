@@ -5353,8 +5353,8 @@ fn test_mcp_agents_with_data_product() {
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("Data product not found"),
-        "SQL injection in read_data_product name should be safely handled"
+            .contains("Invalid data product name"),
+        "SQL injection in read_data_product name should be rejected by validation"
     );
 
     // SQL injection attempt in cluster override.
