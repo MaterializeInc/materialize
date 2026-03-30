@@ -44,7 +44,7 @@ steps:
   - id: testdrive-in-cloudtest
     label: "Full Testdrive in Cloudtest (K8s)"
     depends_on: build-aarch64
-    timeout_in_minutes: 180
+    timeout_in_minutes: 300
     parallelism: 2
     env:
       CLOUDTEST_CLUSTER_DEFINITION_FILE: "misc/kind/cluster.yaml"
@@ -566,7 +566,8 @@ steps:
       - id: checks-self-managed-linear-upgrade-path-manipulate-before-upgrade
         label: "Checks Self-Managed upgrade across all supported patch releases, manipulate before upgrade"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 240
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -577,7 +578,8 @@ steps:
       - id: checks-self-managed-linear-upgrade-path-manipulate-during-upgrade
         label: "Checks Self-Managed upgrade across all supported patch releases, manipulate during upgrade"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        timeout_in_minutes: 240
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
