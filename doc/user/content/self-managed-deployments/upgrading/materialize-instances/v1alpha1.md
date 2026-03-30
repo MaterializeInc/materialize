@@ -1,6 +1,6 @@
 ---
 title: "v1alpha1"
-description: "Upgrading Self-Managed Materialize instances using the v1alpha1 CRD API (before v26.18)."
+description: "Upgrading Self-Managed Materialize instances using the v1alpha1 CRD API (before v26.19)."
 menu:
   main:
     parent: "upgrading-materialize-instances"

@@ -1,6 +1,6 @@
 ---
 title: "v1alpha2"
-description: "Upgrading Self-Managed Materialize instances using the v1alpha2 CRD API (v26.18+)."
+description: "Upgrading Self-Managed Materialize instances using the v1alpha2 CRD API (v26.19+)."
 menu:
   main:
     parent: "upgrading-materialize-instances"
@@ -8,7 +8,14 @@ menu:
     weight: 10
 ---
 
+{{< note >}}
+If you are currently using v1alpha1 and want to switch, see [Switching from v1alpha1 to v1alpha2](/self-managed-deployments/upgrading/materialize-instances/#switching-from-v1alpha1-to-v1alpha2).
+{{</ note >}}
+
 ## Upgrading Materialize Instances
+
+With the `v1alpha2` CRD, rollouts trigger automatically when spec fields change.
+Unlike `v1alpha1`, there is no `requestRollout` field. You only need to update the spec and the operator handles the rest.
 
 **After** you have upgraded your Materialize Operator, upgrade your Materialize
 instance(s) to the **APP Version** of the Operator. To find the version of your
@@ -36,7 +43,7 @@ use the `kubectl patch` command; for example, if the **App Version** is {{< self
 kubectl patch materialize <instance-name> \
   -n <materialize-instance-namespace> \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
+  -p "{\"apiVersion\": \"materialize.cloud/v1alpha2\", \"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
 ```
 
 
@@ -63,18 +70,38 @@ Apply the updated definition:
 kubectl apply -f materialize.yaml
 ```
 
+#### Using Terraform
+
+If you are managing your Materialize instance with the
+[Materialize Terraform modules](https://github.com/MaterializeInc/materialize-terraform-self-managed),
+update the `environmentd_version` variable:
+
+```hcl
+module "materialize_instance" {
+  source = "../kubernetes/modules/materialize-instance"
+
+  crd_version        = "v1alpha2"
+  request_rollout    = null
+  environmentd_version = "v26.19.0"  # Update to the new version
+  # ... other configuration
+}
+```
+
 ## Rollout Configuration
+
+With `v1alpha2`, the operator computes a hash of the spec fields and automatically triggers a rollout when the hash changes. The `requestRollout` field from `v1alpha1` is not used.
 
 #### `forceRollout`
 
-Specify a new `UUID` value for `forceRollout` to roll out even when there are
-no other changes to the instance.
+Specify a new `UUID` value for `forceRollout` to trigger a rollout even when there are
+no other changes to the instance. The `forceRollout` value is included in the
+hash calculation, so changing it produces a new hash and triggers a rollout.
 
 ```shell
 kubectl patch materialize <instance-name> \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"forceRollout\": \"$(uuidgen)\"}}"
+  -p "{\"apiVersion\": \"materialize.cloud/v1alpha2\", \"spec\": {\"forceRollout\": \"$(uuidgen)\"}}"
 ```
 
 ### Rollout strategies
@@ -125,5 +152,5 @@ You may want to cancel an in-progress rollout if the upgrade has failed. This ma
 To cancel an in-progress rollout and revert to the last completed rollout state, you must revert the Materialize resource to the contents it had before triggering the rollout:
 
 ```shell
-kubectl apply -f previous_materialize_configuration.yaml'
+kubectl apply -f previous_materialize_configuration.yaml
 ```
