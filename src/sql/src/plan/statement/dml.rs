@@ -16,10 +16,9 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-
 use mz_arrow_util::builder::ArrowBuilder;
+use mz_expr::RowSetFinishing;
 use mz_expr::visit::Visit;
-use mz_expr::{MirRelationExpr, RowSetFinishing};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::separated;
@@ -1510,32 +1509,6 @@ pub fn plan_explain_timestamp(
     }))
 }
 
-/// Plans and decorrelates a [`Query`]. Like [`query::plan_root_query`], but
-/// returns an [`MirRelationExpr`], which cannot include correlated expressions.
-#[deprecated = "Use `query::plan_root_query` and use `HirRelationExpr` in `~Plan` structs."]
-pub fn plan_query(
-    scx: &StatementContext,
-    query: Query<Aug>,
-    params: &Params,
-    lifetime: QueryLifetime,
-) -> Result<query::PlannedRootQuery<MirRelationExpr>, PlanError> {
-    let query::PlannedRootQuery {
-        mut expr,
-        desc,
-        finishing,
-        scope,
-    } = query::plan_root_query(scx, query, lifetime)?;
-    expr.bind_parameters(scx, lifetime, params)?;
-
-    Ok(query::PlannedRootQuery {
-        // No metrics passed! One more reason not to use this deprecated function.
-        expr: expr.lower(scx.catalog.system_vars(), None)?,
-        desc,
-        finishing,
-        scope,
-    })
-}
-
 generate_extracted_config!(SubscribeOption, (Snapshot, bool), (Progress, bool));
 
 pub fn describe_subscribe(
@@ -1669,7 +1642,19 @@ pub fn plan_subscribe(
         }
         SubscribeRelation::Query(query) => {
             #[allow(deprecated)] // TODO(aalexandrov): Use HirRelationExpr in Subscribe
-            let query = plan_query(scx, query, params, QueryLifetime::Subscribe)?;
+            let query::PlannedRootQuery {
+                mut expr,
+                desc,
+                finishing,
+                scope,
+            } = query::plan_root_query(scx, query, QueryLifetime::Subscribe)?;
+            expr.bind_parameters(scx, QueryLifetime::Subscribe, params)?;
+            let query = query::PlannedRootQuery {
+                expr: expr.lower(scx.catalog.system_vars(), None)?,
+                desc,
+                finishing,
+                scope,
+            };
             // There's no way to apply finishing operations to a `SUBSCRIBE` directly, so the
             // finishing should have already been turned into a `TopK` by
             // `plan_query` / `plan_root_query`, upon seeing the `QueryLifetime::Subscribe`.
