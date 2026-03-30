@@ -12,6 +12,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use itertools::Itertools;
+use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller_types::ClusterId;
@@ -33,9 +34,7 @@ use mz_sql::plan::{
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::{
-    CopyDirection, ExplainStage, ShowStatement, Statement, SubscribeRelation,
-};
+use mz_sql_parser::ast::{CopyDirection, ExplainStage, ShowStatement, Statement};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -179,7 +178,10 @@ impl PeekClient {
                         }
                     }
                 }
-                Statement::Subscribe(subscribe) => {
+
+                Statement::Subscribe(_)
+                    if ENABLE_FRONTEND_SUBSCRIBES.get(catalog.system_config().dyncfgs()) =>
+                {
                     // We have a subscribe statement to process; continue.
                 }
                 _ => {
