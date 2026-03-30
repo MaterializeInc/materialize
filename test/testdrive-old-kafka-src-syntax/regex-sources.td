@@ -9,6 +9,8 @@
 
 $ set-arg-default default-storage-size=scale=1,workers=1
 
+$ set-sql-timeout duration=120s
+
 $ kafka-create-topic topic=request-log
 $ kafka-ingest topic=request-log format=bytes
 123.17.127.5 - - [22/Jan/2020 18:59:52] "GET / HTTP/1.1" 200 -
