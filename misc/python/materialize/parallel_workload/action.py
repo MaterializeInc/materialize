@@ -2899,6 +2899,7 @@ class CreateIcebergSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "BYTES format with non-encodable type",
+            "cannot be used as an Iceberg equality delete key",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:

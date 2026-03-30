@@ -115,6 +115,10 @@ pub enum PlanError {
         desired_key: Vec<String>,
         valid_keys: Vec<Vec<String>>,
     },
+    IcebergSinkUnsupportedKeyType {
+        column: String,
+        column_type: String,
+    },
     InvalidWmrRecursionLimit(String),
     InvalidNumericMaxScale(InvalidNumericMaxScaleError),
     InvalidCharLength(InvalidCharLengthError),
@@ -479,6 +483,9 @@ impl PlanError {
             Self::UpsertSinkWithInvalidKey { .. } | Self::UpsertSinkWithoutKey => {
                 Some("See: https://materialize.com/s/sink-key-selection".into())
             }
+            Self::IcebergSinkUnsupportedKeyType { .. } => {
+                Some("Iceberg equality delete keys must be primitive, non-floating-point columns.".into())
+            }
             Self::Catalog(e) => e.hint(),
             Self::VarError(e) => e.hint(),
             Self::PgSourcePurification(e) => e.hint(),
@@ -630,6 +637,9 @@ impl fmt::Display for PlanError {
             Self::UpsertSinkWithoutKey => write!(f, "upsert sinks must specify a key"),
             Self::UpsertSinkWithInvalidKey { .. } => {
                 write!(f, "upsert key could not be validated as unique")
+            }
+            Self::IcebergSinkUnsupportedKeyType { column, column_type } => {
+                write!(f, "column {column} has type {column_type} which cannot be used as an Iceberg equality delete key")
             }
             Self::InvalidWmrRecursionLimit(msg) => write!(f, "Invalid WITH MUTUALLY RECURSIVE recursion limit. {}", msg),
             Self::InvalidNumericMaxScale(e) => e.fmt(f),

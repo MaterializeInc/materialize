@@ -3568,6 +3568,31 @@ fn plan_sink(
                     Ok(name_idx)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+
+            // Iceberg equality deletes require primitive, non-float key columns.
+            // Reject types that the iceberg-rust library cannot use as identifier fields.
+            if matches!(&connection, CreateSinkConnection::Iceberg { .. }) {
+                let cols: Vec<_> = desc.iter().collect();
+                for &idx in &indices {
+                    let (col_name, col_type) = cols[idx];
+                    let scalar = &col_type.scalar_type;
+                    if matches!(
+                        scalar,
+                        SqlScalarType::Float32
+                            | SqlScalarType::Float64
+                            | SqlScalarType::Array(_)
+                            | SqlScalarType::List { .. }
+                            | SqlScalarType::Map { .. }
+                            | SqlScalarType::Record { .. }
+                    ) {
+                        return Err(PlanError::IcebergSinkUnsupportedKeyType {
+                            column: col_name.to_string(),
+                            column_type: format!("{:?}", scalar),
+                        });
+                    }
+                }
+            }
+
             let is_valid_key = desc
                 .typ()
                 .keys
