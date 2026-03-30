@@ -886,7 +886,7 @@ impl PeekClient {
                 );
 
                 mz_ore::task::spawn_blocking(
-                    || "optimize peek",
+                    || "optimize copy-to",
                     move || {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
@@ -1089,6 +1089,7 @@ impl PeekClient {
             QueryPlan::Subscribe(plan) => {
                 let plan = plan.clone();
                 let catalog: Arc<Catalog> = Arc::clone(&catalog);
+                let debug_name = format!("subscribe-{}", index_id);
                 let mut optimizer = optimize::subscribe::Optimizer::new(
                     catalog,
                     compute_instance_snapshot.clone(),
@@ -1096,7 +1097,7 @@ impl PeekClient {
                     index_id,
                     plan.with_snapshot,
                     plan.up_to,
-                    "TODO".to_string(),
+                    debug_name,
                     optimizer_config,
                     self.optimizer_metrics.clone(),
                 );
@@ -1106,13 +1107,10 @@ impl PeekClient {
                         span.in_scope(|| {
                             let _dispatch_guard = explain_ctx.dispatch_guard();
 
-                            // SELECT/EXPLAIN path
-                            // HIR ⇒ MIR lowering and MIR optimization (local)
                             let global_mir_plan =
                                 optimizer.catch_unwind_optimize(plan.from.clone())?;
                             let as_of = timestamp_context.timestamp_or_default();
 
-                            // Attach resolved context required to continue the pipeline.
                             if let Some(up_to) = optimizer.up_to() {
                                 if as_of > up_to {
                                     return Err(AdapterError::AbsurdSubscribeBounds {

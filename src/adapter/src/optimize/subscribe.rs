@@ -123,7 +123,7 @@ impl Optimizer {
 /// 3. jointly optimizing the `MIR` plans in the [`MirDataflowDescription`].
 #[derive(Clone, Debug)]
 pub struct GlobalMirPlan<T: Clone> {
-    pub df_desc: MirDataflowDescription,
+    df_desc: MirDataflowDescription,
     df_meta: DataflowMetainfo,
     phantom: PhantomData<T>,
 }
