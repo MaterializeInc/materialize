@@ -62,10 +62,10 @@
 //! ```
 //!
 
-use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
+use aws_sdk_s3::error::DisplayErrorContext;
 use bytes::Bytes;
 use differential_dataflow::Hashable;
 use futures::stream::BoxStream;
@@ -161,9 +161,16 @@ where
             uri,
         } => {
             // Checksum validation does not work with GCS when using ranges, which happens with parquet.
-            // From here, there is no way to know if this is a connection to S3 or GCS, so we just disable checksum validation
-            // for all parquet ingestions.
-            let use_checksum = format != ContentFormat::Parquet;
+            // So, we disable checksum if both the endpoint is overridden to a non-AWS endpoint and the format is Parquet.
+            let use_checksum = !(connection.endpoint.is_some()
+                && !connection.endpoint.as_ref().unwrap().contains("amazonaws"))
+                || format != ContentFormat::Parquet;
+            if !use_checksum {
+                tracing::info!(
+                    "disabling checksum validation for S3 source because endpoint: {:?} is overridden and format is Parquet",
+                    connection.endpoint
+                );
+            }
             let source = AwsS3Source::new(
                 connection,
                 connection_id,
@@ -1080,11 +1087,7 @@ impl From<reqwest::header::ToStrError> for StorageErrorXKind {
 
 impl From<aws_smithy_types::byte_stream::error::Error> for StorageErrorXKind {
     fn from(err: aws_smithy_types::byte_stream::error::Error) -> Self {
-        if let Some(err_source) = err.source() {
-            StorageErrorXKind::AwsS3Request(format!("{err}, source: {err_source}"))
-        } else {
-            StorageErrorXKind::AwsS3Request(err.to_string())
-        }
+        StorageErrorXKind::AwsS3Bytes(DisplayErrorContext(err).to_string().into())
     }
 }
 

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use aws_sdk_s3::error::{DisplayErrorContext, SdkError};
+use aws_sdk_s3::error::DisplayErrorContext;
 use derivative::Derivative;
 use futures::StreamExt;
 use futures::stream::{BoxStream, TryStreamExt};
@@ -222,23 +222,10 @@ impl OneshotSource for AwsS3Source {
                 let value = range.into_range_header_value();
                 request = request.range(value);
             }
-            let object = request.send().await.map_err(|err| match err {
-                SdkError::ServiceError(serv_err) => {
-                    tracing::warn!("aws service error: {:?}", &serv_err.raw().body());
-                    StorageErrorXKind::AwsS3Request(
-                        DisplayErrorContext(SdkError::ServiceError(serv_err)).to_string(),
-                    )
-                }
-                SdkError::TimeoutError(_) => {
-                    tracing::warn!("aws timeout error: {}", DisplayErrorContext(&err));
-                    StorageErrorXKind::AwsS3Request(DisplayErrorContext(&err).to_string())
-                }
-
-                _ => {
-                    tracing::warn!("error fetching object: {}", DisplayErrorContext(&err));
-                    StorageErrorXKind::AwsS3Request(DisplayErrorContext(&err).to_string())
-                }
-            })?;
+            let object = request
+                .send()
+                .await
+                .map_err(|err| StorageErrorXKind::generic(DisplayErrorContext(err)))?;
             // AWS's ByteStream doesn't implement the Stream trait.
             let stream = mz_aws_util::s3::ByteStreamAdapter::new(object.body)
                 .err_into()
