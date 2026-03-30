@@ -169,14 +169,7 @@ impl PeekClient {
                 Statement::Copy(copy_stmt) => {
                     match &copy_stmt.direction {
                         CopyDirection::To => {
-                            // Check for SUBSCRIBE inside COPY TO - we don't handle Plan::Subscribe
-                            if matches!(&copy_stmt.relation, CopyRelation::Subscribe(_)) {
-                                debug!(
-                                    "Bailing out from try_frontend_peek, because COPY (SUBSCRIBE ...) TO is not supported"
-                                );
-                                return Ok(None);
-                            }
-                            // This is COPY TO (SELECT), continue
+                            // This is COPY TO (...), continue
                         }
                         CopyDirection::From => {
                             debug!(
