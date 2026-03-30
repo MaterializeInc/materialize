@@ -44,7 +44,9 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@02438e66d09982e371c6559d3a2ccdff9032f203 # v1.0.77
+        # We use a fork of anthropics/claude-code-action until it is updated to work with fork PRs
+        # See https://github.com/MaterializeInc/claude-code-action/blob/mz-patches/README.md for details.
+        uses: MaterializeInc/claude-code-action@0433f2aa93835ea8b1de27f6ed7a48724b2d510a
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
