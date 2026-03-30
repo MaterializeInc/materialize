@@ -431,6 +431,38 @@ impl Coordinator {
                     let _ = tx.send(result);
                 }
 
+                Command::ExecuteSubscribe {
+                    df_desc,
+                    dependency_ids,
+                    cluster_id,
+                    replica_id,
+                    conn_id,
+                    session_uuid,
+                    read_holds,
+                    plan,
+                    statement_logging_id,
+                    tx,
+                } => {
+                    let mut ctx_extra = ExecuteContextGuard::new(
+                        statement_logging_id,
+                        self.internal_cmd_tx.clone(),
+                    );
+                    let result = self
+                        .implement_subscribe(
+                            &mut ctx_extra,
+                            df_desc,
+                            dependency_ids,
+                            cluster_id,
+                            replica_id,
+                            conn_id,
+                            session_uuid,
+                            read_holds,
+                            plan,
+                        )
+                        .await;
+                    let _ = tx.send(result);
+                }
+
                 Command::CopyToPreflight {
                     s3_sink_connection,
                     sink_id,

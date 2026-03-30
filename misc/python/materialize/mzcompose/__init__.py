@@ -208,6 +208,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_frontend_subscribes",
+            "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "default_timestamp_interval",
             "1s",
             ["100ms", "1s"],

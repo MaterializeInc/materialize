@@ -77,6 +77,13 @@ pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
     "Enable installation of introspection subscribes.",
 );
 
+/// Enable sending subscribes down the new frontend-peek path.
+pub const ENABLE_FRONTEND_SUBSCRIBES: Config<bool> = Config::new(
+    "enable_frontend_subscribes",
+    true,
+    "Enable sending subscribes down the new frontend-peek path.",
+);
+
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
     "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -211,6 +218,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
+        .add(&ENABLE_FRONTEND_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
