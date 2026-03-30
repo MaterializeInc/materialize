@@ -2696,23 +2696,53 @@ def helm_install_operator(
         spawn.runv(["helm", "repo", "update", "materialize"])
 
     operation = "upgrade" if upgrade else "install"
+    stdin = yaml.dump(values).encode()
 
-    spawn.runv(
-        [
-            "helm",
-            operation,
-            "operator",
-            chart_path,
-            "--namespace=materialize",
-            "--create-namespace",
-            "--version",
-            helm_release_version,
-            "--wait",
-            "-f",
-            "-",
-        ],
-        stdin=yaml.dump(values).encode(),
-    )
+    try:
+        spawn.runv(
+            [
+                "helm",
+                operation,
+                "operator",
+                chart_path,
+                "--namespace=materialize",
+                "--create-namespace",
+                "--version",
+                helm_release_version,
+                "--wait",
+                "-f",
+                "-",
+            ],
+            stdin=stdin,
+        )
+    except subprocess.CalledProcessError:
+        # Helm's --wait can panic due to a race condition in fluxcd/cli-utils
+        # (send on closed channel). On failure, clean up the potentially
+        # broken release and retry once.
+        print("helm install failed, retrying...")
+        try:
+            spawn.capture(
+                ["helm", "uninstall", "operator", "--namespace=materialize"],
+                stderr=subprocess.DEVNULL,
+            )
+        except subprocess.CalledProcessError:
+            pass
+        spawn.runv(
+            [
+                "helm",
+                "install",
+                "operator",
+                chart_path,
+                "--namespace=materialize",
+                "--create-namespace",
+                "--version",
+                helm_release_version,
+                "--wait",
+                "-f",
+                "-",
+            ],
+            stdin=stdin,
+        )
 
 
 def init(definition: dict[str, Any]) -> None:
