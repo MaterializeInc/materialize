@@ -1136,6 +1136,12 @@ mod tests {
         assert!(validate_system_catalog_query("SELECT * FROM public.user_table").is_err());
         assert!(validate_system_catalog_query("SELECT * FROM myschema.mytable").is_err());
 
+        // mz_unsafe is a system schema but explicitly blocked for MCP
+        assert!(
+            validate_system_catalog_query("SELECT * FROM mz_unsafe.mz_some_table").is_err(),
+            "mz_unsafe schema should be blocked even though it is a system schema"
+        );
+
         // Mixed: system and user schemas should fail
         assert!(
             validate_system_catalog_query(
