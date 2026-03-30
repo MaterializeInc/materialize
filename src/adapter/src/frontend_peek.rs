@@ -792,23 +792,30 @@ impl PeekClient {
         // depend on whether or not reads have occurred in the txn.
         let requires_linearization = (&explain_ctx).into();
         let mut transaction_determination = determination.clone();
-        if matches!(query_plan, QueryPlan::Subscribe { .. }) {
-            session.add_transaction_ops(TransactionOps::Subscribe)?;
-        } else if when.is_transactional() {
-            session.add_transaction_ops(TransactionOps::Peeks {
-                determination: transaction_determination,
-                cluster_id: target_cluster_id,
-                requires_linearization,
-            })?;
-        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
-            // If the query uses AS OF, then ignore the timestamp.
-            transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
-            session.add_transaction_ops(TransactionOps::Peeks {
-                determination: transaction_determination,
-                cluster_id: target_cluster_id,
-                requires_linearization,
-            })?;
-        };
+        match query_plan {
+            QueryPlan::Subscribe { .. } => {
+                if when.is_transactional() {
+                    session.add_transaction_ops(TransactionOps::Subscribe)?;
+                }
+            }
+            QueryPlan::Select(..) | QueryPlan::CopyTo(..) => {
+                if when.is_transactional() {
+                    session.add_transaction_ops(TransactionOps::Peeks {
+                        determination: transaction_determination,
+                        cluster_id: target_cluster_id,
+                        requires_linearization,
+                    })?;
+                } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
+                    // If the query uses AS OF, then ignore the timestamp.
+                    transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
+                    session.add_transaction_ops(TransactionOps::Peeks {
+                        determination: transaction_determination,
+                        cluster_id: target_cluster_id,
+                        requires_linearization,
+                    })?;
+                }
+            }
+        }
 
         // # From peek_optimize
 
