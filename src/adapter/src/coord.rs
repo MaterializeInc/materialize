@@ -2076,10 +2076,12 @@ impl Coordinator {
             self.controller.create_cluster(
                 instance.id,
                 ClusterConfig {
-                    arranged_logs: instance.log_indexes.clone(),
                     workload_class: instance.config.workload_class.clone(),
                 },
             )?;
+            for (&log, &id) in &instance.log_indexes {
+                self.controller.add_log_source(instance.id, log, id)?;
+            }
             for replica in instance.replicas() {
                 let role = instance.role();
                 self.controller.create_replica(

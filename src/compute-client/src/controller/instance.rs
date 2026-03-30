@@ -887,7 +887,6 @@ where
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
         peek_stash_persist_location: PersistLocation,
-        arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
         metrics: InstanceMetrics,
         now: NowFn,
         wallclock_lag: WallclockLagFn<T>,
@@ -898,19 +897,6 @@ where
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         read_only: bool,
     ) -> Self {
-        let mut collections = BTreeMap::new();
-        let mut log_sources = BTreeMap::new();
-        for (log, id, shared) in arranged_logs {
-            let collection = CollectionState::new_log_collection(
-                id,
-                shared,
-                Arc::clone(&read_hold_tx),
-                introspection_tx.clone(),
-            );
-            collections.insert(id, collection);
-            log_sources.insert(log, id);
-        }
-
         let history = ComputeCommandHistory::new(metrics.for_history());
 
         let send_count = metrics.response_send_count.clone();
@@ -927,8 +913,8 @@ where
             read_only,
             workload_class: None,
             replicas: Default::default(),
-            collections,
-            log_sources,
+            collections: Default::default(),
+            log_sources: Default::default(),
             peeks: Default::default(),
             subscribes: Default::default(),
             copy_tos: Default::default(),
@@ -987,6 +973,27 @@ where
 
         let command = ComputeCommand::UpdateConfiguration(Box::new(config_params));
         self.send(command);
+    }
+
+    /// Registers a log source on this instance.
+    ///
+    /// Log sources are introspection collections that are produced by
+    /// replicas. They must be registered before replicas are added, so
+    /// that replicas know which log collections to produce.
+    pub fn add_log_source(
+        &mut self,
+        log: LogVariant,
+        id: GlobalId,
+        shared: SharedCollectionState<T>,
+    ) {
+        let collection = CollectionState::new_log_collection(
+            id,
+            shared,
+            Arc::clone(&self.read_hold_tx),
+            self.introspection_tx.clone(),
+        );
+        self.collections.insert(id, collection);
+        self.log_sources.insert(log, id);
     }
 
     /// Marks the end of any initialization commands.
