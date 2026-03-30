@@ -6,6 +6,7 @@ menu:
     parent: "mysql"
     name: "Amazon Aurora"
     identifier: "mysql-amazon-aurora"
+    weight: 10
 ---
 
 This page shows you how to stream data from [Amazon Aurora MySQL](https://aws.amazon.com/rds/aurora/)
