@@ -308,6 +308,11 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     matching_files = []
     for filter in args.filter:
         matching_files.extend(glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc"))
+
+    if pg_version is not None:
+        # Vanilla Postgres images don't have SSL configured, skip SSL tests
+        matching_files = [f for f in matching_files if not f.startswith("pg-cdc-ssl")]
+
     sharded_files: list[str] = buildkite.shard_list(
         sorted(matching_files), lambda file: file
     )
