@@ -121,7 +121,7 @@
     "@emotion/babel-plugin": "^11.13.5",
     "@frontegg/client": "^5.3.2",
     "@playwright/test": "^1.48.2",
-    "@sentry/vite-plugin": "^2.22.6",
+    "@sentry/vite-plugin": "^5.1.1",
     "@svgr/babel-plugin-transform-svg-component": "^8.0.0",
     "@tanstack/eslint-plugin-query": "^5.95.0",
     "@testing-library/dom": "^10.4.0",
