@@ -22,6 +22,7 @@
 //! More information about builtin system tables and types can be found in
 //! <https://materialize.com/docs/sql/system-catalog/>.
 
+mod builtin;
 pub mod notice;
 
 use std::collections::BTreeMap;
@@ -14068,7 +14069,7 @@ pub const MZ_ANALYTICS_CLUSTER: BuiltinCluster = BuiltinCluster {
 
 /// List of all builtin objects sorted topologically by dependency.
 pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::new(|| {
-    let mut builtins = vec![
+    let mut builtin_types = vec![
         Builtin::Type(&TYPE_ANY),
         Builtin::Type(&TYPE_ANYARRAY),
         Builtin::Type(&TYPE_ANYELEMENT),
@@ -14160,6 +14161,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Type(&TYPE_ACL_ITEM_ARRAY),
         Builtin::Type(&TYPE_INTERNAL),
     ];
+
+    let mut builtin_funcs = Vec::new();
     for (schema, funcs) in &[
         (PG_CATALOG_SCHEMA, &*mz_sql::func::PG_CATALOG_BUILTINS),
         (
@@ -14171,14 +14174,15 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         (MZ_UNSAFE_SCHEMA, &*mz_sql::func::MZ_UNSAFE_BUILTINS),
     ] {
         for (name, func) in funcs.iter() {
-            builtins.push(Builtin::Func(BuiltinFunc {
+            builtin_funcs.push(Builtin::Func(BuiltinFunc {
                 name,
                 schema,
                 inner: func,
             }));
         }
     }
-    builtins.append(&mut vec![
+
+    let mut builtin_items = vec![
         Builtin::Source(&MZ_CATALOG_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_SHARING_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_BATCHES_RAW),
@@ -14555,9 +14559,20 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
-    ]);
+    ];
 
-    builtins.extend(notice::builtins());
+    builtin_items.extend(notice::builtins());
+
+    // Generate builtin relations reporting builtin objects last, since they need a complete view
+    // of all other builtins.
+    let mut builtin_builtins = builtin::builtins(&builtin_items).collect();
+
+    // Construct the full list of builtins, retaining dependency order.
+    let mut builtins = Vec::new();
+    builtins.append(&mut builtin_types);
+    builtins.append(&mut builtin_funcs);
+    builtins.append(&mut builtin_builtins);
+    builtins.append(&mut builtin_items);
 
     builtins
 });
