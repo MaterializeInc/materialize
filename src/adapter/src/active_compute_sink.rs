@@ -17,7 +17,7 @@ use anyhow::anyhow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::ClusterId;
-use mz_expr::row::RowCollection;
+use mz_expr::row::{RowCollection, RowCollectionBuilder};
 use mz_expr::{RowComparator, compare_columns};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
@@ -25,7 +25,6 @@ use mz_repr::adt::numeric;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowRef, Timestamp};
 use mz_sql::plan::SubscribeOutput;
 use mz_storage_types::instances::StorageInstanceId;
-use timely::progress::Antichain;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -118,42 +117,265 @@ pub struct ActiveSubscribe {
     pub output: SubscribeOutput,
 }
 
+fn format_progress(
+    builder: &mut RowCollectionBuilder,
+    arity: usize,
+    output: &SubscribeOutput,
+    upper: Timestamp,
+) {
+    let mut row_buf = Row::default();
+    let mut packer = row_buf.packer();
+    packer.push(Datum::from(numeric::Numeric::from(upper)));
+    packer.push(Datum::True);
+
+    // Fill in the mz_diff or mz_state column
+    packer.push(Datum::Null);
+
+    // Fill all table columns with NULL.
+    for _ in 0..arity {
+        packer.push(Datum::Null);
+    }
+
+    if let SubscribeOutput::EnvelopeDebezium { order_by_keys } = output {
+        for _ in 0..(arity - order_by_keys.len()) {
+            packer.push(Datum::Null);
+        }
+    }
+    builder.push(&row_buf, NonZeroUsize::MIN);
+}
+
+/// Generate the appropriate unary peek response for the given subscribe batch.
+pub fn format_subscribe_response(
+    batch: SubscribeBatch,
+    arity: usize,
+    as_of: Timestamp,
+    output: &SubscribeOutput,
+    emit_progress: bool,
+) -> PeekResponseUnary {
+    let comparator = RowComparator::new(output.row_order());
+    let rows = match batch.updates {
+        Ok(ref rows) => {
+            let iters = rows.iter().map(|r| r.iter());
+            let merged = mz_ore::iter::merge_iters_by(
+                iters,
+                |(left_row, left_time, _), (right_row, right_time, _)| {
+                    left_time.cmp(right_time).then_with(|| {
+                        comparator.compare_rows(left_row, right_row, || left_row.cmp(right_row))
+                    })
+                },
+            );
+            mz_ore::iter::consolidate_update_iter(merged)
+        }
+        Err(s) => {
+            return PeekResponseUnary::Error(s);
+        }
+    };
+
+    // Sort results by time. We use stable sort here because it will produce
+    // deterministic results since the cursor will always produce rows in
+    // the same order. Compute doesn't guarantee that the results are sorted
+    // (materialize#18936)
+    let mut output_buf = Row::default();
+    let mut output_builder = RowCollection::builder(0, 0);
+    let mut left_datum_vec = mz_repr::DatumVec::new();
+    let mut right_datum_vec = mz_repr::DatumVec::new();
+    let mut push_row = |row: &RowRef, time: Timestamp, diff: Diff| {
+        assert!(as_of <= time);
+        let mut packer = output_buf.packer();
+        // TODO: Change to MzTimestamp.
+        packer.push(Datum::from(numeric::Numeric::from(time)));
+        if emit_progress {
+            // When sinking with PROGRESS, the output includes an
+            // additional column that indicates whether a timestamp is
+            // complete. For regular "data" updates this is always
+            // `false`.
+            packer.push(Datum::False);
+        }
+
+        match output {
+            SubscribeOutput::EnvelopeUpsert { .. } | SubscribeOutput::EnvelopeDebezium { .. } => {}
+            SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
+                packer.push(Datum::Int64(diff.into_inner()));
+            }
+        }
+
+        packer.extend_by_row_ref(row);
+
+        output_builder.push(output_buf.as_row_ref(), NonZeroUsize::MIN);
+    };
+
+    match output {
+        SubscribeOutput::WithinTimestampOrderBy { order_by } => {
+            let mut rows: Vec<_> = rows.collect();
+            // Since the diff is inserted as the first column, we can't take advantage of the
+            // known ordering. (Aside from timestamp, I suppose.)
+            rows.sort_by(
+                |(left_row, left_time, left_diff), (right_row, right_time, right_diff)| {
+                    left_time.cmp(right_time).then_with(|| {
+                        let mut left_datums = left_datum_vec.borrow();
+                        left_datums.extend(&[Datum::Int64(left_diff.into_inner())]);
+                        left_datums.extend(left_row.iter());
+                        let mut right_datums = right_datum_vec.borrow();
+                        right_datums.extend(&[Datum::Int64(right_diff.into_inner())]);
+                        right_datums.extend(right_row.iter());
+                        compare_columns(order_by, &left_datums, &right_datums, || {
+                            left_row.cmp(right_row).then(left_diff.cmp(right_diff))
+                        })
+                    })
+                },
+            );
+            for (row, time, diff) in rows {
+                push_row(row, *time, diff);
+            }
+        }
+        SubscribeOutput::EnvelopeUpsert { order_by_keys }
+        | SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
+            let debezium = matches!(output, SubscribeOutput::EnvelopeDebezium { .. });
+            let mut it = rows.peekable();
+            let mut datum_vec = mz_repr::DatumVec::new();
+            let mut old_datum_vec = mz_repr::DatumVec::new();
+            let comparator = RowComparator::new(order_by_keys.as_slice());
+            let mut group = Vec::with_capacity(2);
+            let mut row_buf = Row::default();
+            // The iterator is sorted by time and key, so elements in the same group should be
+            // adjacent already.
+            while let Some(start) = it.next() {
+                group.clear();
+                group.push(start);
+                while let Some(row) = it.peek()
+                    && start.1 == row.1
+                    && {
+                        comparator
+                            .compare_rows(start.0, row.0, || Ordering::Equal)
+                            .is_eq()
+                    }
+                {
+                    group.extend(it.next());
+                }
+                group.sort_by_key(|(_, _, d)| *d);
+
+                // Four cases:
+                // [(key, value, +1)] => ("insert", key, NULL, value)
+                // [(key, v1, -1), (key, v2, +1)] => ("upsert", key, v1, v2)
+                // [(key, value, -1)] => ("delete", key, value, NULL)
+                // everything else => ("key_violation", key, NULL, NULL)
+                let value_columns = arity - order_by_keys.len();
+                let mut packer = row_buf.packer();
+                match &group[..] {
+                    [(row, _, Diff::ONE)] => {
+                        packer.push(if debezium {
+                            Datum::String("insert")
+                        } else {
+                            Datum::String("upsert")
+                        });
+                        let datums = datum_vec.borrow_with(row);
+                        for column_order in order_by_keys {
+                            packer.push(datums[column_order.column]);
+                        }
+                        if debezium {
+                            for _ in 0..value_columns {
+                                packer.push(Datum::Null);
+                            }
+                        }
+                        for idx in 0..arity {
+                            if !order_by_keys.iter().any(|co| co.column == idx) {
+                                packer.push(datums[idx]);
+                            }
+                        }
+                        push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
+                    }
+                    [(_, _, Diff::MINUS_ONE)] => {
+                        packer.push(Datum::String("delete"));
+                        let datums = datum_vec.borrow_with(start.0);
+                        for column_order in order_by_keys {
+                            packer.push(datums[column_order.column]);
+                        }
+                        if debezium {
+                            for idx in 0..arity {
+                                if !order_by_keys.iter().any(|co| co.column == idx) {
+                                    packer.push(datums[idx]);
+                                }
+                            }
+                        }
+                        for _ in 0..arity - order_by_keys.len() {
+                            packer.push(Datum::Null);
+                        }
+                        push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
+                    }
+                    [(old_row, _, Diff::MINUS_ONE), (row, _, Diff::ONE)] => {
+                        packer.push(Datum::String("upsert"));
+                        let datums = datum_vec.borrow_with(row);
+                        let old_datums = old_datum_vec.borrow_with(old_row);
+
+                        for column_order in order_by_keys {
+                            packer.push(datums[column_order.column]);
+                        }
+                        if debezium {
+                            for idx in 0..arity {
+                                if !order_by_keys.iter().any(|co| co.column == idx) {
+                                    packer.push(old_datums[idx]);
+                                }
+                            }
+                        }
+                        for idx in 0..arity {
+                            if !order_by_keys.iter().any(|co| co.column == idx) {
+                                packer.push(datums[idx]);
+                            }
+                        }
+                        push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
+                    }
+                    _ => {
+                        packer.push(Datum::String("key_violation"));
+                        let datums = datum_vec.borrow_with(start.0);
+                        for column_order in order_by_keys {
+                            packer.push(datums[column_order.column]);
+                        }
+                        if debezium {
+                            for _ in 0..(arity - order_by_keys.len()) {
+                                packer.push(Datum::Null);
+                            }
+                        }
+                        for _ in 0..(arity - order_by_keys.len()) {
+                            packer.push(Datum::Null);
+                        }
+                        push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
+                    }
+                };
+            }
+        }
+        SubscribeOutput::Diffs => {
+            // Diffs output is sorted by time and row, so it can be pushed directly.
+            for (row, time, diff) in rows {
+                push_row(row, *time, diff)
+            }
+        }
+    };
+
+    if emit_progress && !batch.upper.less_equal(&as_of) {
+        if let Some(upper) = batch.upper.as_option() {
+            format_progress(&mut output_builder, arity, output, *upper);
+        }
+    }
+
+    let rows = output_builder.build();
+    let rows = Box::new(rows.into_row_iter());
+
+    PeekResponseUnary::Rows(rows)
+}
+
 impl ActiveSubscribe {
     /// Initializes the subscription.
     ///
     /// This method must be called exactly once, after constructing an
     /// `ActiveSubscribe` and before calling `process_response`.
     pub fn initialize(&self) {
-        // Always emit progress message indicating snapshot timestamp.
-        self.send_progress_message(&Antichain::from_elem(self.as_of));
-    }
-
-    fn send_progress_message(&self, upper: &Antichain<Timestamp>) {
-        if !self.emit_progress {
-            return;
-        }
-        if let Some(upper) = upper.as_option() {
-            let mut row_buf = Row::default();
-            let mut packer = row_buf.packer();
-            packer.push(Datum::from(numeric::Numeric::from(*upper)));
-            packer.push(Datum::True);
-
-            // Fill in the mz_diff or mz_state column
-            packer.push(Datum::Null);
-
-            // Fill all table columns with NULL.
-            for _ in 0..self.arity {
-                packer.push(Datum::Null);
-            }
-
-            if let SubscribeOutput::EnvelopeDebezium { order_by_keys } = &self.output {
-                for _ in 0..(self.arity - order_by_keys.len()) {
-                    packer.push(Datum::Null);
-                }
-            }
-
-            let row_iter = Box::new(row_buf.into_row_iter());
-            self.send(PeekResponseUnary::Rows(row_iter));
+        if self.emit_progress {
+            // A single, all-null row except for the progress timestamp.
+            let mut output_builder = RowCollection::builder(8, 1);
+            format_progress(&mut output_builder, self.arity, &self.output, self.as_of);
+            self.send(PeekResponseUnary::Rows(Box::new(
+                output_builder.build().into_row_iter(),
+            )));
         }
     }
 
@@ -161,220 +383,21 @@ impl ActiveSubscribe {
     ///
     /// Returns `true` if the subscribe is finished.
     pub fn process_response(&self, batch: SubscribeBatch) -> bool {
-        let comparator = RowComparator::new(self.output.row_order());
-        let rows = match batch.updates {
-            Ok(ref rows) => {
-                let iters = rows.iter().map(|r| r.iter());
-                let merged = mz_ore::iter::merge_iters_by(
-                    iters,
-                    |(left_row, left_time, _), (right_row, right_time, _)| {
-                        left_time.cmp(right_time).then_with(|| {
-                            comparator.compare_rows(left_row, right_row, || left_row.cmp(right_row))
-                        })
-                    },
-                );
-                mz_ore::iter::consolidate_update_iter(merged)
-            }
-            Err(s) => {
-                self.send(PeekResponseUnary::Error(s));
-                return true;
-            }
+        let is_finished = match &batch.updates {
+            Ok(_) => batch.upper.is_empty(),
+            Err(_) => true,
         };
+        let response = format_subscribe_response(
+            batch,
+            self.arity,
+            self.as_of,
+            &self.output,
+            self.emit_progress,
+        );
 
-        // Sort results by time. We use stable sort here because it will produce
-        // deterministic results since the cursor will always produce rows in
-        // the same order. Compute doesn't guarantee that the results are sorted
-        // (materialize#18936)
-        let mut output_buf = Row::default();
-        let mut output_builder = RowCollection::builder(0, 0);
-        let mut left_datum_vec = mz_repr::DatumVec::new();
-        let mut right_datum_vec = mz_repr::DatumVec::new();
-        let mut push_row = |row: &RowRef, time: Timestamp, diff: Diff| {
-            assert!(self.as_of <= time);
-            let mut packer = output_buf.packer();
-            // TODO: Change to MzTimestamp.
-            packer.push(Datum::from(numeric::Numeric::from(time)));
-            if self.emit_progress {
-                // When sinking with PROGRESS, the output includes an
-                // additional column that indicates whether a timestamp is
-                // complete. For regular "data" updates this is always
-                // `false`.
-                packer.push(Datum::False);
-            }
+        self.send(response);
 
-            match &self.output {
-                SubscribeOutput::EnvelopeUpsert { .. }
-                | SubscribeOutput::EnvelopeDebezium { .. } => {}
-                SubscribeOutput::Diffs | SubscribeOutput::WithinTimestampOrderBy { .. } => {
-                    packer.push(Datum::Int64(diff.into_inner()));
-                }
-            }
-
-            packer.extend_by_row_ref(row);
-
-            output_builder.push(output_buf.as_row_ref(), NonZeroUsize::MIN);
-        };
-
-        match &self.output {
-            SubscribeOutput::WithinTimestampOrderBy { order_by } => {
-                let mut rows: Vec<_> = rows.collect();
-                // Since the diff is inserted as the first column, we can't take advantage of the
-                // known ordering. (Aside from timestamp, I suppose.)
-                rows.sort_by(
-                    |(left_row, left_time, left_diff), (right_row, right_time, right_diff)| {
-                        left_time.cmp(right_time).then_with(|| {
-                            let mut left_datums = left_datum_vec.borrow();
-                            left_datums.extend(&[Datum::Int64(left_diff.into_inner())]);
-                            left_datums.extend(left_row.iter());
-                            let mut right_datums = right_datum_vec.borrow();
-                            right_datums.extend(&[Datum::Int64(right_diff.into_inner())]);
-                            right_datums.extend(right_row.iter());
-                            compare_columns(order_by, &left_datums, &right_datums, || {
-                                left_row.cmp(right_row).then(left_diff.cmp(right_diff))
-                            })
-                        })
-                    },
-                );
-                for (row, time, diff) in rows {
-                    push_row(row, *time, diff);
-                }
-            }
-            SubscribeOutput::EnvelopeUpsert { order_by_keys }
-            | SubscribeOutput::EnvelopeDebezium { order_by_keys } => {
-                let debezium = matches!(self.output, SubscribeOutput::EnvelopeDebezium { .. });
-                let mut it = rows.peekable();
-                let mut datum_vec = mz_repr::DatumVec::new();
-                let mut old_datum_vec = mz_repr::DatumVec::new();
-                let comparator = RowComparator::new(order_by_keys.as_slice());
-                let mut group = Vec::with_capacity(2);
-                let mut row_buf = Row::default();
-                // The iterator is sorted by time and key, so elements in the same group should be
-                // adjacent already.
-                while let Some(start) = it.next() {
-                    group.clear();
-                    group.push(start);
-                    while let Some(row) = it.peek()
-                        && start.1 == row.1
-                        && {
-                            comparator
-                                .compare_rows(start.0, row.0, || Ordering::Equal)
-                                .is_eq()
-                        }
-                    {
-                        group.extend(it.next());
-                    }
-                    group.sort_by_key(|(_, _, d)| *d);
-
-                    // Four cases:
-                    // [(key, value, +1)] => ("insert", key, NULL, value)
-                    // [(key, v1, -1), (key, v2, +1)] => ("upsert", key, v1, v2)
-                    // [(key, value, -1)] => ("delete", key, value, NULL)
-                    // everything else => ("key_violation", key, NULL, NULL)
-                    let value_columns = self.arity - order_by_keys.len();
-                    let mut packer = row_buf.packer();
-                    match &group[..] {
-                        [(row, _, Diff::ONE)] => {
-                            packer.push(if debezium {
-                                Datum::String("insert")
-                            } else {
-                                Datum::String("upsert")
-                            });
-                            let datums = datum_vec.borrow_with(row);
-                            for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
-                            }
-                            if debezium {
-                                for _ in 0..value_columns {
-                                    packer.push(Datum::Null);
-                                }
-                            }
-                            for idx in 0..self.arity {
-                                if !order_by_keys.iter().any(|co| co.column == idx) {
-                                    packer.push(datums[idx]);
-                                }
-                            }
-                            push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
-                        }
-                        [(_, _, Diff::MINUS_ONE)] => {
-                            packer.push(Datum::String("delete"));
-                            let datums = datum_vec.borrow_with(start.0);
-                            for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
-                            }
-                            if debezium {
-                                for idx in 0..self.arity {
-                                    if !order_by_keys.iter().any(|co| co.column == idx) {
-                                        packer.push(datums[idx]);
-                                    }
-                                }
-                            }
-                            for _ in 0..self.arity - order_by_keys.len() {
-                                packer.push(Datum::Null);
-                            }
-                            push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
-                        }
-                        [(old_row, _, Diff::MINUS_ONE), (row, _, Diff::ONE)] => {
-                            packer.push(Datum::String("upsert"));
-                            let datums = datum_vec.borrow_with(row);
-                            let old_datums = old_datum_vec.borrow_with(old_row);
-
-                            for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
-                            }
-                            if debezium {
-                                for idx in 0..self.arity {
-                                    if !order_by_keys.iter().any(|co| co.column == idx) {
-                                        packer.push(old_datums[idx]);
-                                    }
-                                }
-                            }
-                            for idx in 0..self.arity {
-                                if !order_by_keys.iter().any(|co| co.column == idx) {
-                                    packer.push(datums[idx]);
-                                }
-                            }
-                            push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
-                        }
-                        _ => {
-                            packer.push(Datum::String("key_violation"));
-                            let datums = datum_vec.borrow_with(start.0);
-                            for column_order in order_by_keys {
-                                packer.push(datums[column_order.column]);
-                            }
-                            if debezium {
-                                for _ in 0..(self.arity - order_by_keys.len()) {
-                                    packer.push(Datum::Null);
-                                }
-                            }
-                            for _ in 0..(self.arity - order_by_keys.len()) {
-                                packer.push(Datum::Null);
-                            }
-                            push_row(row_buf.as_row_ref(), *start.1, Diff::ZERO)
-                        }
-                    };
-                }
-            }
-            SubscribeOutput::Diffs => {
-                // Diffs output is sorted by time and row, so it can be pushed directly.
-                for (row, time, diff) in rows {
-                    push_row(row, *time, diff)
-                }
-            }
-        };
-
-        let rows = output_builder.build();
-        let rows = Box::new(rows.into_row_iter());
-        self.send(PeekResponseUnary::Rows(rows));
-
-        // Emit progress message if requested. Don't emit progress for the first
-        // batch if the upper is exactly `as_of` (we're guaranteed it is not
-        // less than `as_of`, but it might be exactly `as_of`) as we've already
-        // emitted that progress message in `initialize`.
-        if !batch.upper.less_equal(&self.as_of) {
-            self.send_progress_message(&batch.upper);
-        }
-
-        batch.upper.is_empty()
+        is_finished
     }
 
     /// Retires the subscribe with the specified reason.
