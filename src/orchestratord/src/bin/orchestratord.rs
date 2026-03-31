@@ -388,9 +388,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     orchestratord_namespace: namespace,
                 },
                 Arc::clone(&metrics),
-                client.clone(),
-            )
-            .await,
+            ),
             watcher::Config::default().timeout(29),
         )
         .with_controller(|controller| {
@@ -437,26 +435,22 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         || "balancer controller",
         k8s_controller::Controller::namespaced_all(
             client.clone(),
-            controller::balancer::Context::new(
-                controller::balancer::Config {
-                    enable_security_context: args.enable_security_context,
-                    enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
-                    image_pull_policy: args.image_pull_policy,
-                    scheduler_name: args.scheduler_name.clone(),
-                    balancerd_node_selector: args.balancerd_node_selector,
-                    balancerd_affinity: args.balancerd_affinity,
-                    balancerd_tolerations: args.balancerd_tolerations,
-                    balancerd_default_resources: args.balancerd_default_resources,
-                    default_certificate_specs: args.default_certificate_specs.clone(),
-                    environmentd_sql_port: args.environmentd_sql_port,
-                    environmentd_http_port: args.environmentd_http_port,
-                    balancerd_sql_port: args.balancerd_sql_port,
-                    balancerd_http_port: args.balancerd_http_port,
-                    balancerd_internal_http_port: args.balancerd_internal_http_port,
-                },
-                client.clone(),
-            )
-            .await,
+            controller::balancer::Context::new(controller::balancer::Config {
+                enable_security_context: args.enable_security_context,
+                enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
+                image_pull_policy: args.image_pull_policy,
+                scheduler_name: args.scheduler_name.clone(),
+                balancerd_node_selector: args.balancerd_node_selector,
+                balancerd_affinity: args.balancerd_affinity,
+                balancerd_tolerations: args.balancerd_tolerations,
+                balancerd_default_resources: args.balancerd_default_resources,
+                default_certificate_specs: args.default_certificate_specs.clone(),
+                environmentd_sql_port: args.environmentd_sql_port,
+                environmentd_http_port: args.environmentd_http_port,
+                balancerd_sql_port: args.balancerd_sql_port,
+                balancerd_http_port: args.balancerd_http_port,
+                balancerd_internal_http_port: args.balancerd_internal_http_port,
+            }),
             watcher::Config::default().timeout(29),
         )
         .with_controller(|controller| {
@@ -491,25 +485,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         || "console controller",
         k8s_controller::Controller::namespaced_all(
             client.clone(),
-            controller::console::Context::new(
-                controller::console::Config {
-                    enable_security_context: args.enable_security_context,
-                    enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
-                    image_pull_policy: args.image_pull_policy,
-                    scheduler_name: args.scheduler_name,
-                    console_node_selector: args.console_node_selector,
-                    console_affinity: args.console_affinity,
-                    console_tolerations: args.console_tolerations,
-                    console_default_resources: args.console_default_resources,
-                    network_policies_ingress_enabled: args.network_policies_ingress_enabled,
-                    network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
-                    default_certificate_specs: args.default_certificate_specs,
-                    console_http_port: args.console_http_port,
-                    balancerd_http_port: args.balancerd_http_port,
-                },
-                client.clone(),
-            )
-            .await,
+            controller::console::Context::new(controller::console::Config {
+                enable_security_context: args.enable_security_context,
+                enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
+                image_pull_policy: args.image_pull_policy,
+                scheduler_name: args.scheduler_name,
+                console_node_selector: args.console_node_selector,
+                console_affinity: args.console_affinity,
+                console_tolerations: args.console_tolerations,
+                console_default_resources: args.console_default_resources,
+                network_policies_ingress_enabled: args.network_policies_ingress_enabled,
+                network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
+                default_certificate_specs: args.default_certificate_specs,
+                console_http_port: args.console_http_port,
+                balancerd_http_port: args.balancerd_http_port,
+            }),
             watcher::Config::default().timeout(29),
         )
         .with_controller(|controller| {

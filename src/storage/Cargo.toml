@@ -72,7 +72,7 @@ prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
-rand-8 = { package = "rand", version = "0.8.5" }
+rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",

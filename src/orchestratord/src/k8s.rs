@@ -7,20 +7,18 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::{future::ready, time::Duration};
+use std::time::Duration;
 
 use apiextensions::v1::CustomResourceColumnDefinition;
-use futures::StreamExt;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions;
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
     api::{DeleteParams, Patch, PatchParams, PostParams},
     core::Status,
     core::response::StatusSummary,
-    runtime::{reflector, watcher},
 };
 use serde::{Serialize, de::DeserializeOwned};
-use tracing::{info, warn};
+use tracing::info;
 
 use mz_cloud_resources::crd::{self, VersionedCrd, register_versioned_crds};
 
@@ -141,38 +139,4 @@ pub async fn register_crds(
     info!("Done rewriting CRDs");
 
     Ok(())
-}
-
-pub async fn make_reflector<K>(client: Client) -> reflector::Store<K>
-where
-    K: kube::Resource<DynamicType = ()>
-        + Clone
-        + Send
-        + Sync
-        + DeserializeOwned
-        + Serialize
-        + std::fmt::Debug
-        + 'static,
-{
-    let api = kube::Api::all(client);
-    let (store, writer) = reflector::store();
-    let reflector =
-        reflector::reflector(writer, watcher(api, watcher::Config::default().timeout(29)));
-    mz_ore::task::spawn(
-        || format!("{} reflector", K::kind(&Default::default())),
-        async {
-            reflector
-                .for_each(|res| {
-                    if let Err(e) = res {
-                        warn!("error in {} reflector: {}", K::kind(&Default::default()), e);
-                    }
-                    ready(())
-                })
-                .await
-        },
-    );
-    // the only way this can return an error is if we drop the writer,
-    // which we do not ever do, so unwrap is fine
-    store.wait_until_ready().await.expect("writer dropped");
-    store
 }

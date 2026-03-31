@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::sync::Arc;
-
 use anyhow::bail;
 use k8s_openapi::{
     api::{
@@ -29,19 +27,14 @@ use k8s_openapi::{
 use kube::{
     Api, Client, Resource, ResourceExt,
     api::{DeleteParams, ObjectMeta, PostParams},
-    runtime::{
-        conditions::is_deployment_completed,
-        controller::Action,
-        reflector::{ObjectRef, Store},
-        wait::await_condition,
-    },
+    runtime::{conditions::is_deployment_completed, controller::Action, wait::await_condition},
 };
 use maplit::btreemap;
 use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, make_reflector, replace_resource},
+    k8s::{apply_resource, get_resource, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -74,28 +67,23 @@ pub struct Config {
 
 pub struct Context {
     config: Config,
-    deployments: Store<Deployment>,
 }
 
 impl Context {
-    pub async fn new(config: Config, client: Client) -> Self {
-        Self {
-            config,
-            deployments: make_reflector(client).await,
-        }
+    pub fn new(config: Config) -> Self {
+        Self { config }
     }
 
     async fn sync_deployment_status(
         &self,
         client: &Client,
         balancer: &Balancer,
-    ) -> Result<(), kube::Error> {
+    ) -> Result<(), Error> {
         let namespace = balancer.namespace();
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &namespace);
+        let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
 
-        let Some(deployment) = self
-            .deployments
-            .get(&ObjectRef::new(&balancer.deployment_name()).within(&namespace))
+        let Some(deployment) = get_resource(&deployment_api, &balancer.deployment_name()).await?
         else {
             return Ok(());
         };
@@ -464,13 +452,8 @@ impl Context {
         deployment_api: &Api<Deployment>,
         new_deployment: &Deployment,
     ) -> Result<(), Error> {
-        let Some(mut existing_deployment) = self
-            .deployments
-            .get(
-                &ObjectRef::new(&new_deployment.name_unchecked())
-                    .within(&new_deployment.namespace().unwrap()),
-            )
-            .map(Arc::unwrap_or_clone)
+        let Some(mut existing_deployment) =
+            get_resource(deployment_api, &new_deployment.name_unchecked()).await?
         else {
             return Ok(());
         };

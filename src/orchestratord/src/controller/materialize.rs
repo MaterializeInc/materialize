@@ -22,8 +22,8 @@ use k8s_openapi::{
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
-    api::PostParams,
-    runtime::{controller::Action, reflector},
+    api::{ListParams, PostParams},
+    runtime::controller::Action,
 };
 use tracing::{debug, trace};
 use uuid::Uuid;
@@ -31,7 +31,7 @@ use uuid::Uuid;
 use crate::{
     Error,
     controller::materialize::generation::V161,
-    k8s::{apply_resource, delete_resource, make_reflector},
+    k8s::{apply_resource, delete_resource},
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
     parse_image_tag,
@@ -127,12 +127,11 @@ pub struct Config {
 pub struct Context {
     config: Config,
     metrics: Arc<Metrics>,
-    materializes: reflector::Store<Materialize>,
     needs_update: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Context {
-    pub async fn new(config: Config, metrics: Arc<Metrics>, client: kube::Client) -> Self {
+    pub fn new(config: Config, metrics: Arc<Metrics>) -> Self {
         if config.cloud_provider == CloudProvider::Aws {
             assert!(
                 config.aws_account_id.is_some(),
@@ -143,7 +142,6 @@ impl Context {
         Self {
             config,
             metrics,
-            materializes: make_reflector(client.clone()).await,
             needs_update: Default::default(),
         }
     }
@@ -228,7 +226,11 @@ impl Context {
         Ok(None)
     }
 
-    fn check_environment_id_conflicts(&self, mz: &Materialize) -> Result<(), Error> {
+    async fn check_environment_id_conflicts(
+        &self,
+        client: &Client,
+        mz: &Materialize,
+    ) -> Result<(), Error> {
         if mz.spec.environment_id.is_nil() {
             // this is always a bug - we delay doing this check until the
             // resource should have an environment id set, either from the
@@ -238,7 +240,9 @@ impl Context {
             )));
         }
 
-        for existing_mz in self.materializes.state() {
+        let mz_api: Api<Materialize> = Api::all(client.clone());
+        let all_mz = mz_api.list(&ListParams::default()).await?;
+        for existing_mz in &all_mz.items {
             if existing_mz.spec.environment_id == mz.spec.environment_id
                 && existing_mz.metadata.uid != mz.metadata.uid
             {
@@ -357,7 +361,7 @@ impl k8s_controller::Context for Context {
             }
         }
 
-        self.check_environment_id_conflicts(mz)?;
+        self.check_environment_id_conflicts(&client, mz).await?;
 
         global::Resources::new(&self.config, mz)?
             .apply(&client, &mz.namespace())
