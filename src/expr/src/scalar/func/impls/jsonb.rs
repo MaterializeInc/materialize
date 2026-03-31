@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_expr_derive::sqlfunc;
@@ -16,7 +17,9 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
+use mz_sql_parser::ast::display::AstDisplay;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::EvalError;
 use crate::scalar::func::EagerUnaryFunc;
@@ -353,4 +356,55 @@ fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclIt
     parse()
         .map(ArrayRustType)
         .map_err(|e| EvalError::InvalidCatalogJson(e.into()))
+}
+
+/// Parses a catalog `create_sql` string into a JSONB object.
+///
+/// The returned JSONB does not fully reflect the parsed SQL and instead contains only fields
+/// required by current callers.
+///
+// TODO: This function isn't parsing JSONB and therefore shouldn't live in the `jsonb` module.
+//       Consider moving all the `parse_catalog_*` functions into their own module.
+#[sqlfunc]
+fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        let mut info = BTreeMap::<&str, serde_json::Value>::new();
+
+        use mz_sql_parser::ast::Statement::*;
+        let item_type = match stmt {
+            CreateSecret(_) => "secret",
+            CreateConnection(_) => "connection",
+            CreateView(stmt) => {
+                let mut definition = stmt.definition.query.to_ast_string_stable();
+                definition.push(';');
+                info.insert("definition", json!(definition));
+
+                "view"
+            }
+            CreateMaterializedView(_) => "materialized-view",
+            CreateContinualTask(_) => "continual-task",
+            CreateTable(_) | CreateTableFromSource(_) => "table",
+            CreateSource(_) | CreateWebhookSource(_) => "source",
+            CreateSubsource(_) => "subsource",
+            CreateSink(_) => "sink",
+            CreateIndex(_) => "index",
+            CreateType(_) => "type",
+            _ => return Err("not a CREATE item statement".into()),
+        };
+        info.insert("type", json!(item_type));
+
+        let info = info.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        Ok(info)
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
 }

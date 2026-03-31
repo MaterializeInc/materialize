@@ -17,6 +17,7 @@ use std::{fmt, str};
 
 use mz_repr::{Datum, InputDatumType, OutputDatumType, ReprColumnType, RowArena, SqlColumnType};
 
+use crate::scalar::func::RedactSql;
 use crate::scalar::func::impls::*;
 use crate::{EvalError, MirScalarExpr};
 
@@ -461,8 +462,10 @@ derive_unary!(
     JsonbTypeof,
     JsonbStripNulls,
     JsonbPretty,
+    ParseCatalogCreateSql,
     ParseCatalogId,
     ParseCatalogPrivileges,
+    RedactSql,
     RoundFloat32,
     RoundFloat64,
     RoundNumeric,
