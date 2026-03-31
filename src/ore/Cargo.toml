@@ -16,8 +16,9 @@ anyhow = { version = "1.0.102", optional = true }
 # lightweight, dependencies on external crates should be avoided if possible. If
 # an external crate is required, it must be optional and feature-gated.
 #
-# The only exception to the above is the `either` crate, which itself has zero
-# dependencies and is widely considered to be basically part of the stdlib.
+# Exceptions: `either` (zero deps, quasi-stdlib) and `zeroize` (zero runtime
+# deps, security-critical — must be available unconditionally so that
+# `ore::secure` types are always accessible without feature-flag opt-in).
 async-trait = { version = "0.1.89", optional = true }
 bytemuck = { version = "1.23.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
@@ -77,6 +78,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 ], optional = true }
 uuid = { version = "1.19.0", optional = true, features = ["v4", "v7"] }
 url = { version = "2.5.8", features = ["serde"] }
+zeroize = { version = "1.8.2", features = ["derive", "serde"] }
 
 # For the `tracing` feature
 http = { version = "1.4.0", optional = true }
