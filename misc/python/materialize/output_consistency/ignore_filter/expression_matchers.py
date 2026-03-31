@@ -16,9 +16,6 @@ from materialize.output_consistency.expression.expression import (
     Expression,
     LeafExpression,
 )
-from materialize.output_consistency.expression.expression_characteristics import (
-    ExpressionCharacteristics,
-)
 from materialize.output_consistency.expression.expression_with_args import (
     ExpressionWithArgs,
 )
@@ -41,11 +38,6 @@ from materialize.output_consistency.operation.operation import (
     DbFunction,
     DbOperation,
     match_function_by_name,
-)
-from materialize.output_consistency.query.query_template import QueryTemplate
-from materialize.output_consistency.selection.row_selection import (
-    ALL_ROWS_SELECTION,
-    DataRowSelection,
 )
 
 
@@ -134,23 +126,6 @@ def matches_nested_expression(expression: Expression) -> bool:
     return not matches_expression_with_only_plain_arguments(expression)
 
 
-def is_function_invoked_only_with_non_nested_parameters(
-    query_template: QueryTemplate, function_name_in_lowercase: str
-) -> bool:
-    at_least_one_invocation_with_nested_args = query_template.matches_any_expression(
-        partial(
-            matches_x_and_y,
-            x=partial(
-                matches_fun_by_name,
-                function_name_in_lower_case=function_name_in_lowercase,
-            ),
-            y=matches_nested_expression,
-        ),
-        True,
-    )
-    return not at_least_one_invocation_with_nested_args
-
-
 def involves_data_type_category(
     expression: Expression, data_type_category: DataTypeCategory
 ) -> bool:
@@ -194,28 +169,6 @@ def is_known_to_involve_exact_data_types(
 def is_operation_tagged(expression: Expression, tag: str) -> bool:
     if isinstance(expression, ExpressionWithArgs):
         return expression.operation.is_tagged(tag)
-
-    return False
-
-
-def argument_has_any_characteristic(
-    expression: Expression,
-    arg_index: int,
-    characteristics: set[ExpressionCharacteristics],
-    row_selection: DataRowSelection = ALL_ROWS_SELECTION,
-) -> bool:
-    if isinstance(expression, ExpressionWithArgs):
-        assert arg_index < len(
-            expression.operation.params
-        ), f"Invalid argument index for {expression.operation_to_pattern()}"
-        param = expression.operation.params[arg_index]
-        if param.optional and len(expression.args) <= arg_index:
-            return False
-
-        argument = expression.args[arg_index]
-        return argument.has_any_characteristic(
-            characteristics, row_selection=row_selection
-        )
 
     return False
 

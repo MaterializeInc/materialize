@@ -209,7 +209,6 @@ def load_composition(
                     f"Your Docker Compose version is {compose_local_version} while the version used in CI is {compose_ci_version}, please upgrade your local Docker Compose version to prevent unexpected breakages.",
                     hint="If you believe this is a mistake, contact the QA team. While not recommended, --ignore-docker-version can be used to ignore this version check.",
                 )
-                sys.exit(1)
         except ValueError:
             pass
 

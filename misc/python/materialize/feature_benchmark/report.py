@@ -126,12 +126,6 @@ class Report:
 
         return False
 
-    def has_any_regressions(self) -> bool:
-        for scenario_name in self.get_scenario_names():
-            if self.has_scenario_regression(scenario_name):
-                return True
-        return False
-
 
 def determine_scenario_classes_with_regressions(
     selected_report_by_scenario_name: dict[str, Report],

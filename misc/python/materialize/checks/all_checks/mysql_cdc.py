@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
 from random import Random
 from textwrap import dedent
 from typing import Any
@@ -560,7 +559,3 @@ class MySqlInvisibleColumn(Check):
                 2 0.2 2025-02-02 two
                 3 0.3 2025-03-03 three
                 """))
-
-
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

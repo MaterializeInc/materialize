@@ -2328,10 +2328,6 @@ Target cluster: idx_cluster
         return Td(sql)
 
 
-def remove_arity_information_from_explain(sql: str) -> str:
-    return re.sub(r" // { arity: \d+ }", "", sql)
-
-
 def remove_target_cluster_from_explain(sql: str) -> str:
     return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
 

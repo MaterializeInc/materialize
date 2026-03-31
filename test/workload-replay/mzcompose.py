@@ -11,8 +11,6 @@
 Simulates workloads captured via `bin/mz-workload-capture` in a local run using Docker Compose.
 """
 
-from __future__ import annotations
-
 import argparse
 import pathlib
 import random

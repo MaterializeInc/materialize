@@ -200,11 +200,6 @@ def setup(c: Composition, external_blob_store: bool) -> None:
     )
 
 
-def teardown(c: Composition) -> None:
-    c.rm(*[s.name for s in SERVICES], stop=True, destroy_volumes=True)
-    c.rm_volumes("mzdata", "tmp", force=True)
-
-
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # c.silent = True
     parser.add_argument(

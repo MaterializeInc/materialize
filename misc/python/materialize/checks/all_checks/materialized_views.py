@@ -6,7 +6,6 @@
 # As of the Change Date specified in that file, in accordance with
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
-import re
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
@@ -353,7 +352,3 @@ class MaterializedViewReplacement(Check):
                 # `validate` remains idempotent.
                 > DROP MATERIALIZED VIEW mv_replacement_replacement
             """))
-
-
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)
