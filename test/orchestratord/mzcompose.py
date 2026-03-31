@@ -1886,7 +1886,7 @@ def workflow_documentation_defaults(
         )
 
         # TODO: Shorten when https://github.com/MaterializeInc/database-issues/issues/11225 is fixed
-        for i in range(480):
+        for i in range(900):
             try:
                 data = json.loads(
                     spawn.capture(
