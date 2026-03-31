@@ -642,6 +642,24 @@ SHOW console_oidc_client_id;
 SHOW console_oidc_scopes;
 ```
 
+## FAQ
+
+### What happens during a blue/green deployment?
+
+OIDC configuration (system parameters) and auto-provisioned roles are persisted
+in the Materialize catalog. Blue/green deployments do not affect SSO
+configuration or user roles. No additional action is required.
+
+### What happens if I tear down my Materialize environment?
+
+Role data and OIDC configuration are stored in the Materialize catalog, which is
+persisted in your configured object storage (e.g., S3). If you delete the
+Materialize instance in Kubernetes and re-apply the Materialize CR, the instance
+rehydrates from the persisted catalog, recovering all roles and configuration.
+
+If the underlying object storage is also deleted, the catalog and all role data
+are lost. Use your cloud provider's disaster recovery policies to protect against this scenario.
+
 ## See also
 
 - [Migrate to SSO](/security/self-managed/sso-migration/)
