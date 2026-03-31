@@ -95,8 +95,11 @@ impl AwsS3Source {
             .load_sdk_config(&self.context, self.connection_id, InTask::Yes)
             .await?;
 
-        let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config)
-            .force_path_style(sdk_config.endpoint_url().is_some());
+        // If the endpoint URL is overridden (which is the case when not using checksums), we need
+        // to force path-style addressing, as custom AWS endpoints typically do not support
+        // virtual host-style addressing.
+        let mut s3_config_builder =
+            aws_sdk_s3::config::Builder::from(&sdk_config).force_path_style(!self.use_checksum);
 
         if !self.use_checksum {
             s3_config_builder = s3_config_builder.response_checksum_validation(
