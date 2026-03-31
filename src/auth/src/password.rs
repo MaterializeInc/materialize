@@ -7,10 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use mz_ore::secure::Zeroize;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
-use zeroize::Zeroize;
 
 use static_assertions::assert_not_impl_all;
 
@@ -41,9 +41,18 @@ impl From<&str> for Password {
     }
 }
 
-impl ToString for Password {
-    fn to_string(&self) -> String {
-        self.0.clone()
+impl Password {
+    /// Returns the password as a byte slice, suitable for hashing.
+    ///
+    /// Unlike the former `to_string().as_bytes()` pattern, this does not
+    /// create an unzeroed `String` copy on the heap.
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+
+    /// Returns the password as a string slice.
+    pub fn as_str(&self) -> &str {
+        &self.0
     }
 }
 

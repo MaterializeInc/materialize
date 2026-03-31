@@ -15,7 +15,7 @@ use std::num::NonZeroU32;
 
 use base64::prelude::*;
 use itertools::Itertools;
-use zeroize::{Zeroize, Zeroizing};
+use mz_ore::secure::{Zeroize, Zeroizing};
 
 use crate::password::Password;
 
@@ -92,7 +92,7 @@ pub fn hash_password(
             iterations: iterations.to_owned(),
             salt: *salt,
         },
-        password.to_string().as_bytes(),
+        password.as_bytes(),
     )?;
 
     Ok(PasswordHash {
@@ -116,7 +116,7 @@ pub fn hash_password_with_opts(
     opts: &HashOpts,
     password: &Password,
 ) -> Result<PasswordHash, HashError> {
-    let hash = hash_password_inner(opts, password.to_string().as_bytes())?;
+    let hash = hash_password_inner(opts, password.as_bytes())?;
 
     Ok(PasswordHash {
         salt: opts.salt,
