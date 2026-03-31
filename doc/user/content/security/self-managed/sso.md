@@ -176,7 +176,7 @@ details on rollout configuration.
 Configure the OIDC system parameters to connect Materialize to your identity
 provider. You can use either a
 [ConfigMap](/self-managed-deployments/configuration-system-parameters/#configure-system-parameters-via-configmap)
-or SQL commands.
+or SQL commands, but it is strongly recommended to use a ConfigMap.
 
 ### OIDC system parameters
 
