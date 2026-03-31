@@ -1602,6 +1602,7 @@ class FlipFlagsAction(Action):
             "copy_to_s3_multipart_part_size_bytes",
             "enable_compute_prometheus_metrics",
             "enable_compute_replica_expiration",
+            "compute_mv_sink_advance_persist_frontiers",
             "compute_replica_expiration_offset",
             "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
