@@ -998,10 +998,15 @@ fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
 /// be converted to a valid Iceberg schema via `arrow_schema_to_schema`.
 #[allow(clippy::disallowed_types)]
 fn build_schema_with_append_columns(schema: &ArrowSchema) -> ArrowSchema {
+    use mz_storage_types::sinks::{ICEBERG_APPEND_DIFF_COLUMN, ICEBERG_APPEND_TIMESTAMP_COLUMN};
     let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-    fields.push(Arc::new(Field::new("_mz_diff", DataType::Int32, false)));
     fields.push(Arc::new(Field::new(
-        "_mz_timestamp",
+        ICEBERG_APPEND_DIFF_COLUMN,
+        DataType::Int32,
+        false,
+    )));
+    fields.push(Arc::new(Field::new(
+        ICEBERG_APPEND_TIMESTAMP_COLUMN,
         DataType::Int64,
         false,
     )));

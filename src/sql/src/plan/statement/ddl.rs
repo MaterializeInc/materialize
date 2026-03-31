@@ -3611,6 +3611,26 @@ fn plan_sink(
         sql_bail!("KEY is not supported for MODE APPEND Iceberg sinks");
     }
 
+    // Reject input columns that clash with the columns MODE APPEND adds to the Iceberg table.
+    if envelope == SinkEnvelope::Append {
+        if let CreateSinkConnection::Iceberg { .. } = &connection {
+            use mz_storage_types::sinks::{
+                ICEBERG_APPEND_DIFF_COLUMN, ICEBERG_APPEND_TIMESTAMP_COLUMN,
+            };
+            for (col_name, _) in desc.iter() {
+                if col_name.as_str() == ICEBERG_APPEND_DIFF_COLUMN
+                    || col_name.as_str() == ICEBERG_APPEND_TIMESTAMP_COLUMN
+                {
+                    sql_bail!(
+                        "column {} conflicts with the system column that MODE APPEND \
+                         adds to the Iceberg table",
+                        col_name.quoted()
+                    );
+                }
+            }
+        }
+    }
+
     let headers_index = match &connection {
         CreateSinkConnection::Kafka {
             headers: Some(headers),

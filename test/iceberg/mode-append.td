@@ -109,3 +109,32 @@ SELECT a, b, _mz_diff FROM polaris.default_namespace.append_demo_table ORDER BY 
 2 two -1
 1 ONE 1
 1 one -1
+
+# Test: table with columns named "_mz_diff" and "_mz_timestamp" — these clash with
+# the columns that MODE APPEND automatically appends to the Iceberg schema.
+
+> CREATE TABLE append_clash_src (id int, _mz_diff int);
+
+! CREATE SINK append_clash_demo
+    FROM append_clash_src
+    INTO ICEBERG CATALOG CONNECTION append_polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'append_clash_table'
+    )
+    USING AWS CONNECTION append_aws_conn
+    MODE APPEND
+    WITH (COMMIT INTERVAL '1s');
+contains:conflicts with the system column that MODE APPEND adds to the Iceberg table
+
+> CREATE TABLE append_clash_src_1 (id int, _mz_timestamp bigint);
+
+! CREATE SINK append_clash_demo_1
+    FROM append_clash_src_1
+    INTO ICEBERG CATALOG CONNECTION append_polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'append_clash_table_1'
+    )
+    USING AWS CONNECTION append_aws_conn
+    MODE APPEND
+    WITH (COMMIT INTERVAL '1s');
+contains:conflicts with the system column that MODE APPEND adds to the Iceberg table
