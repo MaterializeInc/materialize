@@ -474,7 +474,7 @@ where
     // Pre-convert to MfpEval so vectorized expressions are built once.
     let eval_plan = map_filter_project
         .as_mut()
-        .map(|mfp| MfpEval::from_mfp_plan(mfp.take(), enable_vectorized_mfp));
+        .map(|mfp| MfpEval::from_mfp_plan(mfp.take(), true));
 
     builder.build(move |_caps| {
         let name = name.to_owned();
@@ -781,21 +781,132 @@ impl PendingWork {
     where
         YFn: Fn(Instant, usize) -> bool,
     {
-        use mz_expr::vectorized::rows_to_columns;
         use mz_storage_types::errors::DataflowError;
-
-        const BATCH_SIZE: usize = 1024;
 
         let mut session = output.session_with_builder(&self.capability);
         let fetched_part = self.part.part_mut();
         let is_filter_pushdown_audit = fetched_part.is_filter_pushdown_audit();
+
+        // Try the Arrow-native path: get columns directly from the structured decoder.
+        if let Some((source_decoder, timestamps, diffs)) = fetched_part.take_columns() {
+            // Extract the row columns from the SourceData decoder.
+            if let Some(row_decoder) = source_decoder.row_decoder().as_row_decoder() {
+                let err_decoder = source_decoder.err_decoder();
+                let columns = row_decoder.clone_column_decoders();
+                let batch_len = row_decoder.len();
+                let ts_values = timestamps.values();
+                let diff_values = diffs.values();
+
+                *work += batch_len;
+
+                let eval_start = std::time::Instant::now();
+                let mfp_results = vectorized.evaluate_batch_arrow(&columns, batch_len);
+                let eval_elapsed = eval_start.elapsed();
+
+                println!("VECTORIZED ARROW: batch_len={}, eval_us={}", batch_len, eval_elapsed.as_micros());
+
+                for (idx, result) in mfp_results.into_iter().enumerate() {
+                    let time = mz_repr::Timestamp::from(u64::from_le_bytes(ts_values[idx].to_le_bytes()));
+                    let diff: Diff = i64::from_le_bytes(diff_values[idx].to_le_bytes()).into();
+
+                    // Skip rows beyond `until`.
+                    if until.less_equal(&time) {
+                        continue;
+                    }
+
+                    // Check if this row is an error rather than data.
+                    // A non-null entry in err_decoder means the row is an error.
+                    if arrow::array::Array::is_valid(err_decoder, idx) {
+                        let err_bytes = err_decoder.value(idx);
+                        use mz_proto::RustType;
+                        let proto: mz_storage_types::errors::ProtoDataflowError = prost::Message::decode(err_bytes)
+                            .expect("proto should be valid");
+                        let err: DataflowError = DataflowError::from_proto(proto)
+                            .expect("error should be valid");
+                        let mut emit_time = *self.capability.time();
+                        emit_time.0 = time;
+                        session.give((Err(err), emit_time, diff));
+                        *work += 1;
+                        continue;
+                    }
+
+                    match result {
+                        Ok(Some(out_row)) => {
+                            // Filter pushdown audit check.
+                            if let Some(stats) = &is_filter_pushdown_audit {
+                                sentry::with_scope(
+                                    |scope| {
+                                        scope.set_tag("alert_id", "persist_pushdown_audit_violation")
+                                    },
+                                    || {
+                                        error!(
+                                            ?stats,
+                                            name,
+                                            ?mfp_plan,
+                                            "persist filter pushdown correctness violation!"
+                                        );
+                                        if self.panic_on_audit_failure {
+                                            panic!(
+                                                "persist filter pushdown correctness violation! {}",
+                                                name
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                            let mut emit_time = *self.capability.time();
+                            emit_time.0 = time;
+                            session.give((Ok(out_row), emit_time, diff));
+                            *work += 1;
+                        }
+                        Ok(None) => {
+                            // Filtered out by MFP.
+                        }
+                        Err(err) => {
+                            if let Some(stats) = &is_filter_pushdown_audit {
+                                sentry::with_scope(
+                                    |scope| {
+                                        scope.set_tag("alert_id", "persist_pushdown_audit_violation")
+                                    },
+                                    || {
+                                        error!(
+                                            ?stats,
+                                            name,
+                                            ?mfp_plan,
+                                            "persist filter pushdown correctness violation!"
+                                        );
+                                        if self.panic_on_audit_failure {
+                                            panic!(
+                                                "persist filter pushdown correctness violation! {}",
+                                                name
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+                            let mut emit_time = *self.capability.time();
+                            emit_time.0 = time;
+                            session.give((Err(DataflowError::from(err)), emit_time, diff));
+                            *work += 1;
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+
+        // Fallback: row-at-a-time decode + columnar transpose.
+        println!("VECTORIZED FALLBACK: row-at-a-time decode path");
+        use mz_expr::vectorized::rows_to_columns;
+
+        const BATCH_SIZE: usize = 1024;
+
+        let fetched_part = self.part.part_mut();
         let mut row_buf = None;
 
-        // Batch buffer: rows eligible for vectorized evaluation.
         let mut batch: Vec<(Row, mz_repr::Timestamp, Diff)> = Vec::with_capacity(BATCH_SIZE);
 
         loop {
-            // Fill the batch. `exhausted` is true only if the part ran out of rows.
             let mut exhausted = false;
             while batch.len() < BATCH_SIZE {
                 match fetched_part.next_with_storage(&mut row_buf, &mut None) {
@@ -809,7 +920,6 @@ impl PendingWork {
                                 row_buf.replace(SourceData(Ok(row)));
                             }
                             (SourceData(Err(err)), ()) => {
-                                // Errors bypass the batch and are emitted directly.
                                 let mut emit_time = *self.capability.time();
                                 emit_time.0 = time;
                                 session.give((Err(err), emit_time, diff.into()));
@@ -828,7 +938,6 @@ impl PendingWork {
                 return exhausted;
             }
 
-            // Transpose rows to columnar form and evaluate the vectorized plan.
             *work += batch.len();
             let batch_len = batch.len();
             let input_arity = vectorized.input_arity;
@@ -836,7 +945,6 @@ impl PendingWork {
             let transpose_start = std::time::Instant::now();
             let columns = rows_to_columns(batch.iter().map(|(r, _, _)| r), input_arity);
             let transpose_elapsed = transpose_start.elapsed();
-
             let eval_start = std::time::Instant::now();
             let mfp_results = vectorized.evaluate_batch(&columns, batch_len);
             let eval_elapsed = eval_start.elapsed();

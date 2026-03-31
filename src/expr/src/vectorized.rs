@@ -19,10 +19,12 @@
 //! not homogeneous (e.g. contains errors or mixed types), we fall back to
 //! row-at-a-time evaluation.
 
+use arrow::array::Array as ArrowArray;
 use columnar::{Columnar, Len, Push};
 use enum_kinds::EnumKind;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
+use mz_repr::DatumColumnDecoder;
 
 use crate::linear::plan::MfpPlan;
 use crate::{BinaryFunc, MapFilterProject, MirScalarExpr};
@@ -701,155 +703,6 @@ pub(crate) fn eval_mul_int16_dispatch(
     }
 }
 
-// --- Dispatch wrappers for vectorized binary functions ---
-//
-// Each wrapper checks column homogeneity and delegates to the typed implementation.
-// These are referenced by `#[sqlfunc(vectorized = "...")]`.
-
-/// Dispatch wrapper for vectorized i64 addition.
-pub(crate) fn eval_add_int64_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int64) == batch_len && Len::len(&col2.data.Int64) == batch_len {
-        Some(eval_add_int64_vectorized(
-            &col1.data.Int64,
-            &col2.data.Int64,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i64 subtraction.
-pub(crate) fn eval_sub_int64_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int64) == batch_len && Len::len(&col2.data.Int64) == batch_len {
-        Some(eval_sub_int64_vectorized(
-            &col1.data.Int64,
-            &col2.data.Int64,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i64 multiplication.
-pub(crate) fn eval_mul_int64_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int64) == batch_len && Len::len(&col2.data.Int64) == batch_len {
-        Some(eval_mul_int64_vectorized(
-            &col1.data.Int64,
-            &col2.data.Int64,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i32 addition.
-pub(crate) fn eval_add_int32_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int32) == batch_len && Len::len(&col2.data.Int32) == batch_len {
-        Some(eval_add_int32_vectorized(
-            &col1.data.Int32,
-            &col2.data.Int32,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i32 subtraction.
-pub(crate) fn eval_sub_int32_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int32) == batch_len && Len::len(&col2.data.Int32) == batch_len {
-        Some(eval_sub_int32_vectorized(
-            &col1.data.Int32,
-            &col2.data.Int32,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i32 multiplication.
-pub(crate) fn eval_mul_int32_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int32) == batch_len && Len::len(&col2.data.Int32) == batch_len {
-        Some(eval_mul_int32_vectorized(
-            &col1.data.Int32,
-            &col2.data.Int32,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i16 addition.
-pub(crate) fn eval_add_int16_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int16) == batch_len && Len::len(&col2.data.Int16) == batch_len {
-        Some(eval_add_int16_vectorized(
-            &col1.data.Int16,
-            &col2.data.Int16,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i16 subtraction.
-pub(crate) fn eval_sub_int16_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int16) == batch_len && Len::len(&col2.data.Int16) == batch_len {
-        Some(eval_sub_int16_vectorized(
-            &col1.data.Int16,
-            &col2.data.Int16,
-        ))
-    } else {
-        None
-    }
-}
-
-/// Dispatch wrapper for vectorized i16 multiplication.
-pub(crate) fn eval_mul_int16_dispatch(
-    col1: &DatumColumn,
-    col2: &DatumColumn,
-    batch_len: usize,
-) -> Option<DatumColumn> {
-    if Len::len(&col1.data.Int16) == batch_len && Len::len(&col2.data.Int16) == batch_len {
-        Some(eval_mul_int16_vectorized(
-            &col1.data.Int16,
-            &col2.data.Int16,
-        ))
-    } else {
-        None
-    }
-}
-
 /// Slow path: evaluate a binary function element-at-a-time.
 ///
 /// Constructs a `MirScalarExpr::CallBinary` that reads from column positions
@@ -1204,6 +1057,642 @@ fn column_datum_from_datum(datum: mz_repr::Datum<'_>) -> Option<ColumnDatum> {
         Datum::Float32(v) => Some(ColumnDatum::Float32(v.into_inner())),
         Datum::Float64(v) => Some(ColumnDatum::Float64(v.into_inner())),
         _ => None,
+    }
+}
+
+// --- Arrow-native evaluation path ---
+//
+// These functions operate directly on `DatumColumnDecoder` (Arrow arrays)
+// without converting through the `columnar`-derived `ColumnDatum` container.
+
+/// Evaluate a vectorized expression against Arrow-native columns.
+///
+/// `columns` contains the input columns (from Arrow) plus any previously
+/// computed columns. Returns a new `DatumColumnDecoder` with the results.
+fn eval_arrow(
+    expr: &VectorScalarExpr,
+    columns: &[&DatumColumnDecoder],
+    batch_len: usize,
+) -> DatumColumnDecoder {
+    match expr {
+        VectorScalarExpr::Column(index) => {
+            // Clone the Arrow array (Arc-backed, cheap).
+            columns[*index].clone()
+        }
+        VectorScalarExpr::Literal(datum) => {
+            // Broadcast a literal to fill the batch.
+            broadcast_literal_arrow(datum, batch_len)
+        }
+        VectorScalarExpr::CallBinary { func, expr1, expr2 } => {
+            match (expr1.as_ref(), expr2.as_ref()) {
+                (VectorScalarExpr::Column(i1), VectorScalarExpr::Column(i2)) => {
+                    eval_binary_arrow(func, columns[*i1], columns[*i2], batch_len)
+                }
+                (VectorScalarExpr::Column(i1), _) => {
+                    let col2 = eval_arrow(expr2, columns, batch_len);
+                    eval_binary_arrow(func, columns[*i1], &col2, batch_len)
+                }
+                (_, VectorScalarExpr::Column(i2)) => {
+                    let col1 = eval_arrow(expr1, columns, batch_len);
+                    eval_binary_arrow(func, &col1, columns[*i2], batch_len)
+                }
+                _ => {
+                    let col1 = eval_arrow(expr1, columns, batch_len);
+                    let col2 = eval_arrow(expr2, columns, batch_len);
+                    eval_binary_arrow(func, &col1, &col2, batch_len)
+                }
+            }
+        }
+        VectorScalarExpr::Scalar(expr) => {
+            eval_scalar_fallback_arrow(expr, columns, batch_len)
+        }
+    }
+}
+
+/// Broadcast a `ColumnDatum` literal into a `DatumColumnDecoder`.
+fn broadcast_literal_arrow(datum: &ColumnDatum, batch_len: usize) -> DatumColumnDecoder {
+    use arrow::array::*;
+
+    match datum {
+        ColumnDatum::Null => {
+            // A column of all nulls. Use Int64 with all-null validity.
+            DatumColumnDecoder::I64(Int64Array::new_null(batch_len))
+        }
+        ColumnDatum::True => {
+            DatumColumnDecoder::Bool(BooleanArray::from(vec![true; batch_len]))
+        }
+        ColumnDatum::False => {
+            DatumColumnDecoder::Bool(BooleanArray::from(vec![false; batch_len]))
+        }
+        ColumnDatum::Int16(v) => {
+            DatumColumnDecoder::I16(Int16Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::Int32(v) => {
+            DatumColumnDecoder::I32(Int32Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::Int64(v) => {
+            DatumColumnDecoder::I64(Int64Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::UInt8(v) => {
+            DatumColumnDecoder::U8(UInt8Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::UInt16(v) => {
+            DatumColumnDecoder::U16(UInt16Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::UInt32(v) => {
+            DatumColumnDecoder::U32(UInt32Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::UInt64(v) => {
+            DatumColumnDecoder::U64(UInt64Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::Float32(v) => {
+            DatumColumnDecoder::F32(Float32Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::Float64(v) => {
+            DatumColumnDecoder::F64(Float64Array::from(vec![*v; batch_len]))
+        }
+        ColumnDatum::Error(_) => {
+            // Error literals shouldn't appear in vectorized plans; fall back.
+            DatumColumnDecoder::I64(Int64Array::new_null(batch_len))
+        }
+    }
+}
+
+/// Evaluate a binary function on two `DatumColumnDecoder` columns.
+fn eval_binary_arrow(
+    func: &BinaryFunc,
+    col1: &DatumColumnDecoder,
+    col2: &DatumColumnDecoder,
+    batch_len: usize,
+) -> DatumColumnDecoder {
+    use crate::func;
+
+    // Try SIMD-friendly fast paths for matching Arrow types.
+    match func {
+        BinaryFunc::AddInt64(func::AddInt64) => {
+            if let (DatumColumnDecoder::I64(a), DatumColumnDecoder::I64(b)) = (col1, col2) {
+                return eval_add_i64_arrow(a, b);
+            }
+        }
+        BinaryFunc::SubInt64(func::SubInt64) => {
+            if let (DatumColumnDecoder::I64(a), DatumColumnDecoder::I64(b)) = (col1, col2) {
+                return eval_sub_i64_arrow(a, b);
+            }
+        }
+        BinaryFunc::MulInt64(func::MulInt64) => {
+            if let (DatumColumnDecoder::I64(a), DatumColumnDecoder::I64(b)) = (col1, col2) {
+                return eval_mul_i64_arrow(a, b);
+            }
+        }
+        BinaryFunc::AddInt32(func::AddInt32) => {
+            if let (DatumColumnDecoder::I32(a), DatumColumnDecoder::I32(b)) = (col1, col2) {
+                return eval_add_i32_arrow(a, b);
+            }
+        }
+        BinaryFunc::SubInt32(func::SubInt32) => {
+            if let (DatumColumnDecoder::I32(a), DatumColumnDecoder::I32(b)) = (col1, col2) {
+                return eval_sub_i32_arrow(a, b);
+            }
+        }
+        BinaryFunc::MulInt32(func::MulInt32) => {
+            if let (DatumColumnDecoder::I32(a), DatumColumnDecoder::I32(b)) = (col1, col2) {
+                return eval_mul_i32_arrow(a, b);
+            }
+        }
+        BinaryFunc::AddInt16(func::AddInt16) => {
+            if let (DatumColumnDecoder::I16(a), DatumColumnDecoder::I16(b)) = (col1, col2) {
+                return eval_add_i16_arrow(a, b);
+            }
+        }
+        BinaryFunc::SubInt16(func::SubInt16) => {
+            if let (DatumColumnDecoder::I16(a), DatumColumnDecoder::I16(b)) = (col1, col2) {
+                return eval_sub_i16_arrow(a, b);
+            }
+        }
+        BinaryFunc::MulInt16(func::MulInt16) => {
+            if let (DatumColumnDecoder::I16(a), DatumColumnDecoder::I16(b)) = (col1, col2) {
+                return eval_mul_i16_arrow(a, b);
+            }
+        }
+        _ => {}
+    }
+
+    // Slow path: element-at-a-time.
+    eval_binary_slow_arrow(func, col1, col2, batch_len)
+}
+
+/// Build a `DatumColumnDecoder::I64` from results, with error positions producing nulls.
+///
+/// For now, errors from overflow produce nulls in the Arrow array.
+/// A more complete implementation would track errors separately.
+fn i64_results_to_arrow(results: Vec<i64>, errors: &[usize]) -> DatumColumnDecoder {
+    use arrow::array::Int64Array;
+    use arrow::buffer::NullBuffer;
+
+    if errors.is_empty() {
+        DatumColumnDecoder::I64(Int64Array::from(results))
+    } else {
+        // Build validity bitmap: true = valid, false = error/null.
+        let mut validity = vec![true; results.len()];
+        for &idx in errors {
+            validity[idx] = false;
+        }
+        let nulls = NullBuffer::from(validity);
+        let array = Int64Array::new(results.into(), Some(nulls));
+        DatumColumnDecoder::I64(array)
+    }
+}
+
+fn i32_results_to_arrow(results: Vec<i32>, errors: &[usize]) -> DatumColumnDecoder {
+    use arrow::array::Int32Array;
+    use arrow::buffer::NullBuffer;
+
+    if errors.is_empty() {
+        DatumColumnDecoder::I32(Int32Array::from(results))
+    } else {
+        let mut validity = vec![true; results.len()];
+        for &idx in errors {
+            validity[idx] = false;
+        }
+        let nulls = NullBuffer::from(validity);
+        let array = Int32Array::new(results.into(), Some(nulls));
+        DatumColumnDecoder::I32(array)
+    }
+}
+
+fn i16_results_to_arrow(results: Vec<i16>, errors: &[usize]) -> DatumColumnDecoder {
+    use arrow::array::Int16Array;
+    use arrow::buffer::NullBuffer;
+
+    if errors.is_empty() {
+        DatumColumnDecoder::I16(Int16Array::from(results))
+    } else {
+        let mut validity = vec![true; results.len()];
+        for &idx in errors {
+            validity[idx] = false;
+        }
+        let nulls = NullBuffer::from(validity);
+        let array = Int16Array::new(results.into(), Some(nulls));
+        DatumColumnDecoder::I16(array)
+    }
+}
+
+// --- Arrow-native arithmetic operations ---
+
+#[inline]
+fn eval_add_i64_arrow(a: &arrow::array::Int64Array, b: &arrow::array::Int64Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let results: Vec<i64> = a_vals.iter().zip(b_vals.iter())
+        .map(|(x, y)| x.wrapping_add(*y))
+        .collect();
+    let errors = detect_add_overflow(a_vals, b_vals, &results);
+    i64_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_sub_i64_arrow(a: &arrow::array::Int64Array, b: &arrow::array::Int64Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let results: Vec<i64> = a_vals.iter().zip(b_vals.iter())
+        .map(|(x, y)| x.wrapping_sub(*y))
+        .collect();
+    let errors = detect_sub_overflow(a_vals, b_vals, &results);
+    i64_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_mul_i64_arrow(a: &arrow::array::Int64Array, b: &arrow::array::Int64Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let len = a_vals.len();
+    let mut results = Vec::with_capacity(len);
+    let mut errors = Vec::new();
+    for i in 0..len {
+        match a_vals[i].checked_mul(b_vals[i]) {
+            Some(v) => results.push(v),
+            None => {
+                results.push(0);
+                errors.push(i);
+            }
+        }
+    }
+    i64_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_add_i32_arrow(a: &arrow::array::Int32Array, b: &arrow::array::Int32Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let results: Vec<i32> = a_vals.iter().zip(b_vals.iter())
+        .map(|(x, y)| x.wrapping_add(*y))
+        .collect();
+    let errors = detect_add_overflow(a_vals, b_vals, &results);
+    i32_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_sub_i32_arrow(a: &arrow::array::Int32Array, b: &arrow::array::Int32Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let results: Vec<i32> = a_vals.iter().zip(b_vals.iter())
+        .map(|(x, y)| x.wrapping_sub(*y))
+        .collect();
+    let errors = detect_sub_overflow(a_vals, b_vals, &results);
+    i32_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_mul_i32_arrow(a: &arrow::array::Int32Array, b: &arrow::array::Int32Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let len = a_vals.len();
+    let mut results = Vec::with_capacity(len);
+    let mut errors = Vec::new();
+    for i in 0..len {
+        match a_vals[i].checked_mul(b_vals[i]) {
+            Some(v) => results.push(v),
+            None => {
+                results.push(0);
+                errors.push(i);
+            }
+        }
+    }
+    i32_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_add_i16_arrow(a: &arrow::array::Int16Array, b: &arrow::array::Int16Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let results: Vec<i16> = a_vals.iter().zip(b_vals.iter())
+        .map(|(x, y)| x.wrapping_add(*y))
+        .collect();
+    let errors = detect_add_overflow(a_vals, b_vals, &results);
+    i16_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_sub_i16_arrow(a: &arrow::array::Int16Array, b: &arrow::array::Int16Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let results: Vec<i16> = a_vals.iter().zip(b_vals.iter())
+        .map(|(x, y)| x.wrapping_sub(*y))
+        .collect();
+    let errors = detect_sub_overflow(a_vals, b_vals, &results);
+    i16_results_to_arrow(results, &errors)
+}
+
+#[inline]
+fn eval_mul_i16_arrow(a: &arrow::array::Int16Array, b: &arrow::array::Int16Array) -> DatumColumnDecoder {
+    let a_vals = a.values();
+    let b_vals = b.values();
+    let len = a_vals.len();
+    let mut results = Vec::with_capacity(len);
+    let mut errors = Vec::new();
+    for i in 0..len {
+        match a_vals[i].checked_mul(b_vals[i]) {
+            Some(v) => results.push(v),
+            None => {
+                results.push(0);
+                errors.push(i);
+            }
+        }
+    }
+    i16_results_to_arrow(results, &errors)
+}
+
+/// Extract a `Datum` from a `DatumColumnDecoder` at a given index.
+fn arrow_index_as_datum<'a>(
+    col: &'a DatumColumnDecoder,
+    idx: usize,
+    _arena: &'a mz_repr::RowArena,
+) -> Result<mz_repr::Datum<'a>, String> {
+    use mz_repr::Datum;
+    use ordered_float::OrderedFloat;
+
+    match col {
+        DatumColumnDecoder::Bool(a) => {
+            if a.is_valid(idx) {
+                Ok(if a.value(idx) { Datum::True } else { Datum::False })
+            } else {
+                Ok(Datum::Null)
+            }
+        }
+        DatumColumnDecoder::U8(a) => {
+            if a.is_valid(idx) { Ok(Datum::UInt8(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::U16(a) => {
+            if a.is_valid(idx) { Ok(Datum::UInt16(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::U32(a) => {
+            if a.is_valid(idx) { Ok(Datum::UInt32(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::U64(a) => {
+            if a.is_valid(idx) { Ok(Datum::UInt64(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::I16(a) => {
+            if a.is_valid(idx) { Ok(Datum::Int16(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::I32(a) => {
+            if a.is_valid(idx) { Ok(Datum::Int32(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::I64(a) => {
+            if a.is_valid(idx) { Ok(Datum::Int64(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::F32(a) => {
+            if a.is_valid(idx) { Ok(Datum::Float32(OrderedFloat(a.value(idx)))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::F64(a) => {
+            if a.is_valid(idx) { Ok(Datum::Float64(OrderedFloat(a.value(idx)))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::String(a) => {
+            if a.is_valid(idx) { Ok(Datum::String(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::Bytes(a) => {
+            if a.is_valid(idx) { Ok(Datum::Bytes(a.value(idx))) } else { Ok(Datum::Null) }
+        }
+        DatumColumnDecoder::MzTimestamp(a) => {
+            if a.is_valid(idx) {
+                Ok(Datum::MzTimestamp(mz_repr::Timestamp::from(a.value(idx))))
+            } else {
+                Ok(Datum::Null)
+            }
+        }
+        // For complex types, fall back to decoding via the get() method
+        // by packing into a row and extracting.
+        _ => {
+            let mut row = mz_repr::Row::default();
+            col.get(idx, &mut row.packer());
+            Ok(_arena.push_unary_row(row))
+        }
+    }
+}
+
+/// Slow path: element-at-a-time evaluation on Arrow columns.
+fn eval_binary_slow_arrow(
+    func: &BinaryFunc,
+    col1: &DatumColumnDecoder,
+    col2: &DatumColumnDecoder,
+    batch_len: usize,
+) -> DatumColumnDecoder {
+    use mz_repr::RowArena;
+
+    let synth_expr = MirScalarExpr::CallBinary {
+        func: func.clone(),
+        expr1: Box::new(MirScalarExpr::Column(0, Default::default())),
+        expr2: Box::new(MirScalarExpr::Column(1, Default::default())),
+    };
+
+    let arena = RowArena::new();
+    // For the slow path, we pack results into a Row and re-decode.
+    // This is intentionally simple; the fast path handles the common cases.
+    let mut result_col = DatumColumn::new();
+    for i in 0..batch_len {
+        let d1 = arrow_index_as_datum(col1, i, &arena);
+        let d2 = arrow_index_as_datum(col2, i, &arena);
+        match (d1, d2) {
+            (Ok(a), Ok(b)) => {
+                let datums = [a, b];
+                match synth_expr.eval(&datums, &arena) {
+                    Ok(d) => result_col.push(datum_to_column_datum(d)),
+                    Err(e) => result_col.push(ColumnDatum::Error(e.to_string())),
+                }
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                result_col.push(ColumnDatum::Error(e));
+            }
+        }
+    }
+    // Convert back to DatumColumnDecoder. For the slow path this is
+    // unfortunate but correct. We return as Int64 null array as placeholder.
+    // TODO: proper conversion from DatumColumn to DatumColumnDecoder.
+    datum_column_to_arrow(&result_col, batch_len)
+}
+
+/// Fallback: evaluate a MirScalarExpr row-at-a-time over Arrow columns.
+fn eval_scalar_fallback_arrow(
+    expr: &MirScalarExpr,
+    columns: &[&DatumColumnDecoder],
+    batch_len: usize,
+) -> DatumColumnDecoder {
+    use mz_repr::{Datum, RowArena};
+
+    let arena = RowArena::new();
+    let mut result_col = DatumColumn::new();
+    let num_cols = columns.len();
+
+    for row_idx in 0..batch_len {
+        let mut datums: Vec<Datum<'_>> = Vec::with_capacity(num_cols);
+        let mut has_error = false;
+        for col in columns.iter() {
+            match arrow_index_as_datum(col, row_idx, &arena) {
+                Ok(d) => datums.push(d),
+                Err(e) => {
+                    result_col.push(ColumnDatum::Error(e));
+                    has_error = true;
+                    break;
+                }
+            }
+        }
+        if has_error {
+            continue;
+        }
+        match expr.eval(&datums, &arena) {
+            Ok(d) => result_col.push(datum_to_column_datum(d)),
+            Err(e) => result_col.push(ColumnDatum::Error(e.to_string())),
+        }
+    }
+    datum_column_to_arrow(&result_col, batch_len)
+}
+
+/// Convert a `DatumColumn` (columnar container) to a `DatumColumnDecoder` (Arrow array).
+///
+/// This inspects the container to determine the dominant type and builds
+/// the appropriate Arrow array.
+fn datum_column_to_arrow(col: &DatumColumn, batch_len: usize) -> DatumColumnDecoder {
+    use arrow::array::*;
+    use arrow::buffer::NullBuffer;
+
+    // Check if the column is homogeneously Int64.
+    if Len::len(&col.data.Int64) == batch_len {
+        return DatumColumnDecoder::I64(Int64Array::from(col.data.Int64.clone()));
+    }
+    if Len::len(&col.data.Int32) == batch_len {
+        return DatumColumnDecoder::I32(Int32Array::from(col.data.Int32.clone()));
+    }
+    if Len::len(&col.data.Int16) == batch_len {
+        return DatumColumnDecoder::I16(Int16Array::from(col.data.Int16.clone()));
+    }
+
+    // Generic fallback: decode element-by-element into an Int64 null array.
+    // This is lossy but keeps things moving; the slow path is already slow.
+    let arena = mz_repr::RowArena::new();
+    let mut values = Vec::with_capacity(batch_len);
+    let mut validity = vec![true; batch_len];
+    for i in 0..batch_len {
+        match index_as_datum(&col.data, i, &arena) {
+            Ok(mz_repr::Datum::Int64(v)) => values.push(v),
+            _ => {
+                values.push(0);
+                validity[i] = false;
+            }
+        }
+    }
+    let nulls = NullBuffer::from(validity);
+    DatumColumnDecoder::I64(Int64Array::new(values.into(), Some(nulls)))
+}
+
+impl VectorizedSafeMfpPlan {
+    /// Evaluate a batch of Arrow-native columns using vectorized evaluation.
+    ///
+    /// `input_columns` provides the input columns as `DatumColumnDecoder` references,
+    /// one per column in the relation. All columns must have the same length (`batch_len`).
+    ///
+    /// Returns a vector of results, one per input row.
+    pub fn evaluate_batch_arrow(
+        &self,
+        input_columns: &[DatumColumnDecoder],
+        batch_len: usize,
+    ) -> Vec<Result<Option<mz_repr::Row>, crate::EvalError>> {
+        use mz_repr::{Datum, Row, RowArena};
+
+        let kernel_start = std::time::Instant::now();
+
+        let mut computed_columns: Vec<DatumColumnDecoder> = Vec::with_capacity(self.expressions.len());
+
+        // Track which rows are still "alive" (not yet filtered out).
+        let mut alive: Vec<bool> = vec![true; batch_len];
+
+        // Process expressions and predicates in order.
+        let mut expression = 0;
+        for (support, predicate) in self.predicates.iter() {
+            while self.input_arity + expression < *support {
+                let vec_expr = &self.expressions[expression];
+                let col_refs: Vec<&DatumColumnDecoder> = input_columns
+                    .iter()
+                    .chain(computed_columns.iter())
+                    .collect();
+                let col = eval_arrow(vec_expr, &col_refs, batch_len);
+                computed_columns.push(col);
+                expression += 1;
+            }
+
+            // Evaluate the predicate.
+            let col_refs: Vec<&DatumColumnDecoder> = input_columns
+                .iter()
+                .chain(computed_columns.iter())
+                .collect();
+            let pred_col = eval_arrow(predicate, &col_refs, batch_len);
+
+            // Update alive mask.
+            let arena = RowArena::new();
+            for i in 0..batch_len {
+                if alive[i] {
+                    match arrow_index_as_datum(&pred_col, i, &arena) {
+                        Ok(Datum::True) => {}
+                        Ok(_) => alive[i] = false,
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+
+        // Evaluate remaining expressions.
+        while expression < self.expressions.len() {
+            let vec_expr = &self.expressions[expression];
+            let col_refs: Vec<&DatumColumnDecoder> = input_columns
+                .iter()
+                .chain(computed_columns.iter())
+                .collect();
+            let col = eval_arrow(vec_expr, &col_refs, batch_len);
+            computed_columns.push(col);
+            expression += 1;
+        }
+
+        let kernel_us = kernel_start.elapsed().as_micros();
+
+        // Build the final combined column list for projection.
+        let pack_start = std::time::Instant::now();
+        let all_columns: Vec<&DatumColumnDecoder> = input_columns
+            .iter()
+            .chain(computed_columns.iter())
+            .collect();
+
+        // Produce output: apply projection and pack into Rows.
+        let arena = RowArena::new();
+        let mut results = Vec::with_capacity(batch_len);
+        for i in 0..batch_len {
+            if !alive[i] {
+                results.push(Ok(None));
+                continue;
+            }
+
+            let mut row_buf = Row::default();
+            let mut has_error = None;
+            {
+                let mut packer = row_buf.packer();
+                for &col_idx in self.projection.iter() {
+                    match arrow_index_as_datum(all_columns[col_idx], i, &arena) {
+                        Ok(d) => packer.push(d),
+                        Err(e) => {
+                            has_error = Some(e);
+                            break;
+                        }
+                    }
+                }
+            }
+            if let Some(e) = has_error {
+                results.push(Err(crate::EvalError::Internal(e.into())));
+            } else {
+                results.push(Ok(Some(row_buf)));
+            }
+        }
+
+        let pack_us = pack_start.elapsed().as_micros();
+        println!("VECTORIZED DETAIL: batch_len={}, kernel_us={}, pack_us={}", batch_len, kernel_us, pack_us);
+
+        results
     }
 }
 

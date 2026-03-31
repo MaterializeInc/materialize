@@ -967,6 +967,22 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
     pub fn is_filter_pushdown_audit(&self) -> Option<impl std::fmt::Debug + use<K, V, T, D>> {
         self.filter_pushdown_audit.clone()
     }
+
+    /// Returns the structured key decoder, timestamps, and diffs if the structured
+    /// decode path is available. This allows callers to access the underlying Arrow
+    /// arrays directly without decoding to rows.
+    ///
+    /// Advances the cursor to the end, consuming the part.
+    pub fn take_columns(&mut self) -> Option<(&<K::Schema as Schema<K>>::Decoder, &Int64Array, &Int64Array)> {
+        match &self.part {
+            EitherOrBoth::Right((key_decoder, _val_decoder)) |
+            EitherOrBoth::Both(_, (key_decoder, _val_decoder)) => {
+                self.part_cursor = self.timestamps.len();
+                Some((key_decoder, &self.timestamps, &self.diffs))
+            }
+            EitherOrBoth::Left(_) => None,
+        }
+    }
 }
 
 /// A [Blob] object that has been fetched, but has no associated decoding

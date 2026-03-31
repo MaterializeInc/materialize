@@ -59,7 +59,7 @@ pub use crate::relation::{
     VersionedRelationDesc, arb_relation_desc_diff, arb_relation_desc_projection,
     arb_row_for_relation,
 };
-pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
+pub use crate::row::encode::{DatumColumnDecoder, RowColumnarDecoder, RowColumnarEncoder, preserves_order};
 pub use crate::row::iter::{IntoRowIterator, RowIterator};
 pub use crate::row::{
     DatumDictTypedIter, DatumList, DatumListTypedIter, DatumMap, FromDatum, ProtoNumeric, ProtoRow,

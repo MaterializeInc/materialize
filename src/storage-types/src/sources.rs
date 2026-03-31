@@ -1417,6 +1417,14 @@ impl SourceDataRowColumnarDecoder {
             SourceDataRowColumnarDecoder::EmptyRow => 0,
         }
     }
+
+    /// Returns the inner `RowColumnarDecoder`, if this is not an empty-row decoder.
+    pub fn as_row_decoder(&self) -> Option<&RowColumnarDecoder> {
+        match self {
+            SourceDataRowColumnarDecoder::Row(decoder) => Some(decoder),
+            SourceDataRowColumnarDecoder::EmptyRow => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1461,6 +1469,18 @@ impl SourceDataColumnarDecoder {
             row_decoder,
             err_decoder: errs.clone(),
         })
+    }
+}
+
+impl SourceDataColumnarDecoder {
+    /// Returns a reference to the row decoder, if present.
+    pub fn row_decoder(&self) -> &SourceDataRowColumnarDecoder {
+        &self.row_decoder
+    }
+
+    /// Returns a reference to the error column.
+    pub fn err_decoder(&self) -> &BinaryArray {
+        &self.err_decoder
     }
 }
 

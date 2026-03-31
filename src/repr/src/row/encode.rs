@@ -854,8 +854,8 @@ impl DatumColumnEncoder {
 ///
 /// Note: We specifically structure the decoder as an enum instead of using trait objects because
 /// Datum decoding is an extremely hot path and downcasting objects is relatively slow.
-#[derive(Debug)]
-enum DatumColumnDecoder {
+#[derive(Debug, Clone)]
+pub enum DatumColumnDecoder {
     Bool(BooleanArray),
     U8(UInt8Array),
     U16(UInt16Array),
@@ -906,7 +906,7 @@ enum DatumColumnDecoder {
 }
 
 impl DatumColumnDecoder {
-    fn get<'a>(&'a self, idx: usize, packer: &'a mut RowPacker) {
+    pub fn get<'a>(&'a self, idx: usize, packer: &'a mut RowPacker) {
         let datum = match self {
             DatumColumnDecoder::Bool(array) => array
                 .is_valid(idx)
@@ -1352,6 +1352,25 @@ impl RowColumnarDecoder {
     // used inside `SourceDataEncoder`.
     pub fn null_count(&self) -> usize {
         self.nullability.as_ref().map_or(0, |n| n.null_count())
+    }
+}
+
+impl RowColumnarDecoder {
+    /// Returns the number of rows in this decoder.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Returns the per-column decoders as `DatumColumnDecoder` references.
+    pub fn column_decoders(&self) -> Vec<&DatumColumnDecoder> {
+        self.decoders.iter().map(|(_, _, d)| d).collect()
+    }
+
+    /// Returns clones of the per-column decoders.
+    ///
+    /// Arrow arrays are reference-counted, so cloning is cheap.
+    pub fn clone_column_decoders(&self) -> Vec<DatumColumnDecoder> {
+        self.decoders.iter().map(|(_, _, d)| d.clone()).collect()
     }
 }
 

@@ -5803,7 +5803,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5944,7 +5944,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6104,7 +6104,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6407,7 +6407,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -6543,6 +6543,7 @@ version = "0.0.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "arrow",
  "bytes",
  "bytesize",
  "chrono",
@@ -6580,6 +6581,7 @@ dependencies = [
  "mz-sql-parser",
  "mz-sql-pretty",
  "mz-timely-util",
+ "mz-transform",
  "num",
  "num_enum 0.7.5",
  "ordered-float 5.1.0",
@@ -6937,7 +6939,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7154,7 +7156,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7341,7 +7343,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -8318,6 +8320,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "arrow-ipc",
  "async-compression",
  "async-stream",
  "aws-sdk-s3",
@@ -8456,7 +8459,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.16.0-dev.0"
+version = "26.18.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
