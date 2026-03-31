@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/semijoin_idempotence.rs
-revision: 52af3ba2a1
+revision: 5680493e7d
 ---
 
 # mz-transform::semijoin_idempotence

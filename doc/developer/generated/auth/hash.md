@@ -1,12 +1,12 @@
 ---
 source: src/auth/src/hash.rs
-revision: c38d59b849
+revision: b69d9bb412
 ---
 
 # mz-auth::hash
 
 Implements PBKDF2-SHA-256 password hashing and SCRAM-SHA-256 authentication primitives via OpenSSL.
-Sensitive fields (`HashOpts.salt`, `PasswordHash.salt`/`hash`, `ScramSha256Hash` fields) are zeroized on drop via the `zeroize` crate, and stack-local buffers use `Zeroizing<>` wrappers to prevent secrets from lingering in memory.
+Sensitive fields (`HashOpts.salt`, `PasswordHash.salt`/`hash`, `ScramSha256Hash` fields) are zeroized on drop via `mz_ore::secure::Zeroize`, and stack-local buffers use `mz_ore::secure::Zeroizing<>` wrappers to prevent secrets from lingering in memory.
 
 ## Key types
 

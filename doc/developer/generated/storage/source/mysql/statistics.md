@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql/statistics.rs
-revision: e79a6d96d9
+revision: 9e91428d8a
 ---
 
 # mz-storage::source::mysql::statistics

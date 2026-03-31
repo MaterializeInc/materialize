@@ -1,6 +1,6 @@
 ---
 source: src/postgres-util/src/tunnel.rs
-revision: 1c4808846b
+revision: 5f785f23fd
 ---
 
 # mz-postgres-util::tunnel

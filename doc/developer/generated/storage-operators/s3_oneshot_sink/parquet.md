@@ -1,6 +1,6 @@
 ---
 source: src/storage-operators/src/s3_oneshot_sink/parquet.rs
-revision: e757b4d11b
+revision: 5680493e7d
 ---
 
 # storage-operators::s3_oneshot_sink::parquet

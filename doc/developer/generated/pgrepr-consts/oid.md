@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr-consts/src/oid.rs
-revision: af9155582e
+revision: 00e718d08e
 ---
 
 # mz-pgrepr-consts::oid

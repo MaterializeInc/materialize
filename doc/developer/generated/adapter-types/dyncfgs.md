@@ -1,6 +1,6 @@
 ---
 source: src/adapter-types/src/dyncfgs.rs
-revision: 5e38366694
+revision: 860ea8e80b
 ---
 
 # mz-adapter-types::dyncfgs
