@@ -732,6 +732,7 @@ steps:
               composition: mysql-cdc-resumption
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        skip: "database-issues#11264"
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption
@@ -783,6 +784,7 @@ steps:
               run: migration
         agents:
           queue: hetzner-aarch64-4cpu-8gb
+        skip: "database-issues#11264"
 
       - id: mysql-cdc-resumption-old-syntax
         label: MySQL CDC resumption (before source versioning)
