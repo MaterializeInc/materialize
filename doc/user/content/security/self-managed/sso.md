@@ -131,7 +131,7 @@ following fields:
 | Resource | Configuration | Description
 |----------|---------------| ------------
 | Materialize CR | `spec.authenticatorKind` | Set to `Oidc` to enable OIDC authentication.
-| Kubernetes Secret | `external_login_password_mz_system` | Specify the password for the `mz_system` user, who is needed for initial system parameter configuration. Add `external_login_password_mz_system` to the Kubernetes Secret referenced in the Materialize CR's `spec.backendSecretName` field.
+| Kubernetes Secret | `external_login_password_mz_system` | Specify the password for the `mz_system` user. Add `external_login_password_mz_system` to the Kubernetes Secret referenced in the Materialize CR's `spec.backendSecretName` field. The `mz_system` user **always** authenticates with a password. This user is required by the Materialize Operator for upgrades and serves as an emergency administrative account.
 
 The following example Kubernetes manifest includes configuration for OIDC
 authentication:
