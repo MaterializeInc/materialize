@@ -10,7 +10,7 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, TypeVar, Union
+from typing import TYPE_CHECKING, TypeVar
 
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
@@ -47,7 +47,6 @@ class Capability:
 
 
 T = TypeVar("T", bound=Capability)
-ActionOrFactory = Union[type["Action"], "ActionFactory"]
 
 
 class Capabilities:
@@ -171,6 +170,9 @@ class ActionFactory:
     def incompatible_with(cls) -> set[type[Capability]]:
         """The capability classes that this action is not compatible with."""
         return set()
+
+
+ActionOrFactory = type[Action] | ActionFactory
 
 
 class Test:
