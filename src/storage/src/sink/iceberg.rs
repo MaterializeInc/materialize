@@ -74,7 +74,7 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
@@ -139,7 +139,7 @@ use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp as _};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -178,6 +178,118 @@ type DeltaWriterType = DeltaWriter<
 /// The precision needed to store all UInt64 values in a Decimal128.
 /// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
 const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
+
+/// The maximum number of retries for connecting to the Iceberg catalog and loading the table.
+/// Each retry creates a completely fresh catalog connection (new HTTP clients, new credential
+/// providers) to avoid reusing any poisoned connection state.
+const CATALOG_CONNECT_MAX_TRIES: usize = 5;
+/// The maximum backoff between retries for catalog connection attempts.
+const CATALOG_CONNECT_MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Connects to the Iceberg catalog and loads the specified table, retrying with
+/// exponential backoff on transient failures. Each retry creates a brand-new
+/// catalog connection so that stale HTTP clients and credential provider state
+/// are not reused.
+async fn connect_and_load_table(
+    connection: &IcebergSinkConnection,
+    storage_configuration: &StorageConfiguration,
+    operator_name: &str,
+) -> Result<(Arc<dyn Catalog>, Table), anyhow::Error> {
+    let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+    let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
+
+    Retry::default()
+        .max_tries(CATALOG_CONNECT_MAX_TRIES)
+        .clamp_backoff(CATALOG_CONNECT_MAX_BACKOFF)
+        .retry_async(|retry_state| {
+            let table_ident = table_ident.clone();
+            let operator_name = operator_name.to_string();
+            async move {
+                if retry_state.i > 0 {
+                    warn!(
+                        operator = %operator_name,
+                        attempt = retry_state.i + 1,
+                        "retrying Iceberg catalog connection after transient failure"
+                    );
+                }
+                // Create a completely fresh catalog connection on each attempt
+                // to avoid reusing any poisoned HTTP client or credential state.
+                let catalog = connection
+                    .catalog_connection
+                    .connect(storage_configuration, InTask::Yes)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                            connection.catalog_connection.uri,
+                            connection.namespace,
+                            connection.table
+                        )
+                    })?;
+
+                let table = catalog
+                    .load_table(&table_ident)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to load Iceberg table '{}.{}' in {} operator",
+                            connection.namespace, connection.table, operator_name
+                        )
+                    })?;
+
+                Ok((catalog, table))
+            }
+        })
+        .await
+}
+
+/// Connects to the Iceberg catalog and loads or creates the specified table,
+/// retrying with exponential backoff on transient failures.
+async fn connect_and_load_or_create_table(
+    connection: &IcebergSinkConnection,
+    storage_configuration: &StorageConfiguration,
+    initial_schema: &Schema,
+    operator_name: &str,
+) -> Result<(Arc<dyn Catalog>, Table), anyhow::Error> {
+    Retry::default()
+        .max_tries(CATALOG_CONNECT_MAX_TRIES)
+        .clamp_backoff(CATALOG_CONNECT_MAX_BACKOFF)
+        .retry_async(|retry_state| {
+            let operator_name = operator_name.to_string();
+            async move {
+                if retry_state.i > 0 {
+                    warn!(
+                        operator = %operator_name,
+                        attempt = retry_state.i + 1,
+                        "retrying Iceberg catalog connection after transient failure"
+                    );
+                }
+                let catalog = connection
+                    .catalog_connection
+                    .connect(storage_configuration, InTask::Yes)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
+                            connection.catalog_connection.uri,
+                            connection.namespace,
+                            connection.table
+                        )
+                    })?;
+
+                let table = load_or_create_table(
+                    catalog.as_ref(),
+                    connection.namespace.clone(),
+                    connection.table.clone(),
+                    initial_schema,
+                )
+                .await?;
+
+                Ok((catalog, table))
+            }
+        })
+        .await
+}
 
 /// Add Parquet field IDs to an Arrow schema. Iceberg requires field IDs in the
 /// Parquet metadata for schema evolution tracking. Field IDs are assigned
@@ -826,22 +938,11 @@ where
                 return Ok(());
             }
 
-            let catalog = connection
-                .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
-                        connection.catalog_connection.uri, connection.namespace, connection.table
-                    )
-                })?;
-
-            let table = load_or_create_table(
-                catalog.as_ref(),
-                connection.namespace.clone(),
-                connection.table.clone(),
+            let (_catalog, table) = connect_and_load_or_create_table(
+                &connection,
+                &storage_configuration,
                 initial_schema.as_ref(),
+                &name_for_logging,
             )
             .await?;
             debug!(
@@ -1221,31 +1322,17 @@ where
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
             let [capset]: &mut [_; 1] = caps.try_into().unwrap();
-            let catalog = connection
-                .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
-                        connection.catalog_connection.uri, connection.namespace, connection.table
-                    )
-                })?;
 
-            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
-            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
             while let Some(_) = table_ready_input.next().await {
                 // Wait for table to be ready
             }
-            let table = catalog
-                .load_table(&table_ident)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to load Iceberg table '{}.{}' in write_data_files operator",
-                        connection.namespace, connection.table
-                    )
-                })?;
+
+            let (_catalog, table) = connect_and_load_table(
+                &connection,
+                &storage_configuration,
+                &name_for_logging,
+            )
+            .await?;
 
             let table_metadata = table.metadata().clone();
             let current_schema = Arc::clone(table_metadata.current_schema());
@@ -1836,30 +1923,19 @@ where
                 return Ok(());
             }
 
-            let catalog = connection
-                .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to connect to Iceberg catalog '{}' for table '{}.{}'",
-                        connection.catalog_connection.uri, connection.namespace, connection.table
-                    )
-                })?;
-
             let mut write_handle = write_handle.await?;
 
-            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
-            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
             while let Some(_) = table_ready_input.next().await {
                 // Wait for table to be ready
             }
-            let mut table = catalog.load_table(&table_ident).await.with_context(|| {
-                format!(
-                    "Failed to load Iceberg table '{}.{}' in commit_to_iceberg operator",
-                    connection.namespace, connection.table
-                )
-            })?;
+
+            let (catalog, table) = connect_and_load_table(
+                &connection,
+                &storage_configuration,
+                &name_for_logging,
+            )
+            .await?;
+            let mut table = table;
 
             #[allow(clippy::disallowed_types)]
             let mut batch_descriptions: std::collections::HashMap<
