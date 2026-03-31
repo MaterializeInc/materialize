@@ -349,7 +349,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // `create_fast_path_plan` later again, because, e.g., running `LiteralConstraints` is still
         // ahead of us.)
         let use_fast_path_optimizer = match create_fast_path_plan(
-            &mut df_desc,
+            &df_desc,
             self.select_id,
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,
@@ -384,7 +384,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         //     .expect("GlobalMirPlan type");
 
         let peek_plan = match create_fast_path_plan(
-            &mut df_desc,
+            &df_desc,
             self.select_id,
             Some(&self.finishing),
             self.config.features.persist_fast_path_limit,

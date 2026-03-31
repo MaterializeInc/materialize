@@ -428,7 +428,7 @@ fn permute_oneshot_mfp_around_index(
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
 pub fn create_fast_path_plan<T: Timestamp>(
-    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
+    dataflow_plan: &DataflowDescription<OptimizedMirRelationExpr, (), T>,
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
@@ -441,7 +441,7 @@ pub fn create_fast_path_plan<T: Timestamp>(
     // to build (no dependent views). There is likely an index to build as well, but we may not be sure.
     if dataflow_plan.objects_to_build.len() >= 1 && dataflow_plan.objects_to_build[0].id == view_id
     {
-        let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
+        let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner();
         if let Some((rows, found_typ)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
             let plan = FastPathPlan::Constant(
