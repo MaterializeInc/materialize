@@ -360,7 +360,7 @@ where
     let mut datums = DatumVec::new();
 
     if closure.could_error() {
-        let (oks, errs2) = differential_dogs3::operators::half_join::half_join_internal_unsafe(
+        let (oks, errs2) = differential_dogs3::operators::half_join2::half_join_internal_unsafe(
             updates,
             trace,
             |time, antichain| {
@@ -409,7 +409,7 @@ where
             errs.concat(errs2.as_collection()),
         )
     } else {
-        let oks = differential_dogs3::operators::half_join::half_join_internal_unsafe(
+        let oks = differential_dogs3::operators::half_join2::half_join_internal_unsafe(
             updates,
             trace,
             |time, antichain| {
