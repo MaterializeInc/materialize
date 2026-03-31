@@ -14,6 +14,7 @@ import os
 import threading
 import time
 import urllib.parse
+from collections.abc import Callable
 from textwrap import dedent
 
 import psycopg
@@ -41,6 +42,22 @@ SERVICES = [
     Testdrive(),  # Overridden below
     Mz(app_password=""),  # Overridden below
 ]
+
+CONNECTION_ERROR_STRINGS = [
+    "Read timed out",
+    "closed connection",
+    "connection closed",
+    "Connection aborted",
+    "Connection reset by peer",
+    "terminating connection due to idle-in-transaction timeout",
+    "consuming input failed: SSL SYSCALL error: EOF detected",
+    "unexpected eof while reading",
+    "consuming input failed: SSL connection has been closed unexpectedly",
+]
+
+
+def is_connection_error(msg: str) -> bool:
+    return any(s in msg for s in CONNECTION_ERROR_STRINGS)
 
 
 class WebhookSender:
@@ -124,19 +141,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         webhook_sender.start()
 
         failures: list[TestFailureDetails] = []
+        connection_failures: list[tuple[str, str]] = []
 
         try:
             count_chunk = 0
             while time.time() - start_time < args.runtime:
                 count_chunk = count_chunk + 1
                 try:
-                    c.testdrive(
-                        dedent(
-                            """
+                    c.testdrive(dedent("""
                                 > DELETE FROM qa_canary_environment.public_table.table
-                            """
-                        )
-                    )
+                            """))
 
                     conn1, cursor_on_table = create_connection_and_cursor(
                         host,
@@ -181,20 +195,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     IdleInTransactionSessionTimeout,
                 ) as e:
                     error_msg_str = str(e)
-                    if (
-                        "Read timed out" in error_msg_str
-                        or "closed connection" in error_msg_str
-                        or "terminating connection due to idle-in-transaction timeout"
-                        in error_msg_str
-                        or "consuming input failed: SSL SYSCALL error: EOF detected"
-                        in error_msg_str
-                        or "unexpected eof while reading" in error_msg_str
-                        or "consuming input failed: SSL connection has been closed unexpectedly"
-                        in error_msg_str
-                        or "terminating connection due to idle-in-transaction timeout"
-                        in error_msg_str
-                    ):
-                        print(f"Failed: {e}; retrying")
+                    if is_connection_error(error_msg_str):
+                        now = datetime.datetime.now(
+                            tz=datetime.timezone.utc
+                        ).isoformat()
+                        connection_failures.append((now, error_msg_str))
+                        print(f"Connection failure at {now}: {e}; retrying")
                     else:
                         raise
                 except FailedTestExecutionError as e:
@@ -202,6 +208,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     for error in e.errors:
                         # TODO(def-): Remove when database-issues#6825 is fixed
                         if "Non-positive multiplicity in DistinctBy" in error.message:
+                            continue
+                        if is_connection_error(error.message):
+                            now = datetime.datetime.now(
+                                tz=datetime.timezone.utc
+                            ).isoformat()
+                            connection_failures.append((now, error.message))
+                            print(
+                                f"Connection failure at {now}: {error.message}; continuing."
+                            )
                             continue
                         print(
                             f"Test failure occurred ({error.message}), collecting it, and continuing."
@@ -213,6 +228,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     # TODO(def-): Remove when database-issues#6825 is fixed
                     if "Non-positive multiplicity in DistinctBy" in msg:
                         continue
+                    if is_connection_error(msg):
+                        now = datetime.datetime.now(
+                            tz=datetime.timezone.utc
+                        ).isoformat()
+                        connection_failures.append((now, msg))
+                        print(f"Connection failure at {now}: {msg}; continuing.")
+                        continue
                     print(
                         f"Test failure occurred ({msg}), collecting it, and continuing."
                     )
@@ -220,6 +242,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     failures.append(TestFailureDetails(message=msg, details=None))
         finally:
             webhook_sender.stop()
+
+        if connection_failures:
+            print("\n--- Connection failure summary ---")
+            print(f"Total connection failures: {len(connection_failures)}")
+            for ts, msg in connection_failures:
+                print(f"  {ts}: {msg}")
+            print("--- End connection failure summary ---\n")
 
         if len(failures) > 0:
             # reset test case name to remove current iteration and chunk, which does not apply to collected errors
@@ -241,7 +270,11 @@ def fetch_token(user_name: str, password: str) -> str:
 
 
 def http_sql_query(
-    host: str, query: str, token: str, retries: int = 10
+    host: str,
+    query: str,
+    token: str,
+    retries: int = 10,
+    refresh_token: Callable[[], str] | None = None,
 ) -> list[list[str]]:
     try:
         r = requests.post(
@@ -258,8 +291,12 @@ def http_sql_query(
         # TODO: This should be an error once database-issues#8737 is fixed
         if retries > 0:
             print("Timed out after 60s, retrying")
-            return http_sql_query(host, query, token, retries - 1)
+            return http_sql_query(host, query, token, retries - 1, refresh_token)
         raise
+    if r.status_code == 401 and refresh_token is not None:
+        print("Got 401, refreshing token and retrying")
+        new_token = refresh_token()
+        return http_sql_query(host, query, new_token, retries, refresh_token=None)
     assert r.status_code == 200, f"{r}\n{r.text}"
     results = r.json()["results"]
     assert len(results) == 1, results
@@ -327,14 +364,16 @@ def perform_test(
 
     # Token can run out, so refresh it occasionally
     token = fetch_token(user_name, password)
+    refresh_token = lambda: fetch_token(user_name, password)
 
     validate_data_through_http_connection(
         host,
         token,
         i,
+        refresh_token,
     )
 
-    validate_webhook(host, token, webhook_sender)
+    validate_webhook(host, token, webhook_sender, refresh_token)
 
 
 def update_data(c: Composition, i: int) -> None:
@@ -413,14 +452,16 @@ def validate_data_through_http_connection(
     host: str,
     token: str,
     i: int,
+    refresh_token: Callable[[], str] | None = None,
 ) -> None:
-    result = http_sql_query(host, "SELECT 1", token)
+    result = http_sql_query(host, "SELECT 1", token, refresh_token=refresh_token)
     assert result == [["1"]]
 
     result = http_sql_query(
         host,
         "SELECT COUNT(DISTINCT l_returnflag) FROM qa_canary_environment.public_tpch.tpch_q01 WHERE sum_charge < 0",
         token,
+        refresh_token=refresh_token,
     )
     assert result == [["0"]]
 
@@ -428,6 +469,7 @@ def validate_data_through_http_connection(
         host,
         "SELECT COUNT(DISTINCT c_name) FROM qa_canary_environment.public_tpch.tpch_q18 WHERE o_orderdate >= '2023-01-01'",
         token,
+        refresh_token=refresh_token,
     )
     assert result == [["0"]]
 
@@ -435,6 +477,7 @@ def validate_data_through_http_connection(
         host,
         "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_pg_cdc.pg_wmr WHERE degree > 10",
         token,
+        refresh_token=refresh_token,
     )
     assert result == [["0"]]
 
@@ -442,6 +485,7 @@ def validate_data_through_http_connection(
         host,
         "SELECT COUNT(DISTINCT a_name) FROM qa_canary_environment.public_mysql_cdc.mysql_wmr WHERE degree > 10",
         token,
+        refresh_token=refresh_token,
     )
     assert result == [["0"]]
 
@@ -449,6 +493,7 @@ def validate_data_through_http_connection(
         host,
         "SELECT COUNT(DISTINCT count_star) FROM qa_canary_environment.public_loadgen.sales_product_product_category WHERE count_distinct_product_id < 0",
         token,
+        refresh_token=refresh_token,
     )
     assert result == [["0"]]
 
@@ -456,6 +501,7 @@ def validate_data_through_http_connection(
         host,
         "SELECT * FROM qa_canary_environment.public_table.table_mv",
         token,
+        refresh_token=refresh_token,
     )
     assert result == [[f"{i * 100 + 99}"]]
 
@@ -463,6 +509,7 @@ def validate_data_through_http_connection(
         host,
         "SELECT min(c), max(c), count(*) FROM qa_canary_environment.public_table.table",
         token,
+        refresh_token=refresh_token,
     )
     assert result == [["0", f"{i * 100 + 99}", f"{(i + 1) * 100}"]]
 
@@ -471,6 +518,7 @@ def validate_webhook(
     host: str,
     token: str,
     webhook_sender: WebhookSender,
+    refresh_token: Callable[[], str] | None = None,
 ) -> None:
     # Drain the pending queue so we only check the window since last call.
     pending = webhook_sender.take_pending()
@@ -480,16 +528,25 @@ def validate_webhook(
     sent_timestamps = set(pending)
     oldest = min(pending)
 
-    # Only scan events at or after the oldest pending timestamp.
-    result = http_sql_query(
-        host,
-        f"SELECT body->>'created_at' FROM qa_canary_environment.public_webhook.webhook_source "
-        f"WHERE body->>'event_type' = 'canary_heartbeat' AND body->>'created_at' >= '{oldest}'",
-        token,
-    )
-    received_timestamps = {row[0] for row in result}
+    # Retry a few times because there is a small delay between the webhook HTTP
+    # 200 (data persisted) and the data becoming visible via SELECT (read
+    # frontier advancement through the dataflow).
+    missing: list[str] = []
+    for attempt in range(4):
+        if attempt > 0:
+            time.sleep(2)
+        result = http_sql_query(
+            host,
+            f"SELECT body->>'created_at' FROM qa_canary_environment.public_webhook.webhook_source "
+            f"WHERE body->>'event_type' = 'canary_heartbeat' AND body->>'created_at' >= '{oldest}'",
+            token,
+            refresh_token=refresh_token,
+        )
+        received_timestamps = {row[0] for row in result}
+        missing = sorted(sent_timestamps - received_timestamps)
+        if len(missing) == 0:
+            break
 
-    missing = sorted(sent_timestamps - received_timestamps)
     assert (
         len(missing) == 0
     ), f"Webhook events lost: {len(missing)} missing out of {len(pending)} sent. Missing created_at values: {missing[:20]}"
