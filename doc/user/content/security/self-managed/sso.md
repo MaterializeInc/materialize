@@ -184,7 +184,7 @@ or SQL commands, but it is strongly recommended to use a ConfigMap.
 | Parameter | Description | Required | Default |
 |-----------|-------------|----------|---------|
 | `oidc_issuer` | The OIDC issuer URL (e.g., `https://your-org.okta.com/oauth2/default`). Materialize uses this to discover the JWKS endpoint for token validation. | Yes | None |
-| `oidc_audience` | A JSON array of client IDs for audience validation (e.g., `["your-client-id"]`). Materialize checks that the JWT's `aud` claim contains at least one of these values. | No | `[]` |
+| `oidc_audience` | A JSON array of expected audience values for token validation (e.g., `["your-client-id"]`). Use the **client ID from [Step 1](#step-1-configure-your-identity-provider)**. Materialize checks that the JWT's `aud` claim contains at least one of these values. **By default, this is empty, and audience validation is skipped.**| No | `[]` |
 | `oidc_authentication_claim` | The JWT claim to use as the Materialize username. | No | `sub` |
 | `console_oidc_client_id` | The OIDC client ID used by the web console for the authorization code flow. | For console login | Empty |
 | `console_oidc_scopes` | Space-separated OIDC scopes requested by the web console when obtaining an ID token (e.g., `openid`). | For console login | Empty |
@@ -192,8 +192,8 @@ or SQL commands, but it is strongly recommended to use a ConfigMap.
 {{< warning >}}
 When `oidc_audience` is empty, audience validation is skipped. This means
 **any** valid token from the same identity provider can authenticate to
-Materialize, including tokens issued for other applications. Always set
-`oidc_audience` in production environments.
+Materialize, including tokens issued for other applications. **Always set
+`oidc_audience` in production environments.**
 {{</ warning >}}
 
 ### Configure via ConfigMap
