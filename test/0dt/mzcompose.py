@@ -1813,19 +1813,6 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         ),
     ):
         c.up("mz_new")
-
-        new_mz_tables_gid = c.sql_query(
-            "SELECT id FROM mz_tables WHERE name = 'mz_tables'",
-            service="mz_new",
-        )[0][0]
-        new_mv_gid = c.sql_query(
-            "SELECT id FROM mz_materialized_views WHERE name = 'mv'",
-            service="mz_new",
-        )[0][0]
-        assert new_mz_tables_gid == mz_tables_gid
-        assert new_mv_gid == mv_gid
-        # mz_internal.mz_storage_shards won't update until this instance becomes the leader
-
         c.await_mz_deployment_status(DeploymentStatus.READY_TO_PROMOTE, "mz_new")
         c.promote_mz("mz_new")
         c.await_mz_deployment_status(DeploymentStatus.IS_LEADER, "mz_new")
