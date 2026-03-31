@@ -162,6 +162,7 @@ spec:
   environmentdImageRef: materialize/environmentd:v26.18.0 # Use v26.18.0 or later
   backendSecretName: materialize-backend
   authenticatorKind: Oidc
+  requestRollout: 00000000-0000-0000-0000-000000000003 # Switching to Oidc requires a rollout
 ```
 
 Apply the updated manifest to your Kubernetes cluster. See
@@ -198,7 +199,7 @@ Materialize, including tokens issued for other applications. Always set
 ### Configure via ConfigMap
 
 Create a ConfigMap with your OIDC parameters and reference it in the Materialize
-CR's `spec.systemParameterConfigmapName` field:
+CR's `spec.systemParameterConfigmapName` field. At this point, your manifest should look like:
 
 ```yaml
 apiVersion: v1
@@ -209,18 +210,33 @@ metadata:
 data:
   system-params.json: |
     {
-      "oidc_issuer": "https://your-org.okta.com/oauth2/default",
+      "oidc_issuer": "YOUR_OIDC_ISSUER",
       "oidc_audience": "[\"YOUR_CLIENT_ID\"]",
       "oidc_authentication_claim": "email",
       "console_oidc_client_id": "YOUR_CLIENT_ID",
-      "console_oidc_scopes": "openid"
+      "console_oidc_scopes": "openid email"
     }
-```
-
-Then add the ConfigMap name to your Materialize CR:
-
-```yaml
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: materialize-backend
+  namespace: materialize-environment
+stringData:
+  metadata_backend_url: ...
+  persist_backend_url: ...
+  license_key: ...
+  external_login_password_mz_system: "enter_mz_system_password"
+---
+apiVersion: materialize.cloud/v1alpha1
+kind: Materialize
+metadata:
+  name: 12345678-1234-1234-1234-123456789012
+  namespace: materialize-environment
 spec:
+  authenticatorKind: Oidc
+  backendSecretName: materialize-backend
+  requestRollout: 00000000-0000-0000-0000-000000000003 # Switching to Oidc requires a rollout
   systemParameterConfigmapName: mz-system-params
 ```
 
