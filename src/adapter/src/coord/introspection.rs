@@ -224,7 +224,7 @@ impl Coordinator {
             move || {
                 span.in_scope(|| {
                     // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
+                    let global_mir_plan = optimizer.catch_unwind_optimize(plan)?;
                     // Add introduced indexes as validity dependencies.
                     let id_bundle = global_mir_plan.id_bundle(cluster_id);
                     let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
@@ -449,11 +449,13 @@ impl Coordinator {
         let replica_id = subscribe.replica_id.to_string();
         let mut new_updates = Vec::with_capacity(updates.len());
         let mut new_row = Row::default();
-        for (_time, row, diff) in updates {
-            let mut packer = new_row.packer();
-            packer.push(Datum::String(&replica_id));
-            packer.extend_by_row(&row);
-            new_updates.push((new_row.clone(), diff));
+        for collection in updates {
+            for (row, _time, diff) in collection.iter() {
+                let mut packer = new_row.packer();
+                packer.push(Datum::String(&replica_id));
+                packer.extend_by_row_ref(row);
+                new_updates.push((new_row.clone(), diff));
+            }
         }
 
         // If we have a pending deferred write, we need to apply it _before_ the append of the new
