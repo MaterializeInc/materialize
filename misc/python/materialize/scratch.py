@@ -572,15 +572,6 @@ def list_instances(
     return list(boto3.resource("ec2").instances.filter(Filters=filters))
 
 
-def get_instances_by_tag(k: str, v: str) -> list[InstanceTypeDef]:
-    return [
-        i
-        for r in boto3.client("ec2").describe_instances()["Reservations"]
-        for i in r["Instances"]
-        if instance_typedef_tags(i).get(k) == v
-    ]
-
-
 def get_old_instances() -> list[InstanceTypeDef]:
     def exists(i: InstanceTypeDef) -> bool:
         return i["State"]["Name"] != "terminated"

@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import filecmp
 import hashlib
 import json
 import os
@@ -109,14 +108,6 @@ def ensure_dir_exists(path_to_dir: str) -> None:
         ],
         check=True,
     )
-
-
-def sha256_of_file(path: str | Path) -> str:
-    sha256 = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(filecmp.BUFSIZE), b""):
-            sha256.update(block)
-    return sha256.hexdigest()
 
 
 def sha256_of_utf8_string(value: str) -> str:

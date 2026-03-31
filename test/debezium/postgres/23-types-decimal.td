@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE decimal_type (f1 DECIMAL(5,3), f2 INTEGER PRIMARY KEY);
 ALTER TABLE decimal_type REPLICA IDENTITY FULL;
 INSERT INTO decimal_type VALUES (NULL, 0), (NULL, 1), (12.345, 2), ('NaN', 3);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.decimal_type
 

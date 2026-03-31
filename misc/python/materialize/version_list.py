@@ -441,16 +441,6 @@ def get_published_minor_mz_versions(
     return sorted(minor_versions.values(), reverse=newest_first)
 
 
-def get_minor_mz_versions_listed_in_docs(respect_released_tag: bool) -> list[MzVersion]:
-    """
-    Get the latest patch version for every minor version in ascending order.
-    Use this version if it is important whether a tag was introduced before or after creating this branch.
-
-    See also: #get_published_minor_mz_versions()
-    """
-    return VersionsFromDocs(respect_released_tag).minor_versions()
-
-
 def get_all_mz_versions(
     newest_first: bool = True,
 ) -> list[MzVersion]:
@@ -468,17 +458,6 @@ def get_all_mz_versions(
         # Exclude release candidates
         and not version.prerelease
     ]
-
-
-def get_all_mz_versions_listed_in_docs(
-    respect_released_tag: bool,
-) -> list[MzVersion]:
-    """
-    Get all mz versions based on docs. Versions known to be invalid are excluded.
-
-    See also: #get_all_mz_versions()
-    """
-    return VersionsFromDocs(respect_released_tag).all_versions()
 
 
 def get_all_published_mz_versions(

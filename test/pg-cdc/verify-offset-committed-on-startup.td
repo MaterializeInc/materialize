@@ -42,6 +42,8 @@ ALTER TABLE t0 REPLICA IDENTITY FULL;
 
 INSERT INTO t0 SELECT i, repeat(md5(i::text), 1000) FROM generate_series(1, 10000) AS i;
 
+ANALYZE;
+
 # Configure Materialize
 
 $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

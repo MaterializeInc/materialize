@@ -13,7 +13,6 @@ Uses the frontegg-mock instead of a real frontend backend.
 """
 
 import contextlib
-import datetime
 import json
 import socket
 import ssl
@@ -813,17 +812,3 @@ def workflow_split_proxy_header(c: Composition) -> None:
         assert (
             json.loads(body)["results"][0]["rows"][0][0] == "42"
         ), f"unexpected response body: {body}"
-
-
-def retry(fn: Callable, timeout: int) -> None:
-    end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=timeout)
-    ).timestamp()
-    while time.time() < end_time:
-        try:
-            fn()
-            return
-        except:
-            pass
-        time.sleep(1)
-    fn()

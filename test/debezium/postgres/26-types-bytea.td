@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE bytea_type (f1 BYTEA, f2 INTEGER PRIMARY KEY);
 ALTER TABLE bytea_type REPLICA IDENTITY FULL;
 INSERT INTO bytea_type VALUES (NULL, 0), ('', 1), (E'\\x00', 2), (E'\\xABCDEF1234', 3);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.bytea_type
 

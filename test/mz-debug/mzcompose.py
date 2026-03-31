@@ -11,8 +11,6 @@
 Basic test for mz-debug
 """
 
-from dataclasses import dataclass
-
 from materialize import spawn
 from materialize.mzcompose.composition import (
     Composition,
@@ -30,23 +28,6 @@ SERVICES = [
         ]
     ),
     MzDebug(),
-]
-
-
-@dataclass
-class TestCase:
-    name: str
-    dbt_env: dict[str, str]
-    materialized_options: list[str]
-    materialized_image: str | None = None
-
-
-test_cases = [
-    TestCase(
-        name="no-tls-cloud",
-        materialized_options=[],
-        dbt_env={},
-    ),
 ]
 
 

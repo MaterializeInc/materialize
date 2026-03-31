@@ -77,6 +77,13 @@ pub const ENABLE_INTROSPECTION_SUBSCRIBES: Config<bool> = Config::new(
     "Enable installation of introspection subscribes.",
 );
 
+/// Enable sending subscribes down the new frontend-peek path.
+pub const ENABLE_FRONTEND_SUBSCRIBES: Config<bool> = Config::new(
+    "enable_frontend_subscribes",
+    true,
+    "Enable sending subscribes down the new frontend-peek path.",
+);
+
 /// The plan insights notice will not investigate fast path clusters if plan optimization took longer than this.
 pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Duration> = Config::new(
     "plan_insights_notice_fast_path_clusters_optimize_duration",
@@ -176,6 +183,15 @@ pub const ENABLE_MCP_OBSERVATORY: Config<bool> = Config::new(
     "Whether the MCP observatory HTTP endpoint is enabled. When false, requests to /api/mcp/observatory return 503 Service Unavailable.",
 );
 
+/// Maximum size (in bytes) of MCP tool response content after JSON serialization.
+/// Responses exceeding this limit are rejected with a clear error telling the
+/// agent to narrow its query. Keeps responses within LLM context window limits.
+pub const MCP_MAX_RESPONSE_SIZE: Config<usize> = Config::new(
+    "mcp_max_response_size",
+    1_000_000,
+    "Maximum size in bytes of MCP tool response content. Responses exceeding this limit are rejected with an error telling the agent to narrow its query.",
+);
+
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
 /// a persist write + oracle call per DDL statement.
 pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
@@ -211,6 +227,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
+        .add(&ENABLE_FRONTEND_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
         .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
@@ -224,6 +241,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MCP_AGENTS)
         .add(&ENABLE_MCP_AGENTS_QUERY_TOOL)
         .add(&ENABLE_MCP_OBSERVATORY)
+        .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)
         .add(&CONSOLE_OIDC_SCOPES)

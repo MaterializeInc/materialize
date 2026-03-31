@@ -17,6 +17,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_add_column_with_delete (f1 INTEGER, f2 INTEGER PRIMARY KEY);
 ALTER TABLE alter_add_column_with_delete REPLICA IDENTITY FULL;
 INSERT INTO alter_add_column_with_delete VALUES (123, 0),(123, 1),(123, 2),(123, 3);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.alter_add_column_with_delete
 

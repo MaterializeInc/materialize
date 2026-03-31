@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
 from random import Random
 from textwrap import dedent
 from typing import Any
@@ -45,6 +44,7 @@ class PgCdcBase:
                 ALTER TABLE postgres_source_table{self.suffix} REPLICA IDENTITY FULL;
 
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'A', i, REPEAT('A', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
+                ANALYZE postgres_source_table{self.suffix};
 
                 CREATE PUBLICATION postgres_source{self.suffix} FOR ALL TABLES;
 
@@ -91,6 +91,7 @@ class PgCdcBase:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'D', i, REPEAT('D', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
+                ANALYZE postgres_source_table{self.suffix};
 
                 > CREATE SOURCE postgres_source2{self.suffix}
                   FROM POSTGRES CONNECTION pg2{self.suffix}
@@ -126,6 +127,7 @@ class PgCdcBase:
                 $ postgres-execute connection=postgres://postgres:postgres@postgres
                 INSERT INTO postgres_source_table{self.suffix} SELECT 'F', i, REPEAT('F', {self.repeats} - i), NULL FROM generate_series(1,100) AS i;
                 UPDATE postgres_source_table{self.suffix} SET f2 = f2 + 100;
+                ANALYZE postgres_source_table{self.suffix};
 
                 > CREATE SECRET pgpass3{self.suffix} AS 'postgres';
 
@@ -290,6 +292,7 @@ class PgCdcMzNow(Check):
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'C1');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'D1');
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'E1');
+                ANALYZE postgres_mz_now_table;
 
                 CREATE PUBLICATION postgres_mz_now_publication FOR ALL TABLES;
 
@@ -368,7 +371,3 @@ class PgCdcMzNow(Check):
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM postgres_mz_now_table WHERE f2 LIKE '%4%';
                 """))
-
-
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

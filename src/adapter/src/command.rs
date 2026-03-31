@@ -35,6 +35,7 @@ use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator, SqlRelationType
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_sql::plan;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, SideEffectingFunc};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
@@ -52,11 +53,11 @@ use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{ExecuteContextExtra, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
-use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{
     FrontendStatementLoggingEvent, StatementEndedExecutionReason, StatementExecutionStrategy,
     StatementLoggingFrontend,
 };
+use crate::statement_logging::{StatementLoggingId, WatchSetCreation};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
 use crate::{
@@ -264,6 +265,19 @@ pub enum Command {
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 
+    ExecuteSubscribe {
+        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        dependency_ids: BTreeSet<GlobalId>,
+        cluster_id: ComputeInstanceId,
+        replica_id: Option<ReplicaId>,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        read_holds: ReadHolds<mz_repr::Timestamp>,
+        plan: plan::SubscribePlan,
+        statement_logging_id: Option<StatementLoggingId>,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
     /// Preflight check for COPY TO S3 operation. This runs the slow S3 operations
     /// (loading SDK config, checking bucket path, verifying permissions, uploading sentinel)
     /// in a background task to avoid blocking the coordinator.
@@ -364,6 +378,7 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteSubscribe { .. }
             | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
@@ -401,6 +416,7 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteSubscribe { .. }
             | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }

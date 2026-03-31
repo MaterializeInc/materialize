@@ -228,16 +228,6 @@ def is_dirty() -> bool:
     return proc.returncode != 0 or idx.returncode != 0
 
 
-def first_remote_matching(pattern: str) -> str | None:
-    """Get the name of the remote that matches the pattern"""
-    remotes = spawn.capture(["git", "remote", "-v"])
-    for remote in remotes.splitlines():
-        if pattern in remote:
-            return remote.split()[0]
-
-    return None
-
-
 def describe() -> str:
     """Describe the relationship between the current commit and the most recent tag"""
     return spawn.capture(["git", "describe"]).strip()

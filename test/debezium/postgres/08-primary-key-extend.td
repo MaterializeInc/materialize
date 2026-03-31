@@ -20,6 +20,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE alter_extend_primary_key (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE alter_extend_primary_key REPLICA IDENTITY FULL;
 INSERT INTO alter_extend_primary_key VALUES (123, 234), (345, 456);
+ANALYZE;
 
 > CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
     URL '${testdrive.schema-registry-url}'

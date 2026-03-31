@@ -1566,6 +1566,10 @@ class FlipFlagsAction(Action):
             "true",
             "false",
         ]
+        self.flags_with_values["enable_frontend_subscribes"] = [
+            "true",
+            "false",
+        ]
         self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
 
@@ -1602,6 +1606,7 @@ class FlipFlagsAction(Action):
             "copy_to_s3_multipart_part_size_bytes",
             "enable_compute_prometheus_metrics",
             "enable_compute_replica_expiration",
+            "compute_mv_sink_advance_persist_frontiers",
             "compute_replica_expiration_offset",
             "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
@@ -1754,6 +1759,7 @@ class FlipFlagsAction(Action):
             "enable_mcp_agents",
             "enable_mcp_agents_query_tool",
             "enable_mcp_observatory",
+            "mcp_max_response_size",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",

@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE uuid_type (pk_col UUID PRIMARY KEY, nopk_col UUID);
 ALTER TABLE uuid_type REPLICA IDENTITY FULL;
 INSERT INTO uuid_type VALUES ('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11');
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.uuid_type
 

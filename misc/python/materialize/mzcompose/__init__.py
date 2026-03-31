@@ -208,6 +208,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_frontend_subscribes",
+            "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "default_timestamp_interval",
             "1s",
             ["100ms", "1s"],
@@ -482,6 +487,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "copy_to_s3_arrow_builder_buffer_ratio",
     "copy_to_s3_multipart_part_size_bytes",
     "enable_replica_targeted_materialized_views",
+    "compute_mv_sink_advance_persist_frontiers",
     "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
     "enable_compute_render_fueled_as_specific_collection",
@@ -625,6 +631,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_mcp_agents",
     "enable_mcp_agents_query_tool",
     "enable_mcp_observatory",
+    "mcp_max_response_size",
     "user_id_pool_batch_size",
 ]
 

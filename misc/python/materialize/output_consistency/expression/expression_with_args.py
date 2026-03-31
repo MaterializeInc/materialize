@@ -65,9 +65,6 @@ class ExpressionWithArgs(Expression):
     def count_args(self) -> int:
         return len(self.args)
 
-    def has_args(self) -> bool:
-        return self.count_args() > 0
-
     def to_sql(
         self, sql_adjuster: SqlDialectAdjuster, include_alias: bool, is_root_level: bool
     ) -> str:

@@ -910,18 +910,6 @@ class ObservabilityPodMetricsEnabled(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         return  # TODO: Doesn't work with upgrade: Expected no --collect-pod-metrics in environmentd args, but found it
 
-        orchestratord = get_orchestratord_data()
-        args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
-        expected = "--collect-pod-metrics"
-        if self.value and mods[ObservabilityEnabled]:
-            assert (
-                expected in args
-            ), f"Expected {expected} in environmentd args, but only found {args}"
-        else:
-            assert (
-                expected not in args
-            ), f"Expected no {expected} in environmentd args, but found it: {args}"
-
 
 class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
     @classmethod
@@ -1885,8 +1873,7 @@ def workflow_documentation_defaults(
             ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
         )
 
-        # TODO: Shorten when https://github.com/MaterializeInc/database-issues/issues/11225 is fixed
-        for i in range(480):
+        for i in range(180):
             try:
                 data = json.loads(
                     spawn.capture(
