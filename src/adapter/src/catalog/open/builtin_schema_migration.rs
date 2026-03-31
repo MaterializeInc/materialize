@@ -99,12 +99,6 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             "mz_roles",
         ),
         MigrationStep::replacement(
-            "0.160.0",
-            CatalogItemType::Table,
-            MZ_CATALOG_SCHEMA,
-            "mz_sinks",
-        ),
-        MigrationStep::replacement(
             "26.18.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
@@ -157,6 +151,42 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_materialized_views",
+        ),
+        MigrationStep::replacement(
+            "26.21.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_secrets",
+        ),
+        MigrationStep::replacement(
+            "26.21.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_connections",
+        ),
+        MigrationStep::replacement(
+            "26.21.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_continual_tasks",
+        ),
+        MigrationStep::replacement(
+            "26.21.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sinks",
+        ),
+        MigrationStep::replacement(
+            "26.21.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
+        MigrationStep::replacement(
+            "26.21.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
         ),
     ]
 });

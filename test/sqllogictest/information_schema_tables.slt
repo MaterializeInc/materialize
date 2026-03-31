@@ -130,7 +130,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_databases
@@ -158,7 +158,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_indexes
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_connections
@@ -226,15 +226,15 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_secrets
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sources
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_ssh_tunnel_connections
@@ -289,7 +289,23 @@ mz_aws_privatelink_connection_statuses
 VIEW
 materialize
 mz_internal
+mz_builtin_connections
+VIEW
+materialize
+mz_internal
+mz_builtin_continual_tasks
+VIEW
+materialize
+mz_internal
+mz_builtin_indexes
+VIEW
+materialize
+mz_internal
 mz_builtin_materialized_views
+VIEW
+materialize
+mz_internal
+mz_builtin_sources
 VIEW
 materialize
 mz_internal
@@ -370,7 +386,7 @@ VIEW
 materialize
 mz_internal
 mz_continual_tasks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_frontiers

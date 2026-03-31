@@ -1326,33 +1326,6 @@ impl Sink {
         }
     }
 
-    /// Output a combined format string of the sink. For legacy reasons
-    /// if the key-format is none or the key & value formats are
-    /// both the same (either avro or json), we return the value format name,
-    /// otherwise we return a composite name.
-    pub fn combined_format(&self) -> Option<Cow<'_, str>> {
-        match &self.connection {
-            StorageSinkConnection::Kafka(connection) => Some(connection.format.get_format_name()),
-            StorageSinkConnection::Iceberg(_) => None,
-        }
-    }
-
-    /// Output distinct key_format and value_format of the sink.
-    pub fn formats(&self) -> Option<(Option<&str>, &str)> {
-        match &self.connection {
-            StorageSinkConnection::Kafka(connection) => {
-                let key_format = connection
-                    .format
-                    .key_format
-                    .as_ref()
-                    .map(|f| f.get_format_name());
-                let value_format = connection.format.value_format.get_format_name();
-                Some((key_format, value_format))
-            }
-            StorageSinkConnection::Iceberg(_) => None,
-        }
-    }
-
     pub fn connection_id(&self) -> Option<CatalogItemId> {
         self.connection.connection_id()
     }

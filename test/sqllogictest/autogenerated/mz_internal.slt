@@ -740,7 +740,11 @@ mz_aggregates
 mz_aws_connections
 mz_aws_privatelink_connection_status_history
 mz_aws_privatelink_connection_statuses
+mz_builtin_connections
+mz_builtin_continual_tasks
+mz_builtin_indexes
 mz_builtin_materialized_views
+mz_builtin_sources
 mz_catalog_raw
 mz_cluster_deployment_lineage
 mz_cluster_replica_history

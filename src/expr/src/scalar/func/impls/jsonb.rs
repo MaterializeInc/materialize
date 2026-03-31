@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use itertools::Itertools;
 use mz_expr_derive::sqlfunc;
 use mz_lowertest::MzReflect;
 use mz_repr::adt::jsonb::{Jsonb, JsonbRef};
@@ -17,8 +18,10 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
-use mz_sql_parser::ast::RawClusterName;
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{
+    AstInfo, ContinualTaskStmt, Format, FormatSpecifier, RawClusterName, RawItemName,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -368,6 +371,33 @@ fn parse_catalog_privileges<'a>(a: JsonbRef<'a>) -> Result<ArrayRustType<MzAclIt
 //       Consider moving all the `parse_catalog_*` functions into their own module.
 #[sqlfunc]
 fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    fn get_cluster_id(in_cluster: Option<RawClusterName>) -> Result<String, &'static str> {
+        match in_cluster {
+            Some(RawClusterName::Resolved(s)) => Ok(s),
+            Some(RawClusterName::Unresolved(_)) => Err("unresolved IN CLUSTER"),
+            None => Err("missing IN CLUSTER"),
+        }
+    }
+
+    fn get_item_id(item: RawItemName) -> Result<String, &'static str> {
+        match item {
+            RawItemName::Id(id, _, _) => Ok(id),
+            RawItemName::Name(_) => Err("unresolved item name"),
+        }
+    }
+
+    fn format_name<T: AstInfo>(fmt: &Format<T>) -> &'static str {
+        match fmt {
+            Format::Bytes => "bytes",
+            Format::Avro(_) => "avro",
+            Format::Protobuf(_) => "protobuf",
+            Format::Regex(_) => "regex",
+            Format::Csv { .. } => "csv",
+            Format::Json { .. } => "json",
+            Format::Text => "text",
+        }
+    }
+
     let parse = || -> Result<serde_json::Value, String> {
         let mut stmts = mz_sql_parser::parser::parse_statements(a)
             .map_err(|e| format!("failed to parse create_sql: {e}"))?;
@@ -381,16 +411,15 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         use mz_sql_parser::ast::Statement::*;
         let item_type = match stmt {
             CreateSecret(_) => "secret",
-            CreateConnection(_) => "connection",
+            CreateConnection(stmt) => {
+                let connection_type = stmt.connection_type.as_str();
+                info.insert("connection_type", json!(connection_type));
+
+                "connection"
+            }
             CreateView(_) => "view",
             CreateMaterializedView(stmt) => {
-                let Some(in_cluster) = stmt.in_cluster else {
-                    return Err("missing IN CLUSTER".into());
-                };
-                let cluster_id = match in_cluster {
-                    RawClusterName::Unresolved(ident) => ident.into_string(),
-                    RawClusterName::Resolved(s) => s,
-                };
+                let cluster_id = get_cluster_id(stmt.in_cluster)?;
                 info.insert("cluster_id", json!(cluster_id));
 
                 let mut definition = stmt.query.to_ast_string_stable();
@@ -399,12 +428,133 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "materialized-view"
             }
-            CreateContinualTask(_) => "continual-task",
+            CreateContinualTask(stmt) => {
+                let cluster_id = get_cluster_id(stmt.in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+
+                let stmts = stmt.stmts.iter();
+                let definition = stmts
+                    .map(|stmt| match stmt {
+                        ContinualTaskStmt::Delete(s) => s.to_ast_string_stable(),
+                        ContinualTaskStmt::Insert(s) => s.to_ast_string_stable(),
+                    })
+                    .join("; ");
+                info.insert("definition", json!(definition));
+
+                "continual-task"
+            }
             CreateTable(_) | CreateTableFromSource(_) => "table",
-            CreateSource(_) | CreateWebhookSource(_) => "source",
-            CreateSubsource(_) => "subsource",
-            CreateSink(_) => "sink",
-            CreateIndex(_) => "index",
+            CreateSource(stmt) => {
+                let cluster_id = get_cluster_id(stmt.in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+
+                use mz_sql_parser::ast::CreateSourceConnection::*;
+                let (source_type, connection) = match stmt.connection {
+                    Kafka { connection, .. } => ("kafka", Some(connection)),
+                    Postgres { connection, .. } => ("postgres", Some(connection)),
+                    MySql { connection, .. } => ("mysql", Some(connection)),
+                    SqlServer { connection, .. } => ("sql-server", Some(connection)),
+                    LoadGenerator { .. } => ("load-generator", None),
+                };
+                info.insert("source_type", json!(source_type));
+                if let Some(conn) = connection {
+                    let conn_id = get_item_id(conn)?;
+                    info.insert("connection_id", json!(conn_id));
+                }
+
+                if let Some(envelope) = stmt.envelope {
+                    use mz_sql_parser::ast::SourceEnvelope::*;
+                    let envelope_type = match envelope {
+                        None => "none",
+                        Debezium => "debezium",
+                        Upsert { .. } => "upsert",
+                        CdcV2 => "materialize",
+                    };
+                    info.insert("envelope_type", json!(envelope_type));
+                }
+
+                if let Some(format_spec) = stmt.format {
+                    match &format_spec {
+                        FormatSpecifier::Bare(fmt) => {
+                            info.insert("value_format", json!(format_name(fmt)));
+                        }
+                        FormatSpecifier::KeyValue { key, value } => {
+                            info.insert("key_format", json!(format_name(key)));
+                            info.insert("value_format", json!(format_name(value)));
+                        }
+                    }
+                }
+
+                "source"
+            }
+            CreateWebhookSource(stmt) => {
+                info.insert("source_type", json!("webhook"));
+                if stmt.in_cluster.is_some() {
+                    let cluster_id = get_cluster_id(stmt.in_cluster)?;
+                    info.insert("cluster_id", json!(cluster_id));
+                }
+
+                "source"
+            }
+            CreateSubsource(_) => {
+                info.insert("source_type", json!("subsource"));
+
+                "subsource"
+            }
+            CreateSink(stmt) => {
+                let cluster_id = get_cluster_id(stmt.in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+
+                use mz_sql_parser::ast::CreateSinkConnection::*;
+                let (sink_type, connection) = match stmt.connection {
+                    Kafka { connection, .. } => ("kafka", connection),
+                    Iceberg { connection, .. } => ("iceberg", connection),
+                };
+                info.insert("sink_type", json!(sink_type));
+                let conn_id = get_item_id(connection)?;
+                info.insert("connection_id", json!(conn_id));
+
+                if let Some(envelope) = stmt.envelope {
+                    use mz_sql_parser::ast::SinkEnvelope::*;
+                    let envelope_type = match envelope {
+                        Debezium => "debezium",
+                        Upsert => "upsert",
+                    };
+                    info.insert("envelope_type", json!(envelope_type));
+                }
+
+                if let Some(format_spec) = stmt.format {
+                    match &format_spec {
+                        FormatSpecifier::Bare(fmt) => {
+                            let s = format_name(fmt);
+                            info.insert("value_format", json!(s));
+                            info.insert("combined_format", json!(s));
+                        }
+                        FormatSpecifier::KeyValue { key, value } => {
+                            let key_s = format_name(key);
+                            let value_s = format_name(value);
+                            let combined = match key_s == value_s {
+                                true => value_s.to_string(),
+                                false => format!("key-{key_s}-value-{value_s}"),
+                            };
+                            info.insert("key_format", json!(key_s));
+                            info.insert("value_format", json!(value_s));
+                            info.insert("combined_format", json!(combined));
+                        }
+                    }
+                }
+
+                "sink"
+            }
+            CreateIndex(stmt) => {
+                let cluster_id = get_cluster_id(stmt.in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+
+                let on_id = get_item_id(stmt.on_name)?;
+                info.insert("on_id", json!(on_id));
+
+                "index"
+            }
             CreateType(_) => "type",
             _ => return Err("not a CREATE item statement".into()),
         };
