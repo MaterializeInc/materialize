@@ -23,6 +23,8 @@
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
+use std::time::Duration;
+
 use anyhow::anyhow;
 use axum::Json;
 use axum::response::IntoResponse;
@@ -45,6 +47,13 @@ use crate::http::AuthedClient;
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
+
+/// Maximum time an MCP tool call can run before the HTTP response is returned.
+/// Note: this returns a clean JSON-RPC error to the caller, but the underlying
+/// query may continue running on the cluster until it completes or is cancelled
+/// separately (see database-issues#9947 for SELECT timeout gaps).
+const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 // Discovery uses the lightweight view (no JSON schema computation).
 const DISCOVERY_QUERY: &str = "SELECT * FROM mz_internal.mz_mcp_data_products";
 // Details uses the full view with JSON schema.
@@ -374,11 +383,39 @@ async fn handle_mcp_request(
         return StatusCode::OK.into_response();
     }
 
-    // Spawn task for fault isolation
-    let response = mz_ore::task::spawn(|| "mcp_request", async move {
-        handle_mcp_request_inner(&mut client, request, endpoint_type, query_tool_enabled).await
-    })
+    let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
+
+    // Spawn task for fault isolation, with a timeout safety net.
+    let result = tokio::time::timeout(
+        MCP_REQUEST_TIMEOUT,
+        mz_ore::task::spawn(|| "mcp_request", async move {
+            handle_mcp_request_inner(&mut client, request, endpoint_type, query_tool_enabled).await
+        }),
+    )
     .await;
+
+    let response = match result {
+        Ok(inner) => inner,
+        Err(_elapsed) => {
+            warn!(
+                endpoint = %endpoint_type,
+                "MCP request timed out after {:?}",
+                MCP_REQUEST_TIMEOUT,
+            );
+            McpResponse {
+                jsonrpc: "2.0".to_string(),
+                id: request_id,
+                result: None,
+                error: Some(
+                    McpRequestError::QueryExecutionFailed(format!(
+                        "Request timed out after {} seconds.",
+                        MCP_REQUEST_TIMEOUT.as_secs(),
+                    ))
+                    .into(),
+                ),
+            }
+        }
+    };
 
     (StatusCode::OK, Json(response)).into_response()
 }
