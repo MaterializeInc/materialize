@@ -51,27 +51,42 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create pull request
+      - name: Create or update pull request
         if: steps.changes.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH="automated/update-generated-docs-$(date +%Y%m%d)"
-          git checkout -b "$BRANCH"
-          git add doc/developer/generated/
+          BRANCH="automated/update-generated-docs"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          # Check if there's already an open PR from this branch
+          EXISTING_PR=$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Updating existing PR #$EXISTING_PR on branch $BRANCH"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            git merge --no-edit origin/main || true
+          else
+            echo "Creating new branch $BRANCH"
+            git checkout -b "$BRANCH"
+          fi
+
+          git add doc/developer/generated/
           git commit -m "doc: update generated developer documentation
 
           Automated daily refresh of doc/developer/generated/ to reflect
           source changes since each doc was last written.
 
           Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
           git push origin "$BRANCH"
-          gh pr create \
-            --title "doc: update generated developer documentation" \
-            --body "$(cat <<'EOF'
+
+          if [ -z "$EXISTING_PR" ]; then
+            gh pr create \
+              --title "doc: update generated developer documentation" \
+              --body "$(cat <<'EOF'
           ## Summary
 
           Automated daily refresh of `doc/developer/generated/` to reflect source code changes.
@@ -82,8 +97,18 @@ jobs:
 
           Only files under `doc/developer/generated/` are modified.
 
+          ## Review checklist
+
+          - [ ] No unrelated rewording or restructuring of existing text
+          - [ ] No changelog language ("now", "added", "previously", etc.)
+          - [ ] Changes correspond to actual source code changes
+
           🤖 Generated with [Claude Code](https://claude.com/claude-code)
           EOF
           )" \
-            --label "A-doc"
-          gh pr merge "$BRANCH" --auto --squash
+              --label "A-doc" \
+              --reviewer bosconi
+          fi
+          # Automerge is intentionally NOT enabled here.
+          # A human must review and approve before merging to prevent
+          # doc degeneration (see PR #35775 discussion).

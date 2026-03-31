@@ -35,11 +35,40 @@ For each stale doc:
 1. Re-read the source file.
 2. Rewrite the `.md` with updated content and a new `revision` from `git log -1 --format=%h -- <source>`.
 
-**Writing style**: Describe the code's **current state**, not what changed.
-Avoid changelog language like "now", "added", "new", "no longer", "has been removed", "previously", "was replaced".
-Write as if describing the code to someone seeing it for the first time.
-Good: "`MZ_DATABASES` is a `BuiltinMaterializedView` backed by a query over the catalog."
-Bad: "`MZ_DATABASES` is now a `BuiltinMaterializedView` (rather than a `BuiltinTable`)."
+## Editing Existing Documentation
+
+Make surgical edits. Only change text that is:
+  - Factually incorrect
+  - Grammatically broken
+  - Directly related to the task you were given
+
+Do not rephrase, reword, or restructure text that is already correct.
+Treat existing wording as intentional. If a sentence is awkward but
+accurate, leave it alone unless you were specifically asked to improve it.
+
+When updating docs to reflect a code change, touch only the sentences
+that the change invalidates. Everything else stays verbatim.
+
+## Documentation Writing Style
+
+Describe the code's current state, not what changed.
+
+Write as if the reader is seeing the codebase for the first time.
+They have no knowledge of prior implementations, so references to
+what something "used to be" are meaningless to them.
+
+Avoid changelog language:
+  - "now", "added", "new"
+  - "no longer", "has been removed"
+  - "previously", "was replaced"
+  - "changed from", "updated to", "instead of"
+
+Examples:
+  Good: "`MZ_DATABASES` is a `BuiltinMaterializedView` backed by a query over the catalog."
+  Bad:  "`MZ_DATABASES` is now a `BuiltinMaterializedView` (rather than a `BuiltinTable`)."
+
+The "bad" example fails twice: "now" implies a change, and the parenthetical
+references an implementation the reader never saw.
 
 ### 5. Create docs for new files
 
