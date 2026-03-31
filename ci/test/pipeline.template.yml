@@ -162,6 +162,22 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: tla-specs
+        label: "TLA+ model checking"
+        depends_on: []
+        timeout_in_minutes: 10
+        inputs:
+          - "**/*.tla"
+          - "**/*.cfg"
+          - test/tla
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: tla
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
       - id: lint-clippy
         label: Clippy
         command: bin/ci-builder run stable ci/test/lint-clippy.sh
