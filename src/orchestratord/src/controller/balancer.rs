@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::bail;
 use k8s_openapi::{
@@ -609,6 +610,25 @@ impl k8s_controller::Context for Context {
         apply_resource(&service_api, &service).await?;
 
         self.sync_deployment_status(&client, balancer).await?;
+
+        // If the deployment is not yet ready, requeue to check again
+        // shortly. We can't rely solely on the owns(Deployment) trigger
+        // because there's a race between the metadata watcher (which
+        // triggers reconciliation) and the reflector store (which
+        // sync_deployment_status reads from).
+        let ready = balancer
+            .status
+            .as_ref()
+            .map(|status| {
+                status
+                    .conditions
+                    .iter()
+                    .any(|c| c.type_ == "Ready" && c.status == "True")
+            })
+            .unwrap_or(false);
+        if !ready {
+            return Ok(Some(Action::requeue(Duration::from_secs(5))));
+        }
 
         Ok(None)
     }
