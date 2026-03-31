@@ -189,13 +189,6 @@ def is_image_tag_of_release_version(image_tag: str) -> bool:
     )
 
 
-def is_image_tag_of_commit(image_tag: str) -> bool:
-    return (
-        IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR in image_tag
-        or image_tag.startswith(LEGACY_IMAGE_TAG_COMMIT_PREFIX)
-    )
-
-
 def get_version_from_image_tag(image_tag: str) -> str:
     match = VERSION_IN_IMAGE_TAG_PATTERN.match(image_tag)
     assert match is not None, f"Invalid image tag: {image_tag}"

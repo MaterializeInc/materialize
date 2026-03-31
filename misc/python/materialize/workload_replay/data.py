@@ -488,7 +488,6 @@ def create_ingestions(
                         period_s: float,
                         rng: random.Random,
                     ) -> None:
-                        nonlocal stop_event
                         import time
 
                         try:
@@ -568,7 +567,6 @@ def create_ingestions(
                         period_s: float,
                         rng: random.Random,
                     ) -> None:
-                        nonlocal stop_event
                         import time
 
                         try:
@@ -655,7 +653,6 @@ def create_ingestions(
                             period_s: float,
                             rng: random.Random,
                         ) -> None:
-                            nonlocal stop_event
                             import time
 
                             try:

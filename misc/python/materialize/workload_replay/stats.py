@@ -79,12 +79,6 @@ def parse_bytes(s: str) -> int:
     return int(val * mult)
 
 
-def parse_two_bytes(s: str) -> tuple[int, int]:
-    """Parse a string like '100MB / 200MB' into two integers."""
-    a, b = (x.strip() for x in s.split("/", 1))
-    return parse_bytes(a), parse_bytes(b)
-
-
 def parse_percent(s: str) -> float:
     """Parse a percentage string like '45.2%' into a float."""
     return float(s.strip().rstrip("%"))

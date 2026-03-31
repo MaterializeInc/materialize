@@ -101,8 +101,6 @@ class Executor:
         # self.use_ws = self.rng.choice([True, False]) if self.ws else False
 
     def log(self, msg: str) -> None:
-        global logging, lock
-
         if not logging:
             return
 

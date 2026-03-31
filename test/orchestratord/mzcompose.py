@@ -910,18 +910,6 @@ class ObservabilityPodMetricsEnabled(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         return  # TODO: Doesn't work with upgrade: Expected no --collect-pod-metrics in environmentd args, but found it
 
-        orchestratord = get_orchestratord_data()
-        args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
-        expected = "--collect-pod-metrics"
-        if self.value and mods[ObservabilityEnabled]:
-            assert (
-                expected in args
-            ), f"Expected {expected} in environmentd args, but only found {args}"
-        else:
-            assert (
-                expected not in args
-            ), f"Expected no {expected} in environmentd args, but found it: {args}"
-
 
 class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
     @classmethod

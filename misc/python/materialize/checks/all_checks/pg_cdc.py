@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import re
 from random import Random
 from textwrap import dedent
 from typing import Any
@@ -368,7 +367,3 @@ class PgCdcMzNow(Check):
                 INSERT INTO postgres_mz_now_table VALUES (NOW(), 'B3');
                 DELETE FROM postgres_mz_now_table WHERE f2 LIKE '%4%';
                 """))
-
-
-def remove_target_cluster_from_explain(sql: str) -> str:
-    return re.sub(r"\n\s*Target cluster: \w+\n", "", sql)

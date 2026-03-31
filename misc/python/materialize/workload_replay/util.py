@@ -388,15 +388,6 @@ def long_tail_float(lo: float, hi: float, rng: random.Random) -> float:
     return max(lo, min(hi, val))
 
 
-def long_tail_choice(values: list[Any], hot_prob: float, rng: random.Random) -> Any:
-    """Choose a value with bias towards the first few values."""
-    if not values:
-        raise ValueError("empty values")
-    if rng.random() < hot_prob:
-        return rng.choice(values[: min(8, len(values))])
-    return rng.choice(values)
-
-
 def long_tail_text(
     chars: str, max_len: int, hot_pool: list[str], rng: random.Random
 ) -> str:

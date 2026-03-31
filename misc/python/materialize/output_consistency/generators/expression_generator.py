@@ -538,28 +538,6 @@ class ExpressionGenerator:
 
         return matched_ops
 
-    def find_exactly_one_operation_by_predicate(
-        self, match_op: Callable[[DbOperationOrFunction], bool]
-    ) -> DbOperationOrFunction:
-        operations = self.find_operations_by_predicate(match_op)
-        if len(operations) == 0:
-            raise RuntimeError("No operation matches!")
-        if len(operations) > 1:
-            raise RuntimeError(f"More than one operation matches: {operations}")
-
-        return operations[0]
-
-    def find_data_type_with_values_by_type_identifier(
-        self, type_identifier: str
-    ) -> DataTypeWithValues:
-        for (
-            data_type_with_values
-        ) in self.input_data.types_input.all_data_types_with_values:
-            if data_type_with_values.data_type.internal_identifier == type_identifier:
-                return data_type_with_values
-
-        raise RuntimeError(f"No data type found with identifier {type_identifier}")
-
 
 class NoSuitableExpressionFound(Exception):
     def __init__(self, message: str):
