@@ -159,7 +159,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:vX.Y.Z
+  environmentdImageRef: materialize/environmentd:v26.18.0 # Use v26.18.0 or later
   backendSecretName: materialize-backend
   authenticatorKind: Oidc
 ```
