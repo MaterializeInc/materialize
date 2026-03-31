@@ -624,7 +624,7 @@ DROP ROLE <username>;
 
 | Symptom | Possible cause | Resolution |
 |---------|---------------|------------|
-| Console does not show SSO login option | `console_oidc_client_id` nd `console_oidc_scopes` is not set | Set `console_oidc_client_id` to your OIDC client ID |
+| Console does not show SSO login option | `console_oidc_client_id` and `console_oidc_scopes` are not set | Set `console_oidc_client_id` to your OIDC client ID |
 | SSO login redirects fail | Incorrect redirect URI in IdP | Verify the redirect URI is set to `https://<your-console-domain>/auth/callback` |
 | environmentd fails to upgrade | external_login_password_mz_system not set | Ensure the external_login_password_mz_system is configured |
 | "Invalid token" error on psql connection | Wrong or expired JWT token | Obtain a fresh token; verify `oidc_issuer` matches the token's `iss` claim |
