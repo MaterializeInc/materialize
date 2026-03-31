@@ -33,6 +33,8 @@ ALTER TABLE t1 REPLICA IDENTITY FULL;
 INSERT INTO t1 VALUES ('abc', 'abc', 'abc', 'abc');
 INSERT INTO t1 VALUES ('abc ', 'abc ', 'abc ', 'abc ');
 
+ANALYZE;
+
 CREATE PUBLICATION mz_source FOR ALL TABLES;
 
 > BEGIN

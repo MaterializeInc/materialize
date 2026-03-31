@@ -6024,6 +6024,7 @@ def workflow_test_slow_seqno_hold(c: Composition):
             INSERT INTO source1 VALUES (1, NULL);
             ALTER TABLE source1 REPLICA IDENTITY FULL;
             INSERT INTO source1 VALUES (2, NULL);
+            ANALYZE source1;
 
             > CREATE SOURCE "pg_source"
               FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');

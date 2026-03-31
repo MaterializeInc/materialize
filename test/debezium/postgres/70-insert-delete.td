@@ -15,6 +15,7 @@ $ postgres-execute connection=postgres://postgres:postgres@postgres
 CREATE TABLE insert_delete (f1 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE insert_delete REPLICA IDENTITY FULL;
 INSERT INTO insert_delete VALUES (1);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.insert_delete
 

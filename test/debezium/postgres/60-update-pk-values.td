@@ -16,6 +16,7 @@ CREATE TABLE update_pk_values (f1 INTEGER, f2 INTEGER, PRIMARY KEY (f1));
 ALTER TABLE update_pk_values REPLICA IDENTITY FULL;
 INSERT INTO update_pk_values VALUES (1, 10);
 INSERT INTO update_pk_values VALUES (2, 20);
+ANALYZE;
 
 $ schema-registry-wait topic=postgres.public.update_pk_values
 
