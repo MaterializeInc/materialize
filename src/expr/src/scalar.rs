@@ -2721,6 +2721,7 @@ pub enum EvalError {
     AclArrayNullElement,
     MzAclArrayNullElement,
     PrettyError(Box<str>),
+    RedactError(Box<str>),
 }
 
 impl fmt::Display for EvalError {
@@ -2830,6 +2831,7 @@ impl fmt::Display for EvalError {
             }
             EvalError::Parse(e) => e.fmt(f),
             EvalError::PrettyError(e) => e.fmt(f),
+            EvalError::RedactError(e) => e.fmt(f),
             EvalError::ParseHex(e) => e.fmt(f),
             EvalError::Internal(s) => write!(f, "internal error: {}", s),
             EvalError::InfinityOutOfDomain(s) => {
@@ -3133,6 +3135,7 @@ impl RustType<ProtoEvalError> for EvalError {
             EvalError::UnterminatedLikeEscapeSequence => UnterminatedLikeEscapeSequence(()),
             EvalError::Parse(error) => Parse(error.into_proto()),
             EvalError::PrettyError(error) => PrettyError(error.into_proto()),
+            EvalError::RedactError(error) => RedactError(error.into_proto()),
             EvalError::ParseHex(error) => ParseHex(error.into_proto()),
             EvalError::Internal(v) => Internal(v.into_proto()),
             EvalError::InfinityOutOfDomain(v) => InfinityOutOfDomain(v.into_proto()),
@@ -3319,6 +3322,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
                 InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s.into())),
                 PrettyError(s) => Ok(EvalError::PrettyError(s.into())),
+                RedactError(s) => Ok(EvalError::RedactError(s.into())),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
         }

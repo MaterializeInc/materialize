@@ -870,6 +870,9 @@ mod columnation {
                         EvalError::PrettyError(x) => {
                             EvalError::PrettyError(self.string_region.copy(x))
                         }
+                        EvalError::RedactError(x) => {
+                            EvalError::RedactError(self.string_region.copy(x))
+                        }
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
