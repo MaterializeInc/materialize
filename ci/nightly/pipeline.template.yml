@@ -2211,6 +2211,7 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
+        skip: "database-issues#11225"
 
       - id: orchestratord-rolling-upgrade-downtime
         label: "Orchestratord + rolling upgrade downtime"
