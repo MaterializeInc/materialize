@@ -240,7 +240,11 @@ ALTER SYSTEM SET console_oidc_scopes = 'openid';
 ## Step 4. Verify the configuration
 
 1. Navigate to your Materialize console. You should see an option to sign in
-   via your identity provider.
+   via your identity provider via "Use single sign-on".
+
+   ![Materialize console login screen showing the SSO sign-in
+   option](/images/console/console-self-managed-sso.png "Materialize console login screen
+   with SSO option")
 
 1. Sign in through your IdP. After successful authentication, you are redirected
    back to the Materialize console.
