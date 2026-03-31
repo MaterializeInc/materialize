@@ -26,7 +26,7 @@ use mz_catalog::builtin::{
     MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS,
     MZ_ROLES, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
     MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES,
     MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
@@ -34,7 +34,7 @@ use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func,
-    Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
+    Index, MaterializedView, Sink, Table, TableDataSource, Type,
 };
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
@@ -633,9 +633,6 @@ impl CatalogState {
 
                 updates
             }
-            CatalogItem::View(view) => {
-                self.pack_view_update(id, oid, schema_id, name, owner_id, privileges, view, diff)
-            }
             CatalogItem::MaterializedView(mview) => self.pack_materialized_view_update(
                 id, oid, schema_id, name, owner_id, privileges, mview, diff,
             ),
@@ -657,6 +654,7 @@ impl CatalogState {
             CatalogItem::ContinualTask(ct) => self.pack_continual_task_update(
                 id, oid, schema_id, name, owner_id, privileges, ct, diff,
             ),
+            CatalogItem::View(_) => Vec::new(),
         };
 
         if !entry.item().is_temporary() {
@@ -1219,53 +1217,6 @@ impl CatalogState {
         ]);
 
         Ok(BuiltinTableUpdate::row(id, row, diff))
-    }
-
-    fn pack_view_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
-        view: &View,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&view.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    view.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-        let query = match &create_stmt {
-            Statement::CreateView(stmt) => &stmt.definition.query,
-            _ => unreachable!(),
-        };
-
-        let mut query_string = query.to_ast_string_stable();
-        // PostgreSQL appends a semicolon in `pg_views.definition`, we
-        // do the same for compatibility's sake.
-        query_string.push(';');
-
-        vec![BuiltinTableUpdate::row(
-            &*MZ_VIEWS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&query_string),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&view.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        )]
     }
 
     fn pack_materialized_view_update(

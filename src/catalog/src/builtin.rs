@@ -2832,48 +2832,108 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         access: vec![PUBLIC_SELECT],
     }
 });
-pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_views",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_VIEWS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("definition", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_column("create_sql", SqlScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the view."),
-        ("oid", "A PostgreSQL-compatible OID for the view."),
-        (
-            "schema_id",
-            "The ID of the schema to which the view belongs. Corresponds to `mz_schemas.id`.",
-        ),
-        ("name", "The name of the view."),
-        ("definition", "The view definition (a `SELECT` query)."),
-        (
-            "owner_id",
-            "The role ID of the owner of the view. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges belonging to the view."),
-        ("create_sql", "The `CREATE` SQL statement for the view."),
-        (
-            "redacted_create_sql",
-            "The redacted `CREATE` SQL statement for the view.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+pub static MZ_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_views",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_VIEWS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("definition", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the view."),
+            ("oid", "A PostgreSQL-compatible OID for the view."),
+            (
+                "schema_id",
+                "The ID of the schema to which the view belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the view."),
+            ("definition", "The view definition (a `SELECT` query)."),
+            (
+                "owner_id",
+                "The role ID of the owner of the view. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the view."),
+            ("create_sql", "The `CREATE` SQL statement for the view."),
+            (
+                "redacted_create_sql",
+                "The redacted `CREATE` SQL statement for the view.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL definition,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+WITH
+    user_views AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+            data->'value'->>'name' AS name,
+            (mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql'))->>'definition' AS definition,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'view'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '4'
+    ),
+    builtin_views AS (
+        SELECT
+            m.id,
+            v.oid,
+            s.id AS schema_id,
+            v.name,
+            v.definition,
+            's1' AS owner_id,
+            v.privileges,
+            v.create_sql,
+            mz_internal.redact_sql(v.create_sql) AS redacted_create_sql
+        FROM mz_internal.mz_builtin_views v
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = v.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_views
+UNION ALL
+SELECT * FROM builtin_views",
+        access: vec![PUBLIC_SELECT],
+    }
 });
 pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_materialized_views",
@@ -14234,7 +14294,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_SQL_SERVER_SOURCE_TABLES),
         Builtin::Table(&MZ_KAFKA_SOURCE_TABLES),
         Builtin::Table(&MZ_SINKS),
-        Builtin::Table(&MZ_VIEWS),
+        Builtin::MaterializedView(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
         Builtin::Table(&MZ_TYPES),

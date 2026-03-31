@@ -266,7 +266,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_views
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_internal
 mz_activity_log_thinned

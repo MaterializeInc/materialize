@@ -152,6 +152,12 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_pending_cluster_replicas",
         ),
+        MigrationStep::replacement(
+            "26.19.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_views",
+        ),
     ]
 });
 

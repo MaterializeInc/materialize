@@ -90,6 +90,7 @@ ArrangeBy[[Column(0,␠"replica_id")]]-errors  5
 ArrangeBy[[Column(0,␠"role_oid")]]  1
 ArrangeBy[[Column(0,␠"schema_id")]]  6
 ArrangeBy[[Column(0,␠"schema_id")]]-errors  6
+ArrangeBy[[Column(0,␠"schema_name")]]  1
 ArrangeBy[[Column(0,␠"self")]]  1
 ArrangeBy[[Column(0,␠"session_id")]]  1
 ArrangeBy[[Column(0,␠"shard_id"),␠Column(2,␠"collection_timestamp")]]  1
@@ -109,7 +110,7 @@ ArrangeBy[[Column(1,␠"element_id")]]  2
 ArrangeBy[[Column(1,␠"id")]]  1
 ArrangeBy[[Column(1,␠"id")]]-errors  1
 ArrangeBy[[Column(1,␠"id_to_use")]]  1
-ArrangeBy[[Column(1,␠"name")]]  1
+ArrangeBy[[Column(1,␠"name")]]  2
 ArrangeBy[[Column(1,␠"name")]]-errors  1
 ArrangeBy[[Column(1,␠"nspname")]]  1
 ArrangeBy[[Column(1,␠"nspname")]]-errors  1
