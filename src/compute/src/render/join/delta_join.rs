@@ -30,7 +30,6 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::OkErr;
-use timely::dataflow::operators::generic::Session;
 use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 use timely::progress::timestamp::Refines;
@@ -371,13 +370,7 @@ where
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
-                  key,
-                  stream_row,
-                  lookup_row,
-                  initial,
-                  diff1,
-                  output| {
+            move |session: &mut CB<Vec<_>>, key, stream_row, lookup_row, initial, diff1, output| {
                 let mut row_builder = SharedRow::get();
                 let temp_storage = RowArena::new();
 
@@ -392,7 +385,8 @@ where
                     let row = row.as_ref().map(|row| row.cloned()).map_err(Clone::clone);
                     let diff = diff1.clone() * diff2.clone();
                     let data = ((row, time.clone()), initial.clone(), diff);
-                    session.give(data);
+                    use timely::container::PushInto;
+                    session.push_into(data);
                 }
             },
         )
@@ -420,13 +414,7 @@ where
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
-                  key,
-                  stream_row,
-                  lookup_row,
-                  initial,
-                  diff1,
-                  output| {
+            move |session: &mut CB<Vec<_>>, key, stream_row, lookup_row, initial, diff1, output| {
                 if output.is_empty() {
                     return;
                 }
@@ -445,7 +433,8 @@ where
                 {
                     for (time, diff2) in output.drain(..) {
                         let diff = diff1.clone() * diff2.clone();
-                        session.give(((row.clone(), time.clone()), initial.clone(), diff));
+                        use timely::container::PushInto;
+                        session.push_into(((row.clone(), time.clone()), initial.clone(), diff));
                     }
                 }
             },

@@ -2836,7 +2836,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.21.1"
-source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#b3a0d482b6810613b11273356d6bac43802aef73"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#f803be3db4ec97bc36cbace1b59ca82716004e31"
 dependencies = [
  "columnar",
  "columnation",
@@ -2850,7 +2850,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.21.1"
-source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#b3a0d482b6810613b11273356d6bac43802aef73"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#f803be3db4ec97bc36cbace1b59ca82716004e31"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -9955,7 +9955,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "petgraph",
@@ -9976,7 +9976,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
