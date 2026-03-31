@@ -25,10 +25,10 @@ pub struct Identity {
 impl Identity {
     /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
     pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
-        let archive = pkcs12der_from_pem(key, cert)?;
+        let mut archive = pkcs12der_from_pem(key, cert)?;
         Ok(Identity {
-            der: archive.der,
-            pass: archive.pass,
+            der: std::mem::take(&mut archive.der),
+            pass: std::mem::take(&mut archive.pass),
         })
     }
 

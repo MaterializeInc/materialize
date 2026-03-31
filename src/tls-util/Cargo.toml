@@ -20,5 +20,8 @@ tokio = { version = "1.49.0", default-features = false, features = ["fs", "macro
 tokio-postgres = { version = "0.7.15" }
 tracing = "0.1.44"
 
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }
+
 [features]
 default = []

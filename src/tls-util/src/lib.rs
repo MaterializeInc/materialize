@@ -163,12 +163,12 @@ pub fn pkcs12der_from_pem(
 mod tests {
     use super::*;
 
-    #[test]
+    #[mz_ore::test]
     fn pkcs12_archive_needs_drop() {
         assert!(std::mem::needs_drop::<Pkcs12Archive>());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn pkcs12_archive_zeroize_clears_fields() {
         let mut archive = Pkcs12Archive {
             der: vec![0xDE, 0xAD, 0xBE, 0xEF],
@@ -181,7 +181,7 @@ mod tests {
         assert!(archive.pass.is_empty(), "pass was not zeroed");
     }
 
-    #[test]
+    #[mz_ore::test]
     fn pkcs12_archive_implements_zeroize() {
         fn assert_zeroize<T: mz_ore::secure::Zeroize>() {}
         assert_zeroize::<Pkcs12Archive>();
