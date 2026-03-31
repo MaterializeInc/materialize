@@ -269,13 +269,20 @@ authentication over the PostgreSQL wire protocol. Without it, Materialize
 defaults to password authentication.
 {{</ important >}}
 
+<!-- TODO (SangJunBak): Uncomment once v26.19 is released.
 ### Get your token from the console
 
 The easiest way to get an ID token is through the Materialize console:
 
 1. Sign in to the console via SSO.
-1. Click **Connect**.
+1. Click **Connect** in the navigation bar. The connection dialog displays your
+   ID token along with connection instructions.
 1. Copy the provided ID token.
+
+![Materialize console Connect dialog showing the ID
+token](/images/sso-connect-token.png "Materialize console Connect dialog
+with ID token")
+-->
 
 ### Connect with psql
 
