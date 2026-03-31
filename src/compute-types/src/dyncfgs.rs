@@ -343,6 +343,15 @@ pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "If set, skip fetching or processing the snapshot data for subscribes when possible.",
 );
 
+/// Temporary flag to de-risk the rollout of a release-blocker fix.
+///
+/// TODO: Remove after one, or a couple, releases.
+pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
+    "compute_mv_sink_advance_persist_frontiers",
+    true,
+    "Whether the MV sink's write operator advances its internal persist frontiers to the as_of.",
+);
+
 /// Adds the full set of all compute `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -387,4 +396,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
+        .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
 }
