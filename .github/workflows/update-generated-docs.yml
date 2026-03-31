@@ -106,7 +106,7 @@ jobs:
           🤖 Generated with [Claude Code](https://claude.com/claude-code)
           EOF
           )" \
-              --label "A-doc" \
+              --label "A-docs" \
               --reviewer bosconi
           fi
           # Automerge is intentionally NOT enabled here.
