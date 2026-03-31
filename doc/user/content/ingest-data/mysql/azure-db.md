@@ -6,6 +6,7 @@ menu:
     parent: "mysql"
     name: "Azure DB"
     indentifier: "mysql-azure-db"
+    weight: 30
 ---
 
 This page shows you how to stream data from [Azure DB for MySQL](https://azure.microsoft.com/en-us/products/MySQL)

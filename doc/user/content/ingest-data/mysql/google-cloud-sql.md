@@ -6,6 +6,7 @@ menu:
     parent: "mysql"
     name: "Google Cloud SQL"
     identifier: "mysql-google-cloudsql"
+    weight: 40
 ---
 
 This page shows you how to stream data from [Google Cloud SQL for MySQL](https://cloud.google.com/sql/MySQL)
