@@ -30,7 +30,7 @@ use axum::Json;
 use axum::response::IntoResponse;
 use http::StatusCode;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_OBSERVATORY,
+    ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_OBSERVATORY, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
@@ -365,6 +365,7 @@ async fn handle_mcp_request(
     }
 
     let query_tool_enabled = ENABLE_MCP_AGENTS_QUERY_TOOL.get(dyncfgs);
+    let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
 
     let user = client.client.session().user().name.clone();
     let is_notification = request.id.is_none();
@@ -389,7 +390,14 @@ async fn handle_mcp_request(
     let result = tokio::time::timeout(
         MCP_REQUEST_TIMEOUT,
         mz_ore::task::spawn(|| "mcp_request", async move {
-            handle_mcp_request_inner(&mut client, request, endpoint_type, query_tool_enabled).await
+            handle_mcp_request_inner(
+                &mut client,
+                request,
+                endpoint_type,
+                query_tool_enabled,
+                max_response_size,
+            )
+            .await
         }),
     )
     .await;
@@ -425,11 +433,19 @@ async fn handle_mcp_request_inner(
     request: McpRequest,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    max_response_size: usize,
 ) -> McpResponse {
     // Extract request ID (guaranteed to be Some since notifications are filtered earlier)
     let request_id = request.id.clone().unwrap_or(serde_json::Value::Null);
 
-    let result = handle_mcp_method(client, &request, endpoint_type, query_tool_enabled).await;
+    let result = handle_mcp_method(
+        client,
+        &request,
+        endpoint_type,
+        query_tool_enabled,
+        max_response_size,
+    )
+    .await;
 
     match result {
         Ok(result_value) => McpResponse {
@@ -461,6 +477,7 @@ async fn handle_mcp_method(
     request: &McpRequest,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     // Validate JSON-RPC version
     if request.jsonrpc != "2.0" {
@@ -475,11 +492,18 @@ async fn handle_mcp_method(
         }
         McpMethod::ToolsList => {
             debug!(endpoint = %endpoint_type, "Processing tools/list");
-            handle_tools_list(endpoint_type, query_tool_enabled).await
+            handle_tools_list(endpoint_type, query_tool_enabled, max_response_size).await
         }
         McpMethod::ToolsCall(params) => {
             debug!(tool = %params, endpoint = %endpoint_type, "Processing tools/call");
-            handle_tools_call(client, params, endpoint_type, query_tool_enabled).await
+            handle_tools_call(
+                client,
+                params,
+                endpoint_type,
+                query_tool_enabled,
+                max_response_size,
+            )
+            .await
         }
         McpMethod::Unknown => Err(McpRequestError::MethodNotFound(
             "unknown method".to_string(),
@@ -501,7 +525,10 @@ async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, 
 async fn handle_tools_list(
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
+    let size_hint = format!("Response limit: {} MB.", max_response_size / 1_000_000);
+
     let tools = match endpoint_type {
         McpEndpointType::Agents => {
             let mut tools = vec![
@@ -530,7 +557,7 @@ async fn handle_tools_list(
                 },
                 ToolDefinition {
                     name: "read_data_product".to_string(),
-                    description: "Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product.".to_string(),
+                    description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -555,7 +582,7 @@ async fn handle_tools_list(
             if query_tool_enabled {
                 tools.push(ToolDefinition {
                     name: "query".to_string(),
-                    description: "Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views.".to_string(),
+                    description: format!("Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
                         "properties": {
@@ -575,32 +602,30 @@ async fn handle_tools_list(
             tools
         }
         McpEndpointType::Observatory => {
-            vec![
-                ToolDefinition {
-                    name: "query_system_catalog".to_string(),
-                    description: concat!(
-                        "Query Materialize system catalog tables for troubleshooting and observability. ",
-                        "Only mz_*, pg_catalog, and information_schema tables are accessible.\n\n",
-                        "Key tables by scenario:\n",
-                        "- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n",
-                        "- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n",
-                        "- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n",
-                        "- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n",
-                        "- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\n",
-                        "Use SHOW TABLES FROM mz_internal or mz_catalog to discover more tables.",
-                    ).to_string(),
-                    input_schema: json!({
-                        "type": "object",
-                        "properties": {
-                            "sql_query": {
-                                "type": "string",
-                                "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"
-                            }
-                        },
-                        "required": ["sql_query"]
-                    }),
-                },
-            ]
+            vec![ToolDefinition {
+                name: "query_system_catalog".to_string(),
+                description: concat!(
+                    "Query Materialize system catalog tables for troubleshooting and observability. ",
+                    "Only mz_*, pg_catalog, and information_schema tables are accessible.\n\n",
+                    "Key tables by scenario:\n",
+                    "- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n",
+                    "- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n",
+                    "- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n",
+                    "- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n",
+                    "- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\n",
+                    "Use SHOW TABLES FROM mz_internal or mz_catalog to discover more tables.",
+                ).to_owned() + &format!(" {size_hint}"),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "sql_query": {
+                            "type": "string",
+                            "description": "PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"
+                        }
+                    },
+                    "required": ["sql_query"]
+                }),
+            }]
         }
     };
 
@@ -612,16 +637,24 @@ async fn handle_tools_call(
     params: &ToolsCallParams,
     endpoint_type: McpEndpointType,
     query_tool_enabled: bool,
+    max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     match (endpoint_type, params) {
         (McpEndpointType::Agents, ToolsCallParams::GetDataProducts(_)) => {
-            get_data_products(client).await
+            get_data_products(client, max_response_size).await
         }
         (McpEndpointType::Agents, ToolsCallParams::GetDataProductDetails(p)) => {
-            get_data_product_details(client, &p.name).await
+            get_data_product_details(client, &p.name, max_response_size).await
         }
         (McpEndpointType::Agents, ToolsCallParams::ReadDataProduct(p)) => {
-            read_data_product(client, &p.name, p.limit, p.cluster.as_deref()).await
+            read_data_product(
+                client,
+                &p.name,
+                p.limit,
+                p.cluster.as_deref(),
+                max_response_size,
+            )
+            .await
         }
         (McpEndpointType::Agents, ToolsCallParams::Query(_)) if !query_tool_enabled => {
             Err(McpRequestError::ToolNotFound(
@@ -629,10 +662,10 @@ async fn handle_tools_call(
             ))
         }
         (McpEndpointType::Agents, ToolsCallParams::Query(p)) => {
-            execute_query(client, &p.cluster, &p.sql_query).await
+            execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
         }
         (McpEndpointType::Observatory, ToolsCallParams::QuerySystemCatalog(p)) => {
-            query_system_catalog(client, &p.sql_query).await
+            query_system_catalog(client, &p.sql_query, max_response_size).await
         }
         // Tool called on wrong endpoint
         (endpoint, tool) => Err(McpRequestError::ToolNotFound(format!(
@@ -676,16 +709,27 @@ async fn execute_sql(
     ))
 }
 
-async fn get_data_products(client: &mut AuthedClient) -> Result<McpResult, McpRequestError> {
-    debug!("Executing get_data_products");
-    let rows = execute_sql(client, DISCOVERY_QUERY).await?;
-    debug!("get_data_products returned {} rows", rows.len());
-    if rows.is_empty() {
-        warn!("No data products found - indexes must have comments");
-    }
-
+/// Serialize rows to JSON and enforce the response size cap.
+///
+/// If the serialized response exceeds `max_size` bytes, returns an error
+/// telling the agent to narrow its query. This mirrors how the HTTP SQL
+/// endpoint handles `max_result_size` in sql.rs — fail cleanly rather
+/// than silently truncating.
+fn format_rows_response(
+    rows: Vec<Vec<serde_json::Value>>,
+    max_size: usize,
+) -> Result<McpResult, McpRequestError> {
     let text =
         serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
+
+    if text.len() > max_size {
+        return Err(McpRequestError::QueryExecutionFailed(format!(
+            "Response size ({} bytes) exceeds the {} byte limit. \
+             Use LIMIT or WHERE to narrow your query.",
+            text.len(),
+            max_size,
+        )));
+    }
 
     Ok(McpResult::ToolContent(ToolContentResult {
         content: vec![ContentBlock {
@@ -695,9 +739,21 @@ async fn get_data_products(client: &mut AuthedClient) -> Result<McpResult, McpRe
     }))
 }
 
+async fn get_data_products(
+    client: &mut AuthedClient,
+    max_response_size: usize,
+) -> Result<McpResult, McpRequestError> {
+    debug!("Executing get_data_products");
+    let rows = execute_sql(client, DISCOVERY_QUERY).await?;
+    debug!("get_data_products returned {} rows", rows.len());
+
+    format_rows_response(rows, max_response_size)
+}
+
 async fn get_data_product_details(
     client: &mut AuthedClient,
     name: &str,
+    max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     debug!(name = %name, "Executing get_data_product_details");
 
@@ -709,15 +765,7 @@ async fn get_data_product_details(
         return Err(McpRequestError::DataProductNotFound(name.to_string()));
     }
 
-    let text =
-        serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
-
-    Ok(McpResult::ToolContent(ToolContentResult {
-        content: vec![ContentBlock {
-            content_type: "text".to_string(),
-            text,
-        }],
-    }))
+    format_rows_response(rows, max_response_size)
 }
 
 /// Read rows from a data product. Issues a single read-only query.
@@ -732,6 +780,7 @@ async fn read_data_product(
     name: &str,
     limit: u32,
     cluster_override: Option<&str>,
+    max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     debug!(name = %name, limit = limit, cluster_override = ?cluster_override, "Executing read_data_product");
 
@@ -766,15 +815,7 @@ async fn read_data_product(
 
     let rows = execute_sql(client, &read_query).await?;
 
-    let text =
-        serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
-
-    Ok(McpResult::ToolContent(ToolContentResult {
-        content: vec![ContentBlock {
-            content_type: "text".to_string(),
-            text,
-        }],
-    }))
+    format_rows_response(rows, max_response_size)
 }
 
 /// Validates query is a single SELECT, SHOW, or EXPLAIN statement.
@@ -818,6 +859,7 @@ async fn execute_query(
     client: &mut AuthedClient,
     cluster: &str,
     sql_query: &str,
+    max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     debug!(cluster = %cluster, "Executing user query");
 
@@ -833,20 +875,13 @@ async fn execute_query(
 
     let rows = execute_sql(client, &combined_query).await?;
 
-    let text =
-        serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
-
-    Ok(McpResult::ToolContent(ToolContentResult {
-        content: vec![ContentBlock {
-            content_type: "text".to_string(),
-            text,
-        }],
-    }))
+    format_rows_response(rows, max_response_size)
 }
 
 async fn query_system_catalog(
     client: &mut AuthedClient,
     sql_query: &str,
+    max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     debug!("Executing query_system_catalog");
 
@@ -860,15 +895,7 @@ async fn query_system_catalog(
     // Read-only safety is enforced by validate_readonly_query above.
     let rows = execute_sql(client, sql_query).await?;
 
-    let text =
-        serde_json::to_string_pretty(&rows).map_err(|e| McpRequestError::Internal(anyhow!(e)))?;
-
-    Ok(McpResult::ToolContent(ToolContentResult {
-        content: vec![ContentBlock {
-            content_type: "text".to_string(),
-            text,
-        }],
-    }))
+    format_rows_response(rows, max_response_size)
 }
 
 /// Collects table references from SQL AST with their schema qualification.
@@ -1397,7 +1424,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agents_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agents, false)
+        let result = handle_tools_list(McpEndpointType::Agents, false, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1424,7 +1451,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn test_tools_list_agents_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Agents, true)
+        let result = handle_tools_list(McpEndpointType::Agents, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1453,7 +1480,7 @@ mod tests {
     async fn test_tools_list_observatory_unaffected_by_query_flag() {
         // Observatory endpoint should not be affected by the query tool flag
         for flag in [true, false] {
-            let result = handle_tools_list(McpEndpointType::Observatory, flag)
+            let result = handle_tools_list(McpEndpointType::Observatory, flag, 1_000_000)
                 .await
                 .unwrap();
             let McpResult::ToolsList(list) = result else {
@@ -1469,6 +1496,48 @@ mod tests {
                 "query tool should never appear on observatory"
             );
         }
+    }
+
+    // ── Response size cap tests ────────────────────────────────────────
+
+    #[mz_ore::test]
+    fn test_format_rows_response_within_limit() {
+        let rows = vec![vec![json!("a"), json!(1)], vec![json!("b"), json!(2)]];
+        let result = format_rows_response(rows, 1_000_000).unwrap();
+        let McpResult::ToolContent(content) = result else {
+            panic!("Expected ToolContent");
+        };
+        assert_eq!(content.content.len(), 1);
+        assert!(content.content[0].text.contains("\"a\""));
+        assert!(content.content[0].text.contains("\"b\""));
+    }
+
+    #[mz_ore::test]
+    fn test_format_rows_response_errors_when_over_limit() {
+        let rows: Vec<Vec<serde_json::Value>> = (0..100)
+            .map(|i| vec![json!(format!("row_{}", i)), json!(i)])
+            .collect();
+        let err = format_rows_response(rows, 500).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("exceeds the 500 byte limit"),
+            "Error should mention the size limit, got: {msg}"
+        );
+        assert!(
+            msg.contains("Use LIMIT or WHERE"),
+            "Error should suggest narrowing the query, got: {msg}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_format_rows_response_empty_rows() {
+        let rows: Vec<Vec<serde_json::Value>> = vec![];
+        let result = format_rows_response(rows, 1000).unwrap();
+        let McpResult::ToolContent(content) = result else {
+            panic!("Expected ToolContent");
+        };
+        assert_eq!(content.content.len(), 1);
+        assert_eq!(content.content[0].text, "[]");
     }
 
     #[mz_ore::test]
