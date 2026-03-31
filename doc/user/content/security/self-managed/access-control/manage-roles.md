@@ -36,6 +36,10 @@ command](/security/appendix/appendix-command-privileges/)
 
 {{% include-headless "/headless/rbac-sm/create-users" %}}
 
+{{< note >}}
+{{% include-headless "/headless/rbac-sm/oidc-auto-provisioned-roles" %}}
+{{</ note >}}
+
 {{< annotation type="Privilege(s) required to run the command" >}}
 {{% include-headless "/headless/sql-command-privileges/create-role" %}}
 {{</ annotation>}}

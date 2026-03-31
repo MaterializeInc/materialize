@@ -326,20 +326,57 @@ You can also obtain an ID token outside the console using OIDC CLI tools such as
 
 ## Auto-provisioned roles
 
-When a user authenticates via OIDC and no matching Materialize role exists, the
-role is **automatically created**. The role name is derived from the JWT claim
-specified by `oidc_authentication_claim` (default: `sub`).
+Each user who authenticates via OIDC is associated with a single database role
+in Materialize. When a user signs in and no matching role exists, Materialize
+**automatically creates** a role for them. The role name is the value of the JWT
+claim configured in `oidc_authentication_claim`.
+
+For example, if `oidc_authentication_claim` is set to `email` and a user signs
+in with the following JWT:
+
+```json
+{
+  "sub": "auth0|abc123",
+  "email": "alice@your-org.com",
+  "name": "Alice",
+  "iat": 1516239022
+}
+```
+
+Materialize creates a role named `alice@your-org.com`.
 
 Auto-provisioned roles:
 
-- Have default privileges
-- Must be granted additional privileges through RBAC.
+- Have default privileges only.
+- Must be granted additional privileges through
+  [RBAC](/security/self-managed/access-control/manage-roles/).
+- Are not automatically removed when the user is removed from the IdP. See
+  [De-provisioning users](#de-provisioning-users) for cleanup instructions.
+
+{{< note >}}
+If the claim value does not match an existing role, Materialize auto-provisions
+a new role. To avoid orphaned roles, verify the claim mapping before switching
+users over. Using [jwt.io](https://jwt.io), you can confirm the claim value
+matches the existing SQL username.
+{{</ note >}}
 
 {{< important >}}
 Materialize does not support mapping IdP groups to database roles. After a user
 is auto-provisioned, configure their privileges separately using
 [RBAC](/security/self-managed/access-control/manage-roles/).
 {{</ important >}}
+
+### Auditing auto-provisioned roles
+
+To view which roles were auto-provisioned via OIDC, query the
+`autoprovisionsource` column in `mz_roles`:
+
+```mzsql
+SELECT name, autoprovisionsource FROM mz_roles;
+```
+
+Roles created through OIDC authentication will have `autoprovisionsource` set to
+`oidc`.
 
 ## Service accounts
 
@@ -626,25 +663,6 @@ ALTER SYSTEM SET oidc_authentication_claim = 'email';
 When `alice@your-org.com` signs in via OIDC, Materialize resolves the `email`
 claim from the JWT and matches it to the existing `alice@your-org.com` role.
 The user retains all privileges and object ownership from the original role.
-
-{{< note >}}
-If the claim value does not match an existing role, Materialize auto-provisions
-a new role. To avoid orphaned roles, verify the claim mapping before switching
-users over. Using [jwt.io](https://jwt.io), you can confirm the claim value matches the existing SQL username.
-{{</ note >}}
-
-
-## Auditing
-
-To view which roles were auto-provisioned via OIDC, query the
-`autoprovisionsource` column in `mz_roles`:
-
-```mzsql
-SELECT name, autoprovisionsource FROM mz_roles;
-```
-
-Roles created through OIDC authentication will have `autoprovisionsource` set to
-`oidc`.
 
 ## Troubleshooting
 
