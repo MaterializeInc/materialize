@@ -126,7 +126,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
                                 tracing::info!(
                                     "ts: {:?} Definite replication error detected in statistics operator: {def_err}, exiting", ts
                                 );
-                                break;
+                                return Ok(());
                             }
                         }
                     }
