@@ -364,7 +364,7 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
 
 struct AppendEnvelopeHandler {
     ctx: WriterContext,
-    /// Arrow schema with only user columns (no `diff`/`mz_timestamp`), used by
+    /// Arrow schema with only user columns (no `_mz_diff`/`_mz_timestamp`), used by
     /// [`ArrowBuilder`] to serialize row data before the extra columns are appended.
     user_schema_for_append: Arc<ArrowSchema>,
 }
@@ -375,7 +375,7 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
         _connection: &IcebergSinkConnection,
         _materialize_arrow_schema: &Arc<ArrowSchema>,
     ) -> anyhow::Result<Self> {
-        // arrow_schema already includes diff + mz_timestamp (added in render_sink); strip
+        // arrow_schema already includes _mz_diff + _mz_timestamp (added in render_sink); strip
         // the last two fields so ArrowBuilder only processes the user columns.
         let n = ctx.arrow_schema.fields().len().saturating_sub(2);
         let user_schema_for_append =
@@ -410,7 +410,7 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
     }
 
     /// Every change is written as a plain data row: the `before` half (if present) gets
-    /// `diff = -1` and the `after` half gets `diff = +1`. Both carry the same `mz_timestamp`.
+    /// `_mz_diff = -1` and the `after` half gets `_mz_diff = +1`. Both carry the same `_mz_timestamp`.
     fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch> {
         let mut builder = ArrowBuilder::new_with_schema(
             Arc::clone(&self.user_schema_for_append),
@@ -992,15 +992,19 @@ fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
     ArrowSchema::new(fields)
 }
 
-/// Build a new Arrow schema by appending `diff` (Int32) and `mz_timestamp` (Int64) columns.
+/// Build a new Arrow schema by appending `_mz_diff` (Int32) and `_mz_timestamp` (Int64) columns.
 /// These are user-visible Iceberg columns written in append mode. Parquet field IDs are
 /// assigned sequentially after the existing maximum field ID so the extended schema can
 /// be converted to a valid Iceberg schema via `arrow_schema_to_schema`.
 #[allow(clippy::disallowed_types)]
 fn build_schema_with_append_columns(schema: &ArrowSchema) -> ArrowSchema {
     let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
-    fields.push(Arc::new(Field::new("diff", DataType::Int32, false)));
-    fields.push(Arc::new(Field::new("mz_timestamp", DataType::Int64, false)));
+    fields.push(Arc::new(Field::new("_mz_diff", DataType::Int32, false)));
+    fields.push(Arc::new(Field::new(
+        "_mz_timestamp",
+        DataType::Int64,
+        false,
+    )));
 
     add_field_ids_to_arrow_schema(ArrowSchema::new(fields).with_metadata(schema.metadata().clone()))
 }
@@ -2269,7 +2273,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
 
                 Ok(if sink.envelope == SinkEnvelope::Append {
                     // For append mode, extend the Arrow and Iceberg schemas with the user-visible
-                    // `diff` and `mz_timestamp` columns. The minter uses `iceberg_schema` to create
+                    // `_mz_diff` and `_mz_timestamp` columns. The minter uses `iceberg_schema` to create
                     // the Iceberg table, and `write_data_files` uses `arrow_schema_with_ids` when
                     // merging metadata. Both must include these columns before any operator starts.
                     let extended_arrow = build_schema_with_append_columns(&arrow_schema_with_ids);

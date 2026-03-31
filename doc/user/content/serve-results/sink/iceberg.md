@@ -228,7 +228,7 @@ CREATE SINK <sink_name>
 ### Append mode
 
 In append mode, no `KEY` clause is used. The Iceberg table includes all source
-columns plus `diff` (`int`) and `mz_timestamp` (`long`).
+columns plus `_mz_diff` (`int`) and `_mz_timestamp` (`long`).
 
 ```mzsql
 CREATE SINK <sink_name>

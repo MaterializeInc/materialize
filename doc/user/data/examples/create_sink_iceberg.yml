@@ -97,10 +97,10 @@
     - name: "**MODE APPEND**"
       description: |
         Writes all changes as data rows instead of using Iceberg delete files.
-        Two extra columns are appended to the Iceberg table: `diff` (`int`,
-        `+1` for inserts, `-1` for deletes) and `mz_timestamp` (`long`). An
-        update produces two rows: one with `diff = -1` (old values) and one
-        with `diff = +1` (new values). No `KEY` clause is permitted. See
+        Two extra columns are appended to the Iceberg table: `_mz_diff` (`int`,
+        `+1` for inserts, `-1` for deletes) and `_mz_timestamp` (`long`). An
+        update produces two rows: one with `_mz_diff = -1` (old values) and one
+        with `_mz_diff = +1` (new values). No `KEY` clause is permitted. See
         [Append mode](#append-mode).
     - name: "**COMMIT INTERVAL** `'<interval>'`"
       description: |
@@ -127,7 +127,7 @@
 - name: "example-create-iceberg-sink-append"
   description: |
     Create an Iceberg sink in append mode. All changes are written as data
-    rows with `diff` and `mz_timestamp` columns:
+    rows with `_mz_diff` and `_mz_timestamp` columns:
   code: |
     CREATE SINK events_log_iceberg
       IN CLUSTER analytics_cluster

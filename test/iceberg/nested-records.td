@@ -141,7 +141,7 @@ SELECT id, rec.required_field, rec.optional_field FROM iceberg_scan('s3://test-b
 3 <null> <null>
 
 # Test MODE APPEND with nested record types.
-# Verify that diff and mz_timestamp appear alongside nested struct fields.
+# Verify that _mz_diff and _mz_timestamp appear alongside nested struct fields.
 
 > CREATE SINK nested_record_append_sink
     FROM users_with_address
@@ -156,22 +156,22 @@ SELECT id, rec.required_field, rec.optional_field FROM iceberg_scan('s3://test-b
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 $ duckdb-query name=nested_iceberg
-SELECT id, name, addr.street, addr.city, addr.zip, diff FROM iceberg_scan('s3://test-bucket/default_namespace/nested_record_append_table') ORDER BY mz_timestamp, id
+SELECT id, name, addr.street, addr.city, addr.zip, _mz_diff FROM iceberg_scan('s3://test-bucket/default_namespace/nested_record_append_table') ORDER BY _mz_timestamp, id
 1 Alice 999 New St New Town 99999 1
 2 Bob 456 Oak Ave Shelbyville 67890 1
 3 Charlie 789 Pine Rd Capital City 11111 1
 
 $ duckdb-query name=nested_iceberg
-SELECT count(*) FROM iceberg_scan('s3://test-bucket/default_namespace/nested_record_append_table') WHERE mz_timestamp IS NOT NULL
+SELECT count(*) FROM iceberg_scan('s3://test-bucket/default_namespace/nested_record_append_table') WHERE _mz_timestamp IS NOT NULL
 3
 
-# Update a row: should produce diff=-1 (old) and diff=+1 (new) at the same timestamp.
+# Update a row: should produce _mz_diff=-1 (old) and _mz_diff=+1 (new) at the same timestamp.
 > UPDATE users_with_address SET addr = ROW('1 Updated St', 'New City', 55555) WHERE id = 2;
 
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
 
 $ duckdb-query name=nested_iceberg
-SELECT id, addr.city, diff FROM iceberg_scan('s3://test-bucket/default_namespace/nested_record_append_table') ORDER BY mz_timestamp, id, diff
+SELECT id, addr.city, _mz_diff FROM iceberg_scan('s3://test-bucket/default_namespace/nested_record_append_table') ORDER BY _mz_timestamp, id, _mz_diff
 1 New Town 1
 2 Shelbyville 1
 3 Capital City 1

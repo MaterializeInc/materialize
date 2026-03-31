@@ -117,13 +117,13 @@ columns are appended to the Iceberg table:
 
 | Column | Iceberg type | Description |
 |--------|-------------|-------------|
-| `diff` | `int` | `+1` for insertions, `-1` for deletions. |
-| `mz_timestamp` | `long` | The Materialize logical timestamp of the change. |
+| `_mz_diff` | `int` | `+1` for insertions, `-1` for deletions. |
+| `_mz_timestamp` | `long` | The Materialize logical timestamp of the change. |
 
-- An **insert** produces one row with `diff = +1`.
-- A **delete** produces one row with `diff = -1`.
-- An **update** produces two rows: one with `diff = -1` (the old value) and
-  one with `diff = +1` (the new value). Both carry the same `mz_timestamp`.
+- An **insert** produces one row with `_mz_diff = +1`.
+- A **delete** produces one row with `_mz_diff = -1`.
+- An **update** produces two rows: one with `_mz_diff = -1` (the old value) and
+  one with `_mz_diff = +1` (the new value). Both carry the same `_mz_timestamp`.
 
 No `KEY` clause is permitted with `MODE APPEND`.
 
@@ -215,7 +215,7 @@ results.
 example="example-create-iceberg-sink-append" %}}
 
 The Iceberg table will contain all columns from `user_events` plus two
-additional columns: `diff` and `mz_timestamp`. See [Append
+additional columns: `_mz_diff` and `_mz_timestamp`. See [Append
 mode](#append-mode).
 
 ## Related pages
