@@ -1,4 +1,4 @@
-#\!/usr/bin/env python3
+#!/usr/bin/env python3
 """Generate CastGraph.lean from cast_corpus.json."""
 
 import json
@@ -24,15 +24,15 @@ def main():
         to_ty = c["to"]
         ctx = c["context"]
         comma = "," if i < len(casts) - 1 else ""
-        lines.append(f"  ⟨.{from_ty}, .{to_ty}, .{ctx}⟩{comma}")
+        lines.append(f"  \u27e8.{from_ty}, .{to_ty}, .{ctx}\u27e9{comma}")
 
     lines.append("]")
     lines.append("")
-    lines.append("def hasCast (from to : ScalarBaseType) (ctx : CastContext) : Bool :=")
-    lines.append("  allCasts.any fun e => e.from == from && e.to == to && e.ctx == ctx")
+    lines.append("def hasCast (s t : ScalarBaseType) (ctx : CastContext) : Bool :=")
+    lines.append("  allCasts.any fun e => e.src == s && e.tgt == t && e.ctx == ctx")
     lines.append("")
-    lines.append("def hasImplicitCast (from to : ScalarBaseType) : Bool :=")
-    lines.append("  hasCast from to .Implicit")
+    lines.append("def hasImplicitCast (s t : ScalarBaseType) : Bool :=")
+    lines.append("  hasCast s t .Implicit")
     lines.append("")
 
     with open(OUTPUT_PATH, "w") as f:

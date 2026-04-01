@@ -18,15 +18,15 @@ import FormalTypeSystem.CastGraph
 open ScalarBaseType CastContext
 
 /-- Implicit-cast targets from a given source type. -/
-def implicitTargets (from : ScalarBaseType) : List ScalarBaseType :=
-  (allCasts.toList.filter fun e => e.from == from && e.ctx == .Implicit).map (·.to)
+def implicitTargets (s : ScalarBaseType) : List ScalarBaseType :=
+  (allCasts.toList.filter fun e => e.src == s && e.ctx == .Implicit).map (·.tgt)
 
 /-- Bounded BFS reachability via implicit casts. -/
 def reachableFrom (fuel : Nat) (visited frontier : List ScalarBaseType) : List ScalarBaseType :=
   match fuel with
   | 0 => visited
   | fuel' + 1 =>
-    let newNodes := frontier.bind implicitTargets
+    let newNodes := frontier.flatMap implicitTargets
     let unvisited := newNodes.filter fun t => !visited.contains t
     match unvisited with
     | [] => visited
@@ -37,11 +37,11 @@ def canReachSelf (t : ScalarBaseType) : Bool :=
   let targets := implicitTargets t
   (reachableFrom allTypes.length targets targets).contains t
 
-/-- P1: No duplicate cast entries. Each (from, to) pair appears at most once. -/
+/-- P1: No duplicate cast entries. Each (src, tgt) pair appears at most once. -/
 def noDupPairs : Bool :=
   let entries := allCasts.toList
   entries.enum.all fun ⟨i, e⟩ =>
-    !(entries.drop (i + 1) |>.any fun e' => e.from == e'.from && e.to == e'.to)
+    !(entries.drop (i + 1) |>.any fun e' => e.src == e'.src && e.tgt == e'.tgt)
 
 theorem no_duplicate_casts : noDupPairs = true := by native_decide
 
@@ -62,10 +62,10 @@ theorem numeric_implicit_casts_are_dag :
 
 /-- P4: Every type with implicit casts also has some cast to String. -/
 def implicitSources : List ScalarBaseType :=
-  (allCasts.toList.filter fun e => e.ctx == .Implicit).map (·.from)
+  (allCasts.toList.filter fun e => e.ctx == .Implicit).map (·.src)
 
 def hasAnyStringCast (t : ScalarBaseType) : Bool :=
-  allCasts.any fun e => e.from == t && e.to == .String
+  t == .String || allCasts.any fun e => e.src == t && e.tgt == .String
 
 def allImplicitSourcesHaveStringCast : Bool :=
   implicitSources.all hasAnyStringCast

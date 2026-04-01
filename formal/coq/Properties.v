@@ -108,6 +108,7 @@ Definition implicit_sources : list ScalarBaseType :=
     (filter (fun e => CastContext_beq (cast_ctx e) Implicit) all_casts).
 
 Definition has_any_string_cast (t : ScalarBaseType) : bool :=
+  ScalarBaseType_beq t String ||
   existsb (fun e =>
     ScalarBaseType_beq (cast_from e) t &&
     ScalarBaseType_beq (cast_to e) String

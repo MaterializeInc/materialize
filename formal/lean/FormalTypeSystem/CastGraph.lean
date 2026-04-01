@@ -219,8 +219,8 @@ def allCasts : Array CastEntry := #[
   ⟨.AclItem, .MzAclItem, .Explicit⟩
 ]
 
-def hasCast (from to : ScalarBaseType) (ctx : CastContext) : Bool :=
-  allCasts.any fun e => e.from == from && e.to == to && e.ctx == ctx
+def hasCast (s t : ScalarBaseType) (ctx : CastContext) : Bool :=
+  allCasts.any fun e => e.src == s && e.tgt == t && e.ctx == ctx
 
-def hasImplicitCast (from to : ScalarBaseType) : Bool :=
-  hasCast from to .Implicit
+def hasImplicitCast (s t : ScalarBaseType) : Bool :=
+  hasCast s t .Implicit

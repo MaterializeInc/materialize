@@ -8,4 +8,4 @@ package «formal-type-system» where
 
 @[default_target]
 lean_lib «FormalTypeSystem» where
-  srcDir := "FormalTypeSystem"
+  roots := #[`FormalTypeSystem.Types, `FormalTypeSystem.CastGraph, `FormalTypeSystem.Properties]

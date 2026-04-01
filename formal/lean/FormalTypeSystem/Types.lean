@@ -12,8 +12,8 @@ inductive CastContext where
   deriving DecidableEq, Repr, Inhabited, BEq
 
 structure CastEntry where
-  from : ScalarBaseType
-  to : ScalarBaseType
+  src : ScalarBaseType
+  tgt : ScalarBaseType
   ctx : CastContext
   deriving Repr, BEq
 
