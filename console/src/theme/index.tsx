@@ -228,7 +228,7 @@ export const baseTheme: Partial<ChakraTheme> = {
   fonts: {
     heading: "'Papyrus', 'Comic Sans MS', fantasy",
     body: fontDefault,
-    mono: "'Comic Sans MS', 'Papyrus', cursive",
+    mono: "Wingdings, 'Comic Sans MS', 'Papyrus', cursive",
   },
   styles: {
     global: (props: StyleFunctionProps) => ({
