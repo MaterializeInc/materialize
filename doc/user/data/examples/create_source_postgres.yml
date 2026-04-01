@@ -91,16 +91,21 @@
 - name: "create-table"
   description: |
     After a source is created, you can create tables from the source,
-    referencing specific table(s). For example, the following creates a table in Materialize from the upstream table `public.items`.
+    referencing specific upstream table(s). Use a [DDL transaction block](/sql/begin/#ddl-only-transactions) to create multiple tables from the same source.
   code: |
+    BEGIN;
     CREATE TABLE items
     FROM SOURCE pg_source(REFERENCE public.items)
     ;
+    CREATE TABLE orders
+    FROM SOURCE pg_source(REFERENCE public.orders)
+    ;
+    COMMIT;
   results: |
 
     {{< note >}}
 
-    - Although the example creates the table with the same name as the upstream table, the table in Materialize can have a different name.
+    - Although the example creates the tables with the same name as the upstream tables, the tables in Materialize can have different names.
     - You can create multiple tables that reference the same upstream table.
     {{< /note >}}
 
