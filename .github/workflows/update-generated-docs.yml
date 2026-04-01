@@ -30,6 +30,41 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up branch
+        id: branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="automated/update-generated-docs"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          # Check if there's already an open PR from this branch
+          EXISTING_PR=$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // empty')
+
+          if [ -n "$EXISTING_PR" ]; then
+            echo "Updating existing PR #$EXISTING_PR on branch $BRANCH"
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            # If merge conflicts, reset to main — PR content is fully generated
+            if ! git merge --no-edit origin/main; then
+              echo "Merge conflict, resetting branch to main"
+              git merge --abort
+              git reset --hard origin/main
+            fi
+          else
+            # Delete stale remote branch if it exists without an open PR
+            if git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+              echo "Deleting stale remote branch $BRANCH (no open PR)"
+              git push origin --delete "$BRANCH"
+            fi
+            git checkout -b "$BRANCH"
+          fi
+
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "existing_pr=$EXISTING_PR" >> "$GITHUB_OUTPUT"
+
       - name: Run Claude Code to update docs
         id: claude
         uses: anthropics/claude-code-action@02438e66d09982e371c6559d3a2ccdff9032f203 # v1.0.77
@@ -51,33 +86,12 @@ jobs:
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Create or update pull request
+      - name: Commit and push
         if: steps.changes.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH="automated/update-generated-docs"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          # Check if there's already an open PR from this branch
-          EXISTING_PR=$(gh pr list --state open --head "$BRANCH" --json number --jq '.[0].number // empty')
-
-          if [ -n "$EXISTING_PR" ]; then
-            echo "Updating existing PR #$EXISTING_PR on branch $BRANCH"
-            git fetch origin "$BRANCH"
-            git checkout "$BRANCH"
-            git merge --no-edit origin/main || true
-          else
-            # Delete stale remote branch if it exists without an open PR
-            if git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
-              echo "Deleting stale remote branch $BRANCH (no open PR)"
-              git push origin --delete "$BRANCH"
-            fi
-            git checkout -b "$BRANCH"
-          fi
-
+          BRANCH="${{ steps.branch.outputs.branch }}"
           git add doc/developer/generated/
           git commit -m "doc: update generated developer documentation
 
@@ -87,10 +101,16 @@ jobs:
           Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
           git push origin "$BRANCH"
 
-          if [ -z "$EXISTING_PR" ]; then
-            gh pr create \
-              --title "doc: update generated developer documentation" \
-              --body "$(cat <<'EOF'
+      - name: Create pull request
+        if: steps.changes.outputs.has_changes == 'true' && steps.branch.outputs.existing_pr == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ steps.branch.outputs.branch }}"
+          gh pr create \
+            --head "$BRANCH" \
+            --title "doc: update generated developer documentation" \
+            --body "$(cat <<'EOF'
           ## Summary
 
           Automated daily refresh of `doc/developer/generated/` to reflect source code changes.
@@ -110,9 +130,8 @@ jobs:
           🤖 Generated with [Claude Code](https://claude.com/claude-code)
           EOF
           )" \
-              --label "A-docs" \
-              --reviewer bosconi
-          fi
+            --label "A-docs" \
+            --reviewer bosconi
           # Automerge is intentionally NOT enabled here.
           # A human must review and approve before merging to prevent
           # doc degeneration (see PR #35775 discussion).
