@@ -1,6 +1,6 @@
 ---
 source: src/expr-test-util/src/lib.rs
-revision: 52af3ba2a1
+revision: 5680493e7d
 ---
 
 # mz-expr-test-util

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/names.rs
-revision: 4267863081
+revision: 5680493e7d
 ---
 
 # mz-sql::names

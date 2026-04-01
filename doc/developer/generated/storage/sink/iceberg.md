@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/sink/iceberg.rs
-revision: 30eb032290
+revision: 992ebe2c05
 ---
 
 # mz-storage::sink::iceberg

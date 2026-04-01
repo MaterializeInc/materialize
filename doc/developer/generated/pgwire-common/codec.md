@@ -1,6 +1,6 @@
 ---
 source: src/pgwire-common/src/codec.rs
-revision: 59358e137b
+revision: 5680493e7d
 ---
 
 # mz-pgwire-common::codec

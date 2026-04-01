@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/lib.rs
-revision: c9d4078b10
+revision: b69d9bb412
 ---
 
 # mz-ore

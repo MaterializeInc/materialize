@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/scope_label.rs
-revision: 8fd5a2a41a
+revision: c642b63c77
 ---
 
 # timely-util::scope_label

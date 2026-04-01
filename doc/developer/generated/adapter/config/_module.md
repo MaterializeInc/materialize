@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/config.rs
-revision: cb7bca9662
+revision: 5680493e7d
 ---
 
 # adapter::config

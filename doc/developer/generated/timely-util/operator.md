@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/operator.rs
-revision: e79a6d96d9
+revision: c642b63c77
 ---
 
 # timely-util::operator

@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/watch.rs
-revision: b8f9449bec
+revision: 5f785f23fd
 ---
 
 # persist-client::internal::watch

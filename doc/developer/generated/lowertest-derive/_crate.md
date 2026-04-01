@@ -1,6 +1,6 @@
 ---
 source: src/lowertest-derive/src/lib.rs
-revision: 7c2004f36c
+revision: 5680493e7d
 ---
 
 # mz-lowertest-derive

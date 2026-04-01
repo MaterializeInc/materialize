@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/query.rs
-revision: 1b41713262
+revision: 5680493e7d
 ---
 
 # mz-sql-parser::ast::defs::query

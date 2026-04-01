@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/peek.rs
-revision: 52af3ba2a1
+revision: 5680493e7d
 ---
 
 # adapter::coord::peek

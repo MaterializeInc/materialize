@@ -1,6 +1,6 @@
 ---
 source: src/pgcopy/src/copy.rs
-revision: 59358e137b
+revision: 5f785f23fd
 ---
 
 # mz-pgcopy::copy

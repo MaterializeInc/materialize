@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/controller/materialize.rs
-revision: c6a0fb357c
+revision: 927cd62f6b
 ---
 
 # mz-orchestratord::controller::materialize

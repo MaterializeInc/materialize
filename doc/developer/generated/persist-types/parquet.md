@@ -1,6 +1,6 @@
 ---
 source: src/persist-types/src/parquet.rs
-revision: e757b4d11b
+revision: 5f785f23fd
 ---
 
 # persist-types::parquet

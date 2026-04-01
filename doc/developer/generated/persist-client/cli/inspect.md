@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/cli/inspect.rs
-revision: 901d0526a1
+revision: 5f785f23fd
 ---
 
 # persist-client::cli::inspect

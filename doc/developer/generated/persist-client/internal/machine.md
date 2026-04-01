@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/machine.rs
-revision: b33ffcb977
+revision: 5680493e7d
 ---
 
 # persist-client::internal::machine
