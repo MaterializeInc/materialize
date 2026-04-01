@@ -134,8 +134,6 @@ impl Coordinator {
                 ParsedStateUpdateKind::ClusterReplica {
                     durable_cluster_replica,
                     parsed_cluster_replica: _,
-                    cluster_name: _,
-                    cluster_role: _,
                 } => {
                     let entry = cluster_replica_commands
                         .entry((
@@ -627,11 +625,17 @@ impl Coordinator {
             tracing::trace!(?command, "have cluster replica command to apply!");
 
             match command {
-                CatalogImplication::ClusterReplica(CatalogImplicationKind::Added((
-                    replica,
-                    cluster_name,
-                    cluster_role,
-                ))) => {
+                CatalogImplication::ClusterReplica(CatalogImplicationKind::Added(replica)) => {
+                    // Read the cluster name and role from the current catalog
+                    // state. This is correct as long as implications are
+                    // processed right after each catalog transaction. For a
+                    // more future-proof approach that tracks cluster info
+                    // locally across transactions, see the last commit of
+                    // https://github.com/ggevay/materialize/tree/implications-cluster-name-tracking
+                    // which removes that logic.
+                    let cluster = self.catalog().get_cluster(cluster_id);
+                    let cluster_name = cluster.name.clone();
+                    let cluster_role = cluster.role();
                     let replica_name = format!("{}.{}", cluster_name, replica.name);
                     self.handle_create_cluster_replica(
                         cluster_id,
@@ -644,15 +648,15 @@ impl Coordinator {
                     .await;
                 }
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Altered {
-                    prev: (_prev_replica, _prev_cluster_name, _prev_cluster_role),
-                    new: (_new_replica, _new_cluster_name, _new_cluster_role),
+                    prev: _prev_replica,
+                    new: _new_replica,
                 }) => {
                     // No action needed: cluster replica alterations (e.g.
                     // renames, owner changes, pending flag changes) are
                     // catalog-only and require no controller changes.
                 }
                 CatalogImplication::ClusterReplica(CatalogImplicationKind::Dropped(
-                    (_replica, _cluster_name, _cluster_role),
+                    _replica,
                     _full_name,
                 )) => {
                     cluster_replicas_to_drop.push((cluster_id, replica_id));
@@ -1596,7 +1600,7 @@ enum CatalogImplication {
     Secret(CatalogImplicationKind<Secret>),
     Connection(CatalogImplicationKind<Connection>),
     Cluster(CatalogImplicationKind<Cluster>),
-    ClusterReplica(CatalogImplicationKind<(ClusterReplica, String, ClusterRole)>),
+    ClusterReplica(CatalogImplicationKind<ClusterReplica>),
 }
 
 #[derive(Debug, Clone)]
@@ -1801,12 +1805,10 @@ impl CatalogImplication {
             ParsedStateUpdateKind::ClusterReplica {
                 durable_cluster_replica: _,
                 parsed_cluster_replica,
-                cluster_name,
-                cluster_role,
             } => {
                 let name = parsed_cluster_replica.name.clone();
                 self.absorb_cluster_replica(
-                    (parsed_cluster_replica, cluster_name, cluster_role),
+                    parsed_cluster_replica,
                     Some(name),
                     catalog_update.diff,
                 );
@@ -1836,11 +1838,7 @@ impl CatalogImplication {
     impl_absorb_method!(absorb_connection, Connection, Connection);
 
     impl_absorb_method!(absorb_cluster, Cluster, Cluster);
-    impl_absorb_method!(
-        absorb_cluster_replica,
-        ClusterReplica,
-        (ClusterReplica, String, ClusterRole)
-    );
+    impl_absorb_method!(absorb_cluster_replica, ClusterReplica, ClusterReplica);
 }
 
 #[cfg(test)]

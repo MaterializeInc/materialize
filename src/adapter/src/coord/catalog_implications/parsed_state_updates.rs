@@ -19,7 +19,6 @@ use mz_catalog::memory::objects::{
 };
 use mz_catalog::{durable, memory};
 use mz_compute_client::logging::LogVariant;
-use mz_controller::clusters::ClusterRole;
 use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
@@ -59,8 +58,6 @@ pub enum ParsedStateUpdateKind {
     ClusterReplica {
         durable_cluster_replica: durable::objects::ClusterReplica,
         parsed_cluster_replica: memory::objects::ClusterReplica,
-        cluster_name: String,
-        cluster_role: ClusterRole,
     },
     IntrospectionSourceIndex {
         cluster_id: ClusterId,
@@ -207,14 +204,9 @@ fn parse_cluster_replica_update(
         durable_cluster_replica.cluster_id,
         durable_cluster_replica.replica_id,
     );
-    let cluster = catalog.get_cluster(durable_cluster_replica.cluster_id);
-    let cluster_name = cluster.name.clone();
-    let cluster_role = cluster.role();
 
     ParsedStateUpdateKind::ClusterReplica {
         durable_cluster_replica,
         parsed_cluster_replica: parsed_cluster_replica.clone(),
-        cluster_name,
-        cluster_role,
     }
 }
