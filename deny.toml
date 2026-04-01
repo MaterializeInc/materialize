@@ -211,6 +211,93 @@ wrappers = [
 [[bans.deny]]
 name = "rustls"
 
+# FIPS 140-3 compliance: all cryptographic operations must use `aws-lc-rs` as
+# the single crypto backend. The following crates are not FIPS-validated and
+# must not be used for new code. Existing wrappers should be removed as each
+# crate is migrated to `aws-lc-rs`. See doc/developer/openssl-to-rustls-migration.md.
+
+# Use `aws_lc_rs::digest` instead.
+[[bans.deny]]
+name = "sha2"
+wrappers = [
+    # Third-party crates (not under our control).
+    "aws-sdk-s3",
+    "aws-sigv4",
+    "aws-smithy-checksums",
+    "azure_core",
+    "mysql_common",
+    "oauth2",
+    "pest_meta",
+    "postgres-protocol",
+    "reqsign",
+    "ssh-encoding",
+    "ssh-key",
+    # Workspace crates — TODO: migrate to aws-lc-rs and remove.
+    "mz-adapter",
+    "mz-avro",
+    "mz-catalog",
+    "mz-expr",
+    "mz-fivetran-destination",
+    "mz-npm",
+    "mz-orchestrator-kubernetes",
+    "mz-orchestratord",
+    "mz-persist",
+    "mz-storage",
+]
+
+# Use `aws_lc_rs::hmac` instead.
+[[bans.deny]]
+name = "hmac"
+wrappers = [
+    # Third-party crates.
+    "aws-sdk-s3",
+    "aws-sigv4",
+    "azure_core",
+    "postgres-protocol",
+    "reqsign",
+    # Workspace crates — TODO: migrate to aws-lc-rs and remove.
+    "mz-expr",
+]
+
+# Use `aws_lc_rs::constant_time` instead.
+[[bans.deny]]
+name = "subtle"
+wrappers = [
+    # Third-party crates.
+    "digest",
+    "ssh-key",
+    # Workspace crates — TODO: migrate to aws-lc-rs and remove.
+    "mz-expr",
+]
+
+# Use `aws_lc_rs` instead of `ring` — ring is not FIPS-validated.
+[[bans.deny]]
+name = "ring"
+wrappers = [
+    # Third-party crate — TODO: track upstream migration.
+    "aws-config",
+]
+
+# Use `aws_lc_rs::pbkdf2` instead.
+[[bans.deny]]
+name = "pbkdf2"
+
+# Use `aws_lc_rs::signature::Ed25519KeyPair` instead.
+[[bans.deny]]
+name = "ed25519-dalek"
+
+# Use `aws_lc_rs::cipher` (AES-CBC) instead.
+[[bans.deny]]
+name = "aes"
+
+# Use `aws_lc_rs::cipher` instead.
+[[bans.deny]]
+name = "cbc"
+
+# Use `aws_lc_rs::rsa` instead.
+[[bans.deny]]
+name = "rsa"
+
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
 [[bans.deny]]
