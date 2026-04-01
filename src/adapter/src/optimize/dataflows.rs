@@ -264,8 +264,6 @@ impl ExprPrep for ExprPrepWebhookValidation {
 #[derive(Clone, Copy, Debug)]
 pub enum EvalTime {
     Time(mz_repr::Timestamp),
-    /// Skips mz_now() calls.
-    Deferred,
     /// Errors on mz_now() calls.
     NotAvailable,
 }
@@ -671,7 +669,6 @@ fn eval_unmaterializable_func(
         UnmaterializableFunc::MzIsSuperuser => pack(Datum::from(session.is_superuser())),
         UnmaterializableFunc::MzNow => match logical_time {
             EvalTime::Time(logical_time) => pack(Datum::MzTimestamp(logical_time)),
-            EvalTime::Deferred => Ok(MirScalarExpr::CallUnmaterializable(f.clone())),
             EvalTime::NotAvailable => Err(OptimizerError::UncallableFunction {
                 func: UnmaterializableFunc::MzNow,
                 context: "this",

@@ -285,20 +285,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         };
         df_desc.export_sink(self.select_id, sink_description);
 
-        // Prepare expressions in the assembled dataflow.
-        //
-        // Resolve all unmaterializable function calls except mz_now(), because
-        // we don't yet have a timestamp.
-        let style = ExprPrepOneShot {
-            logical_time: EvalTime::Deferred,
-            session,
-            catalog_state: self.catalog.state(),
-        };
-        df_desc.visit_children(
-            |r| style.prep_relation_expr(r),
-            |s| style.prep_scalar_expr(s),
-        )?;
-
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());
 
