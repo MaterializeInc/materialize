@@ -1225,6 +1225,49 @@ impl MirScalarExpr {
                             if exprs.len() == 1 {
                                 // Only one argument, so the coalesce is a no-op.
                                 *e = exprs[0].take();
+                            } else {
+                                // COALESCE(CASE WHEN e_cond THEN NULL ELSE e_else END, ...)
+                                // ->
+                                // CASE WHEN e_cond THEN COALESCE(...) ELSE e_else END
+                                //
+                                // ... and flipped
+                                if let MirScalarExpr::If { cond: _, then, els } = &exprs[0] {
+                                    if then.is_literal_null() {
+                                        let MirScalarExpr::If {
+                                            mut cond,
+                                            then: _,
+                                            mut els,
+                                        } = exprs.remove(0)
+                                        else {
+                                            unreachable!();
+                                        };
+                                        *e = MirScalarExpr::if_then_else(
+                                            cond.take(),
+                                            MirScalarExpr::CallVariadic {
+                                                func: VariadicFunc::Coalesce(Coalesce),
+                                                exprs: std::mem::take(exprs),
+                                            },
+                                            els.take(),
+                                        );
+                                    } else if els.is_literal_null() {
+                                        let MirScalarExpr::If {
+                                            mut cond,
+                                            mut then,
+                                            els: _,
+                                        } = exprs.remove(0)
+                                        else {
+                                            unreachable!();
+                                        };
+                                        *e = MirScalarExpr::if_then_else(
+                                            cond.take(),
+                                            then.take(),
+                                            MirScalarExpr::CallVariadic {
+                                                func: VariadicFunc::Coalesce(Coalesce),
+                                                exprs: std::mem::take(exprs),
+                                            },
+                                        );
+                                    }
+                                }
                             }
                         } else if exprs.iter().all(|e| e.is_literal()) {
                             *e = eval(e);
