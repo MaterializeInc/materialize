@@ -97,6 +97,8 @@ pub(crate) mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
+#[cfg(test)]
+mod typeconv_properties_test;
 pub(crate) mod with_options;
 
 use crate::plan;
