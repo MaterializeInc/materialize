@@ -9,6 +9,7 @@
 
 import {
   Box,
+  Button,
   Flex,
   forwardRef,
   HStack,
@@ -27,6 +28,7 @@ import useResizeObserver from "use-resize-observer";
 import ConnectModal from "~/components/ConnectModal";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
+import { triggerLogoExplosion } from "~/platform/App";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import EnvironmentSelectField from "~/layouts/EnvironmentSelect";
 import ProfileDropdown from "~/layouts/ProfileDropdown";
@@ -60,6 +62,7 @@ export const NavBarContainer = forwardRef<
   return (
     <Flex
       ref={ref}
+      className="april-fools-navbar"
       direction={{ base: "row", lg: "column" }}
       justify="flex-start"
       align={{ base: "center", lg: "stretch" }}
@@ -247,6 +250,18 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
             <SelfManagedNavMenu isCollapsed={isCollapsed} isMobile={false} />
           }
         />
+        {!isMobile && !isCollapsed && (
+          <Button
+            variant="ghost"
+            size="sm"
+            mx="4"
+            mt="2"
+            onClick={triggerLogoExplosion}
+            fontSize="xs"
+          >
+            🎮 Surprise me
+          </Button>
+        )}
         {!isMobile && <Spacer />}
         {!isMobile && !isCollapsed && (
           <FreeTrialNotice mb="4" mx={{ lg: "4" }} />

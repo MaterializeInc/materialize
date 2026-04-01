@@ -27,6 +27,7 @@ export const MaterializeLogo = ({
       height="6"
       width={markOnly ? "6" : "auto"}
       aria-label="Materialize logo"
+      transform="rotate(180deg)"
       {...props}
     />
   );

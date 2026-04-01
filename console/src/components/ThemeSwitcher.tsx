@@ -14,14 +14,27 @@ import { Link as RouterLink } from "react-router-dom";
 const ThemeSwitcher = () => {
   const { toggleColorMode } = useColorMode();
   const text = useColorModeValue("dark", "light");
+  const [isMaxDark, setIsMaxDark] = React.useState(false);
+
+  const toggleMaxDark = () => {
+    const next = !isMaxDark;
+    setIsMaxDark(next);
+    document.documentElement.style.filter = next ? "brightness(0.05)" : "";
+  };
+
   return (
-    <MenuItem
-      as={RouterLink}
-      fontWeight="medium"
-      onClick={() => toggleColorMode()}
-    >
-      Switch to {text} theme
-    </MenuItem>
+    <>
+      <MenuItem
+        as={RouterLink}
+        fontWeight="medium"
+        onClick={() => toggleColorMode()}
+      >
+        Switch to {text} theme
+      </MenuItem>
+      <MenuItem fontWeight="medium" onClick={toggleMaxDark}>
+        {isMaxDark ? "Disable" : "Enable"} maximum dark mode
+      </MenuItem>
+    </>
   );
 };
 

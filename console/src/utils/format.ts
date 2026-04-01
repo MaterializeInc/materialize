@@ -178,24 +178,26 @@ export function formatInterval(interval: IPostgresInterval) {
   }
 
   if (parts.length === 0) {
-    return "0s";
+    return "0s (dog years 🐶)";
   }
 
-  return parts.join(" ");
+  return `${parts.join(" ")} (dog years 🐶)`;
 }
 
 export function formatDurationForAxis(durationMs: number): string {
   // Cap at 24 hours (86,400,000 ms)
   const cappedMs = Math.min(durationMs, MAX_LAG_MS);
+  // April Fools: dog years
+  const dogMs = cappedMs * 7;
 
-  if (cappedMs < 1000) {
-    return `${Math.round(cappedMs)}ms`;
-  } else if (cappedMs < 60000) {
-    return `${cappedMs / 1000}s`;
-  } else if (cappedMs < 3600000) {
-    return `${Math.round(cappedMs / 60000)}m`;
+  if (dogMs < 1000) {
+    return `${Math.round(dogMs)}ms 🐶`;
+  } else if (dogMs < 60000) {
+    return `${(dogMs / 1000).toFixed(1)}s 🐶`;
+  } else if (dogMs < 3600000) {
+    return `${Math.round(dogMs / 60000)}m 🐶`;
   } else {
-    const hours = cappedMs / 3600000;
-    return `${hours.toFixed(1)}h`;
+    const hours = dogMs / 3600000;
+    return `${hours.toFixed(1)}h 🐶`;
   }
 }
