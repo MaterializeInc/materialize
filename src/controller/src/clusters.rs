@@ -267,6 +267,7 @@ impl ReplicaLocation {
 
 /// The "role" of a cluster, which is currently used to determine the
 /// severity of alerts for problems with its replicas.
+#[derive(Debug, Clone)]
 pub enum ClusterRole {
     /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
@@ -378,16 +379,16 @@ where
     }
 
     /// Updates the workload class for a cluster.
-    pub fn update_cluster_workload_class(
-        &mut self,
-        id: ClusterId,
-        workload_class: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
         self.compute
-            .update_instance_workload_class(id, workload_class)?;
-        Ok(())
+            .update_instance_workload_class(id, workload_class)
+            .expect("instance exists");
     }
 
     /// Drops the specified cluster.
