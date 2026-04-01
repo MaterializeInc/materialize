@@ -49,6 +49,12 @@ use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
 
+/// JSON-RPC protocol version used in all MCP requests and responses.
+const JSONRPC_VERSION: &str = "2.0";
+
+/// MCP protocol version returned in the `initialize` response.
+const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+
 /// Maximum time an MCP tool call can run before the HTTP response is returned.
 /// Note: this returns a clean JSON-RPC error to the caller, but the underlying
 /// query may continue running on the cluster until it completes or is cancelled
@@ -408,11 +414,11 @@ async fn handle_mcp_request(
         Err(_elapsed) => {
             warn!(
                 endpoint = %endpoint_type,
-                "MCP request timed out after {:?}",
-                MCP_REQUEST_TIMEOUT,
+                timeout = ?MCP_REQUEST_TIMEOUT,
+                "MCP request timed out",
             );
             McpResponse {
-                jsonrpc: "2.0".to_string(),
+                jsonrpc: JSONRPC_VERSION.to_string(),
                 id: request_id,
                 result: None,
                 error: Some(
@@ -450,7 +456,7 @@ async fn handle_mcp_request_inner(
 
     match result {
         Ok(result_value) => McpResponse {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: JSONRPC_VERSION.to_string(),
             id: request_id,
             result: Some(result_value),
             error: None,
@@ -464,7 +470,7 @@ async fn handle_mcp_request_inner(
                 warn!(error = %e, method = %request.method, "MCP method execution failed");
             }
             McpResponse {
-                jsonrpc: "2.0".to_string(),
+                jsonrpc: JSONRPC_VERSION.to_string(),
                 id: request_id,
                 result: None,
                 error: Some(e.into()),
@@ -481,7 +487,7 @@ async fn handle_mcp_method(
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     // Validate JSON-RPC version
-    if request.jsonrpc != "2.0" {
+    if request.jsonrpc != JSONRPC_VERSION {
         return Err(McpRequestError::InvalidJsonRpcVersion);
     }
 
@@ -514,7 +520,7 @@ async fn handle_mcp_method(
 
 async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, McpRequestError> {
     Ok(McpResult::Initialize(InitializeResult {
-        protocol_version: "2024-11-05".to_string(),
+        protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
         server_info: ServerInfo {
             name: format!("materialize-mcp-{}", endpoint_type),
