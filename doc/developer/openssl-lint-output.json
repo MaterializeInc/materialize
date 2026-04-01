@@ -1,0 +1,1098 @@
+[
+  {
+    "crate_name": "mz",
+    "crate_path": "src/mz",
+    "category": "dependency",
+    "description": "openssl-probe = \"0.1.6\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz",
+    "crate_path": "src/mz",
+    "category": "feature-flag",
+    "description": "reqwest: features include \"default-tls\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-adapter",
+    "crate_path": "src/adapter",
+    "category": "dependency",
+    "description": "hyper-tls = \"0.5.0\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-adapter",
+    "crate_path": "src/adapter",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-adapter",
+    "crate_path": "src/adapter",
+    "category": "source-code",
+    "description": "openssl::rand::rand_bytes(&mut nonce).expect(\"failed to generate nonce\");",
+    "file": "src/adapter/src/catalog/migrate.rs",
+    "line": 833
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "Openssl(openssl::error::ErrorStack),",
+    "file": "src/auth/src/hash.rs",
+    "line": 70
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::rand::rand_bytes(&mut *salt).map_err(HashError::Openssl)?;",
+    "file": "src/auth/src/hash.rs",
+    "line": 88
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::rand::rand_bytes(&mut *nonce).map_err(HashError::Openssl)?;",
+    "file": "src/auth/src/hash.rs",
+    "line": 107
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::memcmp::eq(a, b)",
+    "file": "src/auth/src/hash.rs",
+    "line": 140
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "if !constant_time_compare(&openssl::sha::sha256(&client_key), &stored_key) {",
+    "file": "src/auth/src/hash.rs",
+    "line": 208
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::pkey::PKey::hmac(key).map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;",
+    "file": "src/auth/src/hash.rs",
+    "line": 219
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)",
+    "file": "src/auth/src/hash.rs",
+    "line": 221
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "let digest = openssl::sha::sha256(&buf);",
+    "file": "src/auth/src/hash.rs",
+    "line": 239
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "let signing_key = openssl::pkey::PKey::hmac(&hashed_password.hash).unwrap();",
+    "file": "src/auth/src/hash.rs",
+    "line": 316
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();",
+    "file": "src/auth/src/hash.rs",
+    "line": 318
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "let stored_key = openssl::sha::sha256(&client_key);",
+    "file": "src/auth/src/hash.rs",
+    "line": 321
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();",
+    "file": "src/auth/src/hash.rs",
+    "line": 323
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::pkcs5::pbkdf2_hmac(",
+    "file": "src/auth/src/hash.rs",
+    "line": 341
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::hash::MessageDigest::sha256(),",
+    "file": "src/auth/src/hash.rs",
+    "line": 345
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "let signing_key = openssl::pkey::PKey::hmac(&salted_password).expect(\"signing key\");",
+    "file": "src/auth/src/hash.rs",
+    "line": 439
+  },
+  {
+    "crate_name": "mz-auth",
+    "crate_path": "src/auth",
+    "category": "source-code",
+    "description": "openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)",
+    "file": "src/auth/src/hash.rs",
+    "line": 441
+  },
+  {
+    "crate_name": "mz-aws-util",
+    "crate_path": "src/aws-util",
+    "category": "dependency",
+    "description": "hyper-tls = \"0.5.0\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-balancerd",
+    "crate_path": "src/balancerd",
+    "category": "dependency",
+    "description": "hyper-openssl = \"0.10.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-balancerd",
+    "crate_path": "src/balancerd",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-balancerd",
+    "crate_path": "src/balancerd",
+    "category": "dependency",
+    "description": "tokio-openssl = \"0.6.5\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-balancerd",
+    "crate_path": "src/balancerd",
+    "category": "source-code",
+    "description": "use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};",
+    "file": "src/balancerd/src/lib.rs",
+    "line": 61
+  },
+  {
+    "crate_name": "mz-balancerd",
+    "crate_path": "src/balancerd",
+    "category": "source-code",
+    "description": "use tokio_openssl::SslStream;",
+    "file": "src/balancerd/src/lib.rs",
+    "line": 70
+  },
+  {
+    "crate_name": "mz-balancerd",
+    "crate_path": "src/balancerd",
+    "category": "source-code",
+    "description": "use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};",
+    "file": "src/balancerd/tests/server.rs",
+    "line": 43
+  },
+  {
+    "crate_name": "mz-balancerd",
+    "crate_path": "src/balancerd",
+    "category": "source-code",
+    "description": "use openssl::x509::X509;",
+    "file": "src/balancerd/tests/server.rs",
+    "line": 44
+  },
+  {
+    "crate_name": "mz-catalog",
+    "crate_path": "src/catalog",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-catalog",
+    "crate_path": "src/catalog",
+    "category": "source-code",
+    "description": "openssl::rand::rand_bytes(&mut nonce).expect(\"random number generation failed\");",
+    "file": "src/catalog/src/durable/initialize.rs",
+    "line": 767
+  },
+  {
+    "crate_name": "mz-catalog",
+    "crate_path": "src/catalog",
+    "category": "source-code",
+    "description": "let stored_key = openssl::sha::sha256(&first_key);",
+    "file": "src/catalog/src/durable/upgrade/v77_to_v78.rs",
+    "line": 39
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "dependency",
+    "description": "native-tls = \"0.2.14\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "feature-flag",
+    "description": "reqwest: features include \"native-tls-vendored\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "source-code",
+    "description": "pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {",
+    "file": "src/ccsr/src/tls.rs",
+    "line": 27
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "source-code",
+    "description": "pub fn from_pem(pem: &[u8]) -> native_tls::Result<Certificate> {",
+    "file": "src/ccsr/src/tls.rs",
+    "line": 58
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "source-code",
+    "description": "der: native_tls::Certificate::from_pem(pem)?.to_der()?,",
+    "file": "src/ccsr/src/tls.rs",
+    "line": 60
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "source-code",
+    "description": "pub fn from_der(der: &[u8]) -> native_tls::Result<Certificate> {",
+    "file": "src/ccsr/src/tls.rs",
+    "line": 65
+  },
+  {
+    "crate_name": "mz-ccsr",
+    "crate_path": "src/ccsr",
+    "category": "source-code",
+    "description": "let _ = native_tls::Certificate::from_der(der)?;",
+    "file": "src/ccsr/src/tls.rs",
+    "line": 66
+  },
+  {
+    "crate_name": "mz-cloud-resources",
+    "crate_path": "src/cloud-resources",
+    "category": "feature-flag",
+    "description": "kube: features include \"openssl-tls\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-debug",
+    "crate_path": "src/mz-debug",
+    "category": "dependency",
+    "description": "postgres-openssl = \"0.5.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-debug",
+    "crate_path": "src/mz-debug",
+    "category": "source-code",
+    "description": "use postgres_openssl::{MakeTlsConnector, TlsStream};",
+    "file": "src/mz-debug/src/system_catalog_dumper.rs",
+    "line": 41
+  },
+  {
+    "crate_name": "mz-dyncfg-launchdarkly",
+    "crate_path": "src/dyncfg-launchdarkly",
+    "category": "dependency",
+    "description": "hyper-tls = \"0.5.0\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "dependency",
+    "description": "hyper-openssl = \"0.10.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "dependency",
+    "description": "hyper-tls = \"0.6.0\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "dependency",
+    "description": "openssl-sys = \"0.9.108\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "dependency",
+    "description": "postgres-openssl = \"0.5.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "feature-flag",
+    "description": "feature \"test\" references \"postgres-openssl\"",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use hyper_openssl::SslStream;",
+    "file": "src/environmentd/src/http.rs",
+    "line": 73
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use hyper_openssl::client::legacy::MaybeHttpsStream;",
+    "file": "src/environmentd/src/http.rs",
+    "line": 74
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::ssl::Ssl;",
+    "file": "src/environmentd/src/http.rs",
+    "line": 97
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::asn1::Asn1Time;",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 62
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::error::ErrorStack;",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 63
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::hash::MessageDigest;",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 64
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::nid::Nid;",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 65
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::pkey::{PKey, Private};",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 66
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::rsa::Rsa;",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 67
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions};",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 68
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 69
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::x509::{X509, X509Name, X509NameBuilder};",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 70
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use postgres_openssl::MakeTlsConnector;",
+    "file": "src/environmentd/src/test_util.rs",
+    "line": 75
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use hyper_openssl::client::legacy::HttpsConnector;",
+    "file": "src/environmentd/tests/auth.rs",
+    "line": 35
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::error::ErrorStack;",
+    "file": "src/environmentd/tests/auth.rs",
+    "line": 58
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions, SslVerifyMode};",
+    "file": "src/environmentd/tests/auth.rs",
+    "line": 59
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};",
+    "file": "src/environmentd/tests/server.rs",
+    "line": 54
+  },
+  {
+    "crate_name": "mz-environmentd",
+    "crate_path": "src/environmentd",
+    "category": "source-code",
+    "description": "use openssl::x509::X509;",
+    "file": "src/environmentd/tests/server.rs",
+    "line": 55
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "dependency",
+    "description": "postgres-openssl = \"0.5.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "feature-flag",
+    "description": "reqwest: features include \"native-tls-vendored\" (in build-dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": "use openssl::symm::{Cipher, Crypter};",
+    "file": "src/fivetran-destination/src/crypto.rs",
+    "line": 16
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": ") -> Result<AsyncAesDecrypter<R>, openssl::error::ErrorStack> {",
+    "file": "src/fivetran-destination/src/crypto.rs",
+    "line": 36
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": "openssl::symm::Mode::Decrypt,",
+    "file": "src/fivetran-destination/src/crypto.rs",
+    "line": 41
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": "use openssl::ssl::{SslConnector, SslMethod};",
+    "file": "src/fivetran-destination/src/destination/config.rs",
+    "line": 10
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": "use openssl::x509::X509;",
+    "file": "src/fivetran-destination/src/destination/config.rs",
+    "line": 11
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": "use openssl::x509::store::X509StoreBuilder;",
+    "file": "src/fivetran-destination/src/destination/config.rs",
+    "line": 12
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": "use postgres_openssl::MakeTlsConnector;",
+    "file": "src/fivetran-destination/src/destination/config.rs",
+    "line": 13
+  },
+  {
+    "crate_name": "mz-fivetran-destination",
+    "crate_path": "src/fivetran-destination",
+    "category": "source-code",
+    "description": "Crypto(#[from] openssl::error::ErrorStack),",
+    "file": "src/fivetran-destination/src/error.rs",
+    "line": 76
+  },
+  {
+    "crate_name": "mz-frontegg-mock",
+    "crate_path": "src/frontegg-mock",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dev-dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-frontegg-mock",
+    "crate_path": "src/frontegg-mock",
+    "category": "source-code",
+    "description": "use openssl::rsa::Rsa;",
+    "file": "src/frontegg-mock/tests/local.rs",
+    "line": 23
+  },
+  {
+    "crate_name": "mz-npm",
+    "crate_path": "src/npm",
+    "category": "feature-flag",
+    "description": "reqwest: features include \"native-tls-vendored\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-oidc-mock",
+    "crate_path": "src/oidc-mock",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-oidc-mock",
+    "crate_path": "src/oidc-mock",
+    "category": "source-code",
+    "description": "use openssl::pkey::{PKey, Private};",
+    "file": "src/oidc-mock/src/lib.rs",
+    "line": 28
+  },
+  {
+    "crate_name": "mz-oidc-mock",
+    "crate_path": "src/oidc-mock",
+    "category": "source-code",
+    "description": "use openssl::rsa::Rsa;",
+    "file": "src/oidc-mock/src/lib.rs",
+    "line": 29
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "dependency",
+    "description": "tokio-openssl = \"0.6.5\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "dependency",
+    "description": "tokio-native-tls = \"0.3.1\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "dependency",
+    "description": "native-tls = \"0.2.14\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "dependency",
+    "description": "hyper-tls = \"0.6.0\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "feature-flag",
+    "description": "feature \"async\" references \"openssl\"",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "feature-flag",
+    "description": "feature \"async\" references \"tokio-openssl\"",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "feature-flag",
+    "description": "feature \"tracing\" references \"tokio-native-tls\"",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "feature-flag",
+    "description": "feature \"tracing\" references \"native-tls\"",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "feature-flag",
+    "description": "feature \"tracing\" references \"hyper-tls\"",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "source-code",
+    "description": "use tokio_openssl::SslStream;",
+    "file": "src/ore/src/netio/async_ready.rs",
+    "line": 19
+  },
+  {
+    "crate_name": "mz-ore",
+    "crate_path": "src/ore",
+    "category": "source-code",
+    "description": "native_tls::TlsConnector::builder()",
+    "file": "src/ore/src/tracing.rs",
+    "line": 392
+  },
+  {
+    "crate_name": "mz-persist",
+    "crate_path": "src/persist",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-persist",
+    "crate_path": "src/persist",
+    "category": "dependency",
+    "description": "openssl-sys = \"0.9.108\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-persist",
+    "crate_path": "src/persist",
+    "category": "dependency",
+    "description": "postgres-openssl = \"0.5.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-persist",
+    "crate_path": "src/persist",
+    "category": "feature-flag",
+    "description": "reqwest: features include \"default-tls\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-pgwire",
+    "crate_path": "src/pgwire",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-pgwire",
+    "crate_path": "src/pgwire",
+    "category": "dependency",
+    "description": "tokio-openssl = \"0.6.5\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-pgwire",
+    "crate_path": "src/pgwire",
+    "category": "source-code",
+    "description": "use openssl::ssl::Ssl;",
+    "file": "src/pgwire/src/server.rs",
+    "line": 26
+  },
+  {
+    "crate_name": "mz-pgwire",
+    "crate_path": "src/pgwire",
+    "category": "source-code",
+    "description": "use tokio_openssl::SslStream;",
+    "file": "src/pgwire/src/server.rs",
+    "line": 29
+  },
+  {
+    "crate_name": "mz-pgwire-common",
+    "crate_path": "src/pgwire-common",
+    "category": "dependency",
+    "description": "tokio-openssl = \"0.6.5\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-pgwire-common",
+    "crate_path": "src/pgwire-common",
+    "category": "source-code",
+    "description": "use tokio_openssl::SslStream;",
+    "file": "src/pgwire-common/src/conn.rs",
+    "line": 19
+  },
+  {
+    "crate_name": "mz-postgres-util",
+    "crate_path": "src/postgres-util",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-postgres-util",
+    "crate_path": "src/postgres-util",
+    "category": "dependency",
+    "description": "postgres-openssl = \"0.5.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-postgres-util",
+    "crate_path": "src/postgres-util",
+    "category": "source-code",
+    "description": "PostgresSsl(#[from] openssl::error::ErrorStack),",
+    "file": "src/postgres-util/src/lib.rs",
+    "line": 54
+  },
+  {
+    "crate_name": "mz-segment",
+    "crate_path": "src/segment",
+    "category": "feature-flag",
+    "description": "segment: features include \"native-tls-vendored\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-server-core",
+    "crate_path": "src/server-core",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-server-core",
+    "crate_path": "src/server-core",
+    "category": "source-code",
+    "description": "use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};",
+    "file": "src/server-core/src/lib.rs",
+    "line": 32
+  },
+  {
+    "crate_name": "mz-sql-server-util",
+    "crate_path": "src/sql-server-util",
+    "category": "feature-flag",
+    "description": "tiberius: features include \"native-tls\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ssh-util",
+    "crate_path": "src/ssh-util",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-ssh-util",
+    "crate_path": "src/ssh-util",
+    "category": "source-code",
+    "description": "use openssl::pkey::{PKey, Private};",
+    "file": "src/ssh-util/src/keys.rs",
+    "line": 16
+  },
+  {
+    "crate_name": "mz-ssh-util",
+    "crate_path": "src/ssh-util",
+    "category": "source-code",
+    "description": "use openssl::pkey::{PKey, Private};",
+    "file": "src/ssh-util/src/keys.rs",
+    "line": 256
+  },
+  {
+    "crate_name": "mz-storage",
+    "crate_path": "src/storage",
+    "category": "feature-flag",
+    "description": "tiberius: features include \"native-tls\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-storage-types",
+    "crate_path": "src/storage-types",
+    "category": "dependency",
+    "description": "native-tls = \"0.2.14\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-storage-types",
+    "crate_path": "src/storage-types",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-storage-types",
+    "crate_path": "src/storage-types",
+    "category": "feature-flag",
+    "description": "tiberius: features include \"native-tls\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-storage-types",
+    "crate_path": "src/storage-types",
+    "category": "source-code",
+    "description": "NativeTls(#[from] native_tls::Error),",
+    "file": "src/storage-types/src/errors.rs",
+    "line": 1192
+  },
+  {
+    "crate_name": "mz-storage-types",
+    "crate_path": "src/storage-types",
+    "category": "source-code",
+    "description": "Openssl(#[from] openssl::error::ErrorStack),",
+    "file": "src/storage-types/src/errors.rs",
+    "line": 1194
+  },
+  {
+    "crate_name": "mz-testdrive",
+    "crate_path": "src/testdrive",
+    "category": "feature-flag",
+    "description": "duckdb: features include \"native-tls\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-testdrive",
+    "crate_path": "src/testdrive",
+    "category": "feature-flag",
+    "description": "reqwest: features include \"native-tls-vendored\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "dependency",
+    "description": "openssl = \"0.10.76\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "dependency",
+    "description": "openssl-sys = \"0.9.108\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "dependency",
+    "description": "postgres-openssl = \"0.5.2\" (in dependencies)",
+    "file": null,
+    "line": null
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": "use openssl::pkcs12::Pkcs12;",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 12
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": "use openssl::pkey::PKey;",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 13
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": "use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 14
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": "use openssl::stack::Stack;",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 15
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": "use openssl::x509::X509;",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 16
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": "use postgres_openssl::MakeTlsConnector;",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 17
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": "OpenSsl(#[from] openssl::error::ErrorStack),",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 34
+  },
+  {
+    "crate_name": "mz-tls-util",
+    "crate_path": "src/tls-util",
+    "category": "source-code",
+    "description": ") -> Result<Pkcs12Archive, openssl::error::ErrorStack> {",
+    "file": "src/tls-util/src/lib.rs",
+    "line": 107
+  }
+]

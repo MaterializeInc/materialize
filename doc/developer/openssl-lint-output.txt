@@ -1,0 +1,201 @@
+=== OpenSSL Usage Report ===
+
+--- mz (src/mz) ---
+  [dependency] openssl-probe = "0.1.6" (in dependencies)
+  [feature-flag] reqwest: features include "default-tls" (in dependencies)
+
+--- mz-adapter (src/adapter) ---
+  [dependency] hyper-tls = "0.5.0" (in dependencies)
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [source-code] src/adapter/src/catalog/migrate.rs:833  openssl::rand::rand_bytes(&mut nonce).expect("failed to generate nonce");
+
+--- mz-auth (src/auth) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [source-code] src/auth/src/hash.rs:70  Openssl(openssl::error::ErrorStack),
+  [source-code] src/auth/src/hash.rs:88  openssl::rand::rand_bytes(&mut *salt).map_err(HashError::Openssl)?;
+  [source-code] src/auth/src/hash.rs:107  openssl::rand::rand_bytes(&mut *nonce).map_err(HashError::Openssl)?;
+  [source-code] src/auth/src/hash.rs:140  openssl::memcmp::eq(a, b)
+  [source-code] src/auth/src/hash.rs:208  if !constant_time_compare(&openssl::sha::sha256(&client_key), &stored_key) {
+  [source-code] src/auth/src/hash.rs:219  openssl::pkey::PKey::hmac(key).map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
+  [source-code] src/auth/src/hash.rs:221  openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
+  [source-code] src/auth/src/hash.rs:239  let digest = openssl::sha::sha256(&buf);
+  [source-code] src/auth/src/hash.rs:316  let signing_key = openssl::pkey::PKey::hmac(&hashed_password.hash).unwrap();
+  [source-code] src/auth/src/hash.rs:318  openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
+  [source-code] src/auth/src/hash.rs:321  let stored_key = openssl::sha::sha256(&client_key);
+  [source-code] src/auth/src/hash.rs:323  openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
+  [source-code] src/auth/src/hash.rs:341  openssl::pkcs5::pbkdf2_hmac(
+  [source-code] src/auth/src/hash.rs:345  openssl::hash::MessageDigest::sha256(),
+  [source-code] src/auth/src/hash.rs:439  let signing_key = openssl::pkey::PKey::hmac(&salted_password).expect("signing key");
+  [source-code] src/auth/src/hash.rs:441  openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
+
+--- mz-aws-util (src/aws-util) ---
+  [dependency] hyper-tls = "0.5.0" (in dependencies)
+
+--- mz-balancerd (src/balancerd) ---
+  [dependency] hyper-openssl = "0.10.2" (in dependencies)
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] tokio-openssl = "0.6.5" (in dependencies)
+  [source-code] src/balancerd/src/lib.rs:61  use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
+  [source-code] src/balancerd/src/lib.rs:70  use tokio_openssl::SslStream;
+  [source-code] src/balancerd/tests/server.rs:43  use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
+  [source-code] src/balancerd/tests/server.rs:44  use openssl::x509::X509;
+
+--- mz-catalog (src/catalog) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [source-code] src/catalog/src/durable/initialize.rs:767  openssl::rand::rand_bytes(&mut nonce).expect("random number generation failed");
+  [source-code] src/catalog/src/durable/upgrade/v77_to_v78.rs:39  let stored_key = openssl::sha::sha256(&first_key);
+
+--- mz-ccsr (src/ccsr) ---
+  [dependency] native-tls = "0.2.14" (in dependencies)
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [feature-flag] reqwest: features include "native-tls-vendored" (in dependencies)
+  [source-code] src/ccsr/src/tls.rs:27  pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
+  [source-code] src/ccsr/src/tls.rs:58  pub fn from_pem(pem: &[u8]) -> native_tls::Result<Certificate> {
+  [source-code] src/ccsr/src/tls.rs:60  der: native_tls::Certificate::from_pem(pem)?.to_der()?,
+  [source-code] src/ccsr/src/tls.rs:65  pub fn from_der(der: &[u8]) -> native_tls::Result<Certificate> {
+  [source-code] src/ccsr/src/tls.rs:66  let _ = native_tls::Certificate::from_der(der)?;
+
+--- mz-cloud-resources (src/cloud-resources) ---
+  [feature-flag] kube: features include "openssl-tls" (in dependencies)
+
+--- mz-debug (src/mz-debug) ---
+  [dependency] postgres-openssl = "0.5.2" (in dependencies)
+  [source-code] src/mz-debug/src/system_catalog_dumper.rs:41  use postgres_openssl::{MakeTlsConnector, TlsStream};
+
+--- mz-dyncfg-launchdarkly (src/dyncfg-launchdarkly) ---
+  [dependency] hyper-tls = "0.5.0" (in dependencies)
+
+--- mz-environmentd (src/environmentd) ---
+  [dependency] hyper-openssl = "0.10.2" (in dependencies)
+  [dependency] hyper-tls = "0.6.0" (in dependencies)
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] openssl-sys = "0.9.108" (in dependencies)
+  [dependency] postgres-openssl = "0.5.2" (in dependencies)
+  [feature-flag] feature "test" references "postgres-openssl"
+  [source-code] src/environmentd/src/http.rs:73  use hyper_openssl::SslStream;
+  [source-code] src/environmentd/src/http.rs:74  use hyper_openssl::client::legacy::MaybeHttpsStream;
+  [source-code] src/environmentd/src/http.rs:97  use openssl::ssl::Ssl;
+  [source-code] src/environmentd/src/test_util.rs:62  use openssl::asn1::Asn1Time;
+  [source-code] src/environmentd/src/test_util.rs:63  use openssl::error::ErrorStack;
+  [source-code] src/environmentd/src/test_util.rs:64  use openssl::hash::MessageDigest;
+  [source-code] src/environmentd/src/test_util.rs:65  use openssl::nid::Nid;
+  [source-code] src/environmentd/src/test_util.rs:66  use openssl::pkey::{PKey, Private};
+  [source-code] src/environmentd/src/test_util.rs:67  use openssl::rsa::Rsa;
+  [source-code] src/environmentd/src/test_util.rs:68  use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions};
+  [source-code] src/environmentd/src/test_util.rs:69  use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
+  [source-code] src/environmentd/src/test_util.rs:70  use openssl::x509::{X509, X509Name, X509NameBuilder};
+  [source-code] src/environmentd/src/test_util.rs:75  use postgres_openssl::MakeTlsConnector;
+  [source-code] src/environmentd/tests/auth.rs:35  use hyper_openssl::client::legacy::HttpsConnector;
+  [source-code] src/environmentd/tests/auth.rs:58  use openssl::error::ErrorStack;
+  [source-code] src/environmentd/tests/auth.rs:59  use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions, SslVerifyMode};
+  [source-code] src/environmentd/tests/server.rs:54  use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
+  [source-code] src/environmentd/tests/server.rs:55  use openssl::x509::X509;
+
+--- mz-fivetran-destination (src/fivetran-destination) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] postgres-openssl = "0.5.2" (in dependencies)
+  [feature-flag] reqwest: features include "native-tls-vendored" (in build-dependencies)
+  [source-code] src/fivetran-destination/src/crypto.rs:16  use openssl::symm::{Cipher, Crypter};
+  [source-code] src/fivetran-destination/src/crypto.rs:36  ) -> Result<AsyncAesDecrypter<R>, openssl::error::ErrorStack> {
+  [source-code] src/fivetran-destination/src/crypto.rs:41  openssl::symm::Mode::Decrypt,
+  [source-code] src/fivetran-destination/src/destination/config.rs:10  use openssl::ssl::{SslConnector, SslMethod};
+  [source-code] src/fivetran-destination/src/destination/config.rs:11  use openssl::x509::X509;
+  [source-code] src/fivetran-destination/src/destination/config.rs:12  use openssl::x509::store::X509StoreBuilder;
+  [source-code] src/fivetran-destination/src/destination/config.rs:13  use postgres_openssl::MakeTlsConnector;
+  [source-code] src/fivetran-destination/src/error.rs:76  Crypto(#[from] openssl::error::ErrorStack),
+
+--- mz-frontegg-mock (src/frontegg-mock) ---
+  [dependency] openssl = "0.10.76" (in dev-dependencies)
+  [source-code] src/frontegg-mock/tests/local.rs:23  use openssl::rsa::Rsa;
+
+--- mz-npm (src/npm) ---
+  [feature-flag] reqwest: features include "native-tls-vendored" (in dependencies)
+
+--- mz-oidc-mock (src/oidc-mock) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [source-code] src/oidc-mock/src/lib.rs:28  use openssl::pkey::{PKey, Private};
+  [source-code] src/oidc-mock/src/lib.rs:29  use openssl::rsa::Rsa;
+
+--- mz-ore (src/ore) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] tokio-openssl = "0.6.5" (in dependencies)
+  [dependency] tokio-native-tls = "0.3.1" (in dependencies)
+  [dependency] native-tls = "0.2.14" (in dependencies)
+  [dependency] hyper-tls = "0.6.0" (in dependencies)
+  [feature-flag] feature "async" references "openssl"
+  [feature-flag] feature "async" references "tokio-openssl"
+  [feature-flag] feature "tracing" references "tokio-native-tls"
+  [feature-flag] feature "tracing" references "native-tls"
+  [feature-flag] feature "tracing" references "hyper-tls"
+  [source-code] src/ore/src/netio/async_ready.rs:19  use tokio_openssl::SslStream;
+  [source-code] src/ore/src/tracing.rs:392  native_tls::TlsConnector::builder()
+
+--- mz-persist (src/persist) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] openssl-sys = "0.9.108" (in dependencies)
+  [dependency] postgres-openssl = "0.5.2" (in dependencies)
+  [feature-flag] reqwest: features include "default-tls" (in dependencies)
+
+--- mz-pgwire (src/pgwire) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] tokio-openssl = "0.6.5" (in dependencies)
+  [source-code] src/pgwire/src/server.rs:26  use openssl::ssl::Ssl;
+  [source-code] src/pgwire/src/server.rs:29  use tokio_openssl::SslStream;
+
+--- mz-pgwire-common (src/pgwire-common) ---
+  [dependency] tokio-openssl = "0.6.5" (in dependencies)
+  [source-code] src/pgwire-common/src/conn.rs:19  use tokio_openssl::SslStream;
+
+--- mz-postgres-util (src/postgres-util) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] postgres-openssl = "0.5.2" (in dependencies)
+  [source-code] src/postgres-util/src/lib.rs:54  PostgresSsl(#[from] openssl::error::ErrorStack),
+
+--- mz-segment (src/segment) ---
+  [feature-flag] segment: features include "native-tls-vendored" (in dependencies)
+
+--- mz-server-core (src/server-core) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [source-code] src/server-core/src/lib.rs:32  use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+
+--- mz-sql-server-util (src/sql-server-util) ---
+  [feature-flag] tiberius: features include "native-tls" (in dependencies)
+
+--- mz-ssh-util (src/ssh-util) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [source-code] src/ssh-util/src/keys.rs:16  use openssl::pkey::{PKey, Private};
+  [source-code] src/ssh-util/src/keys.rs:256  use openssl::pkey::{PKey, Private};
+
+--- mz-storage (src/storage) ---
+  [feature-flag] tiberius: features include "native-tls" (in dependencies)
+
+--- mz-storage-types (src/storage-types) ---
+  [dependency] native-tls = "0.2.14" (in dependencies)
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [feature-flag] tiberius: features include "native-tls" (in dependencies)
+  [source-code] src/storage-types/src/errors.rs:1192  NativeTls(#[from] native_tls::Error),
+  [source-code] src/storage-types/src/errors.rs:1194  Openssl(#[from] openssl::error::ErrorStack),
+
+--- mz-testdrive (src/testdrive) ---
+  [feature-flag] duckdb: features include "native-tls" (in dependencies)
+  [feature-flag] reqwest: features include "native-tls-vendored" (in dependencies)
+
+--- mz-tls-util (src/tls-util) ---
+  [dependency] openssl = "0.10.76" (in dependencies)
+  [dependency] openssl-sys = "0.9.108" (in dependencies)
+  [dependency] postgres-openssl = "0.5.2" (in dependencies)
+  [source-code] src/tls-util/src/lib.rs:12  use openssl::pkcs12::Pkcs12;
+  [source-code] src/tls-util/src/lib.rs:13  use openssl::pkey::PKey;
+  [source-code] src/tls-util/src/lib.rs:14  use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+  [source-code] src/tls-util/src/lib.rs:15  use openssl::stack::Stack;
+  [source-code] src/tls-util/src/lib.rs:16  use openssl::x509::X509;
+  [source-code] src/tls-util/src/lib.rs:17  use postgres_openssl::MakeTlsConnector;
+  [source-code] src/tls-util/src/lib.rs:34  OpenSsl(#[from] openssl::error::ErrorStack),
+  [source-code] src/tls-util/src/lib.rs:107  ) -> Result<Pkcs12Archive, openssl::error::ErrorStack> {
+
+=== Summary ===
+Crates with findings: 28
+  dependency: 22
+  feature-flag: 13
+  source-code: 18
+Total findings: 137
