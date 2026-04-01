@@ -102,7 +102,7 @@ export interface ThemeShadows {
   };
 }
 
-const fontDefault = "'Comic Sans MS', 'Comic Sans', 'Papyrus', cursive";
+const fontDefault = "'Comic Sans MS', 'Papyrus', Wingdings, cursive";
 
 export const initialColorMode = "system";
 export const config: ChakraTheme["config"] = {
@@ -226,9 +226,9 @@ export const baseTheme: Partial<ChakraTheme> = {
     // nb: style guide color palettes without a standard chakra equivalent: indigo, lavender
   },
   fonts: {
-    heading: "'Papyrus', 'Comic Sans MS', fantasy",
+    heading: "'Papyrus', Wingdings, 'Comic Sans MS', fantasy",
     body: fontDefault,
-    mono: "Wingdings, 'Comic Sans MS', 'Papyrus', cursive",
+    mono: "Wingdings, 'Papyrus', 'Comic Sans MS', cursive",
   },
   styles: {
     global: (props: StyleFunctionProps) => ({

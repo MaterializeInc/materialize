@@ -73,15 +73,15 @@
     transform: rotate(0deg);
   }
   50% {
-    transform: rotate(0.8deg);
+    transform: rotate(3deg);
   }
   100% {
-    transform: rotate(-0.4deg);
+    transform: rotate(-1.5deg);
   }
 }
 
 .april-fools-active {
-  animation: slow-drift 120s ease-in-out infinite;
+  animation: slow-drift 60s ease-in-out infinite;
   transform-origin: center center;
 }
 
