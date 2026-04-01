@@ -76,6 +76,13 @@
 
 - name: "ingest-data-step"
   description: |
+    {{< tip >}}
+    When snapshotting, Materialize uses PostgreSQL statistics to estimate the amount of data and
+    number of rows to read. Before creating the source in Materialize, check that the PostgreSQL
+    statistics are up to date by running PostgreSQL `ANALYZE`.  See
+    [Snapshotting considerations](#snapshotting) for more information.
+    {{< /tip >}}
+
     {{< tabs >}}
     {{< tab "Legacy Syntax" >}}
     #### Legacy syntax
