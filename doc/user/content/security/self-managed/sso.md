@@ -265,14 +265,9 @@ ALTER SYSTEM SET console_oidc_scopes = 'openid';
 1. Sign in through your IdP. After successful authentication, you are redirected
    back to the Materialize console.
 
-1. To verify that your role was created, navigate to the [SQL shell](/console/sql-shell/) and run:
+1. To confirm which SQL role you've signed in as via SSO, open the [SQL Shell](/console/sql-shell/) in the Materialize console. In the welcome message, you should see the role's name labelled under "User". This is derived from the `oidc_authentication_claim` claim in your identity token:
 
-   ```mzsql
-   SELECT name, autoprovisionsource FROM mz_roles WHERE autoprovisionsource = 'oidc';
-   ```
-
-   You should see your username (derived from the configured authentication
-   claim) listed with an `autoprovisionsource` of `oidc`.
+![Materialize console Shell](/images/console/console.png "Materialize console Shell")
 
 ## Connecting via SQL clients
 
@@ -368,14 +363,16 @@ is auto-provisioned, configure their privileges separately using
 
 ### Auditing auto-provisioned roles
 
-To view which roles were auto-provisioned via OIDC, query the
-`autoprovisionsource` column in `mz_roles`:
+To view which roles were auto-provisioned via OIDC, query `mz_audit_events`:
 
 ```mzsql
-SELECT name, autoprovisionsource FROM mz_roles;
+SELECT details
+FROM mz_audit_events
+WHERE event_type = 'create' AND object_type = 'role' AND details ->> 'auto_provision_source' = 'oidc'
+ORDER BY occurred_at DESC;
 ```
 
-Roles created through OIDC authentication will have `autoprovisionsource` set to
+Roles created through OIDC authentication will have `auto_provision_source` set to
 `oidc`.
 
 ## Service accounts
