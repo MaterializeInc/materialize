@@ -13,10 +13,10 @@
 
 # Standard MCP initialize handshake for observatory endpoint.
 mcp-observatory
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-observatory","version":"<VERSION>"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-observatory","version":"<VERSION>"}}}
 
 # =============================================================================
 # Tools List
@@ -27,7 +27,7 @@ mcp-observatory
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 ----
 200 OK
-{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible.\n\nKey tables by scenario:\n- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\nUse SHOW TABLES FROM mz_internal or mz_catalog to discover more tables. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]}}]}}
+{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible.\n\nKey tables by scenario:\n- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\nUse SHOW TABLES FROM mz_internal or mz_catalog to discover more tables. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
 
 # =============================================================================
 # query_system_catalog - valid system catalog queries
@@ -38,14 +38,14 @@ mcp-observatory
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}]}}
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
 
 # Query with qualified schema should work.
 mcp-observatory
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_catalog.mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}]}}
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
 
 # =============================================================================
 # query_system_catalog - pg_catalog and information_schema
@@ -56,14 +56,14 @@ mcp-observatory
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT typname FROM pg_catalog.pg_type WHERE typname = 'bool'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"bool\"\n  ]\n]"}]}}
+{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"bool\"\n  ]\n]"}],"isError":false}}
 
 # information_schema should be accessible.
 mcp-observatory
 {"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT table_schema FROM information_schema.tables WHERE table_name = 'mz_databases' AND table_schema = 'mz_catalog' LIMIT 1"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"mz_catalog\"\n  ]\n]"}]}}
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"mz_catalog\"\n  ]\n]"}],"isError":false}}
 
 # =============================================================================
 # query_system_catalog - non-system tables rejected
@@ -170,7 +170,7 @@ Failed to deserialize the JSON body into the target type: .: unknown variant `no
 
 # Wrong JSON-RPC version should return InvalidRequest error.
 mcp-observatory
-{"jsonrpc":"1.0","id":40,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+{"jsonrpc":"1.0","id":40,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":40,"error":{"code":-32600,"message":"Invalid JSON-RPC version: expected 2.0","data":{"error_type":"InvalidRequest"}}}
@@ -193,7 +193,7 @@ mcp-observatory
 {"jsonrpc":"2.0","id":"my-request-42","method":"tools/list"}
 ----
 200 OK
-{"jsonrpc":"2.0","id":"my-request-42","result":{"tools":[{"name":"query_system_catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible.\n\nKey tables by scenario:\n- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\nUse SHOW TABLES FROM mz_internal or mz_catalog to discover more tables. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]}}]}}
+{"jsonrpc":"2.0","id":"my-request-42","result":{"tools":[{"name":"query_system_catalog","title":"Query System Catalog","description":"Query Materialize system catalog tables for troubleshooting and observability. Only mz_*, pg_catalog, and information_schema tables are accessible.\n\nKey tables by scenario:\n- Freshness: mz_internal.mz_wallclock_global_lag_recent_history, mz_internal.mz_materialization_lag, mz_internal.mz_hydration_statuses\n- Memory: mz_internal.mz_cluster_replica_utilization, mz_internal.mz_cluster_replica_metrics, mz_internal.mz_dataflow_arrangement_sizes\n- Cluster health: mz_internal.mz_cluster_replica_statuses, mz_catalog.mz_cluster_replicas\n- Source/Sink health: mz_internal.mz_source_statuses, mz_internal.mz_sink_statuses, mz_internal.mz_source_statistics, mz_internal.mz_sink_statistics\n- Object catalog: mz_catalog.mz_objects (all objects), mz_catalog.mz_tables, mz_catalog.mz_materialized_views, mz_catalog.mz_sources, mz_catalog.mz_sinks\n\nUse SHOW TABLES FROM mz_internal or mz_catalog to discover more tables. Response limit: 1 MB.","inputSchema":{"type":"object","properties":{"sql_query":{"type":"string","description":"PostgreSQL-compatible SELECT, SHOW, or EXPLAIN query referencing mz_* system catalog tables"}},"required":["sql_query"]},"annotations":{"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}}]}}
 
 # =============================================================================
 # query_system_catalog - additional rejection cases

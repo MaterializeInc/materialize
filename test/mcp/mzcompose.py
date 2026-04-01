@@ -68,7 +68,7 @@ def workflow_default(c: Composition) -> None:
             jsonrpc(
                 "initialize",
                 {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": "2025-11-25",
                     "capabilities": {},
                     "clientInfo": {"name": "test", "version": "0.1.0"},
                 },
@@ -78,7 +78,7 @@ def workflow_default(c: Composition) -> None:
         body = r.json()
         assert "result" in body, f"missing result: {body}"
         result = body["result"]
-        assert result["protocolVersion"] == "2024-11-05"
+        assert result["protocolVersion"] == "2025-11-25"
         assert "serverInfo" in result
         assert result["serverInfo"]["name"] == "materialize-mcp-agents"
 
@@ -135,7 +135,7 @@ def workflow_default(c: Composition) -> None:
             jsonrpc(
                 "initialize",
                 {
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": "2025-11-25",
                     "capabilities": {},
                     "clientInfo": {"name": "test", "version": "0.1.0"},
                 },
@@ -144,7 +144,7 @@ def workflow_default(c: Composition) -> None:
         assert r.status_code == 200
         body = r.json()
         result = body["result"]
-        assert result["protocolVersion"] == "2024-11-05"
+        assert result["protocolVersion"] == "2025-11-25"
         assert result["serverInfo"]["name"] == "materialize-mcp-observatory"
 
     with c.test_case("observatory_tools_list"):
