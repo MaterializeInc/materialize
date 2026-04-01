@@ -2836,7 +2836,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.21.1"
-source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#f803be3db4ec97bc36cbace1b59ca82716004e31"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#79e81af41073a4fc7ac6548c924f67fa680ca90d"
 dependencies = [
  "columnar",
  "columnation",
@@ -2850,7 +2850,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.21.1"
-source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#f803be3db4ec97bc36cbace1b59ca82716004e31"
+source = "git+https://github.com/frankmcsherry/differential-dataflow.git?branch=half_join_ordered#79e81af41073a4fc7ac6548c924f67fa680ca90d"
 dependencies = [
  "differential-dataflow",
  "serde",
