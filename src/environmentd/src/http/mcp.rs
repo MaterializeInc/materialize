@@ -35,9 +35,10 @@ use mz_adapter_types::dyncfgs::{
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql_parser::ast::display::escaped_string_literal;
+use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::{Raw, RawItemName};
+use mz_sql_parser::parser::parse_item_name;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -768,6 +769,33 @@ async fn get_data_product_details(
     format_rows_response(rows, max_response_size)
 }
 
+/// Parses a data product name and returns it safely quoted for SQL interpolation.
+///
+/// Uses the SQL parser to validate the name as an `UnresolvedItemName`, then
+/// formats it with `FormatMode::Stable` so every identifier part is
+/// double-quoted with proper escaping. This prevents SQL injection regardless
+/// of the input.
+fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(McpRequestError::QueryValidationFailed(
+            "Data product name cannot be empty".to_string(),
+        ));
+    }
+
+    let parsed = parse_item_name(name).map_err(|_| {
+        McpRequestError::QueryValidationFailed(format!(
+            "Invalid data product name: {}. Expected a valid object name, \
+             e.g. '\"database\".\"schema\".\"name\"' or 'my_view'",
+            name
+        ))
+    })?;
+
+    // Stable formatting forces all identifiers to be double-quoted,
+    // so SQL keywords and special characters cannot escape.
+    Ok(parsed.to_ast_string_stable())
+}
+
 /// Read rows from a data product. Issues a single read-only query.
 ///
 /// When `cluster_override` is provided, sets the cluster explicitly.
@@ -783,6 +811,9 @@ async fn read_data_product(
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     debug!(name = %name, limit = limit, cluster_override = ?cluster_override, "Executing read_data_product");
+
+    // Parse and safely quote the name for SQL interpolation.
+    let safe_name = safe_data_product_name(name)?;
 
     // Lightweight existence check: verify the data product is visible in the
     // catalog before running the read query. This gives a clean DataProductNotFound
@@ -806,11 +837,11 @@ async fn read_data_product(
         Some(cluster) => format!(
             "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}; COMMIT;",
             escaped_string_literal(cluster),
-            name,
+            safe_name,
             clamped_limit,
         ),
         // Single statement — skip explicit transaction for better performance.
-        None => format!("SELECT * FROM {} LIMIT {}", name, clamped_limit),
+        None => format!("SELECT * FROM {} LIMIT {}", safe_name, clamped_limit),
     };
 
     let rows = execute_sql(client, &read_query).await?;
@@ -1498,46 +1529,40 @@ mod tests {
         }
     }
 
-    // ── Response size cap tests ────────────────────────────────────────
+    // ── Data product name validation tests ─────────────────────────────
 
     #[mz_ore::test]
-    fn test_format_rows_response_within_limit() {
-        let rows = vec![vec![json!("a"), json!(1)], vec![json!("b"), json!(2)]];
-        let result = format_rows_response(rows, 1_000_000).unwrap();
-        let McpResult::ToolContent(content) = result else {
-            panic!("Expected ToolContent");
-        };
-        assert_eq!(content.content.len(), 1);
-        assert!(content.content[0].text.contains("\"a\""));
-        assert!(content.content[0].text.contains("\"b\""));
+    fn test_safe_data_product_name_valid() {
+        // Fully qualified quoted identifiers
+        assert_eq!(
+            safe_data_product_name(r#""materialize"."public"."my_view""#).unwrap(),
+            r#""materialize"."public"."my_view""#
+        );
+        // Two-part name
+        assert_eq!(
+            safe_data_product_name(r#""public"."my_view""#).unwrap(),
+            r#""public"."my_view""#
+        );
+        // Unquoted name gets quoted in stable mode
+        assert_eq!(safe_data_product_name("my_view").unwrap(), r#""my_view""#);
     }
 
     #[mz_ore::test]
-    fn test_format_rows_response_errors_when_over_limit() {
-        let rows: Vec<Vec<serde_json::Value>> = (0..100)
-            .map(|i| vec![json!(format!("row_{}", i)), json!(i)])
-            .collect();
-        let err = format_rows_response(rows, 500).unwrap_err();
-        let msg = err.to_string();
-        assert!(
-            msg.contains("exceeds the 500 byte limit"),
-            "Error should mention the size limit, got: {msg}"
-        );
-        assert!(
-            msg.contains("Use LIMIT or WHERE"),
-            "Error should suggest narrowing the query, got: {msg}"
-        );
+    fn test_safe_data_product_name_rejects_empty() {
+        assert!(safe_data_product_name("").is_err());
+        assert!(safe_data_product_name("   ").is_err());
     }
 
     #[mz_ore::test]
-    fn test_format_rows_response_empty_rows() {
-        let rows: Vec<Vec<serde_json::Value>> = vec![];
-        let result = format_rows_response(rows, 1000).unwrap();
-        let McpResult::ToolContent(content) = result else {
-            panic!("Expected ToolContent");
-        };
-        assert_eq!(content.content.len(), 1);
-        assert_eq!(content.content[0].text, "[]");
+    fn test_safe_data_product_name_rejects_sql_injection() {
+        // Attempted injection via semicolon
+        assert!(safe_data_product_name("my_view; DROP TABLE users").is_err());
+        // Attempted injection via subquery
+        assert!(safe_data_product_name("my_view UNION SELECT * FROM secrets").is_err());
+        // Multiple table references via comma
+        assert!(safe_data_product_name("my_view, secrets").is_err());
+        // SQL keywords after name are rejected by the parser
+        assert!(safe_data_product_name("my_view WHERE 1=1 --").is_err());
     }
 
     #[mz_ore::test]

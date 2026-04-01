@@ -179,6 +179,22 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
+/// Parses a SQL item name (e.g. `"db"."schema"."table"` or `my_view`).
+pub fn parse_item_name(sql: &str) -> Result<UnresolvedItemName, ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let name = parser.parse_item_name()?;
+    if parser.next_token().is_some() {
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after item name"
+        )
+    } else {
+        Ok(name)
+    }
+}
+
 /// Parses a string containing a comma-separated list of identifiers and
 /// returns their underlying string values.
 ///
