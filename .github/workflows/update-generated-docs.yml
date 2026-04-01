@@ -70,7 +70,11 @@ jobs:
             git checkout "$BRANCH"
             git merge --no-edit origin/main || true
           else
-            echo "Creating new branch $BRANCH"
+            # Delete stale remote branch if it exists without an open PR
+            if git ls-remote --exit-code origin "refs/heads/$BRANCH" >/dev/null 2>&1; then
+              echo "Deleting stale remote branch $BRANCH (no open PR)"
+              git push origin --delete "$BRANCH"
+            fi
             git checkout -b "$BRANCH"
           fi
 
