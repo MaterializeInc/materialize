@@ -18,6 +18,7 @@ Cloud Storage, or Cloudflare R2.
 - Make sure that you have setup your bucket.
 - Obtain the following for your bucket. Instructions to obtain these vary by provider.
   - The S3 compatible URI (`S3_BUCKET_URI`)
+    - GCS compatible URIs (beginning with `gs://`) are also valid.
   - The S3 compatible access tokens (`ACCESS_KEY_ID` and `SECRET_ACCESS_KEY`)
 
 ## Step 1. Create a connection

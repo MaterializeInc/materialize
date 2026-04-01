@@ -56,7 +56,7 @@ contains:COPY TO <expr> requires a FORMAT option
     AWS CONNECTION = aws_conn,
     FORMAT = 'csv'
   );
-contains:only 's3://...' urls are supported as COPY TO target
+contains:only 's3://...' and 'gs://...' urls are supported as COPY TO target
 
 ! COPY t TO NULL
   WITH (
