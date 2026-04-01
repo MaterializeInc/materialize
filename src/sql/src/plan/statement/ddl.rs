@@ -3568,6 +3568,62 @@ fn plan_sink(
                     Ok(name_idx)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+
+            // Iceberg equality deletes require primitive, non-float key columns.
+            // Use an allow-list so that new types are rejected by default.
+            if matches!(&connection, CreateSinkConnection::Iceberg { .. }) {
+                let cols: Vec<_> = desc.iter().collect();
+                for &idx in &indices {
+                    let (col_name, col_type) = cols[idx];
+                    let scalar = &col_type.scalar_type;
+                    let is_valid = matches!(
+                        scalar,
+                        // integers
+                        SqlScalarType::Bool
+                            | SqlScalarType::Int16
+                            | SqlScalarType::Int32
+                            | SqlScalarType::Int64
+                            | SqlScalarType::UInt16
+                            | SqlScalarType::UInt32
+                            | SqlScalarType::UInt64
+                            // decimal / numeric
+                            | SqlScalarType::Numeric { .. }
+                            // date / time
+                            | SqlScalarType::Date
+                            | SqlScalarType::Time
+                            | SqlScalarType::Timestamp { .. }
+                            | SqlScalarType::TimestampTz { .. }
+                            | SqlScalarType::Interval
+                            | SqlScalarType::MzTimestamp
+                            // string-like
+                            | SqlScalarType::String
+                            | SqlScalarType::Char { .. }
+                            | SqlScalarType::VarChar { .. }
+                            | SqlScalarType::PgLegacyChar
+                            | SqlScalarType::PgLegacyName
+                            | SqlScalarType::Bytes
+                            | SqlScalarType::Jsonb
+                            // identifiers
+                            | SqlScalarType::Uuid
+                            | SqlScalarType::Oid
+                            | SqlScalarType::RegProc
+                            | SqlScalarType::RegType
+                            | SqlScalarType::RegClass
+                            | SqlScalarType::MzAclItem
+                            | SqlScalarType::AclItem
+                            | SqlScalarType::Int2Vector
+                            // ranges
+                            | SqlScalarType::Range { .. }
+                    );
+                    if !is_valid {
+                        return Err(PlanError::IcebergSinkUnsupportedKeyType {
+                            column: col_name.to_string(),
+                            column_type: format!("{:?}", scalar),
+                        });
+                    }
+                }
+            }
+
             let is_valid_key = desc
                 .typ()
                 .keys
