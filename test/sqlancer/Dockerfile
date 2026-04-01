@@ -35,4 +35,4 @@ RUN git clone https://github.com/MaterializeInc/sqlancer \
 
 WORKDIR /workdir/sqlancer
 
-ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-Xmx8g", "-jar", "target/sqlancer-2.0.0.jar"]
+ENTRYPOINT ["/usr/bin/eatmydata", "/usr/bin/java", "-Xmx16g", "-jar", "target/sqlancer-2.0.0.jar"]
