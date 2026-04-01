@@ -212,6 +212,20 @@
     DELETE FROM t;
     ```
 
+- name: postgres-snapshot-behavior
+  content: |
+    The PostgreSQL source performs parallel snapshotting of tables by distributing rows among
+    workers using ranges of
+    [`CTID`](https://www.postgresql.org/docs/current/ddl-system-columns.html#DDL-SYSTEM-COLUMNS-CTID).
+    Materialize uses
+    [PostgreSQL statistics to estimate](https://www.postgresql.org/docs/current/row-estimation-examples.html)
+    the amount of data and number of rows to read. Missing or stale statistics can result in uneven
+    work distribution, reducing snapshot performance. They can also cause incorrect snapshot
+    progress reporting in the Console.
+
+    To avoid this situation, before creating the source in Materialize, ensure statistics are up to
+    date by running PostgreSQL `ANALYZE` command.
+
 - name: postgres-considerations
   content: |
     ### Schema changes
@@ -279,3 +293,8 @@
     ### Modifying an existing source
 
     {{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
+
+    ### Snapshotting
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-snapshot-behavior" %}}
