@@ -1562,6 +1562,15 @@ pub fn plan_cast(
     }
 }
 
+/// Returns all registered casts as (from, to, context) triples.
+/// Used by the formal verification corpus generator.
+pub fn all_casts() -> Vec<(SqlScalarBaseType, SqlScalarBaseType, CastContext)> {
+    VALID_CASTS
+        .iter()
+        .map(|((from, to), imp)| (*from, *to, imp.context))
+        .collect()
+}
+
 /// Reports whether it is possible to perform a cast from the specified types.
 pub fn can_cast(
     ecx: &ExprContext,
@@ -1570,4 +1579,51 @@ pub fn can_cast(
     cast_to: &SqlScalarType,
 ) -> bool {
     get_cast(ecx, ccx, cast_from, cast_to).is_ok()
+}
+
+#[cfg(test)]
+mod corpus_tests {
+    use super::*;
+
+    /// Generate cast_corpus.json for formal verification.
+    /// Run with: cargo test -p mz-sql generate_cast_corpus -- --ignored --nocapture
+    #[mz_ore::test]
+    #[ignore]
+    fn generate_cast_corpus() {
+        let casts = all_casts();
+        let entries: Vec<serde_json::Value> = casts
+            .into_iter()
+            .map(|(from, to, ctx)| {
+                serde_json::json!({
+                    "from": format!("{from:?}"),
+                    "to": format!("{to:?}"),
+                    "context": match ctx {
+                        CastContext::Implicit => "Implicit",
+                        CastContext::Assignment => "Assignment",
+                        CastContext::Explicit => "Explicit",
+                        CastContext::Coerced => "Coerced",
+                    }
+                })
+            })
+            .collect();
+
+        let json = serde_json::to_string_pretty(&entries).expect("serialization failed");
+
+        // Write to formal/shared/cast_corpus.json relative to workspace root
+        let workspace_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap() // src/sql -> src
+            .parent()
+            .unwrap() // src -> workspace root
+            .to_path_buf();
+        let output_dir = workspace_root.join("formal/shared");
+        std::fs::create_dir_all(&output_dir).expect("failed to create output dir");
+        let output_path = output_dir.join("cast_corpus.json");
+        std::fs::write(&output_path, &json).expect("failed to write corpus");
+        println!(
+            "Wrote {} cast entries to {}",
+            entries.len(),
+            output_path.display()
+        );
+    }
 }

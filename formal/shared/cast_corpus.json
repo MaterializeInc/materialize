@@ -1,0 +1,1072 @@
+[
+  {
+    "from": "Bool",
+    "to": "Int32",
+    "context": "Explicit"
+  },
+  {
+    "from": "Bool",
+    "to": "Int64",
+    "context": "Explicit"
+  },
+  {
+    "from": "Bool",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int16",
+    "to": "Int32",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "Int64",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int16",
+    "to": "UInt32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int16",
+    "to": "UInt64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int16",
+    "to": "Float32",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "Numeric",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int16",
+    "to": "Oid",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "RegProc",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "RegType",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int16",
+    "to": "RegClass",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "Bool",
+    "context": "Explicit"
+  },
+  {
+    "from": "Int32",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int32",
+    "to": "Int64",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int32",
+    "to": "UInt32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int32",
+    "to": "UInt64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int32",
+    "to": "Float32",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "Numeric",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "PgLegacyChar",
+    "context": "Explicit"
+  },
+  {
+    "from": "Int32",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int32",
+    "to": "Oid",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "RegProc",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "RegType",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "RegClass",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int32",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "Bool",
+    "context": "Explicit"
+  },
+  {
+    "from": "Int64",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int64",
+    "to": "Int32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int64",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int64",
+    "to": "UInt32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int64",
+    "to": "UInt64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int64",
+    "to": "Float32",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "Numeric",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Int64",
+    "to": "Oid",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "RegProc",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "RegType",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "RegClass",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int64",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt16",
+    "to": "Int32",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "Int64",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "UInt32",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "UInt64",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "Float32",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "Numeric",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt16",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt32",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt32",
+    "to": "Int32",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt32",
+    "to": "Int64",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt32",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt32",
+    "to": "UInt64",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt32",
+    "to": "Float32",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt32",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt32",
+    "to": "Numeric",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt32",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt32",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt64",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt64",
+    "to": "Int32",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt64",
+    "to": "Int64",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt64",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt64",
+    "to": "UInt32",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt64",
+    "to": "Float32",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt64",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt64",
+    "to": "Numeric",
+    "context": "Implicit"
+  },
+  {
+    "from": "UInt64",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "UInt64",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "Float32",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float32",
+    "to": "Int32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float32",
+    "to": "Int64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float32",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float32",
+    "to": "UInt32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float32",
+    "to": "UInt64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float32",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "Float32",
+    "to": "Numeric",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float32",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "Int32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "Int64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "UInt32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "UInt64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "Float32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "Numeric",
+    "context": "Assignment"
+  },
+  {
+    "from": "Float64",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "Int16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "Int32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "Int64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "UInt16",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "UInt32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "UInt64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "Float32",
+    "context": "Implicit"
+  },
+  {
+    "from": "Numeric",
+    "to": "Float64",
+    "context": "Implicit"
+  },
+  {
+    "from": "Numeric",
+    "to": "Numeric",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Numeric",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "Date",
+    "to": "Timestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "Date",
+    "to": "TimestampTz",
+    "context": "Implicit"
+  },
+  {
+    "from": "Date",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Date",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "Time",
+    "to": "Interval",
+    "context": "Implicit"
+  },
+  {
+    "from": "Time",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Timestamp",
+    "to": "Date",
+    "context": "Assignment"
+  },
+  {
+    "from": "Timestamp",
+    "to": "Time",
+    "context": "Assignment"
+  },
+  {
+    "from": "Timestamp",
+    "to": "Timestamp",
+    "context": "Assignment"
+  },
+  {
+    "from": "Timestamp",
+    "to": "TimestampTz",
+    "context": "Implicit"
+  },
+  {
+    "from": "Timestamp",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Timestamp",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "TimestampTz",
+    "to": "Date",
+    "context": "Assignment"
+  },
+  {
+    "from": "TimestampTz",
+    "to": "Time",
+    "context": "Assignment"
+  },
+  {
+    "from": "TimestampTz",
+    "to": "Timestamp",
+    "context": "Assignment"
+  },
+  {
+    "from": "TimestampTz",
+    "to": "TimestampTz",
+    "context": "Assignment"
+  },
+  {
+    "from": "TimestampTz",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "TimestampTz",
+    "to": "MzTimestamp",
+    "context": "Implicit"
+  },
+  {
+    "from": "Interval",
+    "to": "Time",
+    "context": "Assignment"
+  },
+  {
+    "from": "Interval",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "PgLegacyChar",
+    "to": "Int32",
+    "context": "Explicit"
+  },
+  {
+    "from": "PgLegacyChar",
+    "to": "String",
+    "context": "Implicit"
+  },
+  {
+    "from": "PgLegacyChar",
+    "to": "Char",
+    "context": "Assignment"
+  },
+  {
+    "from": "PgLegacyChar",
+    "to": "VarChar",
+    "context": "Assignment"
+  },
+  {
+    "from": "PgLegacyName",
+    "to": "String",
+    "context": "Implicit"
+  },
+  {
+    "from": "PgLegacyName",
+    "to": "Char",
+    "context": "Assignment"
+  },
+  {
+    "from": "PgLegacyName",
+    "to": "VarChar",
+    "context": "Assignment"
+  },
+  {
+    "from": "Bytes",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "String",
+    "to": "Bool",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Int16",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Int32",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Int64",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "UInt16",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "UInt32",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "UInt64",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Float32",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Float64",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Numeric",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Date",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Time",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Timestamp",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "TimestampTz",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Interval",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "PgLegacyChar",
+    "context": "Assignment"
+  },
+  {
+    "from": "String",
+    "to": "PgLegacyName",
+    "context": "Implicit"
+  },
+  {
+    "from": "String",
+    "to": "Bytes",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Char",
+    "context": "Implicit"
+  },
+  {
+    "from": "String",
+    "to": "VarChar",
+    "context": "Implicit"
+  },
+  {
+    "from": "String",
+    "to": "Jsonb",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Uuid",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Array",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "List",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Oid",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Map",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "RegProc",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "RegType",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "RegClass",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "Int2Vector",
+    "context": "Explicit"
+  },
+  {
+    "from": "String",
+    "to": "MzTimestamp",
+    "context": "Assignment"
+  },
+  {
+    "from": "String",
+    "to": "Range",
+    "context": "Explicit"
+  },
+  {
+    "from": "Char",
+    "to": "PgLegacyChar",
+    "context": "Assignment"
+  },
+  {
+    "from": "Char",
+    "to": "PgLegacyName",
+    "context": "Implicit"
+  },
+  {
+    "from": "Char",
+    "to": "String",
+    "context": "Implicit"
+  },
+  {
+    "from": "Char",
+    "to": "Char",
+    "context": "Implicit"
+  },
+  {
+    "from": "Char",
+    "to": "VarChar",
+    "context": "Implicit"
+  },
+  {
+    "from": "VarChar",
+    "to": "PgLegacyChar",
+    "context": "Assignment"
+  },
+  {
+    "from": "VarChar",
+    "to": "PgLegacyName",
+    "context": "Implicit"
+  },
+  {
+    "from": "VarChar",
+    "to": "String",
+    "context": "Implicit"
+  },
+  {
+    "from": "VarChar",
+    "to": "Char",
+    "context": "Implicit"
+  },
+  {
+    "from": "VarChar",
+    "to": "VarChar",
+    "context": "Implicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "Bool",
+    "context": "Explicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "Int16",
+    "context": "Explicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "Int32",
+    "context": "Explicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "Int64",
+    "context": "Explicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "Float32",
+    "context": "Explicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "Float64",
+    "context": "Explicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "Numeric",
+    "context": "Explicit"
+  },
+  {
+    "from": "Jsonb",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Uuid",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Array",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Array",
+    "to": "Array",
+    "context": "Explicit"
+  },
+  {
+    "from": "Array",
+    "to": "List",
+    "context": "Explicit"
+  },
+  {
+    "from": "List",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "List",
+    "to": "List",
+    "context": "Implicit"
+  },
+  {
+    "from": "Record",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Record",
+    "to": "Record",
+    "context": "Implicit"
+  },
+  {
+    "from": "Oid",
+    "to": "Int32",
+    "context": "Assignment"
+  },
+  {
+    "from": "Oid",
+    "to": "Int64",
+    "context": "Assignment"
+  },
+  {
+    "from": "Oid",
+    "to": "String",
+    "context": "Explicit"
+  },
+  {
+    "from": "Oid",
+    "to": "RegProc",
+    "context": "Implicit"
+  },
+  {
+    "from": "Oid",
+    "to": "RegType",
+    "context": "Implicit"
+  },
+  {
+    "from": "Oid",
+    "to": "RegClass",
+    "context": "Implicit"
+  },
+  {
+    "from": "Map",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "RegProc",
+    "to": "String",
+    "context": "Explicit"
+  },
+  {
+    "from": "RegProc",
+    "to": "Oid",
+    "context": "Implicit"
+  },
+  {
+    "from": "RegType",
+    "to": "String",
+    "context": "Explicit"
+  },
+  {
+    "from": "RegType",
+    "to": "Oid",
+    "context": "Implicit"
+  },
+  {
+    "from": "RegClass",
+    "to": "String",
+    "context": "Explicit"
+  },
+  {
+    "from": "RegClass",
+    "to": "Oid",
+    "context": "Implicit"
+  },
+  {
+    "from": "Int2Vector",
+    "to": "String",
+    "context": "Explicit"
+  },
+  {
+    "from": "Int2Vector",
+    "to": "Array",
+    "context": "Implicit"
+  },
+  {
+    "from": "MzTimestamp",
+    "to": "Timestamp",
+    "context": "Assignment"
+  },
+  {
+    "from": "MzTimestamp",
+    "to": "TimestampTz",
+    "context": "Assignment"
+  },
+  {
+    "from": "MzTimestamp",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "Range",
+    "to": "String",
+    "context": "Assignment"
+  },
+  {
+    "from": "MzAclItem",
+    "to": "String",
+    "context": "Explicit"
+  },
+  {
+    "from": "MzAclItem",
+    "to": "AclItem",
+    "context": "Explicit"
+  },
+  {
+    "from": "AclItem",
+    "to": "String",
+    "context": "Explicit"
+  },
+  {
+    "from": "AclItem",
+    "to": "MzAclItem",
+    "context": "Explicit"
+  }
+]
