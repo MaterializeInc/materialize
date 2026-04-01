@@ -36,6 +36,7 @@ const BrowserRouterWrapper = ({ children }: React.PropsWithChildren) => {
       }
       future={{
         v7_relativeSplatPath: true,
+        v7_startTransition: true,
       }}
     >
       {children}
