@@ -90,6 +90,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{
     ConnectionResolver, InlinedConnection, IntoInlineConnection,
 };
+use mz_transform::notice::OptimizerNotice;
 use serde::Serialize;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -147,7 +148,16 @@ pub struct CatalogState {
     pub(super) storage_metadata: Arc<StorageMetadata>,
     pub(super) mock_authentication_nonce: Option<String>,
 
-    // Mutable state not derived from the durable catalog.
+    // Mutable state not derived from the durable catalog. Populated
+    // during dataflow bootstrapping (`bootstrap_dataflow_plans`), which
+    // doesn't run in Testdrive's read-only consistency check, so this
+    // must be `#[serde(skip)]`.
+    #[serde(skip)]
+    pub(super) notices_by_dep_id: imbl::OrdMap<GlobalId, Vec<Arc<OptimizerNotice>>>,
+
+    // Populated by active connections creating temporary objects. The
+    // read-only catalog opened by Testdrive's consistency check has no
+    // active connections, so this must be `#[serde(skip)]`.
     #[serde(skip)]
     pub(super) temporary_schemas: imbl::OrdMap<ConnectionId, Schema>,
 
@@ -283,6 +293,7 @@ impl CatalogState {
             database_by_id: Default::default(),
             entry_by_id: Default::default(),
             entry_by_global_id: Default::default(),
+            notices_by_dep_id: Default::default(),
             ambient_schemas_by_name: Default::default(),
             ambient_schemas_by_id: Default::default(),
             temporary_schemas: Default::default(),
@@ -1406,6 +1417,9 @@ impl CatalogState {
                     custom_logical_compaction_window: materialized_view.compaction_window,
                     refresh_schedule: materialized_view.refresh_schedule,
                     initial_as_of,
+                    optimized_plan: None,
+                    physical_plan: None,
+                    dataflow_metainfo: None,
                 })
             }
             Plan::CreateContinualTask(plan) => {
@@ -1427,6 +1441,9 @@ impl CatalogState {
                 custom_logical_compaction_window: custom_logical_compaction_window
                     .or(index.compaction_window),
                 is_retained_metrics_object,
+                optimized_plan: None,
+                physical_plan: None,
+                dataflow_metainfo: None,
             }),
             Plan::CreateSink(CreateSinkPlan {
                 sink,

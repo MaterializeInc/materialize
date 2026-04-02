@@ -71,5 +71,8 @@ pub fn ct_item_from_plan(
         dependencies,
         cluster_id,
         initial_as_of: as_of.map(Antichain::from_elem),
+        optimized_plan: None,
+        physical_plan: None,
+        dataflow_metainfo: None,
     })
 }

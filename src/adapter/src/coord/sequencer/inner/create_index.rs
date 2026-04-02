@@ -455,6 +455,9 @@ impl Coordinator {
                 cluster_id,
                 is_retained_metrics_object: false,
                 custom_logical_compaction_window: compaction_window,
+                optimized_plan: None,
+                physical_plan: None,
+                dataflow_metainfo: None,
             }),
             owner_id: *self.catalog().get_entry_by_global_id(&on).owner_id(),
         }];

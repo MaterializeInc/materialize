@@ -67,9 +67,7 @@ use uuid::Uuid;
 use crate::AdapterError;
 use crate::catalog::migrate::{self, get_migration_version, set_migration_version};
 use crate::catalog::state::LocalExpressionCache;
-use crate::catalog::{
-    BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name,
-};
+use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Config, is_reserved_name};
 
 pub struct InitializeStateResult {
     /// An initialized [`CatalogState`].
@@ -138,6 +136,7 @@ impl Catalog {
             database_by_id: imbl::OrdMap::new(),
             entry_by_id: imbl::OrdMap::new(),
             entry_by_global_id: imbl::OrdMap::new(),
+            notices_by_dep_id: imbl::OrdMap::new(),
             ambient_schemas_by_name: imbl::OrdMap::new(),
             ambient_schemas_by_id: imbl::OrdMap::new(),
             clusters_by_name: imbl::OrdMap::new(),
@@ -576,7 +575,6 @@ impl Catalog {
 
             let catalog = Catalog {
                 state,
-                plans: CatalogPlans::default(),
                 expr_cache_handle,
                 transient_revision: 1,
                 storage: Arc::new(tokio::sync::Mutex::new(storage)),

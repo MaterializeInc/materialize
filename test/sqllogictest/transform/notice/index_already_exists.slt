@@ -114,6 +114,15 @@ FROM
   mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
 ----
 
+# Verify the notice row is actually retracted from the
+# underlying builtin table (not just hidden by the JOIN).
+query I
+SELECT count(*)
+FROM mz_internal.mz_optimizer_notices
+WHERE notice_type = 'An identical index already exists'
+----
+0
+
 
 # CREATE INDEX for an identical index that emits the optimizer notice.
 statement ok
@@ -190,6 +199,6 @@ WHERE
   idx.name = 't_idx3'
 ----
 
-# This further tests `drop_plans_and_metainfos`
+# This further tests `drop_optimizer_notices`
 statement ok
 DROP SCHEMA notices CASCADE;
