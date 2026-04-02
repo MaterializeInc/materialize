@@ -5255,6 +5255,86 @@ def workflow_test_pending_replica_audit_events(
     )
 
 
+def workflow_test_system_cluster_audit_events(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Tests that system cluster and replica create events appear in
+    mz_audit_events after a fresh startup.
+    """
+    c.up("materialized")
+
+    # Verify that create events exist for the builtin system clusters.
+    system_cluster_creates = c.sql_query("""
+        SELECT event_type, object_type, details->>'name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster'
+          AND details->>'id' LIKE 's%'
+        ORDER BY details->>'name';
+        """)
+    system_cluster_names = [row[2] for row in system_cluster_creates]
+    for expected in [
+        "mz_analytics",
+        "mz_catalog_server",
+        "mz_probe",
+        "mz_support",
+        "mz_system",
+    ]:
+        assert (
+            expected in system_cluster_names
+        ), f"Expected create audit event for system cluster '{expected}', found: {system_cluster_names}"
+
+    # Verify that create events exist for the builtin system cluster replicas.
+    system_replica_creates = c.sql_query("""
+        SELECT event_type, object_type, details->>'cluster_name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster-replica'
+          AND details->>'cluster_id' LIKE 's%'
+        ORDER BY details->>'cluster_name';
+        """)
+    system_replica_cluster_names = [row[2] for row in system_replica_creates]
+    for expected in ["mz_catalog_server", "mz_probe", "mz_system"]:
+        assert (
+            expected in system_replica_cluster_names
+        ), f"Expected create audit event for replica on '{expected}', found: {system_replica_cluster_names}"
+
+    # Record counts before restart.
+    cluster_count_before = len(system_cluster_creates)
+    replica_count_before = len(system_replica_creates)
+
+    # Restart and verify no new events are emitted when nothing changed.
+    c.kill("materialized")
+    c.up("materialized")
+
+    system_cluster_creates_after = c.sql_query("""
+        SELECT event_type, object_type, details->>'name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster'
+          AND details->>'id' LIKE 's%'
+        ORDER BY details->>'name';
+        """)
+    assert len(system_cluster_creates_after) == cluster_count_before, (
+        f"Expected {cluster_count_before} system cluster create events after restart, "
+        f"got {len(system_cluster_creates_after)}"
+    )
+
+    system_replica_creates_after = c.sql_query("""
+        SELECT event_type, object_type, details->>'cluster_name'
+        FROM mz_audit_events
+        WHERE event_type = 'create'
+          AND object_type = 'cluster-replica'
+          AND details->>'cluster_id' LIKE 's%'
+        ORDER BY details->>'cluster_name';
+        """)
+    assert len(system_replica_creates_after) == replica_count_before, (
+        f"Expected {replica_count_before} system replica create events after restart, "
+        f"got {len(system_replica_creates_after)}"
+    )
+
+
 def workflow_crash_on_replica_expiration_mv(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
