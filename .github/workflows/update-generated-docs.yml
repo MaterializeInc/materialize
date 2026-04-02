@@ -136,3 +136,17 @@ jobs:
           # Automerge is intentionally NOT enabled here.
           # A human must review and approve before merging to prevent
           # doc degeneration (see PR #35775 discussion).
+
+      # GITHUB_TOKEN cannot trigger other workflows, so the CLA workflow
+      # never fires for PRs created by this workflow. Set the status
+      # directly since github-actions[bot] is in the CLA allowlist.
+      - name: Set CLA status for bot author
+        if: steps.changes.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA=$(git rev-parse HEAD)
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state=success \
+            -f context=cla-assistant \
+            -f description="All contributors have signed the CLA."
