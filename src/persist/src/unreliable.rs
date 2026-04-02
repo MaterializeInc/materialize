@@ -202,12 +202,11 @@ impl Consensus for UnreliableConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         self.handle
             .run_op("compare_and_set", || {
-                self.consensus.compare_and_set(key, expected, new)
+                self.consensus.compare_and_set(key, new)
             })
             .await
     }
