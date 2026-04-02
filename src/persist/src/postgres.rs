@@ -238,7 +238,7 @@ impl PostgresConsensus {
     pub async fn open(config: PostgresConsensusConfig) -> Result<Self, ExternalError> {
         // don't need to unredact here because we just want to pull out the username
         let pg_config: Config = config.url.to_string().parse()?;
-        let role = pg_config.get_user().unwrap();
+        let role = pg_config.get_user().expect("failed to get PostgreSQL user");
         let create_schema = format!(
             "CREATE SCHEMA IF NOT EXISTS consensus AUTHORIZATION {}",
             escape_identifier(role),
