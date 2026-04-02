@@ -224,7 +224,7 @@ impl Coordinator {
                 target_cluster,
             )?,
             ExplainStage::LocalPlan => explain_plan(
-                view.optimized_expr.as_inner().clone(),
+                view.locally_optimized_expr.as_inner().clone(),
                 format,
                 &config,
                 &features,
@@ -408,7 +408,7 @@ impl Coordinator {
                     global_id,
                     raw_expr: raw_expr.into(),
                     desc: RelationDesc::new(typ, column_names.clone()),
-                    optimized_expr: optimized_expr.into(),
+                    locally_optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
                     } else {

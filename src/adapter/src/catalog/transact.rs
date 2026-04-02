@@ -611,7 +611,7 @@ impl Catalog {
                         exprs.insert(
                             view.global_id,
                             LocalExpressions {
-                                local_mir: (*view.optimized_expr).clone(),
+                                local_mir: (*view.locally_optimized_expr).clone(),
                                 optimizer_features: optimizer_features.clone(),
                             },
                         );
@@ -620,7 +620,7 @@ impl Catalog {
                         exprs.insert(
                             mv.global_id_writes(),
                             LocalExpressions {
-                                local_mir: (*mv.optimized_expr).clone(),
+                                local_mir: (*mv.locally_optimized_expr).clone(),
                                 optimizer_features: optimizer_features.clone(),
                             },
                         );

@@ -263,7 +263,7 @@ impl Coordinator {
                 Some(target_cluster.name.as_str()),
             )?,
             ExplainStage::LocalPlan => explain_plan(
-                view.optimized_expr.as_inner().clone(),
+                view.locally_optimized_expr.as_inner().clone(),
                 format,
                 &config,
                 &features,
@@ -667,7 +667,7 @@ impl Coordinator {
                 item: CatalogItem::MaterializedView(MaterializedView {
                     create_sql,
                     raw_expr: raw_expr.into(),
-                    optimized_expr: local_mir_plan.expr().into(),
+                    locally_optimized_expr: local_mir_plan.expr().into(),
                     desc,
                     collections,
                     resolved_ids,

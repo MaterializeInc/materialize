@@ -1372,7 +1372,7 @@ pub struct View {
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
-    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// Columns of this view.
     pub desc: RelationDesc,
     /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
@@ -1400,7 +1400,7 @@ pub struct MaterializedView {
     /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression, derived from the `raw_expr`.
-    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
@@ -1516,7 +1516,7 @@ impl MaterializedView {
             create_sql,
             collections,
             raw_expr: replacement.raw_expr,
-            optimized_expr: replacement.optimized_expr,
+            locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
             resolved_ids,
             dependencies,

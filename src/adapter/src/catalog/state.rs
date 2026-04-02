@@ -1265,7 +1265,7 @@ impl CatalogState {
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
                 let previous_exprs = previous_item.map(|item| match item {
-                    CatalogItem::View(view) => Some((view.raw_expr, view.optimized_expr)),
+                    CatalogItem::View(view) => Some((view.raw_expr, view.locally_optimized_expr)),
                     _ => None,
                 });
 
@@ -1311,7 +1311,7 @@ impl CatalogState {
                     global_id,
                     raw_expr,
                     desc: RelationDesc::new(typ, view.column_names),
-                    optimized_expr,
+                    locally_optimized_expr: optimized_expr,
                     conn_id: None,
                     resolved_ids,
                     dependencies: DependencyIds(dependencies),
@@ -1335,9 +1335,10 @@ impl CatalogState {
                 let optimizer_config =
                     optimize::OptimizerConfig::from(system_vars).override_from(&overrides);
                 let previous_exprs = previous_item.map(|item| match item {
-                    CatalogItem::MaterializedView(materialized_view) => {
-                        (materialized_view.raw_expr, materialized_view.optimized_expr)
-                    }
+                    CatalogItem::MaterializedView(materialized_view) => (
+                        materialized_view.raw_expr,
+                        materialized_view.locally_optimized_expr,
+                    ),
                     item => unreachable!("expected materialized view, found: {item:#?}"),
                 });
 
@@ -1394,7 +1395,7 @@ impl CatalogState {
                     create_sql: materialized_view.create_sql,
                     collections,
                     raw_expr,
-                    optimized_expr,
+                    locally_optimized_expr: optimized_expr,
                     desc,
                     resolved_ids,
                     dependencies,

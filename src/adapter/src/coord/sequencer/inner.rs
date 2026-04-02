@@ -2695,9 +2695,12 @@ impl Coordinator {
             let mut ids_to_check = Vec::new();
             let valid = match catalog.try_get_entry(id) {
                 Some(entry) => {
-                    if let CatalogItem::View(objects::View { optimized_expr, .. })
+                    if let CatalogItem::View(objects::View {
+                        locally_optimized_expr: optimized_expr,
+                        ..
+                    })
                     | CatalogItem::MaterializedView(objects::MaterializedView {
-                        optimized_expr,
+                        locally_optimized_expr: optimized_expr,
                         ..
                     }) = entry.item()
                     {
