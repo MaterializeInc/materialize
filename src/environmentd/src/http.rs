@@ -482,15 +482,18 @@ impl HttpServer {
 
             if routes_enabled.mcp_agents {
                 info!("Enabling MCP agents endpoint: /api/mcp/agents");
-                mcp_router =
-                    mcp_router.route("/api/mcp/agents", routing::post(mcp::handle_mcp_agents));
+                mcp_router = mcp_router.route(
+                    "/api/mcp/agents",
+                    routing::post(mcp::handle_mcp_agents).get(mcp::handle_mcp_method_not_allowed),
+                );
             }
 
             if routes_enabled.mcp_observatory {
                 info!("Enabling MCP observatory endpoint: /api/mcp/observatory");
                 mcp_router = mcp_router.route(
                     "/api/mcp/observatory",
-                    routing::post(mcp::handle_mcp_observatory),
+                    routing::post(mcp::handle_mcp_observatory)
+                        .get(mcp::handle_mcp_method_not_allowed),
                 );
             }
 

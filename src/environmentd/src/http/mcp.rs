@@ -28,7 +28,7 @@ use std::time::Duration;
 use anyhow::anyhow;
 use axum::Json;
 use axum::response::IntoResponse;
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_OBSERVATORY, MCP_MAX_RESPONSE_SIZE,
 };
@@ -53,7 +53,8 @@ use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 const JSONRPC_VERSION: &str = "2.0";
 
 /// MCP protocol version returned in the `initialize` response.
-const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+/// Spec: <https://modelcontextprotocol.io/specification/2025-11-25>
+const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Maximum time an MCP tool call can run before the HTTP response is returned.
 /// Note: this returns a clean JSON-RPC error to the caller, but the underlying
@@ -257,6 +258,8 @@ struct InitializeResult {
     capabilities: Capabilities,
     #[serde(rename = "serverInfo")]
     server_info: ServerInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -278,14 +281,42 @@ struct ToolsListResult {
 #[derive(Debug, Serialize)]
 struct ToolDefinition {
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
     description: String,
     #[serde(rename = "inputSchema")]
     input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotations: Option<ToolAnnotations>,
 }
+
+/// MCP 2025-11-25 tool annotations that describe tool behavior.
+/// These hints help clients make trust and safety decisions.
+#[derive(Debug, Serialize)]
+struct ToolAnnotations {
+    #[serde(rename = "readOnlyHint", skip_serializing_if = "Option::is_none")]
+    read_only_hint: Option<bool>,
+    #[serde(rename = "destructiveHint", skip_serializing_if = "Option::is_none")]
+    destructive_hint: Option<bool>,
+    #[serde(rename = "idempotentHint", skip_serializing_if = "Option::is_none")]
+    idempotent_hint: Option<bool>,
+    #[serde(rename = "openWorldHint", skip_serializing_if = "Option::is_none")]
+    open_world_hint: Option<bool>,
+}
+
+/// Annotations for all MCP tools: read-only, non-destructive, idempotent.
+const READ_ONLY_ANNOTATIONS: ToolAnnotations = ToolAnnotations {
+    read_only_hint: Some(true),
+    destructive_hint: Some(false),
+    idempotent_hint: Some(true),
+    open_world_hint: Some(false),
+};
 
 #[derive(Debug, Serialize)]
 struct ToolContentResult {
     content: Vec<ContentBlock>,
+    #[serde(rename = "isError")]
+    is_error: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -338,20 +369,72 @@ impl std::fmt::Display for McpEndpointType {
     }
 }
 
+/// MCP 2025-11-25 requires servers to return 405 for GET requests
+/// on endpoints that only support POST.
+pub async fn handle_mcp_method_not_allowed() -> impl IntoResponse {
+    StatusCode::METHOD_NOT_ALLOWED
+}
+
 /// Agents endpoint: exposes user data products.
 pub async fn handle_mcp_agents(
+    headers: HeaderMap,
     client: AuthedClient,
-    Json(request): Json<McpRequest>,
-) -> impl IntoResponse {
-    handle_mcp_request(client, request, McpEndpointType::Agents).await
+    Json(body): Json<McpRequest>,
+) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers) {
+        return resp;
+    }
+    handle_mcp_request(client, body, McpEndpointType::Agents)
+        .await
+        .into_response()
 }
 
 /// Observatory endpoint: exposes system catalog (mz_*) only.
 pub async fn handle_mcp_observatory(
+    headers: HeaderMap,
     client: AuthedClient,
-    Json(request): Json<McpRequest>,
-) -> impl IntoResponse {
-    handle_mcp_request(client, request, McpEndpointType::Observatory).await
+    Json(body): Json<McpRequest>,
+) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers) {
+        return resp;
+    }
+    handle_mcp_request(client, body, McpEndpointType::Observatory)
+        .await
+        .into_response()
+}
+
+/// Validates the Origin header to prevent DNS rebinding attacks (MCP 2025-11-25).
+/// Returns Some(403) if the Origin is present but doesn't match the Host.
+/// Returns None if the Origin is absent (non-browser client) or valid.
+fn validate_origin(headers: &HeaderMap) -> Option<axum::response::Response> {
+    let origin = match headers.get(http::header::ORIGIN) {
+        Some(o) => o,
+        None => return None, // No Origin header = non-browser client, allow
+    };
+
+    let host = headers
+        .get(http::header::HOST)
+        .and_then(|h| h.to_str().ok());
+
+    let origin_str = origin.to_str().ok().unwrap_or("");
+
+    // Extract host portion from Origin (strip scheme)
+    let origin_host = origin_str
+        .strip_prefix("https://")
+        .or_else(|| origin_str.strip_prefix("http://"))
+        .unwrap_or(origin_str);
+
+    match host {
+        Some(h) if h == origin_host => None, // Origin matches Host
+        _ => {
+            warn!(
+                origin = origin_str,
+                host = ?host,
+                "MCP request rejected: Origin does not match Host",
+            );
+            Some(StatusCode::FORBIDDEN.into_response())
+        }
+    }
 }
 
 async fn handle_mcp_request(
@@ -526,6 +609,7 @@ async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, 
             name: format!("materialize-mcp-{}", endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
+        instructions: None,
     }))
 }
 
@@ -541,15 +625,18 @@ async fn handle_tools_list(
             let mut tools = vec![
                 ToolDefinition {
                     name: "get_data_products".to_string(),
+                    title: Some("List Data Products".to_string()),
                     description: "Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.".to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {},
                         "required": []
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
                 ToolDefinition {
                     name: "get_data_product_details".to_string(),
+                    title: Some("Get Data Product Details".to_string()),
                     description: "Get the complete schema and structure of a specific data product. This shows you exactly what fields are available, their types, and what data you can query. Use this after finding a data product from get_data_products() to understand how to query it.".to_string(),
                     input_schema: json!({
                         "type": "object",
@@ -561,9 +648,11 @@ async fn handle_tools_list(
                         },
                         "required": ["name"]
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
                 ToolDefinition {
                     name: "read_data_product".to_string(),
+                    title: Some("Read Data Product".to_string()),
                     description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
@@ -584,11 +673,13 @@ async fn handle_tools_list(
                         },
                         "required": ["name"]
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
             ];
             if query_tool_enabled {
                 tools.push(ToolDefinition {
                     name: "query".to_string(),
+                    title: Some("Query Data Products".to_string()),
                     description: format!("Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
@@ -604,6 +695,7 @@ async fn handle_tools_list(
                         },
                         "required": ["cluster", "sql_query"]
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 });
             }
             tools
@@ -611,6 +703,7 @@ async fn handle_tools_list(
         McpEndpointType::Observatory => {
             vec![ToolDefinition {
                 name: "query_system_catalog".to_string(),
+                title: Some("Query System Catalog".to_string()),
                 description: concat!(
                     "Query Materialize system catalog tables for troubleshooting and observability. ",
                     "Only mz_*, pg_catalog, and information_schema tables are accessible.\n\n",
@@ -632,6 +725,7 @@ async fn handle_tools_list(
                     },
                     "required": ["sql_query"]
                 }),
+                annotations: Some(READ_ONLY_ANNOTATIONS),
             }]
         }
     };
@@ -743,6 +837,7 @@ fn format_rows_response(
             content_type: "text".to_string(),
             text,
         }],
+        is_error: false,
     }))
 }
 
@@ -1569,6 +1664,46 @@ mod tests {
         assert!(safe_data_product_name("my_view, secrets").is_err());
         // SQL keywords after name are rejected by the parser
         assert!(safe_data_product_name("my_view WHERE 1=1 --").is_err());
+    }
+
+    // ── Origin validation tests ────────────────────────────────────────
+
+    #[mz_ore::test]
+    fn test_validate_origin_no_header() {
+        let headers = HeaderMap::new();
+        assert!(validate_origin(&headers).is_none(), "No Origin = allow");
+    }
+
+    #[mz_ore::test]
+    fn test_validate_origin_matching() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ORIGIN, "https://example.com".parse().unwrap());
+        headers.insert(http::header::HOST, "example.com".parse().unwrap());
+        assert!(
+            validate_origin(&headers).is_none(),
+            "Matching Origin = allow"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_origin_mismatch() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ORIGIN, "https://evil.com".parse().unwrap());
+        headers.insert(http::header::HOST, "example.com".parse().unwrap());
+        assert!(
+            validate_origin(&headers).is_some(),
+            "Mismatched Origin = reject"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_origin_no_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ORIGIN, "https://example.com".parse().unwrap());
+        assert!(
+            validate_origin(&headers).is_some(),
+            "Origin with no Host = reject"
+        );
     }
 
     #[mz_ore::test]
