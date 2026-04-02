@@ -4737,11 +4737,11 @@ async fn test_cert_reloading() {
         .send()
         .await
         .unwrap();
-    // TODO(SEC-219): certificate comparison needs rustls-native peer cert API.
-    // Previously we compared X509::from_der(tlsinfo.peer_certificate()) against the
-    // server cert file. With rustls, peer_certificate() is not available on reqwest TlsInfo.
-    let _tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
     assert_contains!(resp.text().await.unwrap(), "12234");
+    let server_cert_der = test_util::cert_file_to_der(&server_cert);
+    let tls_cfg = TestTlsConfig::with_ca(&ca.ca_cert_path());
+    let peer_der = test_util::peer_certificate_der(envd_server.http_local_addr(), &tls_cfg).await;
+    assert_eq!(peer_der, server_cert_der);
     check_pgwire(&conn_str, &ca.ca_cert_path()).await;
 
     // Generate new certs. Install only the key, reload, and make sure the old cert is still in
@@ -4749,6 +4749,8 @@ async fn test_cert_reloading() {
     let (next_cert, next_key) = ca
         .request_cert("next", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
+    let next_cert_der = test_util::cert_file_to_der(&next_cert);
+    assert_ne!(next_cert_der, server_cert_der);
     std::fs::copy(next_key, &server_key).unwrap();
     let (tx, rx) = oneshot::channel();
     reload_tx.try_send(Some(tx)).unwrap();
@@ -4756,16 +4758,8 @@ async fn test_cert_reloading() {
     assert_err!(res);
 
     // We should still be on the old cert because now the cert and key mismatch.
-    let resp = client
-        .post(&https_url)
-        .header("Content-Type", "application/json")
-        .basic_auth(frontegg_user, Some(&frontegg_password))
-        .body(body)
-        .send()
-        .await
-        .unwrap();
-    // TODO(SEC-219): certificate comparison needs rustls-native peer cert API.
-    let _tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
+    let peer_der = test_util::peer_certificate_der(envd_server.http_local_addr(), &tls_cfg).await;
+    assert_eq!(peer_der, server_cert_der);
     check_pgwire(&conn_str, &ca.ca_cert_path()).await;
 
     // Now move the cert too. Reloading should succeed and the response should have the new
@@ -4775,16 +4769,8 @@ async fn test_cert_reloading() {
     reload_tx.try_send(Some(tx)).unwrap();
     let res = rx.await.unwrap();
     assert_ok!(res);
-    let resp = client
-        .post(&https_url)
-        .header("Content-Type", "application/json")
-        .basic_auth(frontegg_user, Some(&frontegg_password))
-        .body(body)
-        .send()
-        .await
-        .unwrap();
-    // TODO(SEC-219): certificate comparison needs rustls-native peer cert API.
-    let _tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
+    let peer_der = test_util::peer_certificate_der(envd_server.http_local_addr(), &tls_cfg).await;
+    assert_eq!(peer_der, next_cert_der);
     check_pgwire(&conn_str, &ca.ca_cert_path()).await;
 }
 

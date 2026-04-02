@@ -253,21 +253,19 @@ async fn test_balancer() {
             .send()
             .await
             .unwrap();
-        // TODO(SEC-219): peer certificate inspection not available with rustls postgres connector
-        // let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
-        // let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
-        // let server_x509 = X509::from_pem(&std::fs::read(&server_cert).unwrap()).unwrap();
-        // assert_eq!(resp_x509, server_x509);
         assert_contains!(resp.text().await.unwrap(), "12234");
+        let server_cert_der = test_util::cert_file_to_der(&server_cert);
+        let tls_cfg = TestTlsConfig::with_ca(&ca.ca_cert_path());
+        let peer_der = test_util::peer_certificate_der(balancer_https_listen, &tls_cfg).await;
+        assert_eq!(peer_der, server_cert_der);
 
         // Generate new certs. Install only the key, reload, and make sure the old cert is still in
         // use.
         let (next_cert, next_key) = ca
             .request_cert("next", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
             .unwrap();
-        // TODO(SEC-219): peer certificate inspection not available with rustls postgres connector
-        // let next_x509 = X509::from_pem(&std::fs::read(&next_cert).unwrap()).unwrap();
-        // assert_ne!(next_x509, server_x509);
+        let next_cert_der = test_util::cert_file_to_der(&next_cert);
+        assert_ne!(next_cert_der, server_cert_der);
         std::fs::copy(next_key, &server_key).unwrap();
         let (tx, rx) = oneshot::channel();
         reload_tx.try_send(Some(tx)).unwrap();
@@ -275,18 +273,8 @@ async fn test_balancer() {
         assert_err!(res);
 
         // We should still be on the old cert because now the cert and key mismatch.
-        let resp = client
-            .post(&https_url)
-            .header("Content-Type", "application/json")
-            .basic_auth(frontegg_user, Some(&frontegg_password))
-            .body(body)
-            .send()
-            .await
-            .unwrap();
-        // TODO(SEC-219): peer certificate inspection not available with rustls postgres connector
-        // let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
-        // let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
-        // assert_eq!(resp_x509, server_x509);
+        let peer_der = test_util::peer_certificate_der(balancer_https_listen, &tls_cfg).await;
+        assert_eq!(peer_der, server_cert_der);
 
         // Now move the cert too. Reloading should succeed and the response should have the new
         // cert.
@@ -295,18 +283,8 @@ async fn test_balancer() {
         reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
         assert_ok!(res);
-        let resp = client
-            .post(&https_url)
-            .header("Content-Type", "application/json")
-            .basic_auth(frontegg_user, Some(&frontegg_password))
-            .body(body)
-            .send()
-            .await
-            .unwrap();
-        // TODO(SEC-219): peer certificate inspection not available with rustls postgres connector
-        // let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
-        // let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
-        // assert_eq!(resp_x509, next_x509);
+        let peer_der = test_util::peer_certificate_der(balancer_https_listen, &tls_cfg).await;
+        assert_eq!(peer_der, next_cert_der);
 
         if !is_multi_tenant_resolver {
             continue;

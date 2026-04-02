@@ -69,25 +69,25 @@ use uuid::Uuid;
 // without increasing test time.
 const EXPIRES_IN_SECS: u64 = 20;
 
-// TODO(SEC-219): migrate make_http_tls to rustls (hyper-rustls).
-// For now, HTTP test paths using this function will panic at runtime.
-fn make_http_tls(_config: &TestTlsConfig) -> hyper_rustls::HttpsConnector<HttpConnector> {
+fn make_http_tls(config: &TestTlsConfig) -> hyper_rustls::HttpsConnector<HttpConnector> {
+    let tls_config: rustls::ClientConfig = (*config.build_rustls_client_config()).clone();
     let mut http = HttpConnector::new();
     http.enforce_http(false);
     hyper_rustls::HttpsConnectorBuilder::new()
-        .with_native_roots()
-        .unwrap()
+        .with_tls_config(tls_config)
         .https_or_http()
         .enable_http2()
         .wrap_connector(http)
 }
 
-// TODO(SEC-219): migrate make_ws_tls to rustls.
-// For now, WebSocket test paths using this function will connect via plain TCP.
-fn make_ws_tls(uri: &Uri, _config: &TestTlsConfig) -> impl Read + Write {
-    // Plain TCP — TLS WS tests will fail at the protocol level until
-    // this is migrated to tokio-rustls or rustls-connector.
-    TcpStream::connect(format!("{}:{}", uri.host().unwrap(), uri.port().unwrap())).unwrap()
+fn make_ws_tls(uri: &Uri, config: &TestTlsConfig) -> impl Read + Write {
+    let tls_config = config.build_rustls_client_config();
+    let server_name = rustls::pki_types::ServerName::try_from(uri.host().unwrap().to_string())
+        .expect("valid server name");
+    let conn = rustls::ClientConnection::new(tls_config, server_name).unwrap();
+    let tcp =
+        TcpStream::connect(format!("{}:{}", uri.host().unwrap(), uri.port().unwrap())).unwrap();
+    rustls::StreamOwned::new(conn, tcp)
 }
 
 // Use two error types because some tests need to retry certain errors because

@@ -1693,6 +1693,39 @@ pub fn make_pg_tls(config: TestTlsConfig) -> MakeRustlsConnect {
     MakeRustlsConnect::new((*config.build_rustls_client_config()).clone())
 }
 
+/// Performs a TLS handshake to `addr` and returns the peer's leaf certificate
+/// in DER encoding.
+///
+/// We use a raw `tokio_rustls` connection instead of reqwest because
+/// `reqwest::tls::TlsInfo::peer_certificate()` only returns the peer cert
+/// when reqwest is built with the `native-tls` backend. With the `rustls-tls`
+/// backend it always returns `None` — a known reqwest limitation. By dropping
+/// down to `tokio_rustls` directly we can call
+/// `ServerConnection::peer_certificates()` which always works.
+pub async fn peer_certificate_der(
+    addr: std::net::SocketAddr,
+    tls_config: &TestTlsConfig,
+) -> Vec<u8> {
+    use tokio_rustls::TlsConnector;
+
+    let connector = TlsConnector::from(tls_config.build_rustls_client_config());
+    let server_name = rustls::pki_types::ServerName::IpAddress(addr.ip().into());
+    let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let tls = connector.connect(server_name, tcp).await.unwrap();
+    let (_, session) = tls.get_ref();
+    let certs = session.peer_certificates().expect("peer certificates");
+    certs[0].as_ref().to_vec()
+}
+
+/// Reads a PEM certificate file and returns the first certificate as DER bytes.
+pub fn cert_file_to_der(path: &Path) -> Vec<u8> {
+    let pem = fs::read(path).unwrap();
+    let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    certs[0].as_ref().to_vec()
+}
+
 /// Configuration for test TLS connections, replacing the old
 /// `FnOnce(&mut SslConnectorBuilder)` closure pattern.
 #[derive(Clone, Debug)]
