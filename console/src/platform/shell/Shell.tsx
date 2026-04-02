@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import "./crt.css";
+import "./aprilFools.css";
 
 import { Grid, GridItem, useDisclosure, VStack } from "@chakra-ui/react";
 import { TransactionSpec } from "@codemirror/state";
@@ -16,6 +17,8 @@ import { RESET, useAtomCallback } from "jotai/utils";
 import React, { useCallback, useEffect, useMemo, useRef } from "react";
 
 import { useSegment } from "~/analytics/segment";
+import { useToast } from "~/hooks/useToast";
+import { startCursorTrail } from "./aprilFoolsEffects";
 import { EditorCommand, EditorEvent } from "~/components/CommandBlock";
 import {
   useGetView,
@@ -59,6 +62,41 @@ function shouldNavigateNext(event: EditorEvent) {
   return event.cursor.line === event.state.lineCount;
 }
 
+// April Fools: escalating DROP toast chain
+const DROP_CHAIN = [
+  "Whoa, who hurt you?",
+  "Okay but are you REALLY sure?",
+  "This is your third warning. We're getting concerned.",
+  "Fine. But we're telling your DBA.",
+  "Your DBA has been notified. They are not happy.",
+  "The database is crying now. Are you proud of yourself?",
+  "...you're still here? Impressive commitment to destruction.",
+];
+
+function dropToastChain(
+  toast: (opts: {
+    description: string;
+    status: string;
+    isClosable: boolean;
+    duration?: number;
+  }) => void,
+  step = 0,
+) {
+  if (step >= DROP_CHAIN.length) return;
+  setTimeout(
+    () => {
+      toast({
+        description: `⚠️ ${DROP_CHAIN[step]}`,
+        status: "error",
+        isClosable: true,
+        duration: 4000,
+      });
+      dropToastChain(toast, step + 1);
+    },
+    step === 0 ? 0 : 2000,
+  );
+}
+
 const Shell = () => {
   const [shellState, setShellState] = useAtom(shellStateAtom);
 
@@ -80,6 +118,7 @@ const Shell = () => {
   const viewDispatch = useViewDispatch();
 
   const { track } = useSegment();
+  const sentientToast = useToast({ duration: 5000 });
 
   const cancelQuery = () => {
     const { connectionId } = shellState;
@@ -163,6 +202,54 @@ const Shell = () => {
       setShouldAutoScroll(true);
 
       const queries = splitQueryString(command);
+
+      // April Fools: Sentient SQL Linter
+      const upper = command.toUpperCase();
+      const linterQuips: string[] = [];
+      if (/SELECT\s+\*/.test(upper))
+        linterQuips.push(
+          "SELECT *? This feels like a lack of commitment to specific columns.",
+        );
+      if (/\bJOIN\b/.test(upper))
+        linterQuips.push(
+          "Are these two tables even compatible? Have they been to counseling?",
+        );
+      if (/\bDROP\b/.test(upper)) dropToastChain(sentientToast);
+      if (/\bLIMIT\b/.test(upper))
+        linterQuips.push("Why restrict yourself? Dream bigger.");
+      if (/\bDELETE\b/.test(upper))
+        linterQuips.push(
+          "Deleting data? In this economy?",
+        );
+      if (/\bTRUNCATE\b/.test(upper))
+        linterQuips.push(
+          "TRUNCATE? That's not assertive, that's unhinged.",
+        );
+      if (/\bWHERE\s+1\s*=\s*1\b/.test(upper))
+        linterQuips.push(
+          "WHERE 1=1... profound. Have you considered a career in philosophy?",
+        );
+      if (/\bGROUP\s+BY\b/.test(upper))
+        linterQuips.push(
+          "GROUP BY? Some of us prefer to be individuals.",
+        );
+      if (/\bORDER\s+BY\b/.test(upper))
+        linterQuips.push("Imposing order on chaos. Bold move.");
+      if (/\bSUBSCRIBE\b/.test(upper))
+        linterQuips.push(
+          "SUBSCRIBE? Don't forget to like and hit that bell icon.",
+        );
+      if (/\bCREATE\s+MATERIALIZED\s+VIEW\b/.test(upper))
+        linterQuips.push(
+          "Creating a materialized view? That's a big commitment. Are you ready for this?",
+        );
+      for (const quip of linterQuips) {
+        sentientToast({
+          description: `🤔 ${quip}`,
+          status: "success",
+          isClosable: true,
+        });
+      }
 
       send({ queries, originalCommand: command });
       if (options?.trackingMethod) {
@@ -296,6 +383,19 @@ const Shell = () => {
   const shellPromptRef = useRef<FocusableElement>(null);
 
   const focusShell = useCallback(() => shellPromptRef.current?.focus(), []);
+
+  // April Fools: global CSS animations + cursor trail
+  useEffect(() => {
+    document.body.classList.add("april-fools-active", "april-fools-gravity");
+    const cleanupTrail = startCursorTrail();
+    return () => {
+      document.body.classList.remove(
+        "april-fools-active",
+        "april-fools-gravity",
+      );
+      cleanupTrail();
+    };
+  }, []);
 
   return (
     <Grid

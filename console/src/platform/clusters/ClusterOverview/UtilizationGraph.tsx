@@ -32,6 +32,34 @@ import {
   GraphLineCursor,
   GraphTooltipCursor,
 } from "~/components/graphComponents";
+
+// April Fools: sparkle effect on graph hover
+function spawnSparkle(container: HTMLElement, x: number, y: number) {
+  const sparkle = document.createElement("div");
+  const hue = Math.random() * 360;
+  const size = 3 + Math.random() * 5;
+  const driftX = (Math.random() - 0.5) * 40;
+  sparkle.textContent = "✨";
+  sparkle.style.cssText = `
+    position:absolute;
+    left:${x}px;
+    top:${y}px;
+    font-size:${size + 8}px;
+    pointer-events:none;
+    z-index:10;
+    opacity:1;
+    transition:all 1s ease-out;
+    filter:hue-rotate(${hue}deg);
+  `;
+  container.appendChild(sparkle);
+  requestAnimationFrame(() => {
+    sparkle.style.opacity = "0";
+    sparkle.style.top = `${y - 30 - Math.random() * 30}px`;
+    sparkle.style.left = `${x + driftX}px`;
+    sparkle.style.transform = `scale(0.3) rotate(${Math.random() * 180}deg)`;
+  });
+  setTimeout(() => sparkle.remove(), 1000);
+}
 import { useHandleEmittedEvent } from "~/hooks/useHandleEmittedEvent";
 import {
   useCursorState,
@@ -223,8 +251,63 @@ export const ClusterUtilizationGraphInner = ({
   );
   const statusLineColor = colors.foreground.tertiary;
 
+  // April Fools: sparkle on hover
+  const graphContainerRef = React.useRef<HTMLDivElement>(null);
+  let lastSparkleTime = React.useRef(0);
+  const handleSparkle = React.useCallback((event: PointerEvent) => {
+    const now = Date.now();
+    if (now - lastSparkleTime.current < 80) return;
+    lastSparkleTime.current = now;
+    const container = graphContainerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    spawnSparkle(
+      container,
+      event.clientX - rect.left,
+      event.clientY - rect.top,
+    );
+  }, []);
+
+  // April Fools: elastic pull effect
+  const [elasticTransform, setElasticTransform] = React.useState("");
+  const [isElasticActive, setIsElasticActive] = React.useState(false);
+
+  const handleElasticMove = React.useCallback(
+    (event: React.PointerEvent | PointerEvent) => {
+      const container = graphContainerRef.current;
+      if (!container) return;
+      const rect = container.getBoundingClientRect();
+      const relX = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
+      const relY = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
+      const tiltX = relY * -8;
+      const tiltY = relX * 8;
+      const translateZ = 10;
+      const scaleAmount = 1 + Math.abs(relX * relY) * 0.04;
+      setElasticTransform(
+        `perspective(600px) rotateX(${tiltX}deg) rotateY(${tiltY}deg) translateZ(${translateZ}px) scale(${scaleAmount})`,
+      );
+      setIsElasticActive(true);
+    },
+    [],
+  );
+
+  const handleElasticLeave = React.useCallback(() => {
+    setElasticTransform("");
+    setIsElasticActive(false);
+  }, []);
+
   return (
-    <Box position="relative">
+    <Box
+      position="relative"
+      ref={graphContainerRef}
+      style={{
+        transform: elasticTransform || "perspective(600px) rotateX(0) rotateY(0) scale(1)",
+        transition: isElasticActive
+          ? "transform 0.05s ease-out"
+          : "transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)",
+        transformOrigin: "center center",
+      }}
+    >
       <HStack justifyContent="space-between" mb={2}>
         <Text fontSize="sm" lineHeight="16px" fontWeight={500}>
           {title}
@@ -293,10 +376,16 @@ export const ClusterUtilizationGraphInner = ({
                 key={replicaData.id}
                 defined={(datapoint) => datapoint[dataKey] !== null}
                 stroke={replicaColorMap.get(replicaData.id)?.color}
-                strokeWidth={1}
+                strokeWidth={2}
                 data={replicaData.data}
                 x={(d) => xScale(d.bucketStart)}
                 y={(d) => yScale(d[dataKey] ?? 0)}
+                style={{
+                  strokeDasharray: 5000,
+                  strokeDashoffset: 5000,
+                  animation:
+                    "april-fools-draw-line 2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards",
+                }}
               />
             )
           );
@@ -344,10 +433,13 @@ export const ClusterUtilizationGraphInner = ({
           {...graphEventOverlayProps}
           onPointerMove={(event) => {
             handleTooltip(event);
+            handleSparkle(event);
+            handleElasticMove(event);
             onPointerMove?.(event);
           }}
           onPointerLeave={(event) => {
             hideTooltip();
+            handleElasticLeave();
             onPointerOut?.(event);
           }}
         />

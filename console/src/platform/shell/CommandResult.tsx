@@ -17,8 +17,23 @@ import { InfoIcon } from "~/icons";
 import { MaterializeTheme } from "~/theme";
 import { capitalizeSentence } from "~/util";
 
+import { triggerConfetti } from "./aprilFoolsEffects";
 import CommandResultNotice from "./CommandResultNotice";
 import { ERROR_NOTICE_OUTPUT_MAX_WIDTH, TABLE_PAGE_SIZE } from "./constants";
+
+// April Fools: SUBSCRIBE compliments
+const SUBSCRIBE_COMPLIMENTS = [
+  "You're doing amazing. These rows are lucky to have you watching them.",
+  "Your dedication to real-time data is truly inspiring.",
+  "Not everyone has the patience for SUBSCRIBE. You're built different.",
+  "These changes wouldn't be the same without you observing them.",
+  "You've been subscribing for a while now. Remember to hydrate!",
+  "Fun fact: this data stream thinks you're really cool.",
+  "The rows are blushing. They've never had such an attentive audience.",
+  "SUBSCRIBE to self-care too, okay?",
+  "Your commitment to eventual consistency is... consistent. We love that.",
+  "You could be doom-scrolling, but instead you're watching database diffs. Respect.",
+];
 import ErrorOutput from "./ErrorOutput";
 import formatRows from "./formatRows";
 import SqlSelectTable, { TablePagination } from "./SqlSelectTable";
@@ -54,6 +69,25 @@ const CommandResult = ({
       .isSubscribeManager;
 
   const { colors } = useTheme<MaterializeTheme>();
+
+  // April Fools: confetti on successful query
+  const hasTriggeredConfetti = React.useRef(false);
+  React.useEffect(() => {
+    if (!error && commandCompletePayload && !hasTriggeredConfetti.current) {
+      hasTriggeredConfetti.current = true;
+      triggerConfetti();
+    }
+  }, [error, commandCompletePayload]);
+
+  // April Fools: pick a stable compliment per command result
+  const subscribeCompliment = React.useMemo(
+    () =>
+      SUBSCRIBE_COMPLIMENTS[
+        Math.abs(commandOutput.historyId.charCodeAt(0) ?? 0) %
+          SUBSCRIBE_COMPLIMENTS.length
+      ],
+    [commandOutput.historyId],
+  );
 
   const paginationState = useCommandOutputPagination({
     historyId: commandOutput.historyId,
@@ -142,6 +176,11 @@ const CommandResult = ({
         />
       ))}
       {!hasRows && !error && <Code>{commandCompletePayload ?? ""}</Code>}
+      {isStreamingResult && (
+        <Code color={colors.accent.purple} whiteSpace="pre-wrap" px="3">
+          💜 {subscribeCompliment}
+        </Code>
+      )}
       {table}
 
       {error && (

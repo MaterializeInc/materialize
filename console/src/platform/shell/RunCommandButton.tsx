@@ -40,6 +40,17 @@ const RunCommandButton = ({
   const clearPrompt = useAtomCallback(saveClearPrompt);
   const [{ webSocketState }] = useAtom(shellStateAtom);
 
+  // April Fools: uncatchable button
+  const [dodgeOffset, setDodgeOffset] = React.useState({ x: 0, y: 0 });
+  const dodgeCount = React.useRef(0);
+  const handleMouseEnter = React.useCallback(() => {
+    if (dodgeCount.current >= 5) return; // let them catch it eventually
+    dodgeCount.current += 1;
+    const randX = (Math.random() - 0.5) * 200;
+    const randY = (Math.random() - 0.5) * 150;
+    setDodgeOffset({ x: randX, y: randY });
+  }, []);
+
   const isStreaming = webSocketState === "commandInProgressStreaming";
 
   const isCommandProcessing =
@@ -95,6 +106,9 @@ const RunCommandButton = ({
         }}
         isDisabled={isButtonDisabled}
         loadingText={buttonText}
+        onMouseEnter={handleMouseEnter}
+        transform={`translate(${dodgeOffset.x}px, ${dodgeOffset.y}px)`}
+        transition="transform 0.15s ease-out"
         {...rest}
         _hover={{
           opacity: isButtonDisabled ? 0.4 : 1,

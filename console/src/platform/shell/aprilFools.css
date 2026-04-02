@@ -1,0 +1,127 @@
+/* Copyright Materialize, Inc. and contributors. All rights reserved.
+ *
+ * Use of this software is governed by the Business Source License
+ * included in the LICENSE file.
+ *
+ * As of the Change Date specified in that file, in accordance with
+ * the Business Source License, use of this software will be governed
+ * by the Apache License, Version 2.0.
+ */
+
+/* === April Fools 2026 === */
+
+/* 1. Gravity mode: page content slowly drifts down */
+@keyframes gravity-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    transform: translateY(80px) rotate(0.5deg);
+  }
+}
+
+.april-fools-gravity [data-testid="shell"] {
+  animation: gravity-fall 45s ease-in forwards;
+}
+
+/* 2. Spinning status indicators */
+@keyframes spin-forever {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.april-fools-active [class*="StatusPill"],
+.april-fools-active [class*="statusPill"],
+.april-fools-active [data-testid*="status"],
+.april-fools-active [class*="Spinner"] {
+  animation: spin-forever 2s linear infinite;
+}
+
+/* Spin the cluster status dots/circles in the sidebar and cluster pages */
+.april-fools-active svg circle[fill],
+.april-fools-active [class*="replica"] svg {
+  animation: spin-forever 3s linear infinite;
+  transform-origin: center;
+}
+
+/* 3. Wiggle on hover for all interactive elements */
+@keyframes wiggle {
+  0% { transform: rotate(0deg); }
+  15% { transform: rotate(3deg); }
+  30% { transform: rotate(-3deg); }
+  45% { transform: rotate(2deg); }
+  60% { transform: rotate(-2deg); }
+  75% { transform: rotate(1deg); }
+  100% { transform: rotate(0deg); }
+}
+
+.april-fools-active button:hover,
+.april-fools-active a:hover,
+.april-fools-active [role="menuitem"]:hover,
+.april-fools-active [role="tab"]:hover,
+.april-fools-active [role="option"]:hover {
+  animation: wiggle 0.4s ease-in-out;
+}
+
+/* 4. Slow drift: the entire page slowly rotates */
+@keyframes slow-drift {
+  0% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(3deg);
+  }
+  100% {
+    transform: rotate(-1.5deg);
+  }
+}
+
+.april-fools-active {
+  animation: slow-drift 60s ease-in-out infinite;
+  transform-origin: center center;
+}
+
+/* 5. Clingy sidebar: slowly grows wider over time */
+@keyframes clingy-sidebar {
+  0% {
+    min-width: 240px;
+    max-width: 240px;
+  }
+  100% {
+    min-width: 400px;
+    max-width: 400px;
+  }
+}
+
+@media (min-width: 62em) {
+  .april-fools-active .april-fools-navbar {
+    animation: clingy-sidebar 300s ease-in forwards;
+  }
+}
+
+/* 6. Graph line draw-in with spring/elastic easing */
+@keyframes april-fools-draw-line {
+  0% {
+    stroke-dashoffset: 5000;
+  }
+  100% {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* Bouncy jiggle on the whole graph container when hovered */
+@keyframes graph-jiggle {
+  0% { transform: scale(1) rotate(0); }
+  25% { transform: scale(1.01) rotate(0.3deg); }
+  50% { transform: scale(0.99) rotate(-0.2deg); }
+  75% { transform: scale(1.005) rotate(0.1deg); }
+  100% { transform: scale(1) rotate(0); }
+}
+
+.graph-container:hover {
+  animation: graph-jiggle 0.6s ease-in-out;
+}

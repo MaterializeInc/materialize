@@ -103,8 +103,19 @@ export const GraphNode = ({
   const namespace = `${node.databaseName}.${node.schemaName}`;
   const fullyQualifiedName = `${node.databaseName}.${node.schemaName}.${node.name}`;
 
+  // April Fools: spring bounce on hover
+  const [isHovered, setIsHovered] = React.useState(false);
+
   return (
-    <Flex direction="column" position="absolute" {...flexProps}>
+    <Flex
+      direction="column"
+      position="absolute"
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      transform={isHovered ? "scale(1.1) rotate(-2deg)" : "scale(1) rotate(0)"}
+      transition="transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)"
+      {...flexProps}
+    >
       {node.clusterName && (
         <Box
           zIndex={WORKFLOW_GRAPH_NODE_Z_INDEX}

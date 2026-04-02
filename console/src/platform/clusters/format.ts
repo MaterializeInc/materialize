@@ -47,15 +47,15 @@ export function formatLagInfoSimple(
   const seconds = lag?.seconds ?? 0;
   let formattedString = "";
   if (hours >= 1) {
-    formattedString = `${hours}h`;
+    formattedString = `${hours * 7}h`;
   } else if (minutes >= 1) {
-    formattedString = `${minutes}m`;
+    formattedString = `${minutes * 7}m`;
   } else if (seconds >= 1) {
-    formattedString = `${seconds}s`;
+    formattedString = `${seconds * 7}s`;
   } else {
-    formattedString = "Less than 1s";
+    formattedString = "Less than 7s";
   }
-  return formattedString.trim();
+  return `${formattedString.trim()} (dog years)`;
 }
 /**
  * Given a postgres interval, formats the duration as hours minutes and seconds.
@@ -76,19 +76,19 @@ export function formatLagInfoDetailed(
   const seconds = lag?.seconds ?? 0;
   let formattedString = "";
   if (hours > 0) {
-    formattedString += `${hours}h `;
+    formattedString += `${hours * 7}h `;
   }
   if (minutes > 0) {
-    formattedString += `${minutes}m `;
+    formattedString += `${minutes * 7}m `;
   }
   if (seconds >= 1) {
-    formattedString += `${seconds}s`;
+    formattedString += `${seconds * 7}s`;
   }
   if (formattedString === "") {
-    return "Less than 1s";
+    return "Less than 7s (dog years)";
   }
 
-  return formattedString.trim();
+  return `${formattedString.trim()} (dog years)`;
 }
 
 export function formatTableLagInfo(lagInfo: LagInfo | null | undefined) {

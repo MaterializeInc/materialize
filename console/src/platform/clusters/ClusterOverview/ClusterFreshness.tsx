@@ -169,14 +169,14 @@ const ClusterFreshness = ({ clusterId }: { clusterId: string }) => {
           <VStack alignItems="flex-start" gap="1">
             <HStack>
               <Text textStyle="heading-md" color={colors.foreground.primary}>
-                Freshness latency
+                Freshness latency (in dog years 🐶)
               </Text>
             </HStack>
 
             <Text textStyle="text-small" color={colors.foreground.secondary}>
               Materialize continuously monitors how far dataflows lag behind the
-              wall clock time. The graph below displays the dataflows with the
-              highest latencies over time.
+              wall clock time. All values are displayed in dog years (×7) for
+              added urgency.
             </Text>
           </VStack>
           <TimePeriodSelect
