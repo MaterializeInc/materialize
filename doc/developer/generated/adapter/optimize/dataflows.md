@@ -1,10 +1,11 @@
 ---
 source: src/adapter/src/optimize/dataflows.rs
-revision: 2c413b395c
+revision: c0e930f9df
 ---
 
 # adapter::optimize::dataflows
 
 Provides `DataflowBuilder` and supporting types for assembling `DataflowDescription`s from the catalog.
 `DataflowBuilder` traverses catalog entries recursively to import source collections, views, and index arrangements; `ComputeInstanceSnapshot` captures a point-in-time view of a compute instance's installed collections for use during optimization.
-`ExprPrep` and its variants (`ExprPrepOneShot`, `ExprPrepWebhookValidation`) implement expression preparation — inlining literal values for unmaterializable functions (`now()`, `mz_logical_timestamp()`) — before expressions enter the dataflow layer.
+`ExprPrep` and its variants (`ExprPrepOneShot`, `ExprPrepMaintained`, `ExprPrepNoop`, `ExprPrepWebhookValidation`) implement expression preparation — inlining literal values for unmaterializable functions — before expressions enter the dataflow layer.
+`EvalTime` controls how `mz_now()` is handled during expression preparation: `Time(ts)` substitutes a concrete timestamp, and `NotAvailable` produces an error.
