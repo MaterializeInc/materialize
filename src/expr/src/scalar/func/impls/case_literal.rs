@@ -10,16 +10,15 @@
 //! A lookup-based evaluation of `CASE expr WHEN lit1 THEN res1 ... ELSE els END`.
 //!
 //! [`CaseLiteral`] replaces chains of `If(Eq(expr, literal), result, If(...))`
-//! with a single `BTreeMap` lookup, turning O(n) evaluation into O(log n).
+//! with a sorted `Vec` + binary-search lookup, turning O(n) evaluation into O(log n).
 //!
 //! Represented as a `CallVariadic { func: CaseLiteral { lookup, return_type }, exprs }`
 //! where:
 //! * `exprs[0]` = input expression (the `x` in `CASE x WHEN ...`)
 //! * `exprs[1..n]` = case result expressions
 //! * `exprs[last]` = `els` (fallback)
-//! * `lookup: BTreeMap<Row, usize>` maps literal values to indices in `exprs`
+//! * `lookup: Vec<CaseLiteralEntry>` maps literal values to indices in `exprs` (sorted by `Row`)
 
-use std::collections::BTreeMap;
 use std::fmt;
 
 use mz_lowertest::MzReflect;
@@ -29,11 +28,34 @@ use serde::{Deserialize, Serialize};
 use crate::scalar::func::variadic::LazyVariadicFunc;
 use crate::{EvalError, MirScalarExpr};
 
-/// Evaluates a CASE expression by looking up the input datum in a `BTreeMap`.
+/// A single entry in a [`CaseLiteral`] lookup table: a literal `Row` value
+/// paired with the index of the corresponding result expression in `exprs`.
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct CaseLiteralEntry {
+    /// The literal value (as a single-datum `Row`).
+    #[mzreflect(ignore)]
+    pub literal: Row,
+    /// Index into the `exprs` vector of the corresponding result expression.
+    pub expr_index: usize,
+}
+
+/// Evaluates a CASE expression by looking up the input datum in a sorted `Vec`.
 ///
 /// The input expression (`exprs[0]`) is evaluated once, packed into a temporary
-/// `Row`, and looked up in `lookup`. If found, the corresponding result expression
-/// (`exprs[idx]`) is evaluated; otherwise the fallback (`exprs.last()`) is evaluated.
+/// `Row`, and looked up in `lookup` via binary search. If found, the corresponding
+/// result expression (`exprs[idx]`) is evaluated; otherwise the fallback
+/// (`exprs.last()`) is evaluated.
 /// NULL inputs go straight to the fallback (since SQL `NULL = x` is always NULL/falsy).
 #[derive(
     Ord,
@@ -48,8 +70,8 @@ use crate::{EvalError, MirScalarExpr};
     MzReflect
 )]
 pub struct CaseLiteral {
-    /// Map from literal values (as single-datum `Row`s) to indices in the `exprs` vector.
-    pub lookup: BTreeMap<Row, usize>,
+    /// Sorted vec of literal-to-index entries for binary-search lookup.
+    pub lookup: Vec<CaseLiteralEntry>,
     /// The output type of this CASE expression.
     pub return_type: SqlColumnType,
 }
@@ -67,8 +89,11 @@ impl LazyVariadicFunc for CaseLiteral {
             return exprs.last().unwrap().eval(datums, temp_storage);
         }
         let key = Row::pack_slice(&[input]);
-        if let Some(&idx) = self.lookup.get(&key) {
-            exprs[idx].eval(datums, temp_storage)
+        if let Ok(pos) = self
+            .lookup
+            .binary_search_by(|entry| entry.literal.cmp(&key))
+        {
+            exprs[self.lookup[pos].expr_index].eval(datums, temp_storage)
         } else {
             exprs.last().unwrap().eval(datums, temp_storage)
         }
@@ -105,6 +130,41 @@ impl LazyVariadicFunc for CaseLiteral {
 
 // Note: this Display impl is unused at runtime because CaseLiteral has
 // custom printing in src/expr/src/explain/text.rs.
+impl CaseLiteral {
+    /// Look up a key in the sorted lookup vec. Returns the expr index if found.
+    pub fn get(&self, key: &Row) -> Option<usize> {
+        self.lookup
+            .binary_search_by(|entry| entry.literal.cmp(key))
+            .ok()
+            .map(|pos| self.lookup[pos].expr_index)
+    }
+
+    /// Insert an entry, maintaining sorted order.
+    /// If the literal already exists, overwrites the index and returns the old one.
+    pub fn insert(&mut self, literal: Row, expr_index: usize) -> Option<usize> {
+        match self
+            .lookup
+            .binary_search_by(|entry| entry.literal.cmp(&literal))
+        {
+            Ok(pos) => {
+                let old = self.lookup[pos].expr_index;
+                self.lookup[pos].expr_index = expr_index;
+                Some(old)
+            }
+            Err(pos) => {
+                self.lookup.insert(
+                    pos,
+                    CaseLiteralEntry {
+                        literal,
+                        expr_index,
+                    },
+                );
+                None
+            }
+        }
+    }
+}
+
 impl fmt::Display for CaseLiteral {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "case_literal[{} cases]", self.lookup.len())
