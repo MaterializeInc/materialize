@@ -468,6 +468,7 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
     "enable_lgalloc_eager_reclamation",

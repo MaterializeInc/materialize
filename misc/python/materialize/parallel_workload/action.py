@@ -1580,6 +1580,7 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
