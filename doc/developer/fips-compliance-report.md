@@ -70,6 +70,29 @@ Validation Program (CMVP).
 - Standard build: `cargo build` — uses `aws-lc-rs` (non-FIPS mode, faster compilation)
 - FIPS build: `cargo build --features fips` — uses `aws-lc-rs/fips` (links `aws-lc-fips-sys`, the validated module)
 
+**Third-party telemetry SDK exclusion (SEC-229):**
+
+In FIPS mode, non-essential third-party SDKs must be excluded from the binary at
+compile time — including them even if unused is a compliance problem. The
+following Cargo features gate these dependencies:
+
+| Crate | Feature | Gated dependencies |
+|-------|---------|-------------------|
+| mz-adapter | `telemetry` (default) | `mz-segment`, `launchdarkly-server-sdk` |
+| mz-environmentd | `telemetry` (default) | `mz-segment`, `sentry-tracing`, propagates to mz-adapter and mz-orchestrator-tracing |
+| mz-balancerd | `telemetry` (default) | `launchdarkly-server-sdk`, `mz-dyncfg-launchdarkly` |
+| mz-ore | `sentry` (default via orchestrator-tracing) | `sentry`, `sentry-tracing` (split from `tracing` feature) |
+| mz-orchestrator-tracing | `sentry` (default) | `sentry-tracing`, propagates to mz-ore and mz-service |
+| mz-service | `sentry` (default) | `sentry-tracing` |
+
+Build commands:
+- Standard: `cargo build` (all telemetry enabled)
+- FIPS: `cargo build -p mz-environmentd --no-default-features --features fips`
+
+When telemetry features are disabled, CLI args (`--segment-api-key`,
+`--launchdarkly-sdk-key`, `--sentry-dsn`) are still accepted but their values
+are ignored with a warning log.
+
 **Migration tiers:**
 
 | Tier | Crates | Effort | Description |
