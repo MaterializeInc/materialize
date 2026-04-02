@@ -19,23 +19,29 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-04-03* <br>
 *Released to Materialize Self-Managed: 2026-04-04* <br>
 
-This release includes console improvements with OIDC login support and
-enhanced shell reconnection behavior, critical fixes for persist and
-materialized view sink race conditions, and expanded parquet COPY FROM support
-for map and interval types.
+This release includes various improvements and bug fixes.
 
 ### Improvements {#v26.18-improvements}
-- Console now supports OIDC login for enhanced authentication workflows.
-- Console shell now preserves better reconnection behavior with improved toast notifications that don't stack.
-- COPY FROM parquet now supports map and interval data types, expanding import capabilities.
-- Fixed O(rows×cols) performance issue in pack_index_update for wide tables, improving query performance on tables with many columns.
-- SSL certificate loading now properly handles all certificates in PEM bundles instead of only the first one.
+
+- **Improved Console reconnect behavior**. The Console shell now  now reconnects
+  more reliably, with toast notifications that no longer stack.
+
+- **Expanded `COPY FROM` data type support**. [`COPY FROM` parquet
+  files](/sql/copy-from/#parquet-formatting) now supports `map` and `interval`
+  data types.
+
+- **Improved query performance on wide tables**. Queries on tables with many
+  columns now execute faster.
 
 ### Bug Fixes {#v26.18-bug-fixes}
-- Fixed a critical race condition where persist batches could be selected before obtaining a lease, preventing potential read-time halts.
-- Fixed materialized view sinks getting stuck when instantiated with output shards whose initial frontier is less than the dataflow as-of.
-- Fixed panic when dropping computed tables with active SUBSCRIBE operations.
-- Fixed EXPLAIN ANALYZE not working correctly due to quoting issues in mz_mappable_objects.
+
+- Fixed SSL certificate loading to properly handles all certificates in PEM
+  bundles instead of only the first one.
+- Fixed materialized view sinks getting stuck when instantiated with output
+  shards whose initial frontier is less than the dataflow as-of.
+- Fixed panic when dropping computed tables with active `SUBSCRIBE` operations.
+- Fixed `EXPLAIN ANALYZE` not working correctly due to quoting issues in
+  `mz_mappable_objects`.
 
 ## v26.17.1
 *Released to Materialize Self-Managed: 2026-03-27* <br>
