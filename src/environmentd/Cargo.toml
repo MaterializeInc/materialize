@@ -87,7 +87,9 @@ opentelemetry = { version = "0.31.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 pin-project = "1.1.11"
 postgres = { version = "0.19.12", optional = true }
-postgres-openssl = { version = "0.5.2", optional = true }
+tokio-postgres-rustls = { version = "0.13", optional = true }
+rcgen = { version = "0.14", optional = true, default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
+rustls-pemfile = { version = "2", optional = true }
 prometheus = { version = "0.14.0", default-features = false }
 rdkafka-sys = { version = "4.3.0", features = [
     "cmake-build",
@@ -182,7 +184,9 @@ jemalloc = ["mz-alloc/jemalloc"]
 test = [
     "postgres",
     "regex",
-    "postgres-openssl",
+    "tokio-postgres-rustls",
+    "rcgen",
+    "rustls-pemfile",
     "mz-tracing",
     "mz-frontegg-mock",
     "tracing-capture",
