@@ -19,7 +19,7 @@ import argparse
 import json
 import re
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from materialize import MZ_ROOT
@@ -76,10 +76,19 @@ EMBEDDED_CRYPTO_PACKAGES = {
 
 # Patterns in cert generation scripts that indicate non-FIPS algorithms.
 NON_FIPS_CERT_PATTERNS = [
-    (re.compile(r"-md5\b|md5WithRSAEncryption"), "MD5 is not FIPS-approved for signatures"),
-    (re.compile(r"-sha1\b|sha1WithRSAEncryption"), "SHA-1 is not FIPS-approved for signatures (after 2030)"),
+    (
+        re.compile(r"-md5\b|md5WithRSAEncryption"),
+        "MD5 is not FIPS-approved for signatures",
+    ),
+    (
+        re.compile(r"-sha1\b|sha1WithRSAEncryption"),
+        "SHA-1 is not FIPS-approved for signatures (after 2030)",
+    ),
     (re.compile(r"rsa:1024\b|rsa:512\b"), "RSA key size < 2048 is not FIPS-approved"),
-    (re.compile(r"des-cbc\b|des-ede\b|rc4\b|rc2\b"), "DES/RC4/RC2 are not FIPS-approved"),
+    (
+        re.compile(r"des-cbc\b|des-ede\b|rc4\b|rc2\b"),
+        "DES/RC4/RC2 are not FIPS-approved",
+    ),
 ]
 
 

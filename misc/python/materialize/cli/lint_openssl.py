@@ -203,7 +203,9 @@ def print_report(findings: list[Finding]) -> None:
         print()
 
     # Summary.
-    crates_with_deps = len({f.crate_name for f in findings if f.category == "dependency"})
+    crates_with_deps = len(
+        {f.crate_name for f in findings if f.category == "dependency"}
+    )
     crates_with_features = len(
         {f.crate_name for f in findings if f.category == "feature-flag"}
     )
