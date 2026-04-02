@@ -1,24 +1,19 @@
 - name: txn-details
   content: |
     [`BEGIN`](/sql/begin/) starts a transaction block. Once a transaction is started:
-
     - Statements within the transaction are executed sequentially.
-
     - A transaction ends with either a [`COMMIT`](/sql/commit/) or a
       [`ROLLBACK`](/sql/rollback/) statement.
-
       - If all transaction statements succeed and a [`COMMIT`](/sql/commit/) is
       [issued](/sql/commit/#details), all changes are saved.
-
       - If all transaction statements succeed and a [`ROLLBACK`](/sql/rollback/)
       is issued, all changes are discarded.
-
       - If an error occurs and either a [`COMMIT`](/sql/commit/) or a
       [`ROLLBACK`](/sql/rollback/) is issued, all changes are discarded.
 
 - name: txn-insert-only
   content: |
-    An **insert-only** transaction only contains [`INSERT`](/sql/insert/)
+    An **insert-only** transaction block only contains [`INSERT`](/sql/insert/)
     statements that insert into the **same** table.
 
     On a successful [`COMMIT`](/sql/commit/), all statements from the

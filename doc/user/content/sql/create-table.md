@@ -116,6 +116,12 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
 
+### DDL transaction block
+
+For performance, when issuing multiple `CREATE TABLE FROM SOURCE...` statements,
+use within a [transaction block](/sql/begin/#ddl-only-transactions).
+
+
 ### Source-populated tables and snapshotting
 
 {{< include-md file="shared-content/create-table-from-source-snapshotting.md"
