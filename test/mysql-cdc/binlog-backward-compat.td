@@ -30,17 +30,16 @@ USE public;
 CREATE TABLE foo (name VARCHAR(16), value VARCHAR(32));
 INSERT INTO foo VALUES ('a', 'apple'), ('b', 'banana');
 
-> CREATE SOURCE mysql_src FROM MYSQL CONNECTION mysql_conn;
-> CREATE TABLE foo1 FROM SOURCE mysql_src (REFERENCE public.foo);
+> CREATE SOURCE mysql_src FROM MYSQL CONNECTION mysql_conn FOR TABLES (foo);
 
-> SELECT * FROM foo1;
+> SELECT * FROM foo;
 a apple
 b banana
 
 $ mysql-execute name=mysql
 INSERT INTO foo VALUES ('c', 'cherry');
 
-> SELECT * FROM foo1;
+> SELECT * FROM foo;
 a apple
 b banana
 c cherry
@@ -48,7 +47,7 @@ c cherry
 $ mysql-execute name=mysql
 UPDATE foo SET value = 'avocado' WHERE name = 'a';
 
-> SELECT * FROM foo1;
+> SELECT * FROM foo;
 a avocado
 b banana
 c cherry
@@ -56,7 +55,7 @@ c cherry
 $ mysql-execute name=mysql
 DELETE FROM foo WHERE name = 'b';
 
-> SELECT * FROM foo1;
+> SELECT * FROM foo;
 a avocado
 c cherry
 
