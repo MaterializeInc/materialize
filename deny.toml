@@ -137,6 +137,16 @@ skip = [
     { name = "hashbrown", version = "0.16.1" },
     # aws-lc-rs
     { name = "untrusted", version = "0.7.1" },
+    # Pulled in by rustls ecosystem (Cargo.lock regeneration)
+    { name = "base64", version = "0.21.7" },
+    { name = "core-foundation", version = "0.9.4" },
+    { name = "getrandom", version = "0.3.4" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "security-framework", version = "2.11.1" },
+    { name = "security-framework-sys", version = "2.14.0" },
+    { name = "toml_datetime", version = "0.6.11" },
+    { name = "toml_edit", version = "0.22.27" },
+    { name = "winnow", version = "0.7.15" },
 ]
 
 [[bans.deny]]
