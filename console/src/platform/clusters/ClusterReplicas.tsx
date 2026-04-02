@@ -141,6 +141,7 @@ const ClusterReplicasInner = () => {
       ) : (
         <ReplicaTable
           clusterId={clusterId}
+          clusterName={clusterName}
           replicas={replicas ?? []}
           refetchReplicas={refetch}
         />
@@ -157,6 +158,7 @@ const ClusterReplicasInner = () => {
 
 interface ReplicaTableProps {
   clusterId?: string;
+  clusterName: string;
   replicas: ClusterReplicaWithUtilizaton[];
   refetchReplicas: () => void;
 }
