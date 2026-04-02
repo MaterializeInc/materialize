@@ -44,7 +44,6 @@ use mz_secrets::SecretsReader;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
-use mz_tls_util::Pkcs12Archive;
 use mz_tracing::CloneableEnvFilter;
 use rdkafka::ClientContext;
 use rdkafka::config::FromClientConfigAndContext;
@@ -2007,8 +2006,9 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let Pkcs12Archive { der, pass } =
-                mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
+            let mut archive = mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
+            let der = std::mem::take(&mut archive.der);
+            let pass = std::mem::take(&mut archive.pass);
 
             // Add client identity to SSLOpts
             ssl_opts = ssl_opts.map(|opts| {
