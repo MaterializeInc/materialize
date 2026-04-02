@@ -181,6 +181,12 @@ RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
     && npm install -g corepack \
     && corepack enable
 
+# Install Go, required by aws-lc-fips-sys to build the FIPS-validated
+# BoringSSL module. Activated when cargo builds with --all-features (which
+# enables the mz-ore `fips` feature). Go 1.18+ is required.
+RUN curl -fsSL https://go.dev/dl/go1.24.2.linux-$ARCH_GO.tar.gz | tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:${PATH}"
+
 RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.11.0/shellcheck \
     && rm shellcheck.tar.xz \
