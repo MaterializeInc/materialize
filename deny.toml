@@ -206,11 +206,6 @@ wrappers = [
     "zopfli",
 ]
 
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
-[[bans.deny]]
-name = "rustls"
-
 # FIPS 140-3 compliance: all cryptographic operations must use `aws-lc-rs` as
 # the single crypto backend. The following crates are not FIPS-validated and
 # must not be used for new code. Existing wrappers should be removed as each

@@ -19,6 +19,9 @@ anyhow = { version = "1.0.102", optional = true }
 # Exceptions: `either` (zero deps, quasi-stdlib) and `zeroize` (zero runtime
 # deps, security-critical — must be available unconditionally so that
 # `ore::secure` types are always accessible without feature-flag opt-in).
+# aws-lc-rs is the FIPS 140-3 validated crypto backend. When the `fips` feature
+# is enabled, it links against aws-lc-fips-sys (the validated module).
+aws-lc-rs = { version = "1", optional = true }
 async-trait = { version = "0.1.89", optional = true }
 bytemuck = { version = "1.23.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
@@ -156,6 +159,11 @@ assert-no-tracing = []
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
+# FIPS 140-3 compliance: use aws-lc-rs as the crypto backend.
+# `crypto` enables aws-lc-rs in standard (non-FIPS) mode.
+# `fips` enables aws-lc-rs with FIPS 140-3 validated module.
+crypto = ["aws-lc-rs"]
+fips = ["crypto", "aws-lc-rs/fips"]
 
 [[test]]
 name = "future"
