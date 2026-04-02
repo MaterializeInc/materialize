@@ -137,7 +137,7 @@ skip = [
     { name = "hashbrown", version = "0.16.1" },
     # aws-lc-rs
     { name = "untrusted", version = "0.7.1" },
-    # Pulled in by rustls ecosystem (Cargo.lock regeneration)
+    # Pulled in by rustls ecosystem
     { name = "base64", version = "0.21.7" },
     { name = "core-foundation", version = "0.9.4" },
     { name = "getrandom", version = "0.3.4" },
@@ -146,6 +146,7 @@ skip = [
     { name = "security-framework-sys", version = "2.14.0" },
     { name = "toml_datetime", version = "0.6.11" },
     { name = "toml_edit", version = "0.22.27" },
+    { name = "webpki-roots", version = "0.26.11" },
     { name = "winnow", version = "0.7.15" },
 ]
 
@@ -195,6 +196,7 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    "hyper-rustls",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "native-tls",
@@ -207,6 +209,7 @@ wrappers = [
     "rdkafka",
     "reqsign",
     "reqwest",
+    "rustls",
     "tokio-postgres",
     "tokio-tungstenite",
     "tracing-log",
@@ -270,6 +273,7 @@ name = "subtle"
 wrappers = [
     # Third-party crates.
     "digest",
+    "rustls",
     "ssh-key",
     # Workspace crates — TODO: migrate to aws-lc-rs and remove.
     "mz-expr",
@@ -359,6 +363,7 @@ allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
     "CC0-1.0",
+    "CDLA-Permissive-2.0",
     "0BSD",
     "BSD-2-Clause",
     "BSD-3-Clause",
