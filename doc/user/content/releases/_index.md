@@ -23,7 +23,7 @@ This release includes various improvements and bug fixes.
 
 ### Improvements {#v26.18-improvements}
 
-- **Improved Console reconnect behavior**. The Console shell now  now reconnects
+- **Improved Console reconnect behavior**. The Console shell now reconnects
   more reliably, with toast notifications that no longer stack.
 
 - **Expanded `COPY FROM` data type support**. [`COPY FROM` parquet
@@ -35,7 +35,7 @@ This release includes various improvements and bug fixes.
 
 ### Bug Fixes {#v26.18-bug-fixes}
 
-- Fixed SSL certificate loading to properly handles all certificates in PEM
+- Fixed SSL certificate loading to properly handle all certificates in PEM
   bundles instead of only the first one.
 - Fixed materialized view sinks getting stuck when instantiated with output
   shards whose initial frontier is less than the dataflow as-of.
