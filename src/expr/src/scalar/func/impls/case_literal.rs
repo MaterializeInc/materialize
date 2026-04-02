@@ -30,7 +30,18 @@ use crate::{EvalError, MirScalarExpr};
 
 /// A single entry in a [`CaseLiteral`] lookup table: a literal `Row` value
 /// paired with the index of the corresponding result expression in `exprs`.
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
 pub struct CaseLiteralEntry {
     /// The literal value (as a single-datum `Row`).
     #[mzreflect(ignore)]
@@ -141,8 +152,13 @@ impl CaseLiteral {
                 Some(old)
             }
             Err(pos) => {
-                self.lookup
-                    .insert(pos, CaseLiteralEntry { literal, expr_index });
+                self.lookup.insert(
+                    pos,
+                    CaseLiteralEntry {
+                        literal,
+                        expr_index,
+                    },
+                );
                 None
             }
         }
