@@ -11,6 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use aws_lc_rs::digest;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::controller::error::CollectionLookupError;
 use mz_controller_types::ClusterId;
@@ -24,7 +25,6 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
-use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
@@ -339,7 +339,10 @@ impl Coordinator {
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
                 let uuid = epoch_to_uuid_v7(prepared_at);
-                let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
+                let sql_hash: [u8; 32] = digest::digest(&digest::SHA256, sql.as_bytes())
+                    .as_ref()
+                    .try_into()
+                    .expect("SHA256 output is 32 bytes");
                 let record = StatementPreparedRecord {
                     id: uuid,
                     sql_hash,

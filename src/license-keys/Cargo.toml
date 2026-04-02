@@ -23,7 +23,7 @@ aws-sdk-kms = { version = "1.96.0", default-features = false, features = ["rt-to
 base64 = { version = "0.22.1", optional = true }
 pem = { version = "3.0.6", optional = true }
 serde_json = { version = "1.0.149", optional = true }
-sha2 = { version = "0.10.9", optional = true }
+aws-lc-rs = { version = "1", optional = true }
 utoipa = { version = "5.4.0", optional = true }
 uuid = { version = "1.19.0", features = ["v4"], optional = true }
 
@@ -34,7 +34,7 @@ tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []
-signing = ["aws-sdk-kms", "base64", "pem", "serde_json", "sha2", "uuid"]
+signing = ["aws-sdk-kms", "aws-lc-rs", "base64", "pem", "serde_json", "uuid"]
 utoipa = ["dep:utoipa"]
 
 [package.metadata.cargo-udeps.ignore]

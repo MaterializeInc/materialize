@@ -16,6 +16,7 @@ use std::{env, fmt};
 
 use anyhow::{Context, anyhow, bail};
 use async_trait::async_trait;
+use aws_lc_rs::digest;
 use chrono::DateTime;
 use clap::ValueEnum;
 use cloud_resource_controller::KubernetesResourceReader;
@@ -55,7 +56,6 @@ use mz_ore::cast::CastInto;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
@@ -1185,9 +1185,11 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             }),
         };
         let pod_template_json = serde_json::to_string(&pod_template_spec).unwrap();
-        let mut hasher = Sha256::new();
-        hasher.update(pod_template_json);
-        let pod_template_hash = format!("{:x}", hasher.finalize());
+        let pod_template_hash = digest::digest(&digest::SHA256, pod_template_json.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         pod_annotations.insert(
             POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
             pod_template_hash.clone(),

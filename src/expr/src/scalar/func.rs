@@ -19,6 +19,8 @@ use std::{iter, str};
 
 use ::encoding::DecoderTrap;
 use ::encoding::label::encoding_from_whatwg_label;
+use aws_lc_rs::constant_time::verify_slices_are_equal;
+use aws_lc_rs::digest;
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, TimeZone, Timelike, Utc};
 use chrono_tz::{OffsetComponents, OffsetName, Tz};
 use dec::OrderedDecimal;
@@ -47,9 +49,6 @@ use mz_repr::{
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
 use num::traits::CheckedNeg;
-use sha1::Sha1;
-use sha2::{Sha224, Sha256, Sha384, Sha512};
-use subtle::ConstantTimeEq;
 
 use crate::scalar::func::format::DateTimeFormat;
 use crate::{EvalError, like_pattern};
@@ -1411,12 +1410,12 @@ fn get_byte(bytes: &[u8], index: i32) -> Result<i32, EvalError> {
 
 #[sqlfunc(sqlname = "constant_time_compare_bytes", propagates_nulls = true)]
 pub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {
-    bool::from(a.ct_eq(b))
+    verify_slices_are_equal(a, b).is_ok()
 }
 
 #[sqlfunc(sqlname = "constant_time_compare_strings", propagates_nulls = true)]
 pub fn constant_time_eq_string(a: &str, b: &str) -> bool {
-    bool::from(a.as_bytes().ct_eq(b.as_bytes()))
+    verify_slices_are_equal(a.as_bytes(), b.as_bytes()).is_ok()
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
@@ -2967,11 +2966,13 @@ fn digest_bytes(to_digest: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError>
 fn digest_inner(bytes: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError> {
     match digest_fn {
         "md5" => Ok(Md5::digest(bytes).to_vec()),
-        "sha1" => Ok(Sha1::digest(bytes).to_vec()),
-        "sha224" => Ok(Sha224::digest(bytes).to_vec()),
-        "sha256" => Ok(Sha256::digest(bytes).to_vec()),
-        "sha384" => Ok(Sha384::digest(bytes).to_vec()),
-        "sha512" => Ok(Sha512::digest(bytes).to_vec()),
+        "sha1" => Ok(digest::digest(&digest::SHA1_FOR_LEGACY_USE_ONLY, bytes)
+            .as_ref()
+            .to_vec()),
+        "sha224" => Ok(digest::digest(&digest::SHA224, bytes).as_ref().to_vec()),
+        "sha256" => Ok(digest::digest(&digest::SHA256, bytes).as_ref().to_vec()),
+        "sha384" => Ok(digest::digest(&digest::SHA384, bytes).as_ref().to_vec()),
+        "sha512" => Ok(digest::digest(&digest::SHA512, bytes).as_ref().to_vec()),
         other => Err(EvalError::InvalidHashAlgorithm(other.into())),
     }
 }
