@@ -78,6 +78,7 @@ pub use crate::http::{SqlResponse, WebSocketAuth, WebSocketResponse};
 mod deployment;
 pub mod environmentd;
 pub mod http;
+#[cfg(feature = "telemetry")]
 mod telemetry;
 #[cfg(feature = "test")]
 pub mod test_util;
@@ -455,6 +456,7 @@ impl Listeners {
                         SystemParameterSyncClientConfig::File { path: f },
                     ))
                 }
+                #[cfg(feature = "telemetry")]
                 (Some(key), None) => Some(SystemParameterSyncConfig::new(
                     config.environment_id.clone(),
                     &BUILD_INFO,
@@ -465,6 +467,13 @@ impl Listeners {
                         now_fn: config.now.clone(),
                     },
                 )),
+                #[cfg(not(feature = "telemetry"))]
+                (Some(_), None) => {
+                    tracing::warn!(
+                        "LaunchDarkly SDK key provided but telemetry feature is disabled; ignoring"
+                    );
+                    None
+                }
 
                 (Some(_), Some(_)) => {
                     panic!("Cannot configure both file and Launchdarkly based config syncing")
@@ -714,12 +723,15 @@ impl Listeners {
         );
 
         // Initialize adapter.
+        #[cfg(feature = "telemetry")]
         let segment_client = config.segment_api_key.map(|api_key| {
             mz_segment::Client::new(mz_segment::Config {
                 api_key,
                 client_side: config.segment_client_side,
             })
         });
+        #[cfg(not(feature = "telemetry"))]
+        let segment_client = ();
         let connection_limiter = active_connection_counter.clone();
         let connection_limit_callback = Box::new(move |limit, superuser_reserved| {
             connection_limiter.update_limit(limit);
@@ -814,27 +826,30 @@ impl Listeners {
         }
 
         // Start telemetry reporting loop.
-        if let Some(segment_client) = segment_client {
-            telemetry::start_reporting(telemetry::Config {
-                segment_client,
-                adapter_client: adapter_client.clone(),
-                environment_id: config.environment_id,
-                report_interval: Duration::from_secs(3600),
-            });
-        } else if config.test_only_dummy_segment_client {
-            // We only have access to a segment client in production but we
-            // still want to exercise the telemetry reporting code to a degree.
-            // So we create a dummy client and report telemetry into the void.
-            // This way we at least run the telemetry queries the way a
-            // production environment would.
-            tracing::debug!("starting telemetry reporting with a dummy segment client");
-            let segment_client = mz_segment::Client::new_dummy_client();
-            telemetry::start_reporting(telemetry::Config {
-                segment_client,
-                adapter_client: adapter_client.clone(),
-                environment_id: config.environment_id,
-                report_interval: Duration::from_secs(180),
-            });
+        #[cfg(feature = "telemetry")]
+        {
+            if let Some(segment_client) = segment_client {
+                telemetry::start_reporting(telemetry::Config {
+                    segment_client,
+                    adapter_client: adapter_client.clone(),
+                    environment_id: config.environment_id,
+                    report_interval: Duration::from_secs(3600),
+                });
+            } else if config.test_only_dummy_segment_client {
+                // We only have access to a segment client in production but we
+                // still want to exercise the telemetry reporting code to a degree.
+                // So we create a dummy client and report telemetry into the void.
+                // This way we at least run the telemetry queries the way a
+                // production environment would.
+                tracing::debug!("starting telemetry reporting with a dummy segment client");
+                let segment_client = mz_segment::Client::new_dummy_client();
+                telemetry::start_reporting(telemetry::Config {
+                    segment_client,
+                    adapter_client: adapter_client.clone(),
+                    environment_id: config.environment_id,
+                    report_interval: Duration::from_secs(180),
+                });
+            }
         }
 
         // If system_parameter_sync_config and config_sync_loop_interval are present,

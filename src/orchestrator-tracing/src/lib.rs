@@ -30,11 +30,12 @@ use mz_ore::cli::KeyValueArg;
 use mz_ore::metrics::MetricsRegistry;
 #[cfg(feature = "tokio-console")]
 use mz_ore::netio::SocketAddr;
+#[cfg(feature = "sentry")]
+use mz_ore::tracing::SentryConfig;
 #[cfg(feature = "tokio-console")]
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
-    OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
-    TracingHandle,
+    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingHandle,
 };
 use mz_tracing::CloneableEnvFilter;
 use opentelemetry::KeyValue;
@@ -314,6 +315,11 @@ impl TracingCliArgs {
                     retention: self.tokio_console_retention,
                 }
             }),
+            // When mz-ore has tokio-console enabled via feature unification but
+            // this crate does not, we still need to populate the field.
+            #[cfg(not(feature = "tokio-console"))]
+            tokio_console: None,
+            #[cfg(feature = "sentry")]
             sentry: self.sentry_dsn.clone().map(|dsn| SentryConfig {
                 dsn,
                 environment: self.sentry_environment.clone(),
@@ -326,6 +332,8 @@ impl TracingCliArgs {
                     .collect(),
                 event_filter: mz_service::tracing::mz_sentry_event_filter,
             }),
+            #[cfg(not(feature = "sentry"))]
+            _phantom: std::marker::PhantomData::<()>,
             build_version: build_info.version,
             build_sha: build_info.sha,
             registry,

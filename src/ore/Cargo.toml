@@ -144,10 +144,10 @@ tracing = [
     "opentelemetry-otlp",
     "opentelemetry_sdk",
     "tonic",
-    "sentry",
-    "sentry-tracing",
     "yansi",
 ]
+# Sentry error reporting. Split from `tracing` so FIPS builds can exclude it.
+sentry = ["dep:sentry", "dep:sentry-tracing"]
 tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]

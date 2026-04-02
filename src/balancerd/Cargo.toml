@@ -24,11 +24,11 @@ hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
+launchdarkly-server-sdk = { version = "2.6.2", default-features = false, optional = true }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
-mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
+mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly", optional = true }
 mz-dyncfg-file= { path = "../dyncfg-file" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
@@ -61,7 +61,9 @@ reqwest = "0.12.28"
 tempfile = "3.23.0"
 
 [features]
-default = ["mz-alloc-default"]
+default = ["mz-alloc-default", "telemetry"]
+# Third-party telemetry SDKs. Disabled in FIPS builds.
+telemetry = ["dep:launchdarkly-server-sdk", "dep:mz-dyncfg-launchdarkly"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]

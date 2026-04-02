@@ -20,7 +20,7 @@ csv-core = "0.1.13"
 enum-kinds = "0.5.1"
 futures = "0.3.32"
 itertools = "0.14.0"
-mz-adapter = { path = "../adapter" }
+mz-adapter = { path = "../adapter", default-features = false }
 mz-adapter-types = { path = "../adapter-types" }
 mz-auth = { path = "../auth", default-features = false }
 mz-authenticator = { path = "../authenticator" }
