@@ -10,6 +10,7 @@
 use std::str::FromStr;
 
 use itertools::{EitherOrBoth, Itertools};
+use mysql_async::binlog::row;
 use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
@@ -43,18 +44,23 @@ pub fn pack_mysql_row(
         .map(|col| col.name_str().clone())
         .collect::<Vec<_>>();
 
-    tracing::info!("packing row with columns: {row_col_names:?}");
-    tracing::info!("including columns: {included_col_names:?}");
-    let row_values = row
-        .columns_ref()
-        .iter()
-        .enumerate()
-        .filter(|(_, col)| included_col_names.contains(&col.name_str().as_ref()))
-        .map(|(i, _)| {
-            row.as_ref(i)
-                .expect("Can't unwrap row if some of columns was taken")
-                .clone()
-        });
+    let row_values: Vec<Value> = if row_col_names
+        .get(0)
+        .is_some_and(|col_name| col_name.starts_with("@"))
+    {
+        row.unwrap()
+    } else {
+        row.columns_ref()
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| included_col_names.contains(&col.name_str().as_ref()))
+            .map(|(i, _)| {
+                row.as_ref(i)
+                    .expect("Can't unwrap row if some of columns was taken")
+                    .clone()
+            })
+            .collect()
+    };
 
     for values in table_desc.columns.iter().zip_longest(row_values) {
         let (col_desc, value) = match values {
