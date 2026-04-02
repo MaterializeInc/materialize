@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use mz_build_info::BuildInfo;
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
+#[cfg(feature = "telemetry")]
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
 use prometheus::IntCounter;
@@ -50,6 +51,7 @@ pub enum SystemParameterSyncClientConfig {
         // Path to a JSON config file that contains system parameters.
         path: PathBuf,
     },
+    #[cfg(feature = "telemetry")]
     LaunchDarkly {
         /// The LaunchDarkly SDK key
         sdk_key: String,
@@ -61,6 +63,7 @@ pub enum SystemParameterSyncClientConfig {
 impl SystemParameterSyncClientConfig {
     fn is_launch_darkly(&self) -> bool {
         match &self {
+            #[cfg(feature = "telemetry")]
             Self::LaunchDarkly { .. } => true,
             Self::File { .. } => false,
         }

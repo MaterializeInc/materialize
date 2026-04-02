@@ -14,10 +14,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
+#[cfg(feature = "telemetry")]
 use hyper_tls::HttpsConnector;
+#[cfg(feature = "telemetry")]
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
+#[cfg(feature = "telemetry")]
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::Value as JsonValue;
@@ -48,6 +51,7 @@ pub enum SystemParameterFrontendClient {
     File {
         path: PathBuf,
     },
+    #[cfg(feature = "telemetry")]
     LaunchDarkly {
         /// An SDK client to mediate interactions with the LaunchDarkly client.
         #[derivative(Debug = "ignore")]
@@ -73,6 +77,7 @@ impl SystemParameterFrontend {
                 key_map: sync_config.key_map.clone(),
                 metrics: sync_config.metrics.clone(),
             }),
+            #[cfg(feature = "telemetry")]
             SystemParameterSyncClientConfig::LaunchDarkly { sdk_key, now_fn } => Ok(Self {
                 client: SystemParameterFrontendClient::LaunchDarkly {
                     client: ld_client(sdk_key, &sync_config.metrics, now_fn).await?,
@@ -97,6 +102,7 @@ impl SystemParameterFrontend {
                 .unwrap_or(param_name);
 
             let flag_str = match self.client {
+                #[cfg(feature = "telemetry")]
                 SystemParameterFrontendClient::LaunchDarkly {
                     ref client,
                     ref ctx,
@@ -146,6 +152,7 @@ impl SystemParameterFrontend {
     }
 }
 
+#[cfg(feature = "telemetry")]
 fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
     ld::ConfigBuilder::new(api_key)
         .event_processor(
@@ -169,6 +176,7 @@ fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
         .expect("valid config")
 }
 
+#[cfg(feature = "telemetry")]
 async fn ld_client(
     api_key: &str,
     metrics: &Metrics,
@@ -209,6 +217,7 @@ async fn ld_client(
     Ok(ld_client)
 }
 
+#[cfg(feature = "telemetry")]
 fn ld_ctx(
     env_id: &EnvironmentId,
     build_info: &'static BuildInfo,
