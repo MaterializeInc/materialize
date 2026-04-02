@@ -73,7 +73,6 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         branches: "main"
-        skip: "https://github.com/MaterializeInc/database-issues/issues/11257"
 
       - id: devel-docker-tags
         label: Tag development docker images
