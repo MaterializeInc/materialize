@@ -252,12 +252,12 @@ impl Consensus for ReadOnly<Arc<dyn Consensus>> {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         warn!(
-            "ignoring cas({key}) in read-only mode ({} bytes at seqno {expected:?})",
+            "ignoring cas({key}) in read-only mode ({} bytes at seqno {:?})",
             new.data.len(),
+            new.seqno,
         );
         self.ignoring_write();
         Ok(CaSResult::Committed)

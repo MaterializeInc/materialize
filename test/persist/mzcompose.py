@@ -20,10 +20,12 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.dynamodb import DynamodbLocal
 from materialize.mzcompose.services.postgres import PostgresMetadata
 
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
+    DynamodbLocal(),
     PostgresMetadata(),
     Service(
         "maelstrom-persist",
@@ -55,7 +57,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--consensus",
         type=str,
-        choices=["mem", "cockroach", "maelstrom", "postgres"],
+        choices=["mem", "cockroach", "maelstrom", "postgres", "dynamo", "dynamodb"],
         default="maelstrom",
     )
     parser.add_argument(
@@ -78,6 +80,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "postgres://root@cockroach:26257?options=--search_path=consensus"
         )
         c.up("cockroach")
+    elif args.consensus in ("dynamo", "dynamodb"):
+        consensus_uri = "dynamodb://user:pass@dynamodb:8000/consensus"
+        c.up("dynamodb")
     elif args.consensus == "postgres":
         consensus_uri = (
             "postgres://root@postgres-metadata:26257?options=--search_path=consensus"
