@@ -566,4 +566,27 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
             GROUP BY export_id, lir_id
         )",
     },
+    SubscribeSpec {
+        introspection_type: IntrospectionType::ComputeObjectArrangementSizes,
+        sql: "SUBSCRIBE (
+            SELECT
+                ce.export_id AS object_id,
+                (SUM(raw.size) / 10485760 * 10485760)::int8 AS size
+            FROM
+                mz_introspection.mz_compute_exports AS ce
+            JOIN
+                mz_introspection.mz_dataflow_operator_dataflows AS dod
+                ON dod.dataflow_id = ce.dataflow_id
+            JOIN (
+                SELECT operator_id, COUNT(*) AS size
+                FROM (
+                    SELECT operator_id FROM mz_introspection.mz_arrangement_heap_size_raw
+                    UNION ALL
+                    SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_size_raw
+                ) combined
+                GROUP BY operator_id
+            ) AS raw ON raw.operator_id = dod.id
+            GROUP BY ce.export_id
+        )",
+    },
 ];

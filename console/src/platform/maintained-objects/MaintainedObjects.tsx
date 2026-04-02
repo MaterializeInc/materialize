@@ -46,11 +46,12 @@ import { SideDrawer } from "~/components/SideDrawer";
 import { TablePagination } from "~/platform/shell/SqlSelectTable";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
-import { formatIntervalShort } from "~/utils/format";
+import { formatBytesShort, formatIntervalShort } from "~/utils/format";
 import { useQueryStringState } from "~/useQueryString";
 
 import { ObjectDetailPanel } from "./ObjectDetailPanel";
 import {
+  useAllObjectSizes,
   useClusterUtilization,
   useMaintainedObjectsList,
 } from "./queries";
@@ -81,6 +82,7 @@ const MaintainedObjects = () => {
   const { data: objects, isLoading: objectsLoading } =
     useMaintainedObjectsList({ lookbackMinutes: timePeriodMinutes });
   const { data: utilization } = useClusterUtilization();
+  const { data: objectSizes } = useAllObjectSizes();
 
   const { objectId } = useParams<{ objectId: string }>();
   const navigate = useNavigate();
@@ -269,6 +271,7 @@ const MaintainedObjects = () => {
           <MaintainedObjectsTable
             rows={paginatedRows}
             utilization={utilization}
+            objectSizes={objectSizes}
             onRowClick={handleRowClick}
           />
 
@@ -318,12 +321,14 @@ const MaintainedObjects = () => {
 interface MaintainedObjectsTableProps {
   rows: ReturnType<typeof useMaintainedObjectsList>["data"];
   utilization: ReturnType<typeof useClusterUtilization>["data"];
+  objectSizes: ReturnType<typeof useAllObjectSizes>["data"];
   onRowClick: (obj: MaintainedObjectListRow) => void;
 }
 
 const MaintainedObjectsTable = ({
   rows,
   utilization,
+  objectSizes,
   onRowClick,
 }: MaintainedObjectsTableProps) => {
   const { colors } = useTheme<MaterializeTheme>();
@@ -340,9 +345,8 @@ const MaintainedObjectsTable = ({
         <Tr>
           <Th>Object Name</Th>
           <Th>Object Type</Th>
+          <Th>Memory Utilization</Th>
           <Th>Freshness (pMAX)</Th>
-          <Th>Cluster Memory</Th>
-          <Th>Cluster CPU</Th>
           <Th>Cluster</Th>
         </Tr>
       </Thead>
@@ -351,6 +355,7 @@ const MaintainedObjectsTable = ({
           const clusterUtil = obj.clusterId
             ? utilization?.get(obj.clusterId)
             : undefined;
+          const objSize = objectSizes?.get(obj.id);
 
           return (
             <Tr
@@ -376,13 +381,10 @@ const MaintainedObjectsTable = ({
                 <Text textStyle="text-ui-reg">{obj.objectType}</Text>
               </Td>
               <Td>
+                <PercentCell value={objSize?.heapPercent} />
+              </Td>
+              <Td>
                 <LagCell lag={obj.lag} lagMs={obj.lagMs} />
-              </Td>
-              <Td>
-                <PercentCell value={clusterUtil?.memoryPercent} />
-              </Td>
-              <Td>
-                <PercentCell value={clusterUtil?.cpuPercent} />
               </Td>
               <Td>
                 <Text textStyle="text-ui-reg">
@@ -458,13 +460,16 @@ const PercentCell = ({ value }: PercentCellProps) => {
     );
   }
 
-  const rounded = Math.round(value);
-  const barColor = getPercentColor(rounded, colors);
+  const displayValue = value < 1 && value > 0
+    ? value < 0.1 ? "<0.1" : value.toFixed(1)
+    : Math.round(value).toString();
+  const barWidth = Math.max(value, value > 0 ? 2 : 0);
+  const barColor = getPercentColor(Math.round(value), colors);
 
   return (
     <HStack spacing="2" minWidth="80px">
-      <Text textStyle="text-ui-med" whiteSpace="nowrap" minWidth="32px">
-        {rounded}%
+      <Text textStyle="text-ui-med" whiteSpace="nowrap" minWidth="36px">
+        {displayValue}%
       </Text>
       <Box
         width="48px"
@@ -476,13 +481,67 @@ const PercentCell = ({ value }: PercentCellProps) => {
       >
         <Box
           height="100%"
-          width={`${Math.min(rounded, 100)}%`}
+          width={`${Math.min(barWidth, 100)}%`}
+          minWidth={value > 0 ? "4px" : "0px"}
           borderRadius="full"
           bg={barColor}
           transition="width 0.3s ease"
         />
       </Box>
     </HStack>
+  );
+};
+
+
+const ObjectMemoryCell = ({
+  sizeBytes,
+  heapPercent,
+}: {
+  sizeBytes: string | undefined;
+  heapPercent: number | null | undefined;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  if (!sizeBytes) {
+    return (
+      <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+        —
+      </Text>
+    );
+  }
+
+  const bytes = BigInt(sizeBytes);
+  const pct = heapPercent != null ? heapPercent : null;
+
+  return (
+    <VStack align="start" spacing={0}>
+      <Text textStyle="text-ui-med">
+        {formatBytesShort(bytes)}
+      </Text>
+      {pct !== null && (
+        <Text textStyle="text-small" color={colors.foreground.secondary}>
+          {pct < 0.1 ? "<0.1" : pct.toFixed(1)}% of heap
+        </Text>
+      )}
+    </VStack>
+  );
+};
+
+const CostCell = ({ credits }: { credits: number | null | undefined }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  if (credits === null || credits === undefined) {
+    return (
+      <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+        —
+      </Text>
+    );
+  }
+
+  return (
+    <Text textStyle="text-ui-med">
+      {credits < 0.01 ? "<0.01" : credits.toFixed(2)}
+    </Text>
   );
 };
 

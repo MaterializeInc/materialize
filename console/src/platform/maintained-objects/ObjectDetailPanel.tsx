@@ -31,7 +31,7 @@ import { DependenciesSection } from "./DependenciesSection";
 import { ObjectDetailsCard } from "./ObjectDetailsCard";
 import { ObjectFreshnessChart } from "./ObjectFreshnessChart";
 import { ObjectMemoryCard } from "./ObjectMemoryCard";
-import { useObjectColumns, useObjectDetail, useObjectLag, useObjectMemory } from "./queries";
+import { useAllObjectSizes, useObjectColumns, useObjectDetail, useObjectLag, useObjectMemory, useObjectMemoryUnified } from "./queries";
 import { MaintainedObjectListRow } from "./types";
 
 export interface ObjectDetailPanelProps {
@@ -71,6 +71,14 @@ export const ObjectDetailPanel = ({
     replicaName: detail?.replicaName ?? undefined,
     objectType: detail?.objectType,
   });
+
+  const { data: memoryUnified, isLoading: memoryUnifiedLoading } = useObjectMemoryUnified({
+    objectId: object.id,
+    objectType: object.objectType,
+  });
+
+  const { data: allSizes } = useAllObjectSizes();
+  const objectCost = allSizes?.get(object.id);
 
   const isComputeObject =
     object.objectType === "index" || object.objectType === "materialized-view";
@@ -140,6 +148,15 @@ export const ObjectDetailPanel = ({
             replicaName={detail?.replicaName ?? null}
             replicaSize={detail?.replicaSize ?? null}
             isLoading={memoryLoading || memoryFetching}
+          />
+        )}
+
+        {isComputeObject && (
+          <UnifiedMemoryCard
+            replicas={memoryUnified ?? null}
+            isLoading={memoryUnifiedLoading}
+            estimatedCreditsPerHour={objectCost?.estimatedCreditsPerHour ?? null}
+            replicaCreditsPerHour={objectCost?.creditsPerHour ?? null}
           />
         )}
 
@@ -410,6 +427,183 @@ const StatRow = ({
         {value}
       </Text>
     </HStack>
+  );
+};
+
+/**
+ * Shows per-object memory from the unified mz_internal.mz_object_arrangement_sizes
+ * collection. Displays memory across all replicas — no session variables needed.
+ *
+ * This card exists alongside the original ObjectMemoryCard for comparison.
+ * Once validated, the original can be removed and this becomes the primary.
+ */
+const UnifiedMemoryCard = ({
+  replicas,
+  isLoading,
+  estimatedCreditsPerHour,
+  replicaCreditsPerHour,
+}: {
+  replicas: Array<{
+    replicaId: string;
+    replicaName: string;
+    memoryBytes: string;
+    memoryPercentage: number | null;
+  }> | null;
+  isLoading: boolean;
+  estimatedCreditsPerHour: number | null;
+  replicaCreditsPerHour: number | null;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  if (isLoading) {
+    return (
+      <Card
+        p={5}
+        width="100%"
+        borderRadius="md"
+        border="1px"
+        borderColor={colors.accent.brightPurple}
+        bg={`${colors.accent.brightPurple}08`}
+      >
+        <VStack align="start" spacing={2}>
+          <HStack>
+            <Text textStyle="heading-sm">Memory Usage (Unified)</Text>
+            <Text textStyle="text-small" color={colors.accent.brightPurple}>
+              NEW
+            </Text>
+          </HStack>
+          <HStack spacing={2}>
+            <Text textStyle="text-small" color={colors.foreground.secondary}>
+              Loading from mz_internal.mz_object_arrangement_sizes...
+            </Text>
+          </HStack>
+        </VStack>
+      </Card>
+    );
+  }
+
+  if (!replicas || replicas.length === 0) {
+    return (
+      <Card
+        p={5}
+        width="100%"
+        borderRadius="md"
+        border="1px"
+        borderColor={colors.accent.brightPurple}
+        bg={`${colors.accent.brightPurple}08`}
+      >
+        <VStack align="start" spacing={2}>
+          <HStack>
+            <Text textStyle="heading-sm">Memory Usage (Unified)</Text>
+            <Text textStyle="text-small" color={colors.accent.brightPurple}>
+              NEW
+            </Text>
+          </HStack>
+          <Text textStyle="text-small" color={colors.foreground.secondary}>
+            Waiting for introspection data...
+          </Text>
+        </VStack>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      p={5}
+      width="100%"
+      borderRadius="md"
+      border="1px"
+      borderColor={colors.accent.brightPurple}
+      bg={`${colors.accent.brightPurple}08`}
+    >
+      <VStack align="start" spacing={3} width="100%">
+        <HStack>
+          <Text textStyle="heading-sm">Memory Usage (Unified)</Text>
+          <Text textStyle="text-small" color={colors.accent.brightPurple}>
+            NEW
+          </Text>
+        </HStack>
+        <Text textStyle="text-small" color={colors.foreground.secondary}>
+          From mz_internal.mz_object_arrangement_sizes — no session variables, no cluster targeting.
+        </Text>
+
+        {replicas.map((replica) => {
+          const bytes = BigInt(replica.memoryBytes);
+          const percent = replica.memoryPercentage;
+          const barColor =
+            percent !== null && percent > 90
+              ? colors.accent.red
+              : percent !== null && percent > 70
+                ? colors.accent.orange
+                : colors.accent.green;
+
+          return (
+            <Box key={replica.replicaId} width="100%">
+              <HStack width="100%" justify="space-between" mb={1}>
+                <Text textStyle="text-ui-med">
+                  {replica.replicaName}
+                </Text>
+                <HStack spacing={2}>
+                  <Text textStyle="text-ui-med">
+                    {formatBytesShort(bytes)}
+                  </Text>
+                  {percent !== null && (
+                    <Text textStyle="text-small" color={barColor}>
+                      ({Math.round(percent)}%)
+                    </Text>
+                  )}
+                </HStack>
+              </HStack>
+              {percent !== null && (
+                <Box
+                  width="100%"
+                  height="8px"
+                  borderRadius="full"
+                  bg={colors.background.secondary}
+                  overflow="hidden"
+                >
+                  <Box
+                    height="100%"
+                    minWidth={bytes > 0n ? "4px" : "0px"}
+                    width={`${Math.min(Math.round(percent), 100)}%`}
+                    borderRadius="full"
+                    bg={barColor}
+                    transition="width 0.3s ease"
+                  />
+                </Box>
+              )}
+            </Box>
+          );
+        })}
+
+        {estimatedCreditsPerHour !== null && (
+          <Box
+            width="100%"
+            pt={3}
+            mt={1}
+            borderTop="1px"
+            borderColor={colors.border.primary}
+          >
+            <HStack width="100%" justify="space-between">
+              <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+                Estimated cost (memory-based)
+              </Text>
+              <Text textStyle="text-ui-med">
+                {estimatedCreditsPerHour < 0.01
+                  ? "<0.01"
+                  : estimatedCreditsPerHour.toFixed(2)}{" "}
+                credits/hr
+              </Text>
+            </HStack>
+            {replicaCreditsPerHour !== null && (
+              <Text textStyle="text-small" color={colors.foreground.secondary} mt={1}>
+                Based on memory fraction of replica ({replicaCreditsPerHour.toFixed(1)} credits/hr total)
+              </Text>
+            )}
+          </Box>
+        )}
+      </VStack>
+    </Card>
   );
 };
 

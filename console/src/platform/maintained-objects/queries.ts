@@ -38,6 +38,11 @@ import {
   fetchObjectDetail,
   fetchObjectMemory,
 } from "~/api/materialize/maintained-objects/objectDetail";
+import {
+  fetchObjectMemoryUnified,
+} from "~/api/materialize/maintained-objects/objectMemoryUnified";
+import { executeSqlV2 } from "~/api/materialize";
+import { queryBuilder as rawQueryBuilder } from "~/api/materialize/db";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 
@@ -62,6 +67,16 @@ const maintainedObjectsQueryKeys = {
     [
       ...maintainedObjectsQueryKeys.all(),
       buildQueryKeyPart("objectMemory", { objectId }),
+    ] as const,
+  objectMemoryUnified: (objectId: string) =>
+    [
+      ...maintainedObjectsQueryKeys.all(),
+      buildQueryKeyPart("objectMemoryUnified", { objectId }),
+    ] as const,
+  allObjectSizes: () =>
+    [
+      ...maintainedObjectsQueryKeys.all(),
+      buildQueryKeyPart("allObjectSizes"),
     ] as const,
   objectColumns: (objectId: string) =>
     [
@@ -207,6 +222,112 @@ export function useObjectMemory({
     enabled: !!objectId && !!clusterName && !!replicaName && isCompute,
     staleTime: 30_000,
     select: (data) => data.rows[0] ?? null,
+  });
+}
+
+/**
+ * Fetches per-object arrangement sizes for ALL objects across all clusters.
+ * Includes cost attribution (estimated credits/hour based on memory fraction).
+ * Returns a Map keyed by object_id for fast lookup in the list view.
+ */
+export function useAllObjectSizes() {
+  return useQuery({
+    queryKey: maintainedObjectsQueryKeys.allObjectSizes(),
+    queryFn: async ({ queryKey, signal }) => {
+      const query = sql`
+        SELECT
+          oas.object_id AS "objectId",
+          oas.replica_id AS "replicaId",
+          oas.size::text AS "sizeBytes",
+          cr.name AS "replicaName",
+          crs.credits_per_hour::float8 AS "creditsPerHour",
+          COALESCE(crm.heap_limit, crs.memory_bytes * crs.processes, 0)::text AS "replicaTotalMemoryBytes",
+          CASE WHEN COALESCE(crm.heap_limit, crs.memory_bytes * crs.processes, 0) > 0
+            THEN (oas.size::float8 / COALESCE(crm.heap_limit, crs.memory_bytes * crs.processes)::float8 * 100)
+            ELSE NULL
+          END AS "heapPercent",
+          (oas.size::float8 / NULLIF(SUM(oas.size) OVER (PARTITION BY oas.replica_id), 0) * crs.credits_per_hour::float8) AS "estimatedCreditsPerHour"
+        FROM mz_internal.mz_object_arrangement_sizes AS oas
+        INNER JOIN mz_cluster_replicas AS cr ON cr.id = oas.replica_id
+        INNER JOIN mz_cluster_replica_sizes AS crs ON crs.size = cr.size
+        LEFT JOIN (
+          SELECT replica_id, MAX(heap_limit) AS heap_limit
+          FROM mz_internal.mz_cluster_replica_metrics
+          GROUP BY replica_id
+        ) AS crm ON crm.replica_id = cr.id
+        WHERE oas.object_id LIKE 'u%'
+        ORDER BY oas.size DESC
+      `.compile(rawQueryBuilder);
+
+      return executeSqlV2({
+        queries: query,
+        queryKey,
+        requestOptions: { signal },
+      });
+    },
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    select: (data) => {
+      // Build a Map: objectId → { sizeBytes, replicaName, estimatedCreditsPerHour }
+      // If an object has multiple replicas, keep the first (largest replica).
+      const byObjectId = new Map<
+        string,
+        {
+          sizeBytes: string;
+          replicaId: string;
+          replicaName: string;
+          creditsPerHour: number;
+          replicaTotalMemoryBytes: string;
+          heapPercent: number | null;
+          estimatedCreditsPerHour: number | null;
+        }
+      >();
+      for (const row of data.rows) {
+        const objectId = row.objectId as string;
+        if (!byObjectId.has(objectId)) {
+          byObjectId.set(objectId, {
+            sizeBytes: row.sizeBytes as string,
+            replicaId: row.replicaId as string,
+            replicaName: row.replicaName as string,
+            creditsPerHour: row.creditsPerHour as number,
+            replicaTotalMemoryBytes: row.replicaTotalMemoryBytes as string,
+            heapPercent: row.heapPercent as number | null,
+            estimatedCreditsPerHour: row.estimatedCreditsPerHour as number | null,
+          });
+        }
+      }
+      return byObjectId;
+    },
+  });
+}
+
+/**
+ * Fetches per-object memory from the unified mz_internal.mz_object_arrangement_sizes
+ * collection. No session variables needed — queries mz_catalog_server directly.
+ * Returns memory across all replicas for the object.
+ */
+export function useObjectMemoryUnified({
+  objectId,
+  objectType,
+}: {
+  objectId: string | undefined;
+  objectType: string | undefined;
+}) {
+  const isCompute =
+    objectType === "index" || objectType === "materialized-view";
+
+  return useQuery({
+    queryKey: maintainedObjectsQueryKeys.objectMemoryUnified(objectId ?? ""),
+    queryFn: ({ queryKey, signal }) =>
+      fetchObjectMemoryUnified({
+        objectId: objectId!,
+        queryKey,
+        requestOptions: { signal },
+      }),
+    enabled: !!objectId && isCompute,
+    staleTime: 30_000,
+    refetchInterval: 30_000,
+    select: (data) => data.rows,
   });
 }
 

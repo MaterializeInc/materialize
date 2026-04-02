@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(update-config)",
+      "Skill(update-config:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/qindeel/.claude/plans"
+    ]
+  }
+}

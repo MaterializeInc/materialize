@@ -48,6 +48,7 @@ import {
   LargestClusterReplicaParams,
 } from "~/api/materialize/cluster/largestClusterReplica";
 import { fetchLargestMaintainedQueries } from "~/api/materialize/cluster/largestMaintainedQueries";
+import { fetchLargestMaintainedQueriesUnified } from "~/api/materialize/cluster/largestMaintainedQueriesUnified";
 import {
   fetchMaterializationLag,
   LagInfo,
