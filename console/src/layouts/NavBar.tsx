@@ -27,6 +27,7 @@ import useResizeObserver from "use-resize-observer";
 import ConnectModal from "~/components/ConnectModal";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
+import OidcConnectModal from "~/components/OidcConnectModal";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import EnvironmentSelectField from "~/layouts/EnvironmentSelect";
 import ProfileDropdown from "~/layouts/ProfileDropdown";
@@ -276,6 +277,21 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                   />
                 </HideIfEnvironmentDisabled>
               )
+            }
+            selfManagedConfigElement={({ appConfig }) =>
+              appConfig.authMode === "Oidc" ? (
+                <HideIfEnvironmentDisabled>
+                  <ConnectMenuItem
+                    isCollapsed={isCollapsed}
+                    width="100%"
+                    onClick={onOpenConnectModal}
+                  />
+                  <OidcConnectModal
+                    onClose={onCloseConnectModal}
+                    isOpen={isConnectModalOpen}
+                  />
+                </HideIfEnvironmentDisabled>
+              ) : null
             }
           />
         )}

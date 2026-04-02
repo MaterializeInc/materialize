@@ -23,6 +23,7 @@ import { Location, useLocation } from "react-router-dom";
 import { useCanViewUsage } from "~/api/auth";
 import ConnectModal from "~/components/ConnectModal";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
+import OidcConnectModal from "~/components/OidcConnectModal";
 import { AppConfigSwitch, CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useFlags } from "~/hooks/useFlags";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
@@ -304,6 +305,21 @@ const NavMenuMobile = (props: {
                   />
                 </HideIfEnvironmentDisabled>
               )
+            }
+            selfManagedConfigElement={({ appConfig }) =>
+              appConfig.authMode === "Oidc" ? (
+                <HideIfEnvironmentDisabled>
+                  <ConnectMenuItem
+                    width="100%"
+                    onClick={onOpenConnectModal}
+                    mb={{ base: 0, lg: 6 }}
+                  />
+                  <OidcConnectModal
+                    onClose={onCloseConnectModal}
+                    isOpen={isConnectModalOpen}
+                  />
+                </HideIfEnvironmentDisabled>
+              ) : null
             }
           />
         </VStack>

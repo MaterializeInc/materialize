@@ -11,6 +11,11 @@ import { IPostgresInterval } from "postgres-interval";
 
 import { pluralize } from "~/util";
 
+/** Creates an obfuscated string of asterisks matching the length of the input. */
+export function obfuscateSecret(secret: string): string {
+  return "*".repeat(secret.length);
+}
+
 const kilobyte = 1024n;
 const megabyte = 1024n * 1024n;
 const gigabyte = 1024n * 1024n * 1024n;
