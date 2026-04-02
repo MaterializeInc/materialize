@@ -10,7 +10,6 @@
 use std::str::FromStr;
 
 use itertools::{EitherOrBoth, Itertools};
-use mysql_async::binlog::row;
 use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
