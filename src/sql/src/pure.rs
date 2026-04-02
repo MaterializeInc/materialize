@@ -1854,6 +1854,16 @@ async fn purify_create_table_from_source(
                 )
                 .await?;
 
+            let binlog_metadata_setting =
+                mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata").await?;
+            if binlog_metadata_setting != "FULL" {
+                Err(
+                    MySqlSourcePurificationError::UnsupportedBinlogMetadataSetting {
+                        setting: binlog_metadata_setting,
+                    },
+                )?;
+            }
+
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point for this table.
             let initial_gtid_set =
