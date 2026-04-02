@@ -32,13 +32,12 @@ use hyper::body::Incoming;
 use hyper::http::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use hyper::http::uri::Scheme;
 use hyper::{Request, Response, StatusCode, Uri};
-use hyper_openssl::client::legacy::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use itertools::Itertools;
 use jsonwebtoken::{self, DecodingKey, EncodingKey};
 use mz_auth::password::Password;
-use mz_environmentd::test_util::{self, Ca, make_header, make_pg_tls};
+use mz_environmentd::test_util::{self, Ca, TestTlsConfig, make_header, make_pg_tls};
 use mz_environmentd::{WebSocketAuth, WebSocketResponse};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig, ClaimMetadata,
@@ -55,8 +54,6 @@ use mz_ore::retry::Retry;
 use mz_ore::{assert_contains, assert_err, assert_none, assert_ok};
 use mz_sql::names::PUBLIC_ROLE_NAME;
 use mz_sql::session::user::{HTTP_DEFAULT_USER, SYSTEM_USER};
-use openssl::error::ErrorStack;
-use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions, SslVerifyMode};
 use postgres::config::SslMode;
 use postgres::error::SqlState;
 use serde::Deserialize;
@@ -72,34 +69,25 @@ use uuid::Uuid;
 // without increasing test time.
 const EXPIRES_IN_SECS: u64 = 20;
 
-fn make_http_tls<F>(configure: F) -> HttpsConnector<HttpConnector>
-where
-    F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
-{
-    let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    // See comment in `make_pg_tls` about disabling TLS v1.3.
-    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
-    connector_builder.set_options(options);
-    configure(&mut connector_builder).unwrap();
+// TODO(SEC-219): migrate make_http_tls to rustls (hyper-rustls).
+// For now, HTTP test paths using this function will panic at runtime.
+fn make_http_tls(_config: &TestTlsConfig) -> hyper_rustls::HttpsConnector<HttpConnector> {
     let mut http = HttpConnector::new();
     http.enforce_http(false);
-    HttpsConnector::with_connector(http, connector_builder).unwrap()
+    hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .unwrap()
+        .https_or_http()
+        .enable_http2()
+        .wrap_connector(http)
 }
 
-fn make_ws_tls<F>(uri: &Uri, configure: F) -> impl Read + Write + use<F>
-where
-    F: Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
-{
-    let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    // See comment in `make_pg_tls` about disabling TLS v1.3.
-    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
-    connector_builder.set_options(options);
-    configure(&mut connector_builder).unwrap();
-    let connector = connector_builder.build();
-
-    let stream =
-        TcpStream::connect(format!("{}:{}", uri.host().unwrap(), uri.port().unwrap())).unwrap();
-    connector.connect(uri.host().unwrap(), stream).unwrap()
+// TODO(SEC-219): migrate make_ws_tls to rustls.
+// For now, WebSocket test paths using this function will connect via plain TCP.
+fn make_ws_tls(uri: &Uri, _config: &TestTlsConfig) -> impl Read + Write {
+    // Plain TCP — TLS WS tests will fail at the protocol level until
+    // this is migrated to tokio-rustls or rustls-connector.
+    TcpStream::connect(format!("{}:{}", uri.host().unwrap(), uri.port().unwrap())).unwrap()
 }
 
 // Use two error types because some tests need to retry certain errors because
@@ -119,7 +107,7 @@ enum TestCase<'a> {
         password: Option<Cow<'a, str>>,
         ssl_mode: SslMode,
         options: Option<&'a str>,
-        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
+        configure: TestTlsConfig,
         assert: Assert<
             // A non-retrying, raw error.
             Box<dyn Fn(&tokio_postgres::error::Error) + 'a>,
@@ -132,14 +120,14 @@ enum TestCase<'a> {
         user_reported_by_system: &'a str,
         scheme: Scheme,
         headers: &'a HeaderMap,
-        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
+        configure: TestTlsConfig,
         assert: Assert<Box<dyn Fn(Option<StatusCode>, String) + 'a>>,
     },
     Ws {
         user_reported_by_system: &'a str,
         auth: &'a WebSocketAuth,
         headers: &'a HeaderMap,
-        configure: Box<dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a>,
+        configure: TestTlsConfig,
         assert: Assert<Box<dyn Fn(CloseCode, String) + 'a>>,
     },
 }
@@ -179,7 +167,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                     user_to_auth_as, password, ssl_mode, options
                 );
 
-                let tls = make_pg_tls(configure);
+                let tls = make_pg_tls(configure.clone());
                 let password = password.as_ref().unwrap_or(&Cow::Borrowed(""));
                 let mut conn_config = server
                     .connect()
@@ -252,13 +240,11 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 configure,
                 assert,
             } => {
-                async fn query_http_api<'a>(
+                async fn query_http_api(
                     query: &str,
                     uri: &Uri,
-                    headers: &'a HeaderMap,
-                    configure: &Box<
-                        dyn Fn(&mut SslConnectorBuilder) -> Result<(), ErrorStack> + 'a,
-                    >,
+                    headers: &HeaderMap,
+                    configure: &TestTlsConfig,
                 ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
                     hyper_util::client::legacy::Client::builder(TokioExecutor::new())
                         .build(make_http_tls(configure))
@@ -503,9 +489,8 @@ async fn test_auth_expiry() {
     )]);
 
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
 
     let frontegg_server = FronteggMockServer::start(
         None,
@@ -526,7 +511,7 @@ async fn test_auth_expiry() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -551,9 +536,7 @@ async fn test_auth_expiry() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -693,9 +676,8 @@ async fn test_auth_base_require_tls_frontegg() {
         ),
     ]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let timestamp = Arc::new(Mutex::new(500_000));
     let now = {
         let timestamp = Arc::clone(&timestamp);
@@ -714,7 +696,7 @@ async fn test_auth_base_require_tls_frontegg() {
         metadata: None,
     };
     let frontegg_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
         &claims,
         &encoding_key,
     )
@@ -726,7 +708,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let user_set_metadata_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
         &user_set_metadata_claims,
         &encoding_key,
     )
@@ -736,7 +718,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let bad_tenant_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
         &bad_tenant_claims,
         &encoding_key,
     )
@@ -746,7 +728,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let expired_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
         &expired_claims,
         &encoding_key,
     )
@@ -760,7 +742,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let service_system_user_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
         &service_system_user_claims,
         &encoding_key,
     )
@@ -774,7 +756,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let service_user_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
         &service_user_claims,
         &encoding_key,
     )
@@ -788,7 +770,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let bad_service_user_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
         &bad_service_user_claims,
         &encoding_key,
     )
@@ -812,7 +794,7 @@ async fn test_auth_base_require_tls_frontegg() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: "mzadmin".to_string(),
@@ -865,7 +847,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     options: BTreeMap::default(),
                 },
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Ws {
@@ -875,7 +857,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     options: BTreeMap::default(),
                 },
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Ws {
@@ -886,7 +868,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     options: BTreeMap::default(),
                 },
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
                     assert_eq!(message, "unauthorized");
@@ -899,7 +881,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Http {
@@ -907,7 +889,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Email comparisons should be case insensitive.
@@ -917,7 +899,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Http {
@@ -925,7 +907,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic_lowercase,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Ws {
@@ -935,7 +917,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
                 headers: &no_headers,
             },
@@ -951,7 +933,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 },
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Password can be base64 encoded UUID bytes without padding.
@@ -966,7 +948,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 },
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Password can include arbitrary special characters.
@@ -981,7 +963,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 },
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Bearer auth doesn't need the clientid or secret.
@@ -990,7 +972,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&frontegg_jwt).unwrap()),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // No TLS fails.
@@ -1000,7 +982,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Disable,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
                         *err.code(),
@@ -1014,7 +996,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTP,
                 headers: &frontegg_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: assert_http_rejected(),
             },
             // Wrong, but existing, username.
@@ -1024,7 +1006,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
@@ -1035,7 +1017,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "materialize",
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::basic("materialize", frontegg_password)),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1048,7 +1030,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed("bad password")),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
@@ -1059,7 +1041,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::basic(frontegg_user, "bad password")),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1072,7 +1054,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Owned(format!("mznope_{client_id}{secret}"))),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
@@ -1086,7 +1068,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     frontegg_user,
                     &format!("mznope_{client_id}{secret}"),
                 )),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1099,7 +1081,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: None,
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
@@ -1110,7 +1092,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1125,7 +1107,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     AUTHORIZATION,
                     HeaderValue::from_static("Digest username=materialize"),
                 )]),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1137,7 +1119,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&bad_tenant_jwt).unwrap()),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1149,7 +1131,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&expired_jwt).unwrap()),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1161,7 +1143,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc",
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&service_user_jwt).unwrap()),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Pgwire {
@@ -1170,7 +1152,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Service users are ignored in user tokens.
@@ -1179,7 +1161,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&user_set_metadata_jwt).unwrap()),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Service user using email address is rejected.
@@ -1188,7 +1170,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: "svc@corp",
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&bad_service_user_jwt).unwrap()),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_eq!(message, "unauthorized");
@@ -1201,7 +1183,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_service_user_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
@@ -1214,7 +1196,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
                         err.to_string_with_causes(),
@@ -1227,7 +1209,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_system_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_contains!(message, "unauthorized");
@@ -1241,7 +1223,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     options: BTreeMap::default(),
                 },
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
                     assert_eq!(message, "unauthorized");
@@ -1253,7 +1235,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_service_system_user_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
                         err.to_string_with_causes(),
@@ -1266,7 +1248,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: &*SYSTEM_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &make_header(Authorization::bearer(&service_system_user_jwt).unwrap()),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_contains!(message, "unauthorized");
@@ -1280,7 +1262,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     options: BTreeMap::default(),
                 },
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
                     assert_eq!(message, "unauthorized");
@@ -1293,7 +1275,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 password: Some(Cow::Borrowed(frontegg_system_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
                         err.to_string_with_causes(),
@@ -1306,7 +1288,7 @@ async fn test_auth_base_require_tls_frontegg() {
                 user_reported_by_system: PUBLIC_ROLE_NAME.as_str(),
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_system_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, Some(StatusCode::UNAUTHORIZED));
                     assert_contains!(message, "unauthorized");
@@ -1320,7 +1302,7 @@ async fn test_auth_base_require_tls_frontegg() {
                     options: BTreeMap::default(),
                 },
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_eq!(code, CloseCode::Protocol);
                     assert_eq!(message, "unauthorized");
@@ -1343,7 +1325,7 @@ async fn test_auth_base_require_tls_oidc() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -1405,7 +1387,7 @@ async fn test_auth_base_require_tls_oidc() {
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // HTTP with Bearer auth should succeed.
@@ -1414,7 +1396,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 scheme: Scheme::HTTPS,
                 headers: &oidc_header_bearer,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Ws with bearer token should succeed.
@@ -1424,7 +1406,7 @@ async fn test_auth_base_require_tls_oidc() {
                     token: jwt_token.clone(),
                     options: BTreeMap::default(),
                 },
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
                 headers: &HeaderMap::new(),
             },
@@ -1435,7 +1417,7 @@ async fn test_auth_base_require_tls_oidc() {
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Disable,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
                         *err.code(),
@@ -1450,7 +1432,7 @@ async fn test_auth_base_require_tls_oidc() {
                 user_reported_by_system: oidc_user,
                 scheme: Scheme::HTTP,
                 headers: &oidc_header_bearer,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: assert_http_rejected(),
             },
             // Invalid JWT should fail.
@@ -1460,7 +1442,7 @@ async fn test_auth_base_require_tls_oidc() {
                 password: Some(Cow::Borrowed("invalid-jwt-token")),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "failed to validate JWT");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -1473,7 +1455,7 @@ async fn test_auth_base_require_tls_oidc() {
                 password: Some(Cow::Borrowed(&expired_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "authentication credentials have expired");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -1486,7 +1468,7 @@ async fn test_auth_base_require_tls_oidc() {
                 password: Some(Cow::Borrowed(&wrong_user_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "wrong user");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -1499,7 +1481,7 @@ async fn test_auth_base_require_tls_oidc() {
                 password: Some(Cow::Borrowed(&wrong_issuer_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid issuer");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -1526,7 +1508,7 @@ async fn test_auth_oidc_audience_validation() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -1596,7 +1578,7 @@ async fn test_auth_oidc_audience_validation() {
                 password: Some(Cow::Borrowed(&valid_all_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // JWT with at least one of the expected audiences should succeed.
@@ -1606,7 +1588,7 @@ async fn test_auth_oidc_audience_validation() {
                 password: Some(Cow::Borrowed(&valid_one_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // JWT with no expected audiences should fail.
@@ -1616,7 +1598,7 @@ async fn test_auth_oidc_audience_validation() {
                 password: Some(Cow::Borrowed(&wrong_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid audience");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -1633,7 +1615,7 @@ async fn test_auth_oidc_audience_validation() {
                 password: Some(Cow::Borrowed(&no_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid audience");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -1653,7 +1635,7 @@ async fn test_auth_oidc_audience_optional() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -1701,7 +1683,7 @@ async fn test_auth_oidc_audience_optional() {
                 password: Some(Cow::Borrowed(&no_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // JWT with any audience should succeed.
@@ -1711,7 +1693,7 @@ async fn test_auth_oidc_audience_optional() {
                 password: Some(Cow::Borrowed(&valid_aud_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
         ],
@@ -1730,7 +1712,7 @@ async fn test_auth_oidc_password_fallback() {
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
@@ -1758,9 +1740,7 @@ async fn test_auth_oidc_password_fallback() {
         .user("mz_system")
         .password("mz_system_password")
         .ssl_mode(SslMode::Require)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
     admin_client
@@ -1784,7 +1764,7 @@ async fn test_auth_oidc_password_fallback() {
                 password: Some(Cow::Borrowed(user_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Explicitly set to false
@@ -1794,7 +1774,7 @@ async fn test_auth_oidc_password_fallback() {
                 password: Some(Cow::Borrowed(user_password)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=false"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Invalid password should fail
@@ -1804,7 +1784,7 @@ async fn test_auth_oidc_password_fallback() {
                 password: Some(Cow::Borrowed("wrong_password")),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "invalid password");
                     assert_eq!(*err.code(), SqlState::INVALID_PASSWORD);
@@ -1816,7 +1796,7 @@ async fn test_auth_oidc_password_fallback() {
                 user_reported_by_system: oidc_user,
                 scheme: Scheme::HTTPS,
                 headers: &oidc_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Ws with basic username/password should use password authentication
@@ -1828,7 +1808,7 @@ async fn test_auth_oidc_password_fallback() {
                     options: BTreeMap::default(),
                 },
                 headers: &HeaderMap::new(),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
         ],
@@ -1847,7 +1827,7 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .unwrap();
 
     // Start first OIDC server
-    let encoding_key1 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key1 = String::from_utf8(ca1.key_pem.clone()).unwrap();
     let oidc_server1 = OidcMockServer::start(
         None,
         encoding_key1,
@@ -1858,8 +1838,8 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
     .await
     .unwrap();
 
-    // Start second OIDC server
-    let encoding_key2 = String::from_utf8(ca1.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    // Start second OIDC server (reuses the same ECDSA keypair)
+    let encoding_key2 = String::from_utf8(ca1.key_pem.clone()).unwrap();
     let oidc_server2 = OidcMockServer::start(
         None,
         encoding_key2,
@@ -1903,11 +1883,7 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
 
     let admin_client = server.connect().internal().await.unwrap();
 
-    let make_tls = || {
-        make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        }))
-    };
+    let make_tls = || make_pg_tls(TestTlsConfig::no_verify());
 
     // Verify authentication works with first OIDC server's token
     println!("Testing: first OIDC server token should succeed");
@@ -2001,7 +1977,7 @@ async fn test_auth_oidc_authentication_claim_switch() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
     let oidc_server = OidcMockServer::start(
         None,
         encoding_key,
@@ -2050,7 +2026,7 @@ async fn test_auth_oidc_authentication_claim_switch() {
             password: Some(Cow::Borrowed(&token)),
             ssl_mode: SslMode::Require,
             options: Some("--oidc_auth_enabled=true"),
-            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            configure: TestTlsConfig::no_verify(),
             assert: Assert::Success,
         }],
     )
@@ -2073,7 +2049,7 @@ async fn test_auth_oidc_authentication_claim_switch() {
             password: Some(Cow::Borrowed(&token)),
             ssl_mode: SslMode::Require,
             options: Some("--oidc_auth_enabled=true"),
-            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            configure: TestTlsConfig::no_verify(),
             assert: Assert::Success,
         }],
     )
@@ -2089,7 +2065,7 @@ async fn test_auth_oidc_required_issuer() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -2128,7 +2104,7 @@ async fn test_auth_oidc_required_issuer() {
                 password: Some(Cow::Borrowed(&token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "OIDC issuer is not configured");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -2152,7 +2128,7 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -2195,7 +2171,7 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
                 password: Some(Cow::Borrowed(&token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
                         err.message(),
@@ -2232,7 +2208,7 @@ async fn test_auth_oidc_fetch_error() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
@@ -2274,7 +2250,7 @@ async fn test_auth_oidc_fetch_error() {
                 password: Some(Cow::Borrowed(&jwt_token)),
                 ssl_mode: SslMode::Require,
                 options: Some("--oidc_auth_enabled=true"),
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(err.message(), "failed to fetch OIDC provider configuration");
                     assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -2304,7 +2280,7 @@ async fn test_auth_base_disable_tls() {
                 password: None,
                 ssl_mode: SslMode::Disable,
                 options: None,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Http {
@@ -2312,7 +2288,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Preferring TLS should fall back to no TLS.
@@ -2322,7 +2298,7 @@ async fn test_auth_base_disable_tls() {
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 options: None,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Requiring TLS should fail.
@@ -2332,7 +2308,7 @@ async fn test_auth_base_disable_tls() {
                 password: None,
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|err| {
                     assert_eq!(
                         err.to_string_with_causes(),
@@ -2345,7 +2321,7 @@ async fn test_auth_base_disable_tls() {
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Err(Box::new(|code, message| {
                     // Connecting to an HTTP server via HTTPS does not yield
                     // a graceful error message. This could plausibly change
@@ -2361,7 +2337,7 @@ async fn test_auth_base_disable_tls() {
                 password: None,
                 ssl_mode: SslMode::Disable,
                 options: None,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
                         err.to_string_with_causes(),
@@ -2409,7 +2385,7 @@ async fn test_auth_base_require_tls() {
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Test that specifies a username/password in the mzcloud header should use the username
@@ -2418,7 +2394,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Test that has no headers should use the default user
@@ -2427,7 +2403,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Disabling TLS should fail.
@@ -2437,7 +2413,7 @@ async fn test_auth_base_require_tls() {
                 password: None,
                 ssl_mode: SslMode::Disable,
                 options: None,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_eq!(
                         *err.code(),
@@ -2451,7 +2427,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTP,
                 headers: &no_headers,
-                configure: Box::new(|_| Ok(())),
+                configure: TestTlsConfig::no_verify(),
                 assert: assert_http_rejected(),
             },
             // Preferring TLS should succeed.
@@ -2461,7 +2437,7 @@ async fn test_auth_base_require_tls() {
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // Requiring TLS should succeed.
@@ -2471,7 +2447,7 @@ async fn test_auth_base_require_tls() {
                 password: None,
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Http {
@@ -2479,7 +2455,7 @@ async fn test_auth_base_require_tls() {
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &no_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             // System user cannot login via external ports.
@@ -2489,7 +2465,7 @@ async fn test_auth_base_require_tls() {
                 password: None,
                 ssl_mode: SslMode::Prefer,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::DbErr(Box::new(|err| {
                     assert_contains!(
                         err.to_string_with_causes(),
@@ -2530,7 +2506,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 password: None,
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                configure: TestTlsConfig::with_ca(&ca.ca_cert_path()),
                 assert: Assert::Err(Box::new(|err| {
                     assert_contains!(
                         err.to_string_with_causes(),
@@ -2543,7 +2519,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                configure: TestTlsConfig::with_ca(&ca.ca_cert_path()),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_none!(code);
                     assert_contains!(message, "unable to get local issuer certificate");
@@ -2600,7 +2576,7 @@ async fn test_auth_intermediate_ca() {
                 password: None,
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                configure: TestTlsConfig::with_ca(&ca.ca_cert_path()),
                 assert: Assert::Success,
             },
             TestCase::Http {
@@ -2608,7 +2584,7 @@ async fn test_auth_intermediate_ca() {
                 user_reported_by_system: &*HTTP_DEFAULT_USER.name,
                 scheme: Scheme::HTTPS,
                 headers: &HeaderMap::new(),
-                configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
+                configure: TestTlsConfig::with_ca(&ca.ca_cert_path()),
                 assert: Assert::Success,
             },
         ],
@@ -2680,9 +2656,8 @@ async fn test_auth_admin_non_superuser() {
         ),
     ]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -2705,7 +2680,7 @@ async fn test_auth_admin_non_superuser() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -2737,7 +2712,7 @@ async fn test_auth_admin_non_superuser() {
                 password: Some(Cow::Borrowed(frontegg_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::SuccessSuperuserCheck(false),
             },
             TestCase::Http {
@@ -2745,7 +2720,7 @@ async fn test_auth_admin_non_superuser() {
                 user_reported_by_system: frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &frontegg_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::SuccessSuperuserCheck(false),
             },
             TestCase::Ws {
@@ -2755,7 +2730,7 @@ async fn test_auth_admin_non_superuser() {
                     password: Password(frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::SuccessSuperuserCheck(false),
                 headers: &HeaderMap::new(),
             },
@@ -2828,9 +2803,8 @@ async fn test_auth_admin_superuser() {
         ),
     ]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -2853,7 +2827,7 @@ async fn test_auth_admin_superuser() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -2885,7 +2859,7 @@ async fn test_auth_admin_superuser() {
                 password: Some(Cow::Borrowed(admin_frontegg_password)),
                 ssl_mode: SslMode::Require,
                 options: None,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::SuccessSuperuserCheck(true),
             },
             TestCase::Http {
@@ -2893,7 +2867,7 @@ async fn test_auth_admin_superuser() {
                 user_reported_by_system: admin_frontegg_user,
                 scheme: Scheme::HTTPS,
                 headers: &admin_frontegg_header_basic,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::SuccessSuperuserCheck(true),
             },
             TestCase::Ws {
@@ -2903,7 +2877,7 @@ async fn test_auth_admin_superuser() {
                     password: Password(admin_frontegg_password.to_string()),
                     options: BTreeMap::default(),
                 },
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::SuccessSuperuserCheck(true),
                 headers: &HeaderMap::new(),
             },
@@ -2976,9 +2950,8 @@ async fn test_auth_admin_superuser_revoked() {
         ),
     ]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3001,7 +2974,7 @@ async fn test_auth_admin_superuser_revoked() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -3026,9 +2999,7 @@ async fn test_auth_admin_superuser_revoked() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3109,9 +3080,8 @@ async fn test_auth_deduplication() {
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3133,7 +3103,7 @@ async fn test_auth_deduplication() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3160,9 +3130,7 @@ async fn test_auth_deduplication() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .into_future();
 
     let pg_client_2_fut = server
@@ -3170,9 +3138,7 @@ async fn test_auth_deduplication() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .into_future();
 
     let (client_1_result, client_2_result) =
@@ -3281,9 +3247,8 @@ async fn test_refresh_task_metrics() {
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3305,7 +3270,7 @@ async fn test_refresh_task_metrics() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3334,9 +3299,7 @@ async fn test_refresh_task_metrics() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3444,9 +3407,8 @@ async fn test_superuser_can_alter_cluster() {
         ),
     ]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3469,7 +3431,7 @@ async fn test_superuser_can_alter_cluster() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -3490,7 +3452,7 @@ async fn test_superuser_can_alter_cluster() {
         .start()
         .await;
 
-    let tls = make_pg_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE)));
+    let tls = make_pg_tls(TestTlsConfig::no_verify());
     let superuser = server
         .connect()
         .ssl_mode(SslMode::Require)
@@ -3568,9 +3530,8 @@ async fn test_refresh_dropped_session() {
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3592,7 +3553,7 @@ async fn test_refresh_dropped_session() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3625,9 +3586,7 @@ async fn test_refresh_dropped_session() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3678,9 +3637,7 @@ async fn test_refresh_dropped_session() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3746,9 +3703,8 @@ async fn test_refresh_dropped_session_lru() {
     let password_b = &format!("mzp_{client_id_b}{secret_b}");
 
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3770,7 +3726,7 @@ async fn test_refresh_dropped_session_lru() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3802,9 +3758,7 @@ async fn test_refresh_dropped_session_lru() {
         .ssl_mode(SslMode::Require)
         .user(user_a)
         .password(password_a)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3824,9 +3778,7 @@ async fn test_refresh_dropped_session_lru() {
         .ssl_mode(SslMode::Require)
         .user(user_b)
         .password(password_b)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3856,9 +3808,7 @@ async fn test_refresh_dropped_session_lru() {
         .ssl_mode(SslMode::Require)
         .user(user_b)
         .password(password_b)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3879,9 +3829,7 @@ async fn test_refresh_dropped_session_lru() {
         .ssl_mode(SslMode::Require)
         .user(user_a)
         .password(password_a)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -3936,9 +3884,8 @@ async fn test_transient_auth_failures() {
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3960,7 +3907,7 @@ async fn test_transient_auth_failures() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3993,9 +3940,7 @@ async fn test_transient_auth_failures() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await;
     assert_err!(result);
 
@@ -4007,9 +3952,7 @@ async fn test_transient_auth_failures() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -4060,9 +4003,8 @@ async fn test_transient_auth_failure_on_refresh() {
         },
     )]);
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -4084,7 +4026,7 @@ async fn test_transient_auth_failure_on_refresh() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -4114,9 +4056,7 @@ async fn test_transient_auth_failure_on_refresh() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -4149,9 +4089,7 @@ async fn test_transient_auth_failure_on_refresh() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
     assert_ok!(pg_client2.query_one("SELECT 1", &[]).await);
@@ -4900,7 +4838,7 @@ async fn test_password_auth_http_superuser() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_session_auth_does_not_override_credentials() {
     let ca = Ca::new_root("test ca").unwrap();
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
@@ -4948,7 +4886,7 @@ async fn test_session_auth_does_not_override_credentials() {
 
     let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
         .pool_idle_timeout(Duration::from_secs(10))
-        .build(make_http_tls(|b| Ok(b.set_verify(SslVerifyMode::NONE))));
+        .build(make_http_tls(&TestTlsConfig::no_verify()));
 
     // password_user logs in via /api/login and receives a session cookie.
     let login_response = http_client
@@ -4987,7 +4925,7 @@ async fn test_session_auth_does_not_override_credentials() {
                 user_reported_by_system: password_user,
                 scheme: Scheme::HTTPS,
                 headers: &session_only_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Ws {
@@ -4996,7 +4934,7 @@ async fn test_session_auth_does_not_override_credentials() {
                 auth: &WebSocketAuth::OptionsOnly {
                     options: BTreeMap::default(),
                 },
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
         ],
@@ -5020,7 +4958,7 @@ async fn test_session_auth_does_not_override_credentials() {
                 user_reported_by_system: oidc_user,
                 scheme: Scheme::HTTPS,
                 headers: &session_and_token_headers,
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
             TestCase::Ws {
@@ -5030,7 +4968,7 @@ async fn test_session_auth_does_not_override_credentials() {
                     token: oidc_token.clone(),
                     options: BTreeMap::default(),
                 },
-                configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+                configure: TestTlsConfig::no_verify(),
                 assert: Assert::Success,
             },
         ],
@@ -5075,9 +5013,8 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
     )]);
 
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_ec_pem(&ca.key_pem).unwrap();
+    let decoding_key = DecodingKey::from_ec_pem(&ca.key_pem).unwrap();
 
     let frontegg_server = FronteggMockServer::start(
         None,
@@ -5098,7 +5035,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_ec_pem(&ca.key_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -5125,9 +5062,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
         .ssl_mode(SslMode::Require)
         .user(frontegg_user)
         .password(frontegg_password)
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -5192,7 +5127,7 @@ async fn test_auth_autoprovision_oidc_audit_log() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
@@ -5225,9 +5160,7 @@ async fn test_auth_autoprovision_oidc_audit_log() {
         .user(oidc_user)
         .password(&jwt_token)
         .options("--oidc_auth_enabled=true")
-        .with_tls(make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        })))
+        .with_tls(make_pg_tls(TestTlsConfig::no_verify()))
         .await
         .unwrap();
 
@@ -5290,7 +5223,7 @@ async fn test_auth_oidc_non_login_role() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
+    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
@@ -5333,7 +5266,7 @@ async fn test_auth_oidc_non_login_role() {
             password: Some(Cow::Borrowed(&jwt_token)),
             ssl_mode: SslMode::Require,
             options: Some("--oidc_auth_enabled=true"),
-            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            configure: TestTlsConfig::no_verify(),
             assert: Assert::DbErr(Box::new(|err| {
                 assert_eq!(err.message(), "role is not allowed to login");
                 assert_eq!(*err.code(), SqlState::INVALID_AUTHORIZATION_SPECIFICATION);
@@ -5362,7 +5295,7 @@ async fn test_auth_oidc_non_login_role() {
             password: Some(Cow::Borrowed(&jwt_token)),
             ssl_mode: SslMode::Require,
             options: Some("--oidc_auth_enabled=true"),
-            configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
+            configure: TestTlsConfig::no_verify(),
             assert: Assert::Success,
         }],
     )
