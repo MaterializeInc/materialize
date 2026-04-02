@@ -233,6 +233,9 @@ pub struct BuiltinMaterializedView {
     ///
     /// Format: `IN CLUSTER [cluster_name] AS [query]`
     pub sql: &'static str,
+    /// Whether the MV's retention policy is controlled by
+    /// the system variable `METRICS_RETENTION`
+    pub is_retained_metrics_object: bool,
     /// ACL items to apply to the object
     pub access: Vec<MzAclItem>,
 }
@@ -2396,6 +2399,7 @@ SELECT
     mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
 FROM mz_internal.mz_catalog_raw
 WHERE data->>'kind' = 'Database'",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
 
@@ -2451,6 +2455,7 @@ SELECT
     mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
 FROM mz_internal.mz_catalog_raw
 WHERE data->>'kind' = 'Schema'",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
 
@@ -2997,6 +3002,7 @@ WITH
 SELECT * FROM user_mvs
 UNION ALL
 SELECT * FROM builtin_mvs").into_boxed_str()),
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -3164,6 +3170,7 @@ SELECT
     (data->'value'->>'oid')::oid AS oid
 FROM mz_internal.mz_catalog_raw
 WHERE data->>'kind' = 'NetworkPolicy'",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -3218,6 +3225,7 @@ FROM
     mz_internal.mz_catalog_raw,
     jsonb_array_elements(data->'value'->'rules') AS rule
 WHERE data->>'kind' = 'NetworkPolicy'",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -3399,6 +3407,7 @@ FROM
     mz_internal.mz_catalog_raw,
     jsonb_array_elements(data->'value'->'membership'->'map') AS entry
 WHERE data->>'kind' = 'Role'",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -3655,6 +3664,7 @@ SELECT
     END AS workload_class
 FROM mz_internal.mz_catalog_raw
 WHERE data->>'kind' = 'Cluster'",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
 
@@ -3790,6 +3800,7 @@ FROM mz_internal.mz_catalog_raw
 WHERE
     data->>'kind' = 'ClusterReplica' AND
     (data->'value'->'config'->'location'->'Managed'->>'internal')::bool = true",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
 
@@ -3816,6 +3827,7 @@ FROM mz_internal.mz_catalog_raw
 WHERE
     data->>'kind' = 'ClusterReplica' AND
     (data->'value'->'config'->'location'->'Managed'->>'pending')::bool = true",
+        is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
     });
 
