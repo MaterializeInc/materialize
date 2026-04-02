@@ -39,6 +39,7 @@ import {
   UserApiToken,
 } from "~/api/frontegg/types";
 import { User } from "~/external-library-wrappers/frontegg";
+import { obfuscateSecret } from "~/utils/format";
 
 export const fronteggQueryKeys = {
   all: () => buildGlobalQueryKey("frontegg"),
@@ -92,7 +93,7 @@ function formatAppPassword({ clientId, secret }: NewApiToken) {
   const formattedClientId = clientId.replaceAll("-", "");
   const formattedSecret = secret.replaceAll("-", "");
   const password = `mzp_${formattedClientId}${formattedSecret}`;
-  const obfuscatedPassword = `${new Array(password.length).fill("*").join("")}`;
+  const obfuscatedPassword = obfuscateSecret(password);
   return { password, obfuscatedPassword };
 }
 
