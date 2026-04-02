@@ -240,3 +240,161 @@ SELECT
 FROM t WHERE y = 'null'
 ----
 0
+
+# Verify JSON serialization of a CaseLiteral plan succeeds.
+# This exercises serde JSON serialization of Vec<CaseLiteralEntry>,
+# which previously failed with BTreeMap<Row, usize> because JSON
+# requires string keys.
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR
+SELECT
+  CASE x
+    WHEN 1 THEN 10
+    WHEN 2 THEN 20
+    ELSE 0
+  END
+FROM t
+----
+{
+  "plans": [
+    {
+      "id": "Explained Query",
+      "plan": {
+        "Project": {
+          "input": {
+            "Map": {
+              "input": {
+                "Get": {
+                  "id": {
+                    "Global": {
+                      "User": 1
+                    }
+                  },
+                  "typ": {
+                    "column_types": [
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "String",
+                        "nullable": true
+                      },
+                      {
+                        "scalar_type": "Int32",
+                        "nullable": true
+                      }
+                    ],
+                    "keys": []
+                  },
+                  "access_strategy": "Persist"
+                }
+              },
+              "scalars": [
+                {
+                  "CallVariadic": {
+                    "func": {
+                      "CaseLiteral": {
+                        "lookup": [
+                          {
+                            "literal": {
+                              "data": [
+                                45,
+                                1
+                              ]
+                            },
+                            "expr_index": 1
+                          },
+                          {
+                            "literal": {
+                              "data": [
+                                45,
+                                2
+                              ]
+                            },
+                            "expr_index": 2
+                          }
+                        ],
+                        "return_type": {
+                          "scalar_type": "Int32",
+                          "nullable": false
+                        }
+                      }
+                    },
+                    "exprs": [
+                      {
+                        "Column": [
+                          0,
+                          "x"
+                        ]
+                      },
+                      {
+                        "Literal": [
+                          {
+                            "Ok": {
+                              "data": [
+                                45,
+                                10
+                              ]
+                            }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
+                          }
+                        ]
+                      },
+                      {
+                        "Literal": [
+                          {
+                            "Ok": {
+                              "data": [
+                                45,
+                                20
+                              ]
+                            }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
+                          }
+                        ]
+                      },
+                      {
+                        "Literal": [
+                          {
+                            "Ok": {
+                              "data": [
+                                44
+                              ]
+                            }
+                          },
+                          {
+                            "scalar_type": "Int32",
+                            "nullable": false
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "outputs": [
+            3
+          ]
+        }
+      }
+    }
+  ],
+  "sources": [
+    {
+      "id": {
+        "User": 1
+      },
+      "op": null
+    }
+  ]
+}
+EOF
