@@ -3500,6 +3500,9 @@ fn plan_sink(
         (CreateSinkConnection::Iceberg { .. }, None, Some(ast::IcebergSinkMode::Upsert)) => {
             SinkEnvelope::Upsert
         }
+        (CreateSinkConnection::Iceberg { .. }, None, Some(ast::IcebergSinkMode::Append)) => {
+            SinkEnvelope::Append
+        }
         (CreateSinkConnection::Iceberg { .. }, None, None) => {
             sql_bail!("MODE clause is required")
         }
@@ -3660,6 +3663,30 @@ fn plan_sink(
         | CreateSinkConnection::Iceberg { key: None, .. } => None,
     };
 
+    if key_indices.is_some() && envelope == SinkEnvelope::Append {
+        sql_bail!("KEY is not supported for MODE APPEND Iceberg sinks");
+    }
+
+    // Reject input columns that clash with the columns MODE APPEND adds to the Iceberg table.
+    if envelope == SinkEnvelope::Append {
+        if let CreateSinkConnection::Iceberg { .. } = &connection {
+            use mz_storage_types::sinks::{
+                ICEBERG_APPEND_DIFF_COLUMN, ICEBERG_APPEND_TIMESTAMP_COLUMN,
+            };
+            for (col_name, _) in desc.iter() {
+                if col_name.as_str() == ICEBERG_APPEND_DIFF_COLUMN
+                    || col_name.as_str() == ICEBERG_APPEND_TIMESTAMP_COLUMN
+                {
+                    sql_bail!(
+                        "column {} conflicts with the system column that MODE APPEND \
+                         adds to the Iceberg table",
+                        col_name.quoted()
+                    );
+                }
+            }
+        }
+    }
+
     let headers_index = match &connection {
         CreateSinkConnection::Kafka {
             headers: Some(headers),
@@ -3668,7 +3695,7 @@ fn plan_sink(
             scx.require_feature_flag(&ENABLE_KAFKA_SINK_HEADERS)?;
 
             match envelope {
-                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Upsert | SinkEnvelope::Append => (),
                 SinkEnvelope::Debezium => {
                     sql_bail!("HEADERS option is not supported with ENVELOPE DEBEZIUM")
                 }
@@ -4177,7 +4204,7 @@ fn kafka_sink_builder(
             let mut scope = Scope::from_source(None, value_desc.iter_names());
 
             match envelope {
-                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Upsert | SinkEnvelope::Append => (),
                 SinkEnvelope::Debezium => {
                     let key_indices: HashSet<_> = key_desc_and_indices
                         .as_ref()

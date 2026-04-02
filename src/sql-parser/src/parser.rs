@@ -2426,8 +2426,10 @@ impl<'a> Parser<'a> {
     fn parse_iceberg_sink_mode(&mut self) -> Result<IcebergSinkMode, ParserError> {
         if self.parse_keyword(UPSERT) {
             Ok(IcebergSinkMode::Upsert)
+        } else if self.parse_keyword(APPEND) {
+            Ok(IcebergSinkMode::Append)
         } else {
-            self.expected(self.peek_pos(), "UPSERT", self.peek_token())
+            self.expected(self.peek_pos(), "UPSERT, APPEND", self.peek_token())
         }
     }
 

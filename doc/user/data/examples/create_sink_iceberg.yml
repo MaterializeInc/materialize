@@ -1,4 +1,4 @@
-- name: "syntax"
+- name: "syntax-upsert"
   code: |
     CREATE SINK [IF NOT EXISTS] <sink_name>
     [IN CLUSTER <cluster_name>]
@@ -53,6 +53,59 @@
       description: |
         How frequently to commit snapshots to Iceberg (e.g., `'60s'`, `'5m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
 
+- name: "syntax-append"
+  code: |
+    CREATE SINK [IF NOT EXISTS] <sink_name>
+    [IN CLUSTER <cluster_name>]
+    FROM <item_name>
+    INTO ICEBERG CATALOG CONNECTION <catalog_connection> (
+      NAMESPACE = '<namespace>',
+      TABLE = '<table>'
+    )
+    USING AWS CONNECTION <aws_connection>
+    MODE APPEND
+    WITH (COMMIT INTERVAL = '<interval>')
+  syntax_elements:
+    - name: "`<sink_name>`"
+      description: |
+        The name for the sink.
+    - name: "**IF NOT EXISTS**"
+      description: |
+        Optional. If specified, do not throw an error if a sink with the same name already exists.
+    - name: "**IN CLUSTER** `<cluster_name>`"
+      description: |
+        Optional. The [cluster](/sql/create-cluster) to maintain this sink. If
+        unspecified, defaults to the active cluster.
+    - name: "`<item_name>`"
+      description: |
+        The name of the source, table, or materialized view to sink.
+    - name: "**ICEBERG CATALOG CONNECTION** `<catalog_connection>`"
+      description: |
+        The name of the [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) to use.
+    - name: "**NAMESPACE** `'<namespace>'`"
+      description: |
+        The Iceberg namespace (database) containing the table.
+    - name: "**TABLE** `'<table>'`"
+      description: |
+        The name of the unpartitioned Iceberg table to write to. If the table
+        doesn't exist, Materialize creates it automatically. For details, see
+        [Iceberg table
+        creation](/sql/create-sink/iceberg/#iceberg-table-creation).
+    - name: "**USING AWS CONNECTION** `<aws_connection>`"
+      description: |
+        The [AWS connection](/sql/create-connection/#aws) for object storage access.
+    - name: "**MODE APPEND**"
+      description: |
+        Writes all changes as data rows instead of using Iceberg delete files.
+        Two extra columns are appended to the Iceberg table: `_mz_diff` (`int`,
+        `+1` for inserts, `-1` for deletes) and `_mz_timestamp` (`long`). An
+        update produces two rows: one with `_mz_diff = -1` (old values) and one
+        with `_mz_diff = +1` (new values). No `KEY` clause is permitted. See
+        [Append mode](#append-mode).
+    - name: "**COMMIT INTERVAL** `'<interval>'`"
+      description: |
+        How frequently to commit snapshots to Iceberg (e.g., `'60s'`, `'5m'`). See [Commit interval tradeoffs](#commit-interval-tradeoffs).
+
 - name: "example-create-iceberg-sink"
   description: |
     Using the previously created AWS and Iceberg catalog connection, the
@@ -68,6 +121,23 @@
       USING AWS CONNECTION aws_connection
       KEY (user_id, event_timestamp)
       MODE UPSERT
+      WITH (COMMIT INTERVAL = '1m');
+  testable: false
+
+- name: "example-create-iceberg-sink-append"
+  description: |
+    Create an Iceberg sink in append mode. All changes are written as data
+    rows with `_mz_diff` and `_mz_timestamp` columns:
+  code: |
+    CREATE SINK events_log_iceberg
+      IN CLUSTER analytics_cluster
+      FROM user_events
+      INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+        NAMESPACE = 'events',
+        TABLE = 'user_events_log'
+      )
+      USING AWS CONNECTION aws_connection
+      MODE APPEND
       WITH (COMMIT INTERVAL = '1m');
   testable: false
 

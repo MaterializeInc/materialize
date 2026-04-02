@@ -200,11 +200,16 @@ In Materialize, you can sink from a materialized view, table, or source. Use
 - `<my_iceberg_table>` with the name of your Iceberg table. If the Iceberg table
   does not exist, Materialize creates the table. For details, see [`CREATE SINK`
   reference page](/sql/create-sink/iceberg/#iceberg-table-creation).
-- `<key>` with the column(s) that uniquely identify rows.
 - `<commit_interval>` with your commit interval (e.g., `60s`). The commit
   interval specifies how frequently Materialize commits snapshots to Iceberg.
   The minimum commit interval is `1s`. See [Commit interval
   tradeoffs](#commit-interval-tradeoffs) below.
+
+For the full list of syntax options, see the [`CREATE SINK` reference](/sql/create-sink/iceberg).
+
+### Upsert mode
+
+In upsert mode, replace `<key>` with the column(s) that uniquely identify rows.
 
 ```mzsql
 CREATE SINK <sink_name>
@@ -220,7 +225,23 @@ CREATE SINK <sink_name>
   WITH (COMMIT INTERVAL = '<commit_interval>');
 ```
 
-For the full list of syntax options, see the [`CREATE SINK` reference](/sql/create-sink/iceberg).
+### Append mode
+
+In append mode, no `KEY` clause is used. The Iceberg table includes all source
+columns plus `_mz_diff` (`int`) and `_mz_timestamp` (`long`).
+
+```mzsql
+CREATE SINK <sink_name>
+  IN CLUSTER <sink_cluster>
+  FROM <my_materialize_object>
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = '<my_s3_table_bucket_namespace>',
+    TABLE = '<my_iceberg_table>'
+  )
+  USING AWS CONNECTION aws_connection
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '<commit_interval>');
+```
 
 ## Considerations
 

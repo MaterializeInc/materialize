@@ -124,8 +124,11 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum SinkEnvelope {
+    /// Only used for Kafka.
     Debezium,
     Upsert,
+    /// Only used for Iceberg.
+    Append,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -635,6 +638,11 @@ pub struct S3UploadInfo {
 
 pub const MIN_S3_SINK_FILE_SIZE: ByteSize = ByteSize::mb(16);
 pub const MAX_S3_SINK_FILE_SIZE: ByteSize = ByteSize::gb(4);
+
+/// Column name appended by MODE APPEND Iceberg sinks to record the diff (+1/−1).
+pub const ICEBERG_APPEND_DIFF_COLUMN: &str = "_mz_diff";
+/// Column name appended by MODE APPEND Iceberg sinks to record the logical timestamp.
+pub const ICEBERG_APPEND_TIMESTAMP_COLUMN: &str = "_mz_timestamp";
 
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {

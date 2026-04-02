@@ -34,9 +34,9 @@
 //!               │ file metadata              │
 //!               │                            │
 //!        ┏━━━━━━v━━━━━━━━━━━━━━━━━━━━━━━━━━━━v┓
-//!        ┃           commit to               ┃ (single worker)
-//!        ┃             iceberg               ┃
-//!        ┗━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━┛
+//!        ┃           commit to                ┃ (single worker)
+//!        ┃             iceberg                ┃
+//!        ┗━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━━━━━━━━┛
 //!                      │
 //!              ╭───────v───────╮
 //!              │ Iceberg table │
@@ -74,12 +74,13 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::convert::Infallible;
+use std::future::Future;
 use std::time::Instant;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 use anyhow::{Context, anyhow};
-use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
@@ -92,16 +93,14 @@ use iceberg::spec::{
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
-use iceberg::writer::base_writer::data_file_writer::DataFileWriter;
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::base_writer::equality_delete_writer::{
-    EqualityDeleteFileWriter, EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
+    EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
 };
-use iceberg::writer::base_writer::position_delete_writer::PositionDeleteFileWriter;
 use iceberg::writer::base_writer::position_delete_writer::{
     PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
 };
-use iceberg::writer::combined_writer::delta_writer::{DeltaWriter, DeltaWriterBuilder};
+use iceberg::writer::combined_writer::delta_writer::DeltaWriterBuilder;
 use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
@@ -125,7 +124,7 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::{IcebergSinkConnection, StorageSinkDesc};
+use mz_storage_types::sinks::{IcebergSinkConnection, SinkEnvelope, StorageSinkDesc};
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
@@ -161,19 +160,294 @@ const PARQUET_FILE_PREFIX: &str = "mz_data";
 /// many batches we have in-flight at any given time.
 const INITIAL_DESCRIPTIONS_TO_MINT: u64 = 3;
 
-type DeltaWriterType = DeltaWriter<
-    DataFileWriter<ParquetWriterBuilder, DefaultLocationGenerator, DefaultFileNameGenerator>,
-    PositionDeleteFileWriter<
-        ParquetWriterBuilder,
-        DefaultLocationGenerator,
-        DefaultFileNameGenerator,
-    >,
-    EqualityDeleteFileWriter<
-        ParquetWriterBuilder,
-        DefaultLocationGenerator,
-        DefaultFileNameGenerator,
-    >,
->;
+/// Shared state produced by the async setup in [`write_data_files`] that both
+/// envelope handlers need to construct Parquet writers.
+struct WriterContext {
+    /// Arrow schema for data columns, with Materialize extension metadata merged in.
+    arrow_schema: Arc<ArrowSchema>,
+    /// Iceberg table schema, used to configure Parquet writers.
+    current_schema: Arc<Schema>,
+    /// File I/O for writing Parquet files to object storage.
+    file_io: iceberg::io::FileIO,
+    /// Generates file paths under the table's data directory.
+    location_generator: DefaultLocationGenerator,
+    /// Generates unique file names with a per-worker UUID suffix.
+    file_name_generator: DefaultFileNameGenerator,
+    writer_properties: WriterProperties,
+}
+
+/// Envelope-specific logic for writing Iceberg data files.
+trait EnvelopeHandler: Send {
+    /// Construct from the shared writer context after async setup completes.
+    fn new(
+        ctx: WriterContext,
+        connection: &IcebergSinkConnection,
+        materialize_arrow_schema: &Arc<ArrowSchema>,
+    ) -> anyhow::Result<Self>
+    where
+        Self: Sized;
+
+    /// Create an [`IcebergWriter`] for a new batch.
+    ///
+    /// `is_snapshot` is true for the initial "snapshot" batch (lower == as_of), which
+    /// contains all pre-existing data and can be very large. Implementations may use
+    /// this to disable memory-intensive optimisations like seen-rows deduplication.
+    async fn create_writer(&self, is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>>;
+
+    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch>;
+}
+
+struct UpsertEnvelopeHandler {
+    ctx: WriterContext,
+    /// Iceberg field IDs of the key columns, used for equality delete files.
+    equality_ids: Vec<i32>,
+    /// Iceberg schema for position delete files.
+    pos_schema: Arc<Schema>,
+    /// Iceberg schema for equality delete files (projected to key columns only).
+    eq_schema: Arc<Schema>,
+    /// Configuration for the equality delete writer (projected schema + column IDs).
+    eq_config: EqualityDeleteWriterConfig,
+    /// Arrow schema with an appended `__op` column that the
+    /// [`DeltaWriter`](iceberg::writer::combined_writer::delta_writer::DeltaWriter)
+    /// uses to distinguish inserts (+1) from deletes (-1).
+    schema_with_op: Arc<ArrowSchema>,
+}
+
+impl EnvelopeHandler for UpsertEnvelopeHandler {
+    fn new(
+        ctx: WriterContext,
+        connection: &IcebergSinkConnection,
+        materialize_arrow_schema: &Arc<ArrowSchema>,
+    ) -> anyhow::Result<Self> {
+        let Some((_, equality_indices)) = &connection.key_desc_and_indices else {
+            return Err(anyhow::anyhow!(
+                "Iceberg sink requires key columns for equality deletes"
+            ));
+        };
+
+        let equality_ids = equality_ids_for_indices(
+            ctx.current_schema.as_ref(),
+            materialize_arrow_schema.as_ref(),
+            equality_indices,
+        )?;
+
+        let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
+        let pos_schema = Arc::new(
+            arrow_schema_to_schema(&pos_arrow_schema)
+                .context("Failed to convert position delete Arrow schema to Iceberg schema")?,
+        );
+
+        let eq_config =
+            EqualityDeleteWriterConfig::new(equality_ids.clone(), Arc::clone(&ctx.current_schema))
+                .context("Failed to create EqualityDeleteWriterConfig")?;
+        let eq_schema = Arc::new(
+            arrow_schema_to_schema(eq_config.projected_arrow_schema_ref())
+                .context("Failed to convert equality delete Arrow schema to Iceberg schema")?,
+        );
+
+        let schema_with_op = Arc::new(build_schema_with_op_column(&ctx.arrow_schema));
+
+        Ok(Self {
+            ctx,
+            equality_ids,
+            pos_schema,
+            eq_schema,
+            eq_config,
+            schema_with_op,
+        })
+    }
+
+    async fn create_writer(&self, is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>> {
+        let data_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.ctx.current_schema),
+        )
+        .with_arrow_schema(Arc::clone(&self.ctx.arrow_schema))
+        .context("Arrow schema validation failed")?;
+        let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            data_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
+
+        let pos_config = PositionDeleteWriterConfig::new(None, 0, None);
+        let pos_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.pos_schema),
+        );
+        let pos_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            pos_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        let pos_delete_writer_builder =
+            PositionDeleteFileWriterBuilder::new(pos_rolling_writer, pos_config);
+
+        let eq_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.eq_schema),
+        );
+        let eq_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            eq_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        let eq_delete_writer_builder =
+            EqualityDeleteFileWriterBuilder::new(eq_rolling_writer, self.eq_config.clone());
+
+        let mut builder = DeltaWriterBuilder::new(
+            data_writer_builder,
+            pos_delete_writer_builder,
+            eq_delete_writer_builder,
+            self.equality_ids.clone(),
+        );
+
+        if is_snapshot {
+            builder = builder.with_max_seen_rows(0);
+        }
+
+        Ok(Box::new(
+            builder
+                .build(None)
+                .await
+                .context("Failed to create DeltaWriter")?,
+        ))
+    }
+
+    /// The `__op` column indicates whether each row is an insert (+1) or delete (-1),
+    /// which the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
+    fn row_to_batch(
+        &self,
+        diff_pair: DiffPair<Row>,
+        _ts: Timestamp,
+    ) -> anyhow::Result<RecordBatch> {
+        let mut builder = ArrowBuilder::new_with_schema(
+            Arc::clone(&self.ctx.arrow_schema),
+            DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
+            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+        )
+        .context("Failed to create builder")?;
+
+        let mut op_values = Vec::new();
+
+        if let Some(before) = diff_pair.before {
+            builder
+                .add_row(&before)
+                .context("Failed to add delete row to builder")?;
+            op_values.push(-1i32);
+        }
+        if let Some(after) = diff_pair.after {
+            builder
+                .add_row(&after)
+                .context("Failed to add insert row to builder")?;
+            op_values.push(1i32);
+        }
+
+        let batch = builder
+            .to_record_batch()
+            .context("Failed to create record batch")?;
+
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(Int32Array::from(op_values)));
+
+        RecordBatch::try_new(Arc::clone(&self.schema_with_op), columns)
+            .context("Failed to create batch with op column")
+    }
+}
+
+struct AppendEnvelopeHandler {
+    ctx: WriterContext,
+    /// Arrow schema with only user columns (no `_mz_diff`/`_mz_timestamp`), used by
+    /// [`ArrowBuilder`] to serialize row data before the extra columns are appended.
+    user_schema_for_append: Arc<ArrowSchema>,
+}
+
+impl EnvelopeHandler for AppendEnvelopeHandler {
+    fn new(
+        ctx: WriterContext,
+        _connection: &IcebergSinkConnection,
+        _materialize_arrow_schema: &Arc<ArrowSchema>,
+    ) -> anyhow::Result<Self> {
+        // arrow_schema already includes _mz_diff + _mz_timestamp (added in render_sink); strip
+        // the last two fields so ArrowBuilder only processes the user columns.
+        let n = ctx.arrow_schema.fields().len().saturating_sub(2);
+        let user_schema_for_append =
+            Arc::new(ArrowSchema::new(ctx.arrow_schema.fields()[..n].to_vec()));
+
+        Ok(Self {
+            ctx,
+            user_schema_for_append,
+        })
+    }
+
+    async fn create_writer(&self, _is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>> {
+        let data_parquet_writer = ParquetWriterBuilder::new(
+            self.ctx.writer_properties.clone(),
+            Arc::clone(&self.ctx.current_schema),
+        )
+        .with_arrow_schema(Arc::clone(&self.ctx.arrow_schema))
+        .context("Arrow schema validation failed")?;
+        let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+            data_parquet_writer,
+            Arc::clone(&self.ctx.current_schema),
+            self.ctx.file_io.clone(),
+            self.ctx.location_generator.clone(),
+            self.ctx.file_name_generator.clone(),
+        );
+        Ok(Box::new(
+            DataFileWriterBuilder::new(data_rolling_writer)
+                .build(None)
+                .await
+                .context("Failed to create DataFileWriter")?,
+        ))
+    }
+
+    /// Every change is written as a plain data row: the `before` half (if present) gets
+    /// `_mz_diff = -1` and the `after` half gets `_mz_diff = +1`. Both carry the same `_mz_timestamp`.
+    fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch> {
+        let mut builder = ArrowBuilder::new_with_schema(
+            Arc::clone(&self.user_schema_for_append),
+            DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
+            DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
+        )
+        .context("Failed to create builder")?;
+
+        let mut diff_values: Vec<i32> = Vec::new();
+        let ts_i64 = i64::try_from(u64::from(ts)).unwrap_or(i64::MAX);
+
+        if let Some(before) = diff_pair.before {
+            builder
+                .add_row(&before)
+                .context("Failed to add before row to builder")?;
+            diff_values.push(-1i32);
+        }
+        if let Some(after) = diff_pair.after {
+            builder
+                .add_row(&after)
+                .context("Failed to add after row to builder")?;
+            diff_values.push(1i32);
+        }
+
+        let n = diff_values.len();
+        let batch = builder
+            .to_record_batch()
+            .context("Failed to create record batch")?;
+
+        let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
+        columns.push(Arc::new(Int32Array::from(diff_values)));
+        columns.push(Arc::new(Int64Array::from(vec![ts_i64; n])));
+
+        RecordBatch::try_new(Arc::clone(&self.ctx.arrow_schema), columns)
+            .context("Failed to create append record batch")
+    }
+}
 
 /// The precision needed to store all UInt64 values in a Decimal128.
 /// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
@@ -718,47 +992,26 @@ fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
     ArrowSchema::new(fields)
 }
 
-/// Convert a Materialize DiffPair into an Arrow RecordBatch with an __op column.
-/// The __op column indicates whether each row is an insert (1) or delete (-1), which
-/// the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
-fn row_to_recordbatch(
-    row: DiffPair<Row>,
-    schema: ArrowSchemaRef,
-    schema_with_op: ArrowSchemaRef,
-) -> anyhow::Result<RecordBatch> {
-    let mut builder = ArrowBuilder::new_with_schema(
-        Arc::clone(&schema),
-        DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
-        DEFAULT_ARRAY_BUILDER_DATA_CAPACITY,
-    )
-    .context("Failed to create builder")?;
+/// Build a new Arrow schema by appending `_mz_diff` (Int32) and `_mz_timestamp` (Int64) columns.
+/// These are user-visible Iceberg columns written in append mode. Parquet field IDs are
+/// assigned sequentially after the existing maximum field ID so the extended schema can
+/// be converted to a valid Iceberg schema via `arrow_schema_to_schema`.
+#[allow(clippy::disallowed_types)]
+fn build_schema_with_append_columns(schema: &ArrowSchema) -> ArrowSchema {
+    use mz_storage_types::sinks::{ICEBERG_APPEND_DIFF_COLUMN, ICEBERG_APPEND_TIMESTAMP_COLUMN};
+    let mut fields: Vec<Arc<Field>> = schema.fields().iter().cloned().collect();
+    fields.push(Arc::new(Field::new(
+        ICEBERG_APPEND_DIFF_COLUMN,
+        DataType::Int32,
+        false,
+    )));
+    fields.push(Arc::new(Field::new(
+        ICEBERG_APPEND_TIMESTAMP_COLUMN,
+        DataType::Int64,
+        false,
+    )));
 
-    let mut op_values = Vec::new();
-
-    if let Some(before) = row.before {
-        builder
-            .add_row(&before)
-            .context("Failed to add delete row to builder")?;
-        op_values.push(-1i32); // Delete operation
-    }
-    if let Some(after) = row.after {
-        builder
-            .add_row(&after)
-            .context("Failed to add insert row to builder")?;
-        op_values.push(1i32); // Insert operation
-    }
-
-    let batch = builder
-        .to_record_batch()
-        .context("Failed to create record batch")?;
-
-    let mut columns: Vec<ArrayRef> = batch.columns().to_vec();
-    let op_column = Arc::new(Int32Array::from(op_values));
-    columns.push(op_column);
-
-    let batch_with_op = RecordBatch::try_new(schema_with_op, columns)
-        .context("Failed to create batch with op column")?;
-    Ok(batch_with_op)
+    add_field_ids_to_arrow_schema(ArrowSchema::new(fields).with_metadata(schema.metadata().clone()))
 }
 
 /// Generate time-based batch boundaries for grouping writes into Iceberg snapshots.
@@ -1185,10 +1438,12 @@ struct BoundedDataFileSet {
     pub data_files: Vec<BoundedDataFile>,
 }
 
+/// Construct the envelope-specific closures that [`write_data_files`] needs.
+///
 /// Write rows into Parquet data files bounded by batch descriptions.
 /// Rows are matched to batches by timestamp; if a batch description hasn't arrived yet,
 /// rows are stashed until it does. This allows batches to be minted ahead of data arrival.
-fn write_data_files<G>(
+fn write_data_files<G, H: EnvelopeHandler + 'static>(
     name: String,
     input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
     batch_desc_input: StreamVec<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
@@ -1261,9 +1516,6 @@ where
                 .context("Failed to merge Materialize metadata into Iceberg schema")?,
             );
 
-            // Build schema_with_op by adding the __op column used by DeltaWriter.
-            let schema_with_op = Arc::new(build_schema_with_op_column(&arrow_schema));
-
             // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
             // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
             // No clear way to detect this properly right now, so we use heuristics.
@@ -1286,110 +1538,17 @@ where
 
             let file_io = table.file_io().clone();
 
-            let Some((_, equality_indices)) = connection.key_desc_and_indices else {
-                return Err(anyhow::anyhow!(
-                    "Iceberg sink requires key columns for equality deletes"
-                ));
-            };
-
-            let equality_ids = equality_ids_for_indices(
-                current_schema.as_ref(),
-                materialize_arrow_schema.as_ref(),
-                &equality_indices,
-            )?;
-
             let writer_properties = WriterProperties::new();
 
-            // Precompute schemas that don't change between writer instances.
-            let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
-            let pos_schema = Arc::new(arrow_schema_to_schema(&pos_arrow_schema).context(
-                "Failed to convert position delete Arrow schema to Iceberg schema",
-            )?);
-
-            let eq_config = EqualityDeleteWriterConfig::new(
-                equality_ids.clone(),
-                Arc::clone(&current_schema),
-            )
-            .context("Failed to create EqualityDeleteWriterConfig")?;
-            let eq_schema = Arc::new(
-                arrow_schema_to_schema(eq_config.projected_arrow_schema_ref()).context(
-                    "Failed to convert equality delete Arrow schema to Iceberg schema",
-                )?,
-            );
-
-            let arrow_schema_for_closure = Arc::clone(&arrow_schema);
-            let current_schema_for_closure = Arc::clone(&current_schema);
-
-            let create_delta_writer = move |disable_seen_rows: bool| {
-                let arrow_schema = Arc::clone(&arrow_schema_for_closure);
-                let current_schema = Arc::clone(&current_schema_for_closure);
-                let file_io = file_io.clone();
-                let location_generator = location_generator.clone();
-                let file_name_generator = file_name_generator.clone();
-                let equality_ids = equality_ids.clone();
-                let writer_properties = writer_properties.clone();
-                let pos_schema = Arc::clone(&pos_schema);
-                let eq_schema = Arc::clone(&eq_schema);
-                let eq_config = eq_config.clone();
-
-                async move {
-                    let data_parquet_writer = ParquetWriterBuilder::new(
-                        writer_properties.clone(),
-                        Arc::clone(&current_schema),
-                    )
-                    .with_arrow_schema(Arc::clone(&arrow_schema))
-                    .context("Arrow schema validation failed")?;
-                    let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
-                        data_parquet_writer,
-                        Arc::clone(&current_schema),
-                        file_io.clone(),
-                        location_generator.clone(),
-                        file_name_generator.clone(),
-                    );
-                    let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
-
-                    let pos_config = PositionDeleteWriterConfig::new(None, 0, None);
-                    let pos_parquet_writer =
-                        ParquetWriterBuilder::new(writer_properties.clone(), pos_schema);
-                    let pos_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
-                        pos_parquet_writer,
-                        Arc::clone(&current_schema),
-                        file_io.clone(),
-                        location_generator.clone(),
-                        file_name_generator.clone(),
-                    );
-                    let pos_delete_writer_builder =
-                        PositionDeleteFileWriterBuilder::new(pos_rolling_writer, pos_config);
-
-                    let eq_parquet_writer =
-                        ParquetWriterBuilder::new(writer_properties.clone(), eq_schema);
-                    let eq_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
-                        eq_parquet_writer,
-                        Arc::clone(&current_schema),
-                        file_io.clone(),
-                        location_generator.clone(),
-                        file_name_generator.clone(),
-                    );
-                    let eq_delete_writer_builder =
-                        EqualityDeleteFileWriterBuilder::new(eq_rolling_writer, eq_config);
-
-                    let mut builder = DeltaWriterBuilder::new(
-                        data_writer_builder,
-                        pos_delete_writer_builder,
-                        eq_delete_writer_builder,
-                        equality_ids.clone(),
-                    );
-
-                    if disable_seen_rows {
-                        builder = builder.with_max_seen_rows(0);
-                    }
-
-                    builder
-                        .build(None)
-                        .await
-                        .context("Failed to create DeltaWriter")
-                }
+            let ctx = WriterContext {
+                arrow_schema,
+                current_schema: Arc::clone(&current_schema),
+                file_io,
+                location_generator,
+                file_name_generator,
+                writer_properties,
             };
+            let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
 
             // Rows can arrive before their batch description due to dataflow parallelism.
             // Stash them until we know which batch they belong to.
@@ -1403,7 +1562,7 @@ where
             #[allow(clippy::disallowed_types)]
             let mut in_flight_batches: std::collections::HashMap<
                 (Antichain<Timestamp>, Antichain<Timestamp>),
-                Box<DeltaWriterType>,
+                Box<dyn IcebergWriter>,
             > = std::collections::HashMap::new();
 
             let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
@@ -1474,7 +1633,8 @@ where
                                     upper.pretty(),
                                     is_snapshot
                                 );
-                                let mut delta_writer = create_delta_writer(is_snapshot).await?;
+                                let mut batch_writer =
+                                    handler.create_writer(is_snapshot).await?;
                                 // Drain any stashed rows that belong to this batch
                                 let row_ts_keys: Vec<_> = stashed_rows.keys().cloned().collect();
                                 let mut drained_count = 0;
@@ -1487,15 +1647,12 @@ where
                                             drained_count += rows.len();
                                             for (_row, diff_pair) in rows {
                                                 metrics.stashed_rows.dec();
-                                                let record_batch = row_to_recordbatch(
+                                                let record_batch = handler.row_to_batch(
                                                     diff_pair.clone(),
-                                                    Arc::clone(&arrow_schema),
-                                                    Arc::clone(&schema_with_op),
+                                                    row_ts.clone(),
                                                 )
                                                 .context("failed to convert row to recordbatch")?;
-                                                delta_writer.write(record_batch).await.context(
-                                                    "Failed to write row to DeltaWriter",
-                                                )?;
+                                                batch_writer.write(record_batch).await?;
                                                 staged_messages_since_flush += 1;
                                                 if staged_messages_since_flush >= 10_000 {
                                                     statistics.inc_messages_staged_by(
@@ -1517,9 +1674,7 @@ where
                                     );
                                 }
                                 let prev =
-                                    in_flight_batches.insert(
-                                        batch_desc.clone(), Box::new(delta_writer)
-                                    );
+                                    in_flight_batches.insert(batch_desc.clone(), batch_writer);
                                 if prev.is_some() {
                                     anyhow::bail!(
                                         "Duplicate batch description received for description {:?}",
@@ -1545,21 +1700,17 @@ where
                                 let ts_antichain = Antichain::from_elem(row_ts.clone());
                                 let mut written = false;
                                 // Try writing the row to any in-flight batch it belongs to...
-                                for (batch_desc, delta_writer) in in_flight_batches.iter_mut() {
+                                for (batch_desc, batch_writer) in in_flight_batches.iter_mut() {
                                     let (lower, upper) = batch_desc;
                                     if PartialOrder::less_equal(lower, &ts_antichain)
                                         && PartialOrder::less_than(&ts_antichain, upper)
                                     {
-                                        let record_batch = row_to_recordbatch(
+                                        let record_batch = handler.row_to_batch(
                                             diff_pair.clone(),
-                                            Arc::clone(&arrow_schema),
-                                            Arc::clone(&schema_with_op),
+                                            row_ts.clone(),
                                         )
                                         .context("failed to convert row to recordbatch")?;
-                                        delta_writer
-                                            .write(record_batch)
-                                            .await
-                                            .context("Failed to write row to DeltaWriter")?;
+                                        batch_writer.write(record_batch).await?;
                                         staged_messages_since_flush += 1;
                                         if staged_messages_since_flush >= 10_000 {
                                             statistics.inc_messages_staged_by(
@@ -1640,13 +1791,13 @@ where
                             input_frontier.pretty()
                         );
                         let mut max_upper = Antichain::from_elem(Timestamp::minimum());
-                        for (desc, mut delta_writer) in ready_batches {
+                        for (desc, mut batch_writer) in ready_batches {
                             let close_started_at = Instant::now();
-                            let data_files = delta_writer.close().await;
+                            let data_files = batch_writer.close().await;
                             metrics
                                 .writer_close_duration_seconds
                                 .observe(close_started_at.elapsed().as_secs_f64());
-                            let data_files = data_files.context("Failed to close DeltaWriter")?;
+                            let data_files = data_files.context("Failed to close batch writer")?;
                             debug!(
                                 "{}: closed batch [{}, {}), wrote {} files",
                                 name_for_logging,
@@ -2121,7 +2272,25 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             .insert(sink_id, Rc::clone(&write_frontier));
 
         let (arrow_schema_with_ids, iceberg_schema) =
-            match relation_desc_to_iceberg_schema(&sink.from_desc) {
+            match (|| -> Result<(ArrowSchema, Arc<Schema>), anyhow::Error> {
+                let (arrow_schema_with_ids, iceberg_schema) =
+                    relation_desc_to_iceberg_schema(&sink.from_desc)?;
+
+                Ok(if sink.envelope == SinkEnvelope::Append {
+                    // For append mode, extend the Arrow and Iceberg schemas with the user-visible
+                    // `_mz_diff` and `_mz_timestamp` columns. The minter uses `iceberg_schema` to create
+                    // the Iceberg table, and `write_data_files` uses `arrow_schema_with_ids` when
+                    // merging metadata. Both must include these columns before any operator starts.
+                    let extended_arrow = build_schema_with_append_columns(&arrow_schema_with_ids);
+                    let extended_iceberg = Arc::new(
+                        arrow_schema_to_schema(&extended_arrow)
+                            .context("Failed to build Iceberg schema with append columns")?,
+                    );
+                    (extended_arrow, extended_iceberg)
+                } else {
+                    (arrow_schema_with_ids, iceberg_schema)
+                })
+            })() {
                 Ok(schemas) => schemas,
                 Err(err) => {
                     let error_stream = std::iter::once(HealthStatusMessage {
@@ -2162,18 +2331,35 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             );
 
         let connection_for_writer = self.clone();
-        let (datafiles, write_status, write_button) = write_data_files(
-            format!("{sink_id}-write-data-files"),
-            minted_input,
-            batch_descriptions.clone(),
-            table_ready.clone(),
-            sink.as_of.clone(),
-            connection_for_writer,
-            storage_state.storage_configuration.clone(),
-            Arc::new(arrow_schema_with_ids.clone()),
-            Arc::clone(&metrics),
-            statistics.clone(),
-        );
+        let (datafiles, write_status, write_button) = match sink.envelope {
+            SinkEnvelope::Upsert => write_data_files::<_, UpsertEnvelopeHandler>(
+                format!("{sink_id}-write-data-files"),
+                minted_input,
+                batch_descriptions.clone(),
+                table_ready.clone(),
+                sink.as_of.clone(),
+                connection_for_writer,
+                storage_state.storage_configuration.clone(),
+                Arc::new(arrow_schema_with_ids.clone()),
+                Arc::clone(&metrics),
+                statistics.clone(),
+            ),
+            SinkEnvelope::Append => write_data_files::<_, AppendEnvelopeHandler>(
+                format!("{sink_id}-write-data-files"),
+                minted_input,
+                batch_descriptions.clone(),
+                table_ready.clone(),
+                sink.as_of.clone(),
+                connection_for_writer,
+                storage_state.storage_configuration.clone(),
+                Arc::new(arrow_schema_with_ids.clone()),
+                Arc::clone(&metrics),
+                statistics.clone(),
+            ),
+            SinkEnvelope::Debezium => {
+                unreachable!("Iceberg sink only supports Upsert and Append envelopes")
+            }
+        };
 
         let connection_for_committer = self.clone();
         let (commit_status, commit_button) = commit_to_iceberg(
