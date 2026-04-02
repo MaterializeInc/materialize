@@ -37,6 +37,19 @@ Mention which tests were added or modified in the pull request description, but 
 To auto-close issues, include `Fixes database-issues#NNNN`.
 Add release notes for user-visible changes (should complete "This release will...").
 
+## Cargo.lock discipline
+
+Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semver-compatible dep and introduces unrelated breakage (e.g., `os_info` pulling in `objc2` on macOS, `chrono-tz` changing timezone data, `serde_path_to_error` changing error formats).
+
+* **Adding a dep or changing features**: just `cargo check`. It updates only what's needed.
+* **Updating one crate**: `cargo update -p <crate>` (add `--precise <ver>` to pin).
+* **After any Cargo.lock change**, review the diff:
+  ```
+  git diff Cargo.lock | grep '^[+-]version' | head -40
+  ```
+  Pin back anything that moved unexpectedly: `cargo update -p <crate> --precise <old-version>`.
+* **After rebase conflicts in Cargo.lock**: resolve by taking HEAD's version then running `cargo check` (not `cargo update`). This preserves existing pins while adding only what the new commits require.
+
 ## Git conventions
 
 * Work against the `main` branch of `MaterializeInc/materialize`.
