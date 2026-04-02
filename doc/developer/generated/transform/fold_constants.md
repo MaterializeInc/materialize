@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/fold_constants.rs
-revision: 52af3ba2a1
+revision: 2982634c0d
 ---
 
 # mz-transform::fold_constants

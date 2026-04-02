@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/subscribe.rs
-revision: f7c755e1ed
+revision: 2982634c0d
 ---
 
 # adapter::coord::sequencer::inner::subscribe
