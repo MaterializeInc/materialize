@@ -30,6 +30,7 @@ export function buildClusterReplicasWithUtilizationQuery(clusterId: string) {
     .select([
       "cr.id",
       "cr.name",
+      "c.name as clusterName",
       "cr.size",
       "cr.disk",
       "cru.cpu_percent as cpuPercent",
