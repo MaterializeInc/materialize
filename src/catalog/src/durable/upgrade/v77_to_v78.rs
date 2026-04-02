@@ -36,7 +36,7 @@ fn migrate_scram_client_to_stored(hash_old: &str) -> Option<String> {
         return None;
     }
 
-    let stored_key = openssl::sha::sha256(&first_key);
+    let stored_key = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &first_key);
     let stored_key_b64 = BASE64_STANDARD.encode(stored_key);
 
     Some(format!(

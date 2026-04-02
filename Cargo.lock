@@ -5671,7 +5671,6 @@ dependencies = [
  "mz-timestamp-oracle",
  "mz-tracing",
  "mz-transform",
- "openssl",
  "opentelemetry",
  "prometheus",
  "prost",
@@ -5972,7 +5971,6 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-transform",
- "openssl",
  "paste",
  "prometheus",
  "proptest",
@@ -6047,13 +6045,12 @@ name = "mz-ccsr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "hyper 1.9.0",
  "hyper-util",
  "mz-build-tools",
  "mz-ore",
  "mz-tls-util",
- "native-tls",
- "openssl",
  "proptest",
  "proptest-derive",
  "prost-build",
@@ -6772,6 +6769,7 @@ name = "mz-frontegg-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "axum-extra",
  "base64 0.22.1",
@@ -6781,7 +6779,6 @@ dependencies = [
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
- "openssl",
  "reqwest",
  "serde",
  "serde_json",
@@ -7041,11 +7038,11 @@ name = "mz-oidc-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "jsonwebtoken",
  "mz-ore",
- "openssl",
  "reqwest",
  "serde",
  "serde_json",
@@ -8082,12 +8079,12 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "futures",
  "itertools 0.14.0",
  "mz-ore",
  "openssh",
  "openssh-mux-client",
- "openssl",
  "rand 0.9.2",
  "scopeguard",
  "serde",
@@ -8366,8 +8363,6 @@ dependencies = [
  "mz-timely-util",
  "mz-tls-util",
  "mz-tracing",
- "native-tls",
- "openssl",
  "proptest",
  "proptest-derive",
  "prost",

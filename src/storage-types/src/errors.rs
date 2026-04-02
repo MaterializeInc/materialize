@@ -1189,10 +1189,6 @@ pub enum CsrConnectError {
     #[error("ssh: {0}")]
     Ssh(#[source] anyhow::Error),
     #[error(transparent)]
-    NativeTls(#[from] native_tls::Error),
-    #[error(transparent)]
-    Openssl(#[from] openssl::error::ErrorStack),
-    #[error(transparent)]
     Dns(#[from] mz_ore::netio::DnsResolutionError),
     #[error(transparent)]
     Io(#[from] std::io::Error),

@@ -11,12 +11,12 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.102"
-native-tls = "0.2.14"
-openssl = { version = "0.10.76", features = ["vendored"] }
+base64 = "0.22.1"
 reqwest = { version = "0.12.28", features = [
     "blocking",
     "json",
     "native-tls-vendored",
+    "rustls-tls-webpki-roots-no-provider",
 ] }
 mz-tls-util = { path = "../tls-util" }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }

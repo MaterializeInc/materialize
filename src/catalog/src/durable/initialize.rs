@@ -764,7 +764,7 @@ pub(crate) async fn initialize(
         .is_none()
     {
         let mut nonce = [0u8; 24];
-        openssl::rand::rand_bytes(&mut nonce).expect("random number generation failed");
+        aws_lc_rs::rand::fill(&mut nonce).expect("random number generation failed");
         tx.set_setting(
             MOCK_AUTHENTICATION_NONCE_KEY.to_string(),
             Some(BASE64_STANDARD.encode(nonce)),

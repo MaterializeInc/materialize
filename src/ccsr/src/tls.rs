@@ -9,6 +9,7 @@
 
 //! TLS certificates and identities.
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use mz_tls_util::pkcs12der_from_pem;
@@ -23,9 +24,10 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
-    pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, openssl::error::ErrorStack> {
-        let mut archive = pkcs12der_from_pem(key, cert)?;
+    /// Constructs an identity from a PEM-formatted key and certificate.
+    pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, anyhow::Error> {
+        let mut archive = pkcs12der_from_pem(key, cert)
+            .map_err(|e| anyhow::anyhow!("failed to build PKCS#12 identity: {e}"))?;
         Ok(Identity {
             der: std::mem::take(&mut archive.der),
             pass: std::mem::take(&mut archive.pass),
@@ -54,16 +56,28 @@ pub struct Certificate {
 }
 
 impl Certificate {
-    /// Wraps [`reqwest::Certificate::from_pem`].
-    pub fn from_pem(pem: &[u8]) -> native_tls::Result<Certificate> {
-        Ok(Certificate {
-            der: native_tls::Certificate::from_pem(pem)?.to_der()?,
-        })
+    /// Constructs a certificate from PEM-encoded data.
+    pub fn from_pem(pem: &[u8]) -> Result<Certificate, anyhow::Error> {
+        // Parse PEM to DER by stripping headers and base64-decoding.
+        let pem_str = std::str::from_utf8(pem)
+            .map_err(|e| anyhow::anyhow!("invalid CERTIFICATE PEM: not valid UTF-8: {e}"))?;
+        let b64: String = pem_str
+            .lines()
+            .filter(|l| !l.starts_with("-----"))
+            .collect();
+        let der = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|e| anyhow::anyhow!("invalid CERTIFICATE PEM: bad base64: {e}"))?;
+        // Validate the DER certificate via reqwest.
+        reqwest::Certificate::from_der(&der)
+            .map_err(|e| anyhow::anyhow!("invalid CERTIFICATE: {e}"))?;
+        Ok(Certificate { der })
     }
 
-    /// Wraps [`reqwest::Certificate::from_der`].
-    pub fn from_der(der: &[u8]) -> native_tls::Result<Certificate> {
-        let _ = native_tls::Certificate::from_der(der)?;
+    /// Constructs a certificate from DER-encoded data.
+    pub fn from_der(der: &[u8]) -> Result<Certificate, anyhow::Error> {
+        reqwest::Certificate::from_der(der)
+            .map_err(|e| anyhow::anyhow!("invalid certificate: {e}"))?;
         Ok(Certificate { der: der.into() })
     }
 }

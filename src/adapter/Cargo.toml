@@ -74,7 +74,6 @@ mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 mz-timestamp-oracle = { path = "../timestamp-oracle", default-features = false }
-openssl = { version = "0.10.76", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }

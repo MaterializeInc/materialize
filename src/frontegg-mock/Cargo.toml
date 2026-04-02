@@ -28,8 +28,9 @@ tracing-subscriber = "0.3.23"
 uuid = "1.19.0"
 
 [dev-dependencies]
+aws-lc-rs = "1"
+base64 = "0.22.1"
 reqwest = { version = "0.12.28", features = ["json"] }
-openssl = { version = "0.10.76", features = ["vendored"] }
 
 [features]
 default = []
