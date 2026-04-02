@@ -15,6 +15,14 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.19.0
+
+This release includes the following changes.
+
+### Changes {#v26.19-changes}
+
+- Upgraded the Rust compiler's Unicode version from 16.0.0 to 17.0.0.
+
 ## v26.17.1
 *Released to Materialize Self-Managed: 2026-03-27* <br>
 
