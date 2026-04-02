@@ -9,14 +9,13 @@ Provides Materialize-specific wrappers and utilities for the AWS SDK, centering 
 
 ## Module structure
 
-* `lib.rs` — crate root; exports `defaults()` (a `ConfigLoader` with latest behavior version and native-TLS HTTP client) and `http_client()`.
+* `lib.rs` — crate root; exports `defaults()` (a `ConfigLoader` with latest behavior version, using the AWS SDK's default rustls HTTP client).
 * `s3` — S3 client construction, object listing, and a `futures::Stream` adapter for `ByteStream` (feature-gated on `s3`).
 * `s3_uploader` — `S3MultiPartUploader`, a streaming multipart-upload helper with configurable part/file size limits (feature-gated on `s3`).
 
 ## Key dependencies
 
-* `aws-config`, `aws-sdk-s3`, `aws-smithy-runtime`, `aws-smithy-types`, `aws-types` — AWS SDK components.
-* `hyper-tls` — native TLS HTTP connector, replacing the SDK's default rustls connector per Materialize policy.
+* `aws-config`, `aws-sdk-s3`, `aws-smithy-types`, `aws-types` — AWS SDK components.
 * `mz-ore` — task spawning (`mz_ore::task::spawn`) and error formatting utilities.
 
 ## Downstream consumers
