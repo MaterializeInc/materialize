@@ -39,8 +39,8 @@ pluggy==1.6.0
 protobuf==6.33.5
 psycopg2-binary==2.9.11
 pydantic==2.12.5
-pydantic_core==2.41.5
-Pygments==2.19.2
+pydantic_core==2.42.0
+Pygments==2.20.0
 pytest==8.4.2
 pytest-split==0.11.0
 python-dateutil==2.9.0.post0
