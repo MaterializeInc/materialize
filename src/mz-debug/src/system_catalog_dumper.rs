@@ -38,7 +38,7 @@ use tokio_util::io::StreamReader;
 use mz_ore::collections::HashMap;
 use mz_ore::retry::{self};
 use mz_ore::task::{self, JoinHandle};
-use postgres_openssl::{MakeTlsConnector, TlsStream};
+use mz_tls_util::MakeRustlsConnect;
 use tracing::{info, warn};
 
 #[derive(Debug, Clone)]
@@ -578,7 +578,7 @@ impl fmt::Display for ClusterReplica {
 pub struct SystemCatalogDumper {
     base_path: PathBuf,
     pg_client: Arc<Mutex<PgClient>>,
-    pg_tls: MakeTlsConnector,
+    pg_tls: MakeRustlsConnect,
     cluster_replicas: Vec<ClusterReplica>,
     _pg_conn_handle: JoinHandle<Result<(), tokio_postgres::Error>>,
 }
@@ -588,8 +588,8 @@ pub async fn create_postgres_connection(
 ) -> Result<
     (
         PgClient,
-        Connection<Socket, TlsStream<Socket>>,
-        MakeTlsConnector,
+        Connection<Socket, mz_tls_util::RustlsTlsStream<Socket>>,
+        MakeRustlsConnect,
     ),
     anyhow::Error,
 > {

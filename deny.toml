@@ -285,6 +285,9 @@ name = "ring"
 wrappers = [
     # Third-party crate — TODO: track upstream migration.
     "aws-config",
+    # TODO: remove tokio-postgres-rustls dep from environmentd tests
+    # and use mz-tls-util::MakeRustlsConnect instead.
+    "tokio-postgres-rustls",
 ]
 
 # Use `aws_lc_rs::pbkdf2` instead.
