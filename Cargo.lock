@@ -6050,6 +6050,7 @@ dependencies = [
  "futures",
  "hyper 1.9.0",
  "hyper-util",
+ "libc",
  "mz-alloc",
  "mz-alloc-default",
  "mz-build-info",
