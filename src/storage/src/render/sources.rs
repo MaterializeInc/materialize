@@ -190,6 +190,7 @@ where
 
     // Rehydration start signal — same pattern as render_source.
     let (starter, mut start_signal) = tokio::sync::mpsc::channel::<()>(1);
+    #[allow(unused_mut)]
     let _start_signal = async move {
         let _ = start_signal.recv().await;
     };

@@ -207,7 +207,9 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotIngestionRequest};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
+use mz_storage_types::sources::{
+    GenericSourceConnection, IngestionDescription, SourceConnection,
+};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::communication::Allocate;
@@ -221,6 +223,7 @@ use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
+use crate::source::types::SourceTask;
 use crate::storage_state::StorageState;
 
 mod persist_sink;
@@ -312,15 +315,44 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                     storage_state,
                     base_source_config,
                 ),
-                GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
-                    mz_scope,
-                    &debug_name,
-                    c,
-                    description.clone(),
-                    feedback,
-                    storage_state,
-                    base_source_config,
-                ),
+                GenericSourceConnection::Postgres(c) => {
+                    // Use the task-based pipeline for PostgreSQL sources.
+                    let timestamp_desc = c.timestamp_desc();
+                    let (_resume_tx, resume_rx) =
+                        tokio::sync::watch::channel(Antichain::from_elem(
+                            mz_storage_types::sources::MzOffset::from(0u64),
+                        ));
+                    let (task_outputs, abort_handle) =
+                        c.spawn(base_source_config.clone(), resume_rx);
+                    let (outputs, health, source_tokens) =
+                        crate::render::sources::render_task_source(
+                            mz_scope,
+                            &debug_name,
+                            description.clone(),
+                            feedback,
+                            storage_state,
+                            base_source_config,
+                            task_outputs,
+                            timestamp_desc,
+                        );
+                    // Keep the abort handle alive by leaking it into a background holder.
+                    // When the dataflow is dropped, the handle will be dropped and the
+                    // task will be cancelled.
+                    // TODO: Find a cleaner way to store non-PressOnDropButton tokens.
+                    let _abort_guard = abort_handle;
+                    // Store it via a dummy async operator that holds the handle.
+                    let holder = mz_timely_util::builder_async::OperatorBuilder::new(
+                        "TaskAbortHolder".to_string(),
+                        mz_scope.clone(),
+                    );
+                    let holder_button = holder.build(move |_caps| async move {
+                        let _handle = _abort_guard;
+                        std::future::pending::<()>().await;
+                    });
+                    let mut source_tokens = source_tokens;
+                    source_tokens.push(holder_button.press_on_drop());
+                    (outputs, health, source_tokens)
+                }
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
                     mz_scope,
                     &debug_name,

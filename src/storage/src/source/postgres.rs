@@ -96,6 +96,7 @@ use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
 use mz_storage_types::sources::postgres::CastType;
+use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::sources::{
     MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
 };
@@ -111,7 +112,10 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{Probe, SourceRender, StackedCollection};
+use crate::source::channel_reclock::SourceBatch;
+use crate::source::types::{
+    Probe, SourceRender, SourceTask, SourceTaskOutputs, SourceTaskUpdate, StackedCollection,
+};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -221,7 +225,7 @@ impl SourceRender for PostgresSourceConnection {
             .chain(std::iter::once(None))
             .map(|id| HealthStatusMessage {
                 id,
-                namespace: Self::STATUS_NAMESPACE,
+                namespace: <Self as SourceRender>::STATUS_NAMESPACE,
                 update: HealthStatusUpdate::Running,
             })
             .collect::<Vec<_>>()
@@ -245,7 +249,7 @@ impl SourceRender for PostgresSourceConnection {
                 {
                     StatusNamespace::Ssh
                 }
-                _ => Self::STATUS_NAMESPACE,
+                _ => <Self as SourceRender>::STATUS_NAMESPACE,
             };
 
             HealthStatusMessage {
@@ -264,6 +268,153 @@ impl SourceRender for PostgresSourceConnection {
             vec![snapshot_token, repl_token],
         )
     }
+}
+
+impl SourceTask for PostgresSourceConnection {
+    type Time = MzOffset;
+    const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Postgres;
+
+    fn spawn(
+        self,
+        config: RawSourceCreationConfig,
+        resume_rx: tokio::sync::watch::Receiver<Antichain<MzOffset>>,
+    ) -> (SourceTaskOutputs<MzOffset>, mz_ore::task::AbortOnDropHandle<()>) {
+        let (data_tx, data_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (probe_tx, probe_rx) = tokio::sync::watch::channel(None);
+        let (health_tx, health_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // Extract the Send-safe fields from config. RawSourceCreationConfig contains Rc fields
+        // (shared_remap_upper, statistics) that are not Send, so we can't move the whole config
+        // into the spawned task.
+        let id = config.id;
+        let worker_id = config.worker_id;
+        let source_exports = config.source_exports.clone();
+        let source_resume_uppers = config.source_resume_uppers.clone();
+        let now_fn = config.now_fn.clone();
+
+        let task_handle = mz_ore::task::spawn(
+            || format!("pg_source_task:{id}"),
+            pg_source_task(
+                self,
+                id,
+                worker_id,
+                source_exports,
+                source_resume_uppers,
+                now_fn,
+                data_tx,
+                probe_tx,
+                health_tx,
+                resume_rx,
+            ),
+        );
+
+        let outputs = SourceTaskOutputs {
+            data_rx,
+            probe_rx,
+            health_rx,
+        };
+        (outputs, task_handle.abort_on_drop())
+    }
+}
+
+/// The main async task for a PostgreSQL source.
+///
+/// This task handles the full lifecycle: connect → snapshot → replicate.
+/// Data is sent via channels rather than through timely operators.
+///
+/// Note: This function takes individual fields from `RawSourceCreationConfig` rather than the
+/// whole config because `RawSourceCreationConfig` contains `Rc` fields that are not `Send`.
+async fn pg_source_task(
+    connection: PostgresSourceConnection,
+    id: GlobalId,
+    worker_id: usize,
+    source_exports: BTreeMap<GlobalId, SourceExport<CollectionMetadata>>,
+    source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
+    now_fn: mz_ore::now::NowFn,
+    data_tx: tokio::sync::mpsc::UnboundedSender<
+        SourceBatch<SourceTaskUpdate<MzOffset>, MzOffset, Diff>,
+    >,
+    probe_tx: tokio::sync::watch::Sender<Option<Probe<MzOffset>>>,
+    health_tx: tokio::sync::mpsc::UnboundedSender<HealthStatusMessage>,
+    _resume_rx: tokio::sync::watch::Receiver<Antichain<MzOffset>>,
+) {
+    // Build table_info from source_exports, same as SourceRender::render.
+    let mut table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>> = BTreeMap::new();
+    for (idx, (export_id, export)) in source_exports.iter().enumerate() {
+        let SourceExport {
+            details,
+            storage_metadata: _,
+            data_config: _,
+        } = export;
+        let details = match details {
+            SourceExportDetails::Postgres(details) => details,
+            SourceExportDetails::None => continue,
+            _ => panic!("unexpected source export details: {:?}", details),
+        };
+        let desc = details.table.clone();
+        let casts = details.column_casts.clone();
+        let resume_upper = Antichain::from_iter(
+            source_resume_uppers
+                .get(export_id)
+                .expect("all source exports must be present in source resume uppers")
+                .iter()
+                .map(MzOffset::decode_row),
+        );
+        let output = SourceOutputInfo {
+            desc,
+            projection: None,
+            casts,
+            resume_upper,
+            export_id: *export_id,
+        };
+        table_info
+            .entry(output.desc.oid)
+            .or_insert_with(BTreeMap::new)
+            .insert(idx, output);
+    }
+
+    // Emit initial health status.
+    let export_ids: Vec<Option<GlobalId>> = source_exports
+        .keys()
+        .copied()
+        .map(Some)
+        .chain(std::iter::once(None))
+        .collect();
+    for export_id in &export_ids {
+        let _ = health_tx.send(HealthStatusMessage {
+            id: *export_id,
+            namespace: <PostgresSourceConnection as SourceTask>::STATUS_NAMESPACE,
+            update: HealthStatusUpdate::Running,
+        });
+    }
+
+    // TODO: This is where the real snapshot + replication logic goes.
+    // For now, emit an initial probe and then wait for cancellation.
+    // The actual implementation will:
+    //   1. Connect to PostgreSQL
+    //   2. Create/verify replication slot
+    //   3. Snapshot tables (parallel COPY via tokio tasks)
+    //   4. Start logical replication stream
+    //   5. Process transactions, sending SourceBatch through data_tx
+    //   6. Monitor resume_rx for backpressure and standby status updates
+
+    tracing::info!(%id, "timely-{worker_id} pg_source_task started (skeleton)");
+
+    // Emit a probe so that remap can mint an initial binding.
+    let probe_ts = now_fn().into();
+    let _ = probe_tx.send(Some(Probe {
+        probe_ts,
+        // Start with minimum frontier — real impl would use pg_current_wal_lsn.
+        upstream_frontier: Antichain::from_elem(MzOffset::from(0u64)),
+    }));
+
+    // Suppress unused variable warnings for the skeleton.
+    let _ = &connection;
+    let _ = &data_tx;
+    let _ = &table_info;
+
+    // Wait for cancellation (task abort on drop).
+    std::future::pending::<()>().await;
 }
 
 #[derive(Clone, Debug)]
