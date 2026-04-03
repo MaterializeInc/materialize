@@ -238,9 +238,9 @@ impl Server {
                                     conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
                                     let acceptor = tls.context.acceptor();
                                     match acceptor.accept(conn).await {
-                                        Ok(tls_stream) => {
-                                            Conn::Ssl(mz_pgwire_common::TlsStream::Server(tls_stream))
-                                        }
+                                        Ok(tls_stream) => Conn::Ssl(
+                                            mz_pgwire_common::TlsStream::Server(tls_stream),
+                                        ),
                                         Err(e) => return Err(e.into()),
                                     }
                                 }

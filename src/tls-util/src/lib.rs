@@ -107,7 +107,7 @@ where
     fn make_tls_connect(&mut self, domain: &str) -> Result<Self::TlsConnect, Self::Error> {
         let server_name = ServerName::try_from(domain.to_owned())?;
         Ok(RustlsConnect {
-            connector: TlsConnector::from(self.config.clone()),
+            connector: TlsConnector::from(Arc::clone(&self.config)),
             server_name,
         })
     }
