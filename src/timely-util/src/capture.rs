@@ -13,9 +13,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::sync::Arc;
+
 use mz_ore::channel::{InstrumentedChannelMetric, InstrumentedUnboundedSender};
 use timely::communication::Push;
+use timely::dataflow::operators::capture::event::link_sync::EventLink;
 use timely::dataflow::operators::capture::{Event, EventPusher};
+
+/// A thread-safe linked list for cross-thread event streaming.
+///
+/// This re-exports timely's `link_sync::EventLink`, which uses `Arc`/`Mutex`
+/// (as opposed to the `Rc`/`RefCell`-based `EventLink` in `timely::capture`).
+///
+/// Both writer and reader are `Arc<ArcEventLink<T, C>>`: the writer implements
+/// [`EventPusher`] and the reader implements [`EventIterator`].
+pub type ArcEventLink<T, C> = EventLink<T, C>;
+
+/// Creates a linked `(writer, reader)` pair for cross-thread event streaming.
+///
+/// Both handles begin pointing at the same empty sentinel node. The writer
+/// appends events via [`EventPusher`]; the reader chases the list and yields
+/// them via [`EventIterator`].
+pub fn arc_event_link<T, C>() -> (Arc<ArcEventLink<T, C>>, Arc<ArcEventLink<T, C>>) {
+    let shared = Arc::new(ArcEventLink::new());
+    (Arc::clone(&shared), shared)
+}
 
 pub struct UnboundedTokioCapture<T, C, M>(pub InstrumentedUnboundedSender<Event<T, C>, M>);
 

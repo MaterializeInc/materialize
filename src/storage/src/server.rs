@@ -20,7 +20,9 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
+use mz_timely_util::capture::ArcEventLink;
 use mz_txn_wal::operator::TxnsContext;
+use timely::logging::TimelyEvent;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -48,6 +50,12 @@ struct Config {
     pub metrics: StorageMetrics,
     /// Shared rocksdb write buffer manager
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
+    /// Per-worker writers for forwarding timely logging events to compute.
+    // TODO: Consider using the timely config's `process` and `workers` fields to
+    // deterministically assign writers to workers by local index, rather than pop().
+    pub timely_log_writers: Arc<
+        Mutex<Vec<Arc<ArcEventLink<mz_repr::Timestamp, Vec<(std::time::Duration, TimelyEvent)>>>>>,
+    >,
 }
 
 /// Initiates a timely dataflow computation, processing storage commands.
@@ -60,6 +68,9 @@ pub async fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
+    timely_log_writers: Vec<
+        Arc<ArcEventLink<mz_repr::Timestamp, Vec<(std::time::Duration, TimelyEvent)>>>,
+    >,
 ) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
     let config = Config {
         persist_clients,
@@ -73,6 +84,7 @@ pub async fn serve(
         // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
         // first worker attempts to initialize it.
         shared_rocksdb_write_buffer_manager: Default::default(),
+        timely_log_writers: Arc::new(Mutex::new(timely_log_writers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
 
@@ -103,6 +115,52 @@ impl ClusterSpec for Config {
             mpsc::UnboundedSender<StorageResponse>,
         )>,
     ) {
+        // Register a timely logger that forwards events to the compute logging dataflow.
+        let writer = self.timely_log_writers.lock().unwrap().pop();
+        if let Some(writer) = writer {
+            use timely::dataflow::operators::capture::{Event, EventPusher};
+            use timely::logging::TimelyEventBuilder;
+
+            // We use an approach similar to compute's logging: wrap the writer in
+            // a BatchLogger that translates Logger callbacks into Event pushes,
+            // then register the Logger with timely's log_register.
+            let interval_ms = 1000u128; // 1 second batching interval
+            let mut time_ms = mz_repr::Timestamp::from(0u64);
+            let mut event_pusher = writer;
+            let now = std::time::Instant::now();
+            let start_offset = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Failed to get duration since Unix epoch");
+
+            let logger = timely::logging_core::Logger::<TimelyEventBuilder>::new(
+                now,
+                start_offset,
+                move |time: &std::time::Duration,
+                      data: &mut Option<Vec<(std::time::Duration, TimelyEvent)>>| {
+                    if let Some(data) = data.take() {
+                        event_pusher.push(Event::Messages(time_ms, data));
+                    } else {
+                        // Advance progress.
+                        let new_time_ms: u64 = (((time.as_millis() / interval_ms) + 1)
+                            * interval_ms)
+                            .try_into()
+                            .expect("must fit");
+                        let new_time_ms = mz_repr::Timestamp::from(new_time_ms);
+                        if time_ms < new_time_ms {
+                            event_pusher
+                                .push(Event::Progress(vec![(new_time_ms, 1), (time_ms, -1)]));
+                            time_ms = new_time_ms;
+                        }
+                    }
+                },
+            );
+
+            let mut register = timely_worker
+                .log_register()
+                .expect("Logging must be enabled");
+            register.insert_logger("timely", logger);
+        }
+
         Worker::new(
             timely_worker,
             client_rx,

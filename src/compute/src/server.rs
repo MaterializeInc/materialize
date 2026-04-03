@@ -30,7 +30,9 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage_types::connections::ConnectionContext;
+use mz_timely_util::capture::ArcEventLink;
 use mz_txn_wal::operator::TxnsContext;
+use timely::logging::TimelyEvent;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
@@ -54,8 +56,12 @@ pub struct ComputeInstanceContext {
     pub connection_context: ConnectionContext,
 }
 
+/// Type alias for the storage timely log reader.
+pub(crate) type StorageTimelyLogReader =
+    Arc<ArcEventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
+
 /// Configures the server with compute-specific metrics.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct Config {
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
@@ -71,6 +77,10 @@ struct Config {
     pub metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     pub workers_per_process: usize,
+    /// Per-worker readers for storage timely logging events.
+    // TODO: Consider using the timely config's `process` and `workers` fields to
+    // deterministically assign readers to workers by local index, rather than pop().
+    pub storage_log_readers: Arc<Mutex<Vec<StorageTimelyLogReader>>>,
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
@@ -81,6 +91,7 @@ pub async fn serve(
     txns_ctx: TxnsContext,
     tracing_handle: Arc<TracingHandle>,
     context: ComputeInstanceContext,
+    storage_log_readers: Vec<StorageTimelyLogReader>,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
     let config = Config {
         persist_clients,
@@ -90,6 +101,7 @@ pub async fn serve(
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process: timely_config.workers,
+        storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
 
@@ -223,6 +235,8 @@ struct Worker<'w> {
     metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     workers_per_process: usize,
+    /// Reader for storage timely logging events.
+    storage_log_reader: Option<StorageTimelyLogReader>,
 }
 
 impl ClusterSpec for Config {
@@ -247,6 +261,9 @@ impl ClusterSpec for Config {
         let worker_id = timely_worker.index();
         let metrics = self.metrics.for_worker(worker_id);
 
+        // Take this worker's storage log reader.
+        let storage_log_reader = self.storage_log_readers.lock().unwrap().pop();
+
         // Create the command channel that broadcasts commands from worker 0 to other workers. We
         // reuse this channel between client connections, to avoid bugs where different workers end
         // up creating incompatible sides of the channel dataflow after reconnects.
@@ -268,6 +285,7 @@ impl ClusterSpec for Config {
             tracing_handle: Arc::clone(&self.tracing_handle),
             metrics_registry: self.metrics_registry.clone(),
             workers_per_process: self.workers_per_process,
+            storage_log_reader,
         }
         .run()
     }
@@ -396,21 +414,27 @@ impl<'w> Worker<'w> {
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
-        match &cmd {
-            ComputeCommand::CreateInstance(_) => {
-                self.compute_state = Some(ComputeState::new(
-                    Arc::clone(&self.persist_clients),
-                    self.txns_ctx.clone(),
-                    self.metrics.clone(),
-                    Arc::clone(&self.tracing_handle),
-                    self.context.clone(),
-                    self.metrics_registry.clone(),
-                    self.workers_per_process,
-                ));
-            }
-            _ => (),
+        let is_create_instance = matches!(&cmd, ComputeCommand::CreateInstance(_));
+        if is_create_instance {
+            self.compute_state = Some(ComputeState::new(
+                Arc::clone(&self.persist_clients),
+                self.txns_ctx.clone(),
+                self.metrics.clone(),
+                Arc::clone(&self.tracing_handle),
+                self.context.clone(),
+                self.metrics_registry.clone(),
+                self.workers_per_process,
+            ));
         }
-        self.activate_compute().unwrap().handle_compute_command(cmd);
+        // Take the storage log reader before borrowing self for activate_compute.
+        let storage_log_reader = if is_create_instance {
+            self.storage_log_reader.take()
+        } else {
+            None
+        };
+        let mut active = self.activate_compute().unwrap();
+        active.storage_log_reader = storage_log_reader;
+        active.handle_compute_command(cmd);
     }
 
     fn activate_compute(&mut self) -> Option<ActiveComputeState<'_>> {
@@ -419,6 +443,7 @@ impl<'w> Worker<'w> {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
                 response_tx: &mut self.response_tx,
+                storage_log_reader: None,
             })
         } else {
             None

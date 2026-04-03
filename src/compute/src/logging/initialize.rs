@@ -45,6 +45,7 @@ pub fn initialize(
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
+    storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 ) -> LoggingTraces {
     let interval_ms = std::cmp::max(1, config.interval.as_millis());
 
@@ -70,6 +71,7 @@ pub fn initialize(
         metrics_registry,
         worker_config,
         workers_per_process,
+        storage_log_reader,
     };
 
     // Depending on whether we should log the creation of the logging dataflows, we register the
@@ -108,6 +110,8 @@ struct LoggingContext<'a> {
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
     workers_per_process: usize,
+    /// Optional reader for storage timely logging events.
+    storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 }
 
 pub(crate) struct LoggingTraces {
@@ -133,6 +137,7 @@ impl LoggingContext<'_> {
                 self.config,
                 self.t_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                self.storage_log_reader.take(),
             );
             collections.extend(timely_collections);
 

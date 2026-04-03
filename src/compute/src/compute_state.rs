@@ -361,6 +361,8 @@ pub(crate) struct ActiveComputeState<'a> {
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut ResponseSender,
+    /// Reader for storage timely logging events (consumed during CreateInstance).
+    pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 }
 
 /// A token that keeps a sink alive.
@@ -417,7 +419,8 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.apply_expiration_offset(offset);
         }
 
-        self.initialize_logging(config.logging);
+        let storage_log_reader = self.storage_log_reader.take();
+        self.initialize_logging(config.logging, storage_log_reader);
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);
     }
@@ -670,7 +673,11 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
-    pub fn initialize_logging(&mut self, config: LoggingConfig) {
+    pub fn initialize_logging(
+        &mut self,
+        config: LoggingConfig,
+        storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+    ) {
         if self.compute_state.compute_logger.is_some() {
             panic!("dataflow server has already initialized logging");
         }
@@ -685,6 +692,7 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.metrics_registry.clone(),
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
+            storage_log_reader,
         );
 
         let dataflow_index = Rc::new(dataflow_index);

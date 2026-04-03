@@ -61,6 +61,7 @@ pub(super) fn construct(
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 ) -> Return {
     scope.scoped("timely logging", move |scope| {
         let enable_logging = config.enable_logging;
@@ -74,6 +75,41 @@ pub(super) fn construct(
         } else {
             let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
             (empty(scope), token)
+        };
+
+        // If we have a storage log reader, replay it, remap its IDs to avoid
+        // collisions with compute IDs, and concatenate with compute logs.
+        let (logs, storage_token) = if let Some(reader) = storage_log_reader {
+            use mz_timely_util::activator::RcActivator;
+            use timely::dataflow::operators::Concatenate;
+
+            let activator = RcActivator::new("storage_timely_activator".to_string(), 128);
+            let (storage_logs, s_token) =
+                [reader].mz_replay(scope, "storage timely logs", config.interval, activator);
+
+            // Remap storage IDs so they don't collide with compute IDs.
+            let storage_logs = storage_logs.unary(Pipeline, "Remap Storage IDs", |_cap, _info| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        output.session(&time).give_iterator(data.drain(..).map(
+                            |(t, mut event)| {
+                                remap_timely_event_ids(&mut event);
+                                (t, event)
+                            },
+                        ));
+                    });
+                }
+            });
+
+            let merged = scope.concatenate([logs, storage_logs]);
+            (merged, Some(s_token))
+        } else {
+            (logs, None)
+        };
+        // Convert storage token to Rc<dyn Any> so we can stash it alongside the compute token.
+        let storage_token: Rc<dyn std::any::Any> = match storage_token {
+            Some(t) => t,
+            None => Rc::new(()),
         };
 
         // Build a demux operator that splits the replayed event stream up into the separate
@@ -133,10 +169,14 @@ pub(super) fn construct(
                     };
 
                     for (time, event) in data.drain(..) {
+                        // Note: we skip the worker_id assertion for storage events,
+                        // whose channel IDs have been offset by STORAGE_ID_OFFSET.
                         if let TimelyEvent::Messages(msg) = &event {
-                            match msg.is_send {
-                                true => assert_eq!(msg.source, worker_id),
-                                false => assert_eq!(msg.target, worker_id),
+                            if msg.channel < STORAGE_ID_OFFSET {
+                                match msg.is_send {
+                                    true => assert_eq!(msg.source, worker_id),
+                                    false => assert_eq!(msg.target, worker_id),
+                                }
                             }
                         }
 
@@ -367,9 +407,11 @@ pub(super) fn construct(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
+                let combined_token: Rc<dyn std::any::Any> =
+                    Rc::new((Rc::clone(&token), Rc::clone(&storage_token)));
                 let collection = LogCollection {
                     trace,
-                    token: Rc::clone(&token),
+                    token: combined_token,
                 };
                 collections.insert(variant, collection);
             }
@@ -783,5 +825,58 @@ where
 {
     if vec.len() <= index {
         vec.resize(index + 1, Default::default());
+    }
+}
+
+/// Offset added to storage operator/channel IDs to avoid collisions with compute IDs.
+///
+/// This is large enough that compute IDs (which start from 0 and grow) will never reach it,
+/// but small enough to be representable as a `u64` with room for many storage operators.
+const STORAGE_ID_OFFSET: usize = 1 << 48;
+
+/// Remaps operator, channel, and address IDs in a `TimelyEvent` originating from a storage
+/// timely instance so they don't collide with compute's IDs.
+fn remap_timely_event_ids(event: &mut TimelyEvent) {
+    match event {
+        TimelyEvent::Operates(OperatesEvent { id, addr, .. }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+            if let Some(first) = addr.first_mut() {
+                *first = first.wrapping_add(STORAGE_ID_OFFSET);
+            }
+        }
+        TimelyEvent::Channels(ChannelsEvent {
+            id,
+            scope_addr,
+            source,
+            target,
+            ..
+        }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+            if let Some(first) = scope_addr.first_mut() {
+                *first = first.wrapping_add(STORAGE_ID_OFFSET);
+            }
+            source.0 = source.0.wrapping_add(STORAGE_ID_OFFSET);
+            target.0 = target.0.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Shutdown(ShutdownEvent { id }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Schedule(ScheduleEvent { id, .. }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Messages(MessagesEvent { channel, .. }) => {
+            *channel = channel.wrapping_add(STORAGE_ID_OFFSET);
+            // Note: source/target in Messages are *worker* IDs, not operator IDs.
+            // We leave them as-is.
+        }
+        TimelyEvent::PushProgress(e) => {
+            e.op_id = e.op_id.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::CommChannels(e) => {
+            e.identifier = e.identifier.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Park(_) | TimelyEvent::Text(_) => {
+            // No IDs to remap.
+        }
     }
 }
