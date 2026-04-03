@@ -1369,11 +1369,18 @@ where
         // dropped from the catalog, but the dataflow is still running on a
         // worker, assuming the shard is safe to finalize on reboot may cause
         // the cluster to panic.
-        let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
+        //
+        // In read-only mode, the finalize_shards_task exits immediately and
+        // will never clear these shards, so skip populating them to avoid
+        // the mz_shard_finalization_outstanding metric being stuck at a
+        // stale value until promotion.
+        if !self.read_only {
+            let unfinalized_shards = txn.get_unfinalized_shards().into_iter().collect_vec();
 
-        info!(?unfinalized_shards, "initializing finalizable_shards");
+            info!(?unfinalized_shards, "initializing finalizable_shards");
 
-        self.finalizable_shards.lock().extend(unfinalized_shards);
+            self.finalizable_shards.lock().extend(unfinalized_shards);
+        }
 
         Ok(())
     }
