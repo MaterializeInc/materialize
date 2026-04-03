@@ -195,8 +195,24 @@ steps:
 
       - id: lint-macos
         label: ":rust: macOS Clippy"
-        # Running on a manually installed macOS agent, so make sure we don't go out of disk
-        command: "cargo clippy --all-targets -- -D warnings; if [ $(du -sg target | cut -f1) -gt 50 ]; then rm -rf target; fi"
+        # Running on a manually installed macOS agent, so make sure we don't go out of disk.
+        # Build AWS-LC to /opt/aws-lc if not cached (needed by rdkafka ssl-awslc feature).
+        command: |
+          if [ ! -f /opt/aws-lc/lib/libcrypto.a ]; then
+            echo "Building AWS-LC..."
+            if ! command -v go >/dev/null 2>&1; then
+              curl -fsSL https://go.dev/dl/go1.22.5.darwin-arm64.tar.gz | sudo tar -C /usr/local -xzf -
+              export PATH=$$PATH:/usr/local/go/bin
+            fi
+            tmpdir=$$(mktemp -d)
+            git clone --depth 1 --branch v1.54.0 https://github.com/aws/aws-lc.git $$tmpdir/aws-lc
+            cmake -S $$tmpdir/aws-lc -B $$tmpdir/aws-lc/build -DBUILD_SHARED_LIBS=0 -DBUILD_TESTING=OFF -DBUILD_TOOL=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/aws-lc -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_INCLUDEDIR=include
+            make -C $$tmpdir/aws-lc/build -j$$(sysctl -n hw.ncpu)
+            sudo make -C $$tmpdir/aws-lc/build install
+            rm -rf $$tmpdir
+          fi
+          cargo clippy --all-targets -- -D warnings
+          if [ $$(du -sg target | cut -f1) -gt 50 ]; then rm -rf target; fi
         env:
           CARGO_INCREMENTAL: "0"
           RUSTUP_TOOLCHAIN: $RUST_VERSION
