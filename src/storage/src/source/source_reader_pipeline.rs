@@ -71,8 +71,7 @@ use crate::metrics::StorageMetrics;
 use crate::metrics::source::SourceMetrics;
 use crate::source::reclock::ReclockOperator;
 use crate::source::types::{
-    Probe, SourceMessage, SourceOutput, SourceRender, SourceTaskUpdate,
-    StackedCollection,
+    Probe, SourceMessage, SourceOutput, SourceRender, SourceTaskUpdate, StackedCollection,
 };
 use crate::statistics::SourceStatistics;
 
@@ -206,6 +205,7 @@ where
         config.clone(),
         probed_upper_rx,
         timestamp_desc,
+        None, // use default worker selection
     );
     // Need to broadcast the remap changes to all workers.
     let remap_collection = remap_collection.inner.broadcast().as_collection();
@@ -291,17 +291,27 @@ where
     let worker_id = config.worker_id;
     let id = config.id;
 
+    tracing::warn!("create_raw_source_from_task: ENTERED for {id} on worker {worker_id}");
+
     let mut tokens = vec![];
 
     let source_metrics = Arc::new(config.metrics.get_source_metrics(id, worker_id));
 
-    // The probe_rx from the task drives the remap operator, same as the existing pipeline.
+    // The task's probe_rx watch channel is only live on worker 0 (the active task worker).
+    // The remap operator picks its active worker via `id.hashed() % worker_count`, which may
+    // not be worker 0. To work around this, we use `responsible_worker("pg_source_task")` to
+    // match the task's worker selection. But since RawSourceCreationConfig doesn't expose an
+    // override, we instead always run remap on worker 0 by checking directly.
+    //
+    // Force the remap operator to run on worker 0, matching the task's active worker.
+    // The task's probe_rx watch channel is only live on worker 0.
     let (remap_collection, remap_token) = remap_operator(
         scope,
         storage_state,
         config.clone(),
         task_outputs.probe_rx,
         timestamp_desc,
+        Some(0), // must match task's active worker
     );
     // Need to broadcast the remap changes to all workers.
     let remap_collection = remap_collection.inner.broadcast().as_collection();
@@ -317,9 +327,8 @@ where
         Arc::clone(&source_metrics),
     );
     // Spawn a task to forward the stream into the watch channel.
-    let resume_forward_handle = mz_ore::task::spawn(
-        || format!("resume_upper_forward:{id}"),
-        async move {
+    let resume_forward_handle =
+        mz_ore::task::spawn(|| format!("resume_upper_forward:{id}"), async move {
             use futures::stream::StreamExt;
             let mut stream = std::pin::pin!(committed_upper_stream);
             while let Some(frontier) = stream.next().await {
@@ -327,9 +336,8 @@ where
                     break;
                 }
             }
-        },
-    )
-    .abort_on_drop();
+        })
+        .abort_on_drop();
     // Hold the handle alive via a dummy operator, same pattern as TaskAbortHolder.
     let resume_holder = {
         let builder =
@@ -362,27 +370,26 @@ where
         .map(|(idx, id)| (*id, u64::cast_from(idx)))
         .collect();
     let partition_count = u64::cast_from(export_ids.len());
-    let data_streams: Vec<_> = reclocked_stream
-        .partition::<CapacityContainerBuilder<_>, _, _>(
-            partition_count,
-            move |((gid, result, from_time), ts, diff): (
-                SourceTaskUpdate<FromTime>,
-                mz_repr::Timestamp,
-                Diff,
-            )| {
-                let idx = export_id_to_idx[&gid];
-                let result: Result<SourceOutput<FromTime>, DataflowError> = match result {
-                    Ok(msg) => Ok(SourceOutput {
-                        key: msg.key,
-                        value: msg.value,
-                        metadata: msg.metadata,
-                        from_time,
-                    }),
-                    Err(err) => Err(err),
-                };
-                (idx, (result, ts, diff))
-            },
-        );
+    let data_streams: Vec<_> = reclocked_stream.partition::<CapacityContainerBuilder<_>, _, _>(
+        partition_count,
+        move |((gid, result, from_time), ts, diff): (
+            SourceTaskUpdate<FromTime>,
+            mz_repr::Timestamp,
+            Diff,
+        )| {
+            let idx = export_id_to_idx[&gid];
+            let result: Result<SourceOutput<FromTime>, DataflowError> = match result {
+                Ok(msg) => Ok(SourceOutput {
+                    key: msg.key,
+                    value: msg.value,
+                    metadata: msg.metadata,
+                    from_time,
+                }),
+                Err(err) => Err(err),
+            };
+            (idx, (result, ts, diff))
+        },
+    );
 
     use itertools::Itertools;
     let mut reclocked_exports = BTreeMap::new();
@@ -540,6 +547,7 @@ fn remap_operator<G, FromTime>(
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     remap_relation_desc: RelationDesc,
+    #[allow(unused_variables)] active_worker_override: Option<usize>,
 ) -> (VecCollection<G, FromTime, Diff>, PressOnDropButton)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -569,7 +577,10 @@ where
     let read_only_rx = storage_state.read_only_rx.clone();
     let error_handler = storage_state.error_handler("remap_operator", id);
 
-    let chosen_worker = usize::cast_from(id.hashed() % u64::cast_from(worker_count));
+    let chosen_worker = match active_worker_override {
+        Some(w) => w,
+        None => usize::cast_from(id.hashed() % u64::cast_from(worker_count)),
+    };
     let active_worker = chosen_worker == worker_id;
 
     let operator_name = format!("remap({})", id);

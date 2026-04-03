@@ -189,6 +189,8 @@ where
 {
     let mut needed_tokens = Vec::new();
 
+    tracing::warn!("render_task_source: ENTERED for {}", base_source_config.id);
+
     // Rehydration start signal — same pattern as render_source.
     let (starter, mut start_signal) = tokio::sync::mpsc::channel::<()>(1);
     #[allow(unused_mut)]
@@ -229,8 +231,7 @@ where
         "TaskHealthBridge".to_string(),
         scope.parent.clone(),
     );
-    let (health_output, health_stream) =
-        health_builder.new_output::<CapacityContainerBuilder<_>>();
+    let (health_output, health_stream) = health_builder.new_output::<CapacityContainerBuilder<_>>();
     let health_button = health_builder.build(move |mut caps| async move {
         let mut health_rx = health_rx;
         let cap = caps.pop().expect("one capability");
@@ -240,8 +241,7 @@ where
     });
     needed_tokens.push(health_button.press_on_drop());
 
-    let mut health_streams: Vec<StreamVec<G, HealthStatusMessage>> =
-        vec![health_stream];
+    let mut health_streams: Vec<StreamVec<G, HealthStatusMessage>> = vec![health_stream];
     health_streams.reserve(exports.len());
 
     let mut outputs = BTreeMap::new();

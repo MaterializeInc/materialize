@@ -64,7 +64,10 @@ pub fn channel_reclock<G, D, FromTime, R>(
     remap_collection: VecCollection<G, FromTime, Overflowing<i64>>,
     as_of: Antichain<G::Timestamp>,
     source_rx: mpsc::UnboundedReceiver<SourceBatch<D, FromTime, R>>,
-) -> (timely::dataflow::StreamVec<G, (D, G::Timestamp, R)>, PressOnDropButton)
+) -> (
+    timely::dataflow::StreamVec<G, (D, G::Timestamp, R)>,
+    PressOnDropButton,
+)
 where
     G: Scope,
     G::Timestamp: Timestamp + Lattice + TotalOrder,
@@ -137,7 +140,12 @@ where
                                     last_source_frontier = batch.frontier;
                                 }
                                 None => {
-                                    // Channel closed. Advance source frontier to empty.
+                                    // Channel closed — advance source frontier to empty.
+                                    // This signals "no more data from this worker" which is
+                                    // correct for both non-active workers (whose channels close
+                                    // immediately) and the active worker (whose task completed).
+                                    // The reclocked frontier will advance to remap_upper,
+                                    // allowing the persist sink to make progress.
                                     let changes: Vec<(FromTime, i64)> = last_source_frontier
                                         .iter()
                                         .map(|t| (t.clone(), -1))
@@ -179,7 +187,7 @@ where
 
                 // -- STEP 2: Extract finalized bindings into remap_trace --
                 while let Some(update) = pending_remap.peek_mut() {
-                    if !remap_upper.less_equal(&update.0 .0) {
+                    if !remap_upper.less_equal(&update.0.0) {
                         let Reverse((into, from, diff)) =
                             std::collections::binary_heap::PeekMut::pop(update);
                         remap_trace.push((from, into, diff));
@@ -201,12 +209,27 @@ where
                     let mut frontier_reclocked = false;
 
                     // Build the list of interesting IntoTimes from the remap trace.
+                    //
+                    // In the original reclock operator, `min_time` is always included because
+                    // the remap trace's first binding is AT `as_of` (the minimum time). In the
+                    // channel-based path, the first binding may be at a wall-clock timestamp
+                    // much later than `as_of`. Including `min_time` when no trace entries exist
+                    // at that time causes data to be reclocked to `min_time` (empty binding
+                    // frontier → extract everything). We only include `min_time` when the trace
+                    // is empty, matching the original's semantics for the bootstrap case.
                     let mut min_time = G::Timestamp::minimum();
                     min_time.advance_by(remap_since.borrow());
 
+                    let min_time_iter: Box<dyn Iterator<Item = G::Timestamp>> =
+                        if remap_trace.is_empty() {
+                            Box::new(std::iter::once(min_time))
+                        } else {
+                            Box::new(std::iter::empty())
+                        };
+
                     // Deduplicate consecutive times.
                     let mut prev_cur_time: Option<G::Timestamp> = None;
-                    let interesting_times: Vec<G::Timestamp> = std::iter::once(min_time)
+                    let interesting_times: Vec<G::Timestamp> = min_time_iter
                         .chain(remap_trace.iter().map(|(_, t, _)| t.clone()))
                         .filter(|v| {
                             let dominated = prev_cur_time.as_ref() == Some(v);
@@ -241,10 +264,8 @@ where
                         while i < deferred.len() {
                             if !binding_frontier.less_equal(&deferred[i].1) {
                                 let (data, _, diff) = deferred.swap_remove(i);
-                                output_handle.give(
-                                    &cap.delayed(cur_time),
-                                    (data, cur_time.clone(), diff),
-                                );
+                                output_handle
+                                    .give(&cap.delayed(cur_time), (data, cur_time.clone(), diff));
                                 // Don't increment i — swap_remove moved the last element here.
                             } else {
                                 i += 1;

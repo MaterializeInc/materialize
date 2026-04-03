@@ -207,9 +207,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::dyncfgs;
 use mz_storage_types::oneshot_sources::{OneshotIngestionDescription, OneshotIngestionRequest};
 use mz_storage_types::sinks::StorageSinkDesc;
-use mz_storage_types::sources::{
-    GenericSourceConnection, IngestionDescription, SourceConnection,
-};
+use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::communication::Allocate;
@@ -318,10 +316,9 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 GenericSourceConnection::Postgres(c) => {
                     // Use the task-based pipeline for PostgreSQL sources.
                     let timestamp_desc = c.timestamp_desc();
-                    let (resume_tx, resume_rx) =
-                        tokio::sync::watch::channel(Antichain::from_elem(
-                            mz_storage_types::sources::MzOffset::from(0u64),
-                        ));
+                    let (resume_tx, resume_rx) = tokio::sync::watch::channel(Antichain::from_elem(
+                        mz_storage_types::sources::MzOffset::from(0u64),
+                    ));
                     let (task_outputs, abort_handle) =
                         c.spawn(base_source_config.clone(), resume_rx);
                     let (outputs, health, source_tokens) =
