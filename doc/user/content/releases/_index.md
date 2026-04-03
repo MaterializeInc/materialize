@@ -15,6 +15,34 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.18.0
+*Released to Materialize Cloud: 2026-04-03* <br>
+*Released to Materialize Self-Managed: 2026-04-04* <br>
+
+This release includes various improvements and bug fixes.
+
+### Improvements {#v26.18-improvements}
+
+- **Improved Console reconnect behavior**. The Console shell now reconnects
+  more reliably, with toast notifications that no longer stack.
+
+- **Expanded `COPY FROM` data type support**. [`COPY FROM` parquet
+  files](/sql/copy-from/#parquet-formatting) now supports `map` and `interval`
+  data types.
+
+- **Improved query performance on wide tables**. Queries on tables with many
+  columns now execute faster.
+
+### Bug Fixes {#v26.18-bug-fixes}
+
+- Fixed SSL certificate loading to properly handle all certificates in PEM
+  bundles instead of only the first one.
+- Fixed materialized view sinks getting stuck when instantiated with output
+  shards whose initial frontier is less than the dataflow as-of.
+- Fixed panic when dropping computed tables with active `SUBSCRIBE` operations.
+- Fixed `EXPLAIN ANALYZE` not working correctly due to quoting issues in
+  `mz_mappable_objects`.
+
 ## v26.17.1
 *Released to Materialize Self-Managed: 2026-03-27* <br>
 
