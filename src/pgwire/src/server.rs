@@ -9,7 +9,6 @@
 
 use std::future::Future;
 use std::net::IpAddr;
-use std::pin::Pin;
 use std::str::FromStr;
 
 use anyhow::Context;
@@ -23,10 +22,8 @@ use mz_pgwire_common::{
 };
 use mz_server_core::listeners::{AllowedRoles, AuthenticatorKind};
 use mz_server_core::{Connection, ConnectionHandler, ReloadingTlsConfig};
-use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
 use tokio_metrics::TaskMetrics;
-use tokio_openssl::SslStream;
 use tracing::{debug, error, trace};
 
 use crate::codec::FramedConn;
@@ -239,13 +236,13 @@ impl Server {
                                 (Conn::Unencrypted(mut conn), Some(tls)) => {
                                     trace!("cid={} send=AcceptSsl", conn_id);
                                     conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                    let mut ssl_stream =
-                                        SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
-                                    if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                        let _ = ssl_stream.get_mut().shutdown().await;
-                                        return Err(e.into());
+                                    let acceptor = tls.context.acceptor();
+                                    match acceptor.accept(conn).await {
+                                        Ok(tls_stream) => {
+                                            Conn::Ssl(mz_pgwire_common::TlsStream::Server(tls_stream))
+                                        }
+                                        Err(e) => return Err(e.into()),
                                     }
-                                    Conn::Ssl(ssl_stream)
                                 }
                                 (mut conn, _) => {
                                     trace!("cid={} send=RejectSsl", conn_id);

@@ -24,7 +24,7 @@ pub use codec::{
 };
 pub use conn::{
     CONN_UUID_KEY, Conn, ConnectionCounter, ConnectionError, ConnectionHandle,
-    MZ_FORWARDED_FOR_KEY, UserMetadata,
+    MZ_FORWARDED_FOR_KEY, TlsStream, UserMetadata,
 };
 pub use format::Format;
 pub use message::{

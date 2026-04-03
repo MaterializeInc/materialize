@@ -23,6 +23,7 @@ anyhow = { version = "1.0.102", optional = true }
 # is enabled, it links against aws-lc-fips-sys (the validated module).
 aws-lc-rs = { version = "1", optional = true }
 async-trait = { version = "0.1.89", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"], optional = true }
 bytemuck = { version = "1.23.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
 chrono = { version = "0.4.39", default-features = false, features = ["std"], optional = true }
@@ -44,6 +45,7 @@ num = "0.4.3"
 num-traits = { version = "0.2", optional = true }
 # The vendored feature is transitively depended upon by tokio-openssl.
 openssl = { version = "0.10.76", features = ["vendored"], optional = true }
+tokio-rustls = { version = "0.26", default-features = false, optional = true }
 parquet = { version = "57", optional = true, default-features = false }
 paste = "1.0.11"
 pin-project = "1.1.11"
@@ -88,9 +90,7 @@ http = { version = "1.4.0", optional = true }
 tracing = { version = "0.1.44", optional = true }
 tracing-opentelemetry = { version = "0.32.1", optional = true }
 tonic = { version = "0.14.2", features = ["transport"], optional = true }
-tokio-native-tls = { version = "0.3.1", optional = true }
-native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
-hyper-tls = { version = "0.6.0", optional = true }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "tls12"], optional = true }
 hyper-util = { version = "0.1.20", optional = true }
 opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"], optional = true }
@@ -117,9 +117,8 @@ async = [
     "async-trait",
     "futures",
     "metrics",
-    "openssl",
     "tokio/tracing",
-    "tokio-openssl",
+    "tokio-rustls",
     "tokio",
     "dep:tracing",
 ]
@@ -134,15 +133,14 @@ tracing = [
     "tracing-subscriber",
     "tracing-subscriber/ansi",
     "tracing-opentelemetry",
-    "tokio-native-tls",
-    "native-tls",
     "http",
-    "hyper-tls",
+    "hyper-rustls",
     "hyper-util",
     "metrics",
     "opentelemetry",
     "opentelemetry-otlp",
     "opentelemetry_sdk",
+    "rustls",
     "tonic",
     "yansi",
 ]
@@ -162,7 +160,7 @@ overflowing = ["assert"]
 # FIPS 140-3 compliance: use aws-lc-rs as the crypto backend.
 # `crypto` enables aws-lc-rs in standard (non-FIPS) mode.
 # `fips` enables aws-lc-rs with FIPS 140-3 validated module.
-crypto = ["aws-lc-rs"]
+crypto = ["aws-lc-rs", "rustls"]
 fips = ["crypto", "aws-lc-rs/fips"]
 
 [[test]]

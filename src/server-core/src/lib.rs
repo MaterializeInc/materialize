@@ -10,12 +10,13 @@
 //! Methods common to servers listening for TCP connections.
 
 use std::fmt;
+use std::fs;
 use std::future::Future;
 use std::io;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
+use std::sync::{Arc, Mutex, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -29,8 +30,8 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::AsyncReady;
 use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
-use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
 use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
+use rustls::ServerConfig;
 use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
 use serde::{Deserialize, Serialize};
@@ -458,8 +459,8 @@ where
 /// Configures a server's TLS encryption and authentication.
 #[derive(Clone, Debug)]
 pub struct TlsConfig {
-    /// The SSL context used to manage incoming TLS negotiations.
-    pub context: SslContext,
+    /// The rustls server configuration for incoming TLS negotiations.
+    pub context: Arc<ServerConfig>,
     /// The TLS mode.
     pub mode: TlsMode,
 }
@@ -483,18 +484,34 @@ pub struct TlsCertConfig {
 }
 
 impl TlsCertConfig {
-    /// Returns the SSL context to use in TlsConfigs.
-    pub fn load_context(&self) -> Result<SslContext, anyhow::Error> {
-        // Mozilla publishes three presets: old, intermediate, and modern. They
-        // recommend the intermediate preset for general purpose servers, which
-        // is what we use, as it is compatible with nearly every client released
-        // in the last five years but does not include any known-problematic
-        // ciphers. We once tried to use the modern preset, but it was
-        // incompatible with Fivetran, and presumably other JDBC-based tools.
-        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-        builder.set_certificate_chain_file(&self.cert)?;
-        builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
-        Ok(builder.build().into_context())
+    /// Returns a rustls `ServerConfig` loaded from the certificate and key
+    /// files on disk.
+    ///
+    /// The configuration uses the aws-lc-rs crypto provider (FIPS-capable) and
+    /// enables TLS 1.2 and TLS 1.3 with the default cipher suites, which
+    /// correspond roughly to Mozilla's intermediate compatibility preset.
+    pub fn load_context(&self) -> Result<Arc<ServerConfig>, anyhow::Error> {
+        let cert_pem = fs::read(&self.cert)?;
+        let key_pem = fs::read(&self.key)?;
+
+        let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut &*cert_pem).collect::<Result<_, _>>()?;
+        if certs.is_empty() {
+            bail!("no certificates found in {}", self.cert.display());
+        }
+
+        let key = rustls_pemfile::private_key(&mut &*key_pem)?
+            .ok_or_else(|| anyhow::anyhow!("no private key found in {}", self.key.display()))?;
+
+        let provider = mz_ore::crypto::fips_crypto_provider();
+        let config = ServerConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS12, &rustls::version::TLS13])
+            .map_err(|e| anyhow::anyhow!("TLS version config error: {e}"))?
+            .with_no_client_auth()
+            .with_single_cert(certs, key)
+            .map_err(|e| anyhow::anyhow!("TLS certificate config error: {e}"))?;
+
+        Ok(Arc::new(config))
     }
 
     /// Like [Self::load_context] but attempts to reload the files each time `ticker` yields an item.
@@ -517,7 +534,7 @@ impl TlsCertConfig {
                         Ok(())
                     }
                     Err(err) => {
-                        tracing::error!("failed to reload SSL certificate: {err}");
+                        tracing::error!("failed to reload TLS certificate: {err}");
                         Err(err)
                     }
                 };
@@ -531,23 +548,30 @@ impl TlsCertConfig {
     }
 }
 
-/// An SslContext whose inner value can be updated.
+/// A rustls ServerConfig whose inner value can be hot-reloaded.
 #[derive(Clone, Debug)]
 pub struct ReloadingSslContext {
-    /// The current SSL context.
-    context: Arc<RwLock<SslContext>>,
+    /// The current server configuration, wrapped for concurrent access.
+    context: Arc<RwLock<Arc<ServerConfig>>>,
 }
 
 impl ReloadingSslContext {
-    pub fn get(&self) -> RwLockReadGuard<'_, SslContext> {
-        self.context.read().expect("poisoned")
+    /// Returns the current server configuration.
+    pub fn get(&self) -> Arc<ServerConfig> {
+        Arc::clone(&*self.context.read().expect("poisoned"))
+    }
+
+    /// Returns a [`tokio_rustls::TlsAcceptor`] using the current server
+    /// configuration.
+    pub fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
+        tokio_rustls::TlsAcceptor::from(self.get())
     }
 }
 
 /// Configures a server's TLS encryption and authentication with reloading.
 #[derive(Clone, Debug)]
 pub struct ReloadingTlsConfig {
-    /// The SSL context used to manage incoming TLS negotiations.
+    /// The rustls context used to manage incoming TLS negotiations.
     pub context: ReloadingSslContext,
     /// The TLS mode.
     pub mode: TlsMode,

@@ -18,7 +18,7 @@ derivative = "2.2.0"
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
 tokio = "1.49.0"
-tokio-openssl = "0.6.5"
+tokio-rustls = { version = "0.26", default-features = false }
 tokio-postgres = { version = "0.7.15" }
 tracing = "0.1.44"
 
