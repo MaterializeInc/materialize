@@ -1,6 +1,6 @@
 ---
-title: Built-in MCP Server
-description: "Connect AI agents directly to Materialize's built-in MCP endpoints for real-time data access."
+title: MCP Server for Agents
+description: "Expose real-time data products to AI agents via Materialize's built-in MCP endpoint."
 make_table_row_headers_searchable: true
 menu:
   main:
@@ -10,46 +10,195 @@ menu:
 
 {{< private-preview />}}
 
-Materialize provides built-in [Model Context Protocol
-(MCP)](https://modelcontextprotocol.io/) endpoints that let AI agents discover
+Materialize provides a built-in [Model Context Protocol
+(MCP)](https://modelcontextprotocol.io/) endpoint that lets AI agents discover
 and query your real-time data products over HTTP. The MCP interface is served
 directly by the database; no sidecar process or external server is required.
 
-## MCP endpoints overview
+**Endpoint:** `POST /api/mcp/agents` (HTTP port, default `6876`)
 
-| Endpoint | Path | Description |
-|----------|------|-------------|
-| **Agents** | `/api/mcp/agents` | Discover and read data products (indexed views with comments). Designed for customer-facing AI agents. Available on the HTTP port (default `6876`). |
-| **Observatory** | `/api/mcp/observatory` | Query `mz_*` system catalog tables for troubleshooting and observability. Available on the HTTP port (default `6876`). |
-
-The endpoints use [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over
-HTTP POST and support the MCP `initialize`, `tools/list`, and `tools/call`
+The endpoint uses [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over
+HTTP POST and supports the MCP `initialize`, `tools/list`, and `tools/call`
 methods.
 
-### Enabling / Disabling the MCP endpoints
+## Connect to the MCP server
 
-MCP endpoints can be toggled at runtime using system parameters:
+### Step 1. Get your credentials
+
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
+
+You need your **email address** (or service account name) and an
+[app password](/security/cloud/users-service-accounts/create-service-accounts/).
+
+To create an app password:
+
+1. Log in to the [Materialize Console](https://console.materialize.com/).
+2. Go to **Account** > **App Passwords** > **New app password**.
+3. Copy the generated password — you won't be able to see it again.
+
+{{< /tab >}}
+
+{{< tab "Self-Managed" >}}
+
+Use the login role credentials you created for MCP access (see
+[Authentication and access control](#rbac)).
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+### Step 2. Encode your credentials in Base64
+
+MCP clients send credentials as a Base64-encoded `user:password` string. Run
+this in your terminal:
+
+```bash
+printf '<user>:<app_password>' | base64
+```
+
+For example:
+
+```bash
+printf 'svc-mcp-agent@mycompany.com:my_app_password_here' | base64
+# Output: c3ZjLW1jcC1hZ2VudEBteWNvbXBhbnkuY29tOm15X2FwcF9wYXNzd29yZF9oZXJl
+```
+
+### Step 3. Get your hostname
+
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
+
+Find your region hostname in the [Materialize Console](https://console.materialize.com/)
+under **Connect**. It looks like:
+
+```
+<region-id>.materialize.cloud
+```
+
+Your full MCP endpoint URL is:
+
+```
+https://<region-id>.materialize.cloud/api/mcp/agents
+```
+
+{{< /tab >}}
+
+{{< tab "Self-Managed" >}}
+
+Use your Materialize host and the HTTP port (default `6876`):
+
+```
+http://<host>:6876/api/mcp/agents
+```
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+### Step 4. Configure your MCP client
+
+{{< tabs >}}
+
+{{< tab "Claude Code" >}}
+
+Create a `.mcp.json` file in your project directory:
+
+```json
+{
+  "mcpServers": {
+    "materialize-agents": {
+      "type": "http",
+      "url": "https://<region-id>.materialize.cloud/api/mcp/agents",
+      "headers": {
+        "Authorization": "Basic <base64-token>"
+      }
+    }
+  }
+}
+```
+
+{{< /tab >}}
+
+{{< tab "Claude Desktop" >}}
+
+Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "materialize-agents": {
+      "url": "https://<region-id>.materialize.cloud/api/mcp/agents",
+      "headers": {
+        "Authorization": "Basic <base64-token>"
+      }
+    }
+  }
+}
+```
+
+{{< /tab >}}
+
+{{< tab "Cursor" >}}
+
+In Cursor's MCP settings (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "materialize-agents": {
+      "url": "https://<region-id>.materialize.cloud/api/mcp/agents",
+      "headers": {
+        "Authorization": "Basic <base64-token>"
+      }
+    }
+  }
+}
+```
+
+{{< /tab >}}
+
+{{< tab "Generic HTTP" >}}
+
+Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests:
+
+```bash
+curl -X POST https://<region-id>.materialize.cloud/api/mcp/agents \
+  -H "Content-Type: application/json" \
+  -H "Authorization: "Basic <base64-token>"" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list"
+  }'
+```
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+### Enabling the endpoint
+
+The agents endpoint is disabled by default. Enable it at runtime using system
+parameters:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `enable_mcp_agents` | `false` | Enable or disable the `/api/mcp/agents` endpoint. |
-| `enable_mcp_observatory` | `false` | Enable or disable the `/api/mcp/observatory` endpoint. |
 | `enable_mcp_agents_query_tool` | `false` | Show or hide the `query` tool on the agents endpoint. |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
 ```mzsql
--- Disable the agents endpoint
-ALTER SYSTEM SET enable_mcp_agents = false;
-
--- Enable the query tool
-ALTER SYSTEM SET enable_mcp_agents_query_tool = true;
+ALTER SYSTEM SET enable_mcp_agents = true;
 ```
 
-When an endpoint is disabled, requests return HTTP 503 (Service Unavailable).
+When the endpoint is disabled, requests return HTTP 503 (Service Unavailable).
 
 ## Authentication and access control {#rbac}
 
-Accessing the MCP endpoints requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme),
+Accessing the MCP endpoint requires [basic authentication](https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication#basic_authentication_scheme),
 just as connecting via a SQL client (e.g. `psql`). The authenticated role
 determines which data products are visible based on RBAC privileges.
 
@@ -64,7 +213,7 @@ Use the credentials of a Materialize user or
 * **Password:** An [app password](/security/cloud/users-service-accounts/create-service-accounts/).
 
 For production use, we recommend creating a dedicated service account and
-granting it a role with limited privileges (see below).
+granting it a role with limited privileges (see [Required privileges](#required-privileges)).
 
 {{< /tab >}}
 
@@ -100,7 +249,7 @@ workloads. This ensures agent queries do not consume resources from your other
 clusters, and limits visibility to only the data products you choose to expose.
 
 ```mzsql
-CREATE CLUSTER mcp_cluster SIZE 'xsmall';
+CREATE CLUSTER mcp_cluster SIZE '25cc';
 CREATE SCHEMA mcp_schema;
 ```
 
@@ -135,6 +284,21 @@ COMMENT ON INDEX mcp_schema.payment_status_order_id_idx IS
 COMMENT ON COLUMN mcp_schema.payment_status.order_id IS
   'The unique identifier for the order';
 ```
+
+### 4. Verify your data products
+
+To confirm which data products are visible to your agent role, run:
+
+```mzsql
+SET ROLE mcp_agent;
+SELECT * FROM mz_internal.mz_mcp_data_products;
+```
+
+If a data product is missing, check that:
+
+- The view has an index with a [comment](/sql/comment-on/).
+- The role has `USAGE` on the database, schema, and cluster.
+- The role has `SELECT` on the view.
 
 ### Required privileges
 
@@ -177,8 +341,11 @@ GRANT mcp_agent TO '<service-account-name>';
 
 {{< tab "Self-Managed" >}}
 
+Create a functional role for privileges, then assign it to a login role:
+
 ```mzsql
-CREATE ROLE mcp_agent LOGIN PASSWORD 'secret';
+-- Functional role (cannot log in, holds privileges)
+CREATE ROLE mcp_agent;
 
 GRANT USAGE ON DATABASE materialize TO mcp_agent;
 GRANT USAGE ON SCHEMA mcp_schema TO mcp_agent;
@@ -190,7 +357,14 @@ GRANT USAGE ON CLUSTER mcp_cluster TO mcp_agent;
 -- and only see objects in mcp_schema by default.
 ALTER ROLE mcp_agent SET cluster TO mcp_cluster;
 ALTER ROLE mcp_agent SET search_path TO mcp_schema;
+
+-- Login role (used for authentication)
+CREATE ROLE my_agent LOGIN PASSWORD 'secret';
+GRANT mcp_agent TO my_agent;
 ```
+
+You can create additional login roles and grant them the same `mcp_agent` role
+as needed.
 
 {{< /tab >}}
 
@@ -199,12 +373,7 @@ ALTER ROLE mcp_agent SET search_path TO mcp_schema;
 If any privilege is missing, the data product will not appear in the agent's
 tool list.
 
-## Agents endpoint
-
-**`POST /api/mcp/agents`**
-
-The agents endpoint exposes your data products as MCP tools. It provides the
-following tools:
+## Tools
 
 ### `get_data_products`
 
@@ -318,245 +487,9 @@ Execute a SQL `SELECT` statement against your data products.
 }
 ```
 
-## Observatory endpoint
+## Related pages
 
-**`POST /api/mcp/observatory`**
-
-The observatory endpoint gives agents read-only access to the Materialize
-system catalog for troubleshooting and observability.
-
-### `query_system_catalog`
-
-Execute a SQL query restricted to `mz_*` system tables.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `sql_query` | string | Yes | `SELECT` query using only `mz_*` system tables. |
-
-**Example response:**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "[\n  [\n    \"quickstart\",\n    \"ready\"\n  ],\n  [\n    \"mcp_cluster\",\n    \"ready\"\n  ]\n]"
-      }
-    ],
-    "isError": false
-  }
-}
-```
-
-## Client configuration
-
-Replace `<host>` with your Materialize hostname (or region host for Cloud) and
-encode your credentials in Base64:
-
-```bash
-printf 'user:app_password' | base64
-```
-
-### Claude Desktop
-
-Add the following to your Claude Desktop MCP configuration
-(`claude_desktop_config.json`):
-
-{{< tabs >}}
-
-{{< tab "Cloud" >}}
-
-```json
-{
-  "mcpServers": {
-    "materialize": {
-      "url": "https://<region-host>/api/mcp/agents",
-      "headers": {
-        "Authorization": "Basic <base64(user:app_password)>"
-      }
-    }
-  }
-}
-```
-
-{{< /tab >}}
-
-{{< tab "Self-Managed" >}}
-
-```json
-{
-  "mcpServers": {
-    "materialize": {
-      "url": "http://<host>:6876/api/mcp/agents",
-      "headers": {
-        "Authorization": "Basic <base64(username:password)>"
-      }
-    }
-  }
-}
-```
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
-### Cursor
-
-In Cursor's MCP settings (`.cursor/mcp.json`):
-
-{{< tabs >}}
-
-{{< tab "Cloud" >}}
-
-```json
-{
-  "mcpServers": {
-    "materialize-agents": {
-      "url": "https://<region-host>/api/mcp/agents",
-      "headers": {
-        "Authorization": "Basic <base64(user:app_password)>"
-      }
-    },
-    "materialize-observatory": {
-      "url": "https://<region-host>/api/mcp/observatory",
-      "headers": {
-        "Authorization": "Basic <base64(user:app_password)>"
-      }
-    }
-  }
-}
-```
-
-{{< /tab >}}
-
-{{< tab "Self-Managed" >}}
-
-```json
-{
-  "mcpServers": {
-    "materialize-agents": {
-      "url": "http://<host>:6876/api/mcp/agents",
-      "headers": {
-        "Authorization": "Basic <base64(username:password)>"
-      }
-    },
-    "materialize-observatory": {
-      "url": "http://<host>:6876/api/mcp/observatory",
-      "headers": {
-        "Authorization": "Basic <base64(username:password)>"
-      }
-    }
-  }
-}
-```
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
-### Claude Code
-
-In your project's `.mcp.json`:
-
-{{< tabs >}}
-
-{{< tab "Cloud" >}}
-
-```json
-{
-  "mcpServers": {
-    "materialize-agents": {
-      "type": "http",
-      "url": "https://<region-host>/api/mcp/agents",
-      "headers": {
-        "Authorization": "Basic <base64(user:app_password)>"
-      }
-    },
-    "materialize-observatory": {
-      "type": "http",
-      "url": "https://<region-host>/api/mcp/observatory",
-      "headers": {
-        "Authorization": "Basic <base64(user:app_password)>"
-      }
-    }
-  }
-}
-```
-
-{{< /tab >}}
-
-{{< tab "Self-Managed" >}}
-
-```json
-{
-  "mcpServers": {
-    "materialize-agents": {
-      "type": "http",
-      "url": "http://<host>:6876/api/mcp/agents",
-      "headers": {
-        "Authorization": "Basic <base64(username:password)>"
-      }
-    },
-    "materialize-observatory": {
-      "type": "http",
-      "url": "http://<host>:6876/api/mcp/observatory",
-      "headers": {
-        "Authorization": "Basic <base64(username:password)>"
-      }
-    }
-  }
-}
-```
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
-### Generic HTTP client
-
-Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests:
-
-{{< tabs >}}
-
-{{< tab "Cloud" >}}
-
-```bash
-curl -X POST https://<region-host>/api/mcp/agents \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Basic <base64(user:app_password)>" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/list"
-  }'
-```
-
-{{< /tab >}}
-
-{{< tab "Self-Managed" >}}
-
-```bash
-curl -X POST http://<host>:6876/api/mcp/agents \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Basic <base64(username:password)>" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "tools/list"
-  }'
-```
-
-{{< /tab >}}
-
-{{< /tabs >}}
-
-## Related Pages
-
-- [MCP Server (Python)](/integrations/llm/): standalone Python MCP server
-  for `stdio` and `sse` transports
+- [MCP Server for Observability](/integrations/mcp-observatory/)
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 - [CREATE INDEX](/sql/create-index)
 - [COMMENT ON](/sql/comment-on)
