@@ -59,6 +59,7 @@ pub enum Statement<T: AstInfo> {
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
+    CreateConstraint(CreateConstraintStatement<T>),
     CreateType(CreateTypeStatement<T>),
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
@@ -105,6 +106,7 @@ pub enum Statement<T: AstInfo> {
     Close(CloseStatement),
     Prepare(PrepareStatement<T>),
     Execute(ExecuteStatement<T>),
+    ExecuteUnitTest(ExecuteUnitTestStatement<T>),
     Deallocate(DeallocateStatement),
     Raise(RaiseStatement),
     GrantRole(GrantRoleStatement<T>),
@@ -138,6 +140,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
+            Statement::CreateConstraint(stmt) => f.write_node(stmt),
             Statement::CreateRole(stmt) => f.write_node(stmt),
             Statement::CreateSecret(stmt) => f.write_node(stmt),
             Statement::CreateType(stmt) => f.write_node(stmt),
@@ -184,6 +187,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Fetch(stmt) => f.write_node(stmt),
             Statement::Prepare(stmt) => f.write_node(stmt),
             Statement::Execute(stmt) => f.write_node(stmt),
+            Statement::ExecuteUnitTest(stmt) => f.write_node(stmt),
             Statement::Deallocate(stmt) => f.write_node(stmt),
             Statement::Raise(stmt) => f.write_node(stmt),
             Statement::GrantRole(stmt) => f.write_node(stmt),
@@ -220,6 +224,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
+        StatementKind::CreateConstraint => "create_constraint",
         StatementKind::CreateType => "create_type",
         StatementKind::CreateRole => "create_role",
         StatementKind::CreateCluster => "create_cluster",
@@ -268,6 +273,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Close => "close",
         StatementKind::Prepare => "prepare",
         StatementKind::Execute => "execute",
+        StatementKind::ExecuteUnitTest => "execute_unit_test",
         StatementKind::Deallocate => "deallocate",
         StatementKind::Raise => "raise",
         StatementKind::GrantRole => "grant_role",
@@ -1926,6 +1932,94 @@ pub struct IndexOption<T: AstInfo> {
     pub value: Option<WithOptionValue<T>>,
 }
 impl_display_for_with_option!(IndexOption);
+
+/// The kind of constraint.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ConstraintKind {
+    PrimaryKey,
+    Unique,
+    ForeignKey,
+}
+
+impl AstDisplay for ConstraintKind {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ConstraintKind::PrimaryKey => f.write_str("PRIMARY KEY"),
+            ConstraintKind::Unique => f.write_str("UNIQUE CONSTRAINT"),
+            ConstraintKind::ForeignKey => f.write_str("FOREIGN KEY"),
+        }
+    }
+}
+impl_display!(ConstraintKind);
+
+/// A foreign key reference clause: `REFERENCES <object> (<columns>)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConstraintReference<T: AstInfo> {
+    /// The referenced object.
+    pub object: T::ItemName,
+    /// The referenced columns.
+    pub columns: Vec<Ident>,
+}
+
+impl<T: AstInfo> AstDisplay for ConstraintReference<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("REFERENCES ");
+        f.write_node(&self.object);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(")");
+    }
+}
+impl_display_t!(ConstraintReference);
+
+/// `CREATE { PRIMARY KEY | UNIQUE CONSTRAINT | FOREIGN KEY } [NOT ENFORCED] [name] [IN CLUSTER cluster] ON object (columns) [REFERENCES object (columns)]`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateConstraintStatement<T: AstInfo> {
+    /// The kind of constraint (primary key, unique, or foreign key).
+    pub kind: ConstraintKind,
+    /// Whether the constraint is enforced.
+    pub enforced: bool,
+    /// Optional constraint name.
+    pub name: Option<Ident>,
+    /// Optional cluster to create the constraint in.
+    pub in_cluster: Option<T::ClusterName>,
+    /// The table, view, or materialized view to add the constraint to.
+    pub on_name: T::ItemName,
+    /// The columns that form the constraint.
+    pub columns: Vec<Ident>,
+    /// The referenced object and columns for foreign key constraints.
+    pub references: Option<ConstraintReference<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateConstraintStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE ");
+        f.write_node(&self.kind);
+        if !self.enforced {
+            f.write_str(" NOT ENFORCED");
+        }
+        f.write_str(" ");
+        if let Some(name) = &self.name {
+            f.write_node(name);
+            f.write_str(" ");
+        }
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str("IN CLUSTER ");
+            f.write_node(cluster);
+            f.write_str(" ");
+        }
+        f.write_str("ON ");
+        f.write_node(&self.on_name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(")");
+        if let Some(references) = &self.references {
+            f.write_str(" ");
+            f.write_node(references);
+        }
+    }
+}
+impl_display_t!(CreateConstraintStatement);
 
 /// A `CREATE ROLE` statement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -5087,6 +5181,72 @@ impl<T: AstInfo> AstDisplay for ExecuteStatement<T> {
     }
 }
 impl_display_t!(ExecuteStatement);
+
+/// `EXECUTE UNIT TEST ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExecuteUnitTestStatement<T: AstInfo> {
+    pub name: Ident,
+    pub target: T::ItemName,
+    pub at_time: Option<Expr<T>>,
+    pub mocks: Vec<MockViewDef<T>>,
+    pub expected: ExpectedResultDef<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExecuteUnitTestStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXECUTE UNIT TEST ");
+        f.write_node(&self.name);
+        f.write_str(" FOR ");
+        f.write_node(&self.target);
+        if let Some(at_time) = &self.at_time {
+            f.write_str(" AT TIME ");
+            f.write_node(at_time);
+        }
+        for mock in &self.mocks {
+            f.write_str(" MOCK ");
+            f.write_node(mock);
+        }
+        f.write_str(" EXPECTED");
+        f.write_node(&self.expected);
+    }
+}
+impl_display_t!(ExecuteUnitTestStatement);
+
+/// Mock view definition for EXECUTE UNIT TEST
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MockViewDef<T: AstInfo> {
+    pub name: T::ItemName,
+    pub columns: Vec<ColumnDef<T>>,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for MockViewDef<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str("(");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(") AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(MockViewDef);
+
+/// Expected result definition for EXECUTE UNIT TEST
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExpectedResultDef<T: AstInfo> {
+    pub columns: Vec<ColumnDef<T>>,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExpectedResultDef<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("(");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(") AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(ExpectedResultDef);
 
 /// `DEALLOCATE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

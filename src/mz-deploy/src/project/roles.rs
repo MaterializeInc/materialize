@@ -1,0 +1,452 @@
+//! Role definition loading and validation.
+//!
+//! Loads role definitions from `<root>/roles/` directory. Each `.sql` file
+//! defines a single role with a required `CREATE ROLE` statement and optional
+//! `ALTER ROLE`, `GRANT ROLE`, and `COMMENT` statements.
+
+use crate::project::error::{
+    LoadError, ProjectError, ValidationError, ValidationErrorKind, ValidationErrors,
+};
+use crate::project::parser::{
+    LocatedStatement, parse_statements_with_context, statement_type_name,
+};
+use crate::project::profile_files::collect_all_sql_files;
+use mz_sql_parser::ast::{
+    AlterRoleStatement, CommentObjectType, CommentStatement, CreateRoleStatement,
+    GrantRoleStatement, Raw, Statement,
+};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// A parsed role definition from a `.sql` file in the `roles/` directory.
+pub struct RoleDefinition {
+    /// Role name (derived from filename and validated against CREATE statement).
+    pub name: String,
+    /// Path to the source `.sql` file.
+    pub path: PathBuf,
+    /// The CREATE ROLE statement.
+    pub create_stmt: CreateRoleStatement,
+    /// Optional ALTER ROLE statements for this role.
+    pub alter_stmts: Vec<AlterRoleStatement<Raw>>,
+    /// Optional GRANT ROLE statements granting this role to members.
+    pub grants: Vec<GrantRoleStatement<Raw>>,
+    /// Optional COMMENT statements targeting this role.
+    pub comments: Vec<CommentStatement<Raw>>,
+}
+
+/// Load all role definitions from `<root>/roles/`.
+///
+/// Returns an empty vec if `roles/` doesn't exist (the directory is optional).
+pub fn load_roles(
+    root: &Path,
+    profile: &str,
+    variables: &BTreeMap<String, String>,
+) -> Result<Vec<RoleDefinition>, ProjectError> {
+    let roles_dir = root.join("roles");
+
+    if !roles_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    if !roles_dir.is_dir() {
+        return Err(LoadError::RootNotDirectory { path: roles_dir }.into());
+    }
+
+    let all_files = collect_all_sql_files(&roles_dir)?;
+
+    let mut definitions = Vec::new();
+    let mut errors = Vec::new();
+
+    for object_files in all_files {
+        let expected_name = &object_files.name;
+
+        // Validate all variants independently
+        let mut all_variant_paths = Vec::new();
+        if let Some(ref default_path) = object_files.default {
+            all_variant_paths.push(default_path.clone());
+        }
+        for (_, override_path) in &object_files.overrides {
+            all_variant_paths.push(override_path.clone());
+        }
+
+        for path in &all_variant_paths {
+            let sql = std::fs::read_to_string(path).map_err(|e| LoadError::FileReadFailed {
+                path: path.clone(),
+                source: e,
+            })?;
+            let located = parse_statements_with_context(&sql, path.clone(), variables)?;
+
+            if let Err(mut errs) = classify_role_statements(expected_name, path, located) {
+                errors.append(&mut errs);
+            }
+        }
+
+        // Resolve the active variant: prefer profile match, fall back to default
+        let active_path = object_files
+            .overrides
+            .get(profile)
+            .or(object_files.default.as_ref());
+
+        let active_path = match active_path {
+            Some(p) => p.clone(),
+            None => continue,
+        };
+
+        let sql = std::fs::read_to_string(&active_path).map_err(|e| LoadError::FileReadFailed {
+            path: active_path.clone(),
+            source: e,
+        })?;
+        let located = parse_statements_with_context(&sql, active_path.clone(), variables)?;
+
+        match classify_role_statements(expected_name, &active_path, located) {
+            Ok(def) => definitions.push(def),
+            Err(mut errs) => errors.append(&mut errs),
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(ValidationErrors::new(errors).into());
+    }
+
+    Ok(definitions)
+}
+
+/// Classify parsed statements into a `RoleDefinition`, returning validation errors.
+fn classify_role_statements(
+    expected_name: &str,
+    path: &Path,
+    located_statements: Vec<LocatedStatement>,
+) -> Result<RoleDefinition, Vec<ValidationError>> {
+    let mut create_stmts: Vec<(CreateRoleStatement, usize)> = Vec::new();
+    let mut alter_stmts: Vec<AlterRoleStatement<Raw>> = Vec::new();
+    let mut grants: Vec<GrantRoleStatement<Raw>> = Vec::new();
+    let mut comments: Vec<CommentStatement<Raw>> = Vec::new();
+    let mut errors = Vec::new();
+
+    for LocatedStatement {
+        ast: stmt,
+        byte_offset,
+    } in located_statements
+    {
+        match stmt {
+            Statement::CreateRole(s) => {
+                create_stmts.push((s, byte_offset));
+            }
+            Statement::AlterRole(s) => {
+                // Validate that the ALTER targets this role
+                let target_name = s.name.to_string();
+                if target_name.to_lowercase() != expected_name.to_lowercase() {
+                    errors.push(ValidationError::with_file_sql_and_offset(
+                        ValidationErrorKind::RoleAlterTargetMismatch {
+                            target: target_name,
+                            role_name: expected_name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        s.to_string(),
+                        byte_offset,
+                    ));
+                } else {
+                    alter_stmts.push(s);
+                }
+            }
+            Statement::GrantRole(s) => {
+                // Validate that this role is among the roles being granted
+                let has_match = s
+                    .role_names
+                    .iter()
+                    .any(|r| r.to_string().to_lowercase() == expected_name.to_lowercase());
+                if !has_match {
+                    let target_names: Vec<String> =
+                        s.role_names.iter().map(|r| r.to_string()).collect();
+                    errors.push(ValidationError::with_file_sql_and_offset(
+                        ValidationErrorKind::RoleGrantTargetMismatch {
+                            target: target_names.join(", "),
+                            role_name: expected_name.to_string(),
+                        },
+                        path.to_path_buf(),
+                        s.to_string(),
+                        byte_offset,
+                    ));
+                } else {
+                    grants.push(s);
+                }
+            }
+            Statement::Comment(s) => {
+                // Validate that the comment targets this role
+                match &s.object {
+                    CommentObjectType::Role { name } => {
+                        let target_name = name.to_string();
+                        if target_name.to_lowercase() != expected_name.to_lowercase() {
+                            errors.push(ValidationError::with_file_sql_and_offset(
+                                ValidationErrorKind::RoleCommentTargetMismatch {
+                                    target: target_name,
+                                    role_name: expected_name.to_string(),
+                                },
+                                path.to_path_buf(),
+                                s.to_string(),
+                                byte_offset,
+                            ));
+                        }
+                        comments.push(s);
+                    }
+                    _ => {
+                        errors.push(ValidationError::with_file_sql_and_offset(
+                            ValidationErrorKind::InvalidRoleStatement {
+                                statement_type: "COMMENT (not targeting a role)".to_string(),
+                                role_name: expected_name.to_string(),
+                            },
+                            path.to_path_buf(),
+                            s.to_string(),
+                            byte_offset,
+                        ));
+                    }
+                }
+            }
+            other => {
+                errors.push(ValidationError::with_file_sql_and_offset(
+                    ValidationErrorKind::InvalidRoleStatement {
+                        statement_type: statement_type_name(&other).to_string(),
+                        role_name: expected_name.to_string(),
+                    },
+                    path.to_path_buf(),
+                    other.to_string(),
+                    byte_offset,
+                ));
+            }
+        }
+    }
+
+    // Validate exactly one CREATE ROLE (file-level errors)
+    if create_stmts.is_empty() {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::RoleMissingCreateStatement {
+                role_name: expected_name.to_string(),
+            },
+            path.to_path_buf(),
+        ));
+    } else if create_stmts.len() > 1 {
+        // Point to the second CREATE ROLE
+        errors.push(ValidationError::with_file_and_offset(
+            ValidationErrorKind::RoleMultipleCreateStatements {
+                role_name: expected_name.to_string(),
+            },
+            path.to_path_buf(),
+            create_stmts[1].1,
+        ));
+    }
+
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+
+    let (create_stmt, create_offset) = create_stmts.into_iter().next().unwrap();
+
+    // Validate role name matches filename
+    let declared_name = create_stmt.name.to_string();
+    if declared_name.to_lowercase() != expected_name.to_lowercase() {
+        return Err(vec![ValidationError::with_file_and_offset(
+            ValidationErrorKind::RoleNameMismatch {
+                declared: declared_name,
+                expected: expected_name.to_string(),
+            },
+            path.to_path_buf(),
+            create_offset,
+        )]);
+    }
+
+    Ok(RoleDefinition {
+        name: expected_name.to_string(),
+        path: path.to_path_buf(),
+        create_stmt,
+        alter_stmts,
+        grants,
+        comments,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_dir() -> TempDir {
+        TempDir::new().unwrap()
+    }
+
+    #[test]
+    fn test_load_roles_no_directory() {
+        let dir = create_test_dir();
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
+        assert!(
+            result.is_empty(),
+            "should return empty vec when roles/ doesn't exist"
+        );
+    }
+
+    #[test]
+    fn test_load_roles_basic() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(
+            roles_dir.join("analyst.sql"),
+            "CREATE ROLE analyst INHERIT;\n\
+             ALTER ROLE analyst SET cluster TO 'analytics';\n\
+             GRANT analyst TO joe, jane;\n\
+             COMMENT ON ROLE analyst IS 'Read-only analytics access';",
+        )
+        .unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "analyst");
+        assert_eq!(result[0].alter_stmts.len(), 1);
+        assert_eq!(result[0].grants.len(), 1);
+        assert_eq!(result[0].comments.len(), 1);
+    }
+
+    #[test]
+    fn test_load_roles_create_only() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(roles_dir.join("reader.sql"), "CREATE ROLE reader;").unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "reader");
+        assert!(result[0].alter_stmts.is_empty());
+        assert!(result[0].grants.is_empty());
+        assert!(result[0].comments.is_empty());
+    }
+
+    #[test]
+    fn test_load_roles_name_mismatch() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(roles_dir.join("analyst.sql"), "CREATE ROLE wrong_name;").unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
+        assert!(
+            result.is_err(),
+            "should error when role name doesn't match filename"
+        );
+    }
+
+    #[test]
+    fn test_load_roles_missing_create() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(roles_dir.join("analyst.sql"), "GRANT analyst TO joe;").unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
+        assert!(
+            result.is_err(),
+            "should error when no CREATE ROLE statement"
+        );
+    }
+
+    #[test]
+    fn test_load_roles_unsupported_statement() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(
+            roles_dir.join("analyst.sql"),
+            "CREATE ROLE analyst;\n\
+             CREATE TABLE foo (id INT);",
+        )
+        .unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
+        assert!(
+            result.is_err(),
+            "should error on unsupported statement type"
+        );
+    }
+
+    #[test]
+    fn test_load_roles_alter_target_mismatch() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(
+            roles_dir.join("analyst.sql"),
+            "CREATE ROLE analyst;\n\
+             ALTER ROLE other_role SET cluster TO 'analytics';",
+        )
+        .unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
+        assert!(
+            result.is_err(),
+            "should error when ALTER targets wrong role"
+        );
+    }
+
+    #[test]
+    fn test_load_roles_grant_target_mismatch() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(
+            roles_dir.join("analyst.sql"),
+            "CREATE ROLE analyst;\n\
+             GRANT other_role TO joe;",
+        )
+        .unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
+        assert!(
+            result.is_err(),
+            "should error when grant targets wrong role"
+        );
+    }
+
+    #[test]
+    fn test_load_roles_comment_target_mismatch() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(
+            roles_dir.join("analyst.sql"),
+            "CREATE ROLE analyst;\n\
+             COMMENT ON ROLE other_role IS 'wrong target';",
+        )
+        .unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new());
+        assert!(
+            result.is_err(),
+            "should error when comment targets wrong role"
+        );
+    }
+
+    #[test]
+    fn test_load_roles_multiple_files() {
+        let dir = create_test_dir();
+        let roles_dir = dir.path().join("roles");
+        fs::create_dir(&roles_dir).unwrap();
+
+        fs::write(roles_dir.join("analyst.sql"), "CREATE ROLE analyst;").unwrap();
+
+        fs::write(roles_dir.join("writer.sql"), "CREATE ROLE writer;").unwrap();
+
+        let result = load_roles(dir.path(), "default", &BTreeMap::new()).unwrap();
+        assert_eq!(result.len(), 2);
+        // Sorted by filename
+        assert_eq!(result[0].name, "analyst");
+        assert_eq!(result[1].name, "writer");
+    }
+}

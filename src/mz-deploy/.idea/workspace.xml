@@ -1,0 +1,393 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="AutoImportSettings">
+    <option name="autoReloadType" value="ALL" />
+  </component>
+  <component name="CargoProjects">
+    <cargoProject FILE="$PROJECT_DIR$/../../Cargo.toml">
+      <package file="$PROJECT_DIR$/../mz">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../adapter">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../adapter-types">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../alloc">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../alloc-default">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../arrow-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../audit-log">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../auth">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../authenticator">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../avro">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../aws-secrets-controller">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../aws-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../balancerd">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../build-info">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../build-tools">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../catalog">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../catalog-debug">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../catalog-protos">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../ccsr">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../cloud-api">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../cloud-provider">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../cloud-resources">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../cluster">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../cluster-client">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../clusterd">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../compute">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../compute-client">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../compute-types">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../controller">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../controller-types">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../mz-debug">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../durable-cache">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../dyncfg">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../dyncfg-file">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../dyncfg-launchdarkly">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../dyncfgs">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../environmentd">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../expr">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../expr-derive">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../expr-derive-impl">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../expr-parser">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../expr-test-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../fivetran-destination">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../foundationdb">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../frontegg-auth">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../frontegg-client">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../frontegg-mock">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../http-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../interchange">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../kafka-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../license-keys">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../lowertest">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../lowertest-derive">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../lsp-server">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../materialized">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../metabase">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../../test/metabase/smoketest">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../metrics">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../mysql-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../npm">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../oidc-mock">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../orchestrator">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../orchestrator-kubernetes">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../orchestrator-process">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../orchestrator-tracing">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../orchestratord">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../ore">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../ore-build">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../ore-proc">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../persist">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../persist-client">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../persist-proc">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../persist-types">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../pgcopy">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../pgrepr">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../pgrepr-consts">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../pgtest">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../pgtz">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../pgwire">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../pgwire-common">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../postgres-client">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../postgres-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../prof">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../prof-http">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../proto">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../regexp">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../repr">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../repr-test-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../rocksdb">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../rocksdb-types">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../s3-datagen">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../secrets">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../segment">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../server-core">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../service">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../sql">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../sql-lexer">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../sql-parser">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../sql-pretty">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../sql-server-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../sqllogictest">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../ssh-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../storage">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../storage-client">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../storage-controller">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../storage-operators">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../storage-types">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../../test/test-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../testdrive">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../timely-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../timestamp-oracle">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../tls-util">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../tracing">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../transform">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../txn-wal">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../walkabout">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../persist-cli">
+        <feature name="default" enabled="true" />
+      </package>
+      <package file="$PROJECT_DIR$/../workspace-hack">
+        <feature name="default" enabled="true" />
+      </package>
+    </cargoProject>
+  </component>
+  <component name="ChangeListManager">
+    <list default="true" id="e9f15d06-0365-4662-9e3e-e8f978305ce2" name="Changes" comment="" />
+    <option name="SHOW_DIALOG" value="false" />
+    <option name="HIGHLIGHT_CONFLICTS" value="true" />
+    <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
+    <option name="LAST_RESOLUTION" value="IGNORE" />
+  </component>
+  <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:test" />
+  <component name="Git.Settings">
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/../.." />
+  </component>
+  <component name="MacroExpansionManager">
+    <option name="directoryName" value="aopbc515" />
+  </component>
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "git-widget-placeholder": "mzdeploy",
+    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true"
+  }
+}]]></component>
+  <component name="RustProjectSettings">
+    <option name="toolchainHomeDirectory" value="$USER_HOME$/.cargo/bin" />
+  </component>
+  <component name="TaskManager">
+    <servers />
+  </component>
+</project>

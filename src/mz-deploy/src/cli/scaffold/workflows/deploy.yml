@@ -1,0 +1,34 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    env:
+      MZ_DEPLOY_PROFILE: production
+      MZ_DEPLOY_PROFILES_DIR: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mz-deploy
+        run: # TODO: install mz-deploy
+
+      - name: Apply infrastructure
+        run: mz-deploy apply
+
+      - name: Stage
+        id: stage
+        run: |
+          DEPLOY_ID=$(git rev-parse --short=7 HEAD)
+          mz-deploy stage --deploy-id "$DEPLOY_ID"
+          echo "deploy_id=$DEPLOY_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for hydration
+        run: mz-deploy wait ${{ steps.stage.outputs.deploy_id }} --timeout 21600
+
+      - name: Promote
+        run: mz-deploy promote ${{ steps.stage.outputs.deploy_id }}
