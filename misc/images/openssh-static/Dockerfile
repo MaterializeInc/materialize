@@ -30,6 +30,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     autoconf \
     automake \
     build-essential \
+    ca-certificates \
     cmake \
     git \
     golang \
