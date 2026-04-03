@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/mem.rs
-revision: 4a1aeff959
+revision: 181b1e7efc
 ---
 
 # persist::mem

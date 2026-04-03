@@ -1,6 +1,6 @@
 ---
 source: src/ccsr/src/tls.rs
-revision: ca42a663e0
+revision: 16c15ae741
 ---
 
 # mz-ccsr::tls
