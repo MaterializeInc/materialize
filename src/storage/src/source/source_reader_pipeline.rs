@@ -273,6 +273,7 @@ pub fn create_raw_source_from_task<'g, G: Scope<Timestamp = ()>, FromTime>(
     config: &RawSourceCreationConfig,
     task_outputs: crate::source::types::SourceTaskOutputs<FromTime>,
     timestamp_desc: RelationDesc,
+    resume_tx: watch::Sender<Antichain<FromTime>>,
 ) -> (
     BTreeMap<
         GlobalId,
@@ -307,14 +308,38 @@ where
     tokens.push(remap_token);
 
     // The committed upper feedback: maps IntoTime → FromTime for upstream acknowledgment.
-    // This is consumed by the resume_tx watch channel connected to the task.
-    let _committed_upper_stream = reclock_committed_upper(
+    // Forward the reclocked committed upper to the task via the watch channel.
+    let committed_upper_stream = reclock_committed_upper(
         remap_collection.clone(),
         config.as_of.clone(),
         committed_upper,
         id,
         Arc::clone(&source_metrics),
     );
+    // Spawn a task to forward the stream into the watch channel.
+    let resume_forward_handle = mz_ore::task::spawn(
+        || format!("resume_upper_forward:{id}"),
+        async move {
+            use futures::stream::StreamExt;
+            let mut stream = std::pin::pin!(committed_upper_stream);
+            while let Some(frontier) = stream.next().await {
+                if resume_tx.send(frontier).is_err() {
+                    break;
+                }
+            }
+        },
+    )
+    .abort_on_drop();
+    // Hold the handle alive via a dummy operator, same pattern as TaskAbortHolder.
+    let resume_holder = {
+        let builder =
+            AsyncOperatorBuilder::new(format!("ResumeForwardHolder({id})"), scope.clone());
+        builder.build(move |_caps| async move {
+            let _handle = resume_forward_handle;
+            std::future::pending::<()>().await;
+        })
+    };
+    tokens.push(resume_holder.press_on_drop());
     // Note: the resume feedback to the task is handled by the caller, which connects
     // _committed_upper_stream to the task's resume_rx watch channel.
 

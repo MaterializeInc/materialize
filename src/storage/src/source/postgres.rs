@@ -283,34 +283,50 @@ impl SourceTask for PostgresSourceConnection {
         let (probe_tx, probe_rx) = tokio::sync::watch::channel(None);
         let (health_tx, health_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        // Extract the Send-safe fields from config. RawSourceCreationConfig contains Rc fields
-        // (shared_remap_upper, statistics) that are not Send, so we can't move the whole config
-        // into the spawned task.
         let id = config.id;
         let worker_id = config.worker_id;
-        let source_exports = config.source_exports.clone();
-        let source_resume_uppers = config.source_resume_uppers.clone();
-        let now_fn = config.now_fn.clone();
-        let storage_config = config.config.clone();
-        let timestamp_interval = config.timestamp_interval;
 
-        let task_handle = mz_ore::task::spawn(
-            || format!("pg_source_task:{id}"),
-            pg_source_task(
-                self,
-                id,
-                worker_id,
-                source_exports,
-                source_resume_uppers,
-                now_fn,
-                storage_config,
-                timestamp_interval,
-                data_tx,
-                probe_tx,
-                health_tx,
-                resume_rx,
-            ),
-        );
+        // Only worker 0 runs the actual PG task. Other workers get a no-op task
+        // whose channels close immediately, producing no data.
+        let is_active_worker = worker_id == 0;
+
+        let task_handle = if is_active_worker {
+            // Extract the Send-safe fields from config. RawSourceCreationConfig contains Rc
+            // fields (shared_remap_upper, statistics) that are not Send, so we can't move the
+            // whole config into the spawned task.
+            let source_exports = config.source_exports.clone();
+            let source_resume_uppers = config.source_resume_uppers.clone();
+            let now_fn = config.now_fn.clone();
+            let storage_config = config.config.clone();
+            let timestamp_interval = config.timestamp_interval;
+
+            mz_ore::task::spawn(
+                || format!("pg_source_task:{id}"),
+                pg_source_task(
+                    self,
+                    id,
+                    worker_id,
+                    source_exports,
+                    source_resume_uppers,
+                    now_fn,
+                    storage_config,
+                    timestamp_interval,
+                    data_tx,
+                    probe_tx,
+                    health_tx,
+                    resume_rx,
+                ),
+            )
+        } else {
+            // Non-active workers: drop the senders so receivers see closed channels,
+            // then park forever (task will be cancelled on dataflow drop).
+            drop(data_tx);
+            drop(probe_tx);
+            drop(health_tx);
+            mz_ore::task::spawn(|| format!("pg_source_task_idle:{id}"), async {
+                std::future::pending::<()>().await;
+            })
+        };
 
         let outputs = SourceTaskOutputs {
             data_rx,

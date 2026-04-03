@@ -318,7 +318,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 GenericSourceConnection::Postgres(c) => {
                     // Use the task-based pipeline for PostgreSQL sources.
                     let timestamp_desc = c.timestamp_desc();
-                    let (_resume_tx, resume_rx) =
+                    let (resume_tx, resume_rx) =
                         tokio::sync::watch::channel(Antichain::from_elem(
                             mz_storage_types::sources::MzOffset::from(0u64),
                         ));
@@ -334,6 +334,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                             base_source_config,
                             task_outputs,
                             timestamp_desc,
+                            resume_tx,
                         );
                     // Keep the abort handle alive by leaking it into a background holder.
                     // When the dataflow is dropped, the handle will be dropped and the

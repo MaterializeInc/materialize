@@ -171,6 +171,7 @@ pub fn render_task_source<'g, G, FromTime>(
     base_source_config: RawSourceCreationConfig,
     task_outputs: SourceTaskOutputs<FromTime>,
     timestamp_desc: mz_repr::RelationDesc,
+    resume_tx: tokio::sync::watch::Sender<Antichain<FromTime>>,
 ) -> (
     BTreeMap<
         GlobalId,
@@ -195,18 +196,53 @@ where
         let _ = start_signal.recv().await;
     };
 
+    // Extract health_rx before passing the rest to create_raw_source_from_task.
+    let SourceTaskOutputs {
+        data_rx,
+        probe_rx,
+        health_rx,
+    } = task_outputs;
+    let task_outputs_for_pipeline = crate::source::types::SourceTaskOutputs {
+        data_rx,
+        probe_rx,
+        health_rx: {
+            // Create a dummy health_rx — health is handled here instead.
+            let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            rx
+        },
+    };
+
     let (exports, source_tokens) = source::create_raw_source_from_task(
         scope,
         storage_state,
         resume_stream,
         &base_source_config,
-        task_outputs,
+        task_outputs_for_pipeline,
         timestamp_desc,
+        resume_tx,
     );
 
     needed_tokens.extend(source_tokens);
 
-    let mut health_streams: Vec<StreamVec<G, HealthStatusMessage>> = Vec::with_capacity(exports.len());
+    // Surface health messages from the task channel as a timely stream.
+    let mut health_builder = mz_timely_util::builder_async::OperatorBuilder::new(
+        "TaskHealthBridge".to_string(),
+        scope.parent.clone(),
+    );
+    let (health_output, health_stream) =
+        health_builder.new_output::<CapacityContainerBuilder<_>>();
+    let health_button = health_builder.build(move |mut caps| async move {
+        let mut health_rx = health_rx;
+        let cap = caps.pop().expect("one capability");
+        while let Some(msg) = health_rx.recv().await {
+            health_output.give(&cap, msg);
+        }
+    });
+    needed_tokens.push(health_button.press_on_drop());
+
+    let mut health_streams: Vec<StreamVec<G, HealthStatusMessage>> =
+        vec![health_stream];
+    health_streams.reserve(exports.len());
 
     let mut outputs = BTreeMap::new();
     for (export_id, export) in exports {
