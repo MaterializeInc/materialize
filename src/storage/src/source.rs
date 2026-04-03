@@ -27,6 +27,7 @@
 
 use crate::source::types::SourceMessage;
 
+pub(crate) mod channel_reclock;
 mod probe;
 pub(crate) mod reclock;
 mod source_reader_pipeline;
