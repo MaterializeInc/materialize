@@ -16,8 +16,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.18.0
-*Released to Materialize Cloud: 2026-04-03* <br>
-*Released to Materialize Self-Managed: 2026-04-04* <br>
+*Released to Materialize Cloud: 2026-04-02* <br>
+*Released to Materialize Self-Managed: 2026-04-03* <br>
 
 This release includes various improvements and bug fixes.
 
