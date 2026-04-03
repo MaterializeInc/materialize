@@ -47,6 +47,45 @@ mod usage_metrics;
 
 const BUILD_INFO: BuildInfo = build_info!();
 
+/// Resolves a short hostname to its FQDN using `getaddrinfo` with
+/// `AI_CANONNAME`, equivalent to `hostname --fqdn`. Falls back to the
+/// short hostname if DNS resolution fails.
+fn resolve_fqdn(short_hostname: &str) -> String {
+    use std::ffi::{CStr, CString};
+    use std::ptr;
+
+    let Ok(c_host) = CString::new(short_hostname) else {
+        return short_hostname.to_string();
+    };
+
+    let mut hints: libc::addrinfo = unsafe { std::mem::zeroed() };
+    hints.ai_flags = libc::AI_CANONNAME;
+    hints.ai_family = libc::AF_UNSPEC;
+
+    let mut result: *mut libc::addrinfo = ptr::null_mut();
+
+    let rc = unsafe { libc::getaddrinfo(c_host.as_ptr(), ptr::null(), &hints, &mut result) };
+
+    if rc != 0 || result.is_null() {
+        return short_hostname.to_string();
+    }
+
+    let fqdn = unsafe {
+        let info = &*result;
+        if info.ai_canonname.is_null() {
+            short_hostname.to_string()
+        } else {
+            CStr::from_ptr(info.ai_canonname)
+                .to_string_lossy()
+                .into_owned()
+        }
+    };
+
+    unsafe { libc::freeaddrinfo(result) };
+
+    fqdn
+}
+
 pub static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
 /// Independent cluster server for Materialize.
@@ -170,6 +209,54 @@ struct Args {
 
 pub fn main() {
     mz_ore::panic::install_enhanced_handler();
+
+    // When running in Kubernetes, auto-detect the GRPC host from the pod's FQDN
+    // and the process index from the StatefulSet ordinal. These are set as env
+    // vars so that clap picks them up as defaults (they can still be overridden
+    // via explicit env vars or CLI args).
+    //
+    // SAFETY: Called before any threads are spawned (main entry point, single
+    // threaded), so modifying env vars is safe.
+    if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
+        if std::env::var("CLUSTERD_GRPC_HOST").is_err() {
+            // Resolve the pod's FQDN via DNS, equivalent to `hostname --fqdn`.
+            // In Kubernetes, /etc/hostname only has the short name (e.g.,
+            // "clusterd-0"), but GRPC validation needs the FQDN (e.g.,
+            // "clusterd-0.clusterd.ns.svc.cluster.local"). We resolve the
+            // short hostname through DNS to get the canonical name.
+            //
+            // This avoids shelling out to `hostname --fqdn` which isn't
+            // available in distroless images.
+            // Use the gethostname() syscall, matching what `hostname --fqdn`
+            // does internally, then resolve to FQDN via getaddrinfo.
+            let mut buf = [0u8; 256];
+            if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0 {
+                let hostname = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr().cast()) };
+                if let Ok(short) = hostname.to_str() {
+                    let fqdn = resolve_fqdn(short);
+                    unsafe { std::env::set_var("CLUSTERD_GRPC_HOST", &fqdn) };
+                }
+            }
+        }
+        if std::env::var("CLUSTERD_PROCESS").is_err() {
+            // Extract the ordinal index from the StatefulSet hostname
+            // (e.g., "clusterd-0" → "0").
+            if let Ok(hostname) = std::env::var("HOSTNAME") {
+                if let Some(ordinal) = hostname.rsplit('-').next() {
+                    unsafe { std::env::set_var("CLUSTERD_PROCESS", ordinal) };
+                }
+            }
+        }
+    }
+
+    // Configure LD_PRELOAD for eatmydata if requested (CI performance
+    // optimization). In distroless images libeatmydata.so is not available,
+    // so this is a no-op.
+    if std::env::var("MZ_EAT_MY_DATA").is_ok() {
+        unsafe { std::env::set_var("LD_PRELOAD", "libeatmydata.so") };
+    } else {
+        unsafe { std::env::remove_var("LD_PRELOAD") };
+    }
 
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("CLUSTERD_"),

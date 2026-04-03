@@ -643,12 +643,31 @@ fn aws_secrets_controller_key_alias(env_id: &EnvironmentId) -> String {
 }
 
 pub fn main() {
+    // Configure LD_PRELOAD for eatmydata if requested (CI performance
+    // optimization). In distroless images libeatmydata.so is not available,
+    // so this is a no-op.
+    //
+    // SAFETY: Called before any threads are spawned (main entry point, single
+    // threaded), so modifying env vars is safe.
+    if std::env::var("MZ_EAT_MY_DATA").is_ok() {
+        unsafe { std::env::set_var("LD_PRELOAD", "libeatmydata.so") };
+    } else {
+        unsafe { std::env::remove_var("LD_PRELOAD") };
+    }
+
     let args = cli::parse_args(CliConfig {
         env_prefix: Some("MZ_"),
         enable_version_flag: true,
     });
     if let Err(err) = run(args) {
         panic!("environmentd: fatal: {}", err.display_with_causes());
+    }
+    // In the previous bash entrypoint, environmentd would sleep forever after
+    // a graceful exit. This keeps the container alive for debugging. Replicate
+    // that behavior here.
+    eprintln!("environmentd exited gracefully; sleeping forever");
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(86400));
     }
 }
 
