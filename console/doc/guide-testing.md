@@ -152,6 +152,174 @@ failures).
 yarn playwright show-trace test-results/platform-use-region-local-kind/trace-1.zip
 ```
 
+### Running Scalability Tests
+
+Scalability tests live in `e2e-tests/scalability/` and measure how the console
+performs under real-world conditions — query latency, multi-tab behavior, and
+page load times. They run against a real Materialize instance, either local
+(via workload replay) or staging.
+
+#### Setup (local with workload replay)
+
+```shell
+# Terminal 1: Start workload replay (takes a few minutes to hydrate)
+bin/mzcompose --find workload-replay run default workload_prod_analytics.yml --runtime 900 --no-run-queries
+
+# Terminal 2: Start the console dev server
+cd console
+CONSOLE_DEPLOYMENT_MODE='flexible-deployment' yarn start
+
+# Terminal 3: Run tests (--workers=1 to avoid tests fighting over the same instance)
+cd console
+yarn playwright test scalability/ --project=chromium --workers=1
+```
+
+#### Setup (staging)
+
+```shell
+export BASE_URL=https://staging.console.materialize.com
+export REGION_SLUG=aws/eu-west-1
+export E2E_EMAIL=<your-staging-email>
+export E2E_PASSWORD=<your-staging-password>
+export CLUSTER_NAME=<cluster-name>
+export CLUSTER_ID=<cluster-id>
+yarn playwright test scalability/ --project=chromium
+```
+
+#### Test files
+
+**`query-audit.spec.ts`** — Per-page query baselines
+
+Opens a single tab on each page, sits for 2 minutes, and records every SQL
+request. Reports what queries fire, how often, avg/max latency, and a
+queue/server/download breakdown. Use this to discover polling patterns and
+identify the slowest queries per page.
+
+Pages tested: cluster detail, cluster list, sources list, sinks list, object explorer.
+
+```shell
+# Run all audits
+yarn playwright test scalability/query-audit --project=chromium
+
+# Run one page
+yarn playwright test scalability/query-audit -g "cluster detail" --project=chromium
+yarn playwright test scalability/query-audit -g "object explorer" --project=chromium
+```
+
+**`tab-stress.spec.ts`** — Multi-tab stress tests
+
+Two tests that measure how the console behaves with many tabs open:
+
+- **Progressive tab stress**: Opens 6 tabs on cluster detail one at a time,
+  checking for errors after each. Holds all tabs open for 2 minutes. Reports
+  total query volume, peak concurrency, and failure rate.
+- **Mixed page multi-tab**: Opens 6 tabs across different pages (cluster
+  detail, cluster list, sources, sinks). Holds for 3 minutes with periodic
+  error checks.
+
+```shell
+yarn playwright test scalability/tab-stress --project=chromium
+```
+
+**`page-load.spec.ts`** — UI snappiness
+
+Measures what the user actually experiences — how long from navigating until
+content is visible on screen. Each page has its own cold load test so they
+can be run individually.
+
+- **Cold load**: Opens a page in a fresh tab (no cache), measures time until
+  content appears.
+- **Navigation flow**: Clicks through cluster list → cluster detail → back →
+  revisit. Compares cold vs cached load times.
+
+```shell
+# All cold loads + navigation
+yarn playwright test scalability/page-load --project=chromium
+
+# Individual cold loads
+yarn playwright test scalability/page-load -g "cold load: cluster detail" --project=chromium
+yarn playwright test scalability/page-load -g "cold load: cluster list" --project=chromium
+yarn playwright test scalability/page-load -g "cold load: sources list" --project=chromium
+yarn playwright test scalability/page-load -g "cold load: sinks list" --project=chromium
+yarn playwright test scalability/page-load -g "cold load: object explorer" --project=chromium
+```
+
+#### Running tests per page
+
+Each page has a set of tests that can be run together. Use `--workers=1`
+to avoid tests contending for the same Materialize instance.
+
+**Cluster detail:**
+```shell
+yarn playwright test scalability/ -g "cluster detail|progressive tab" --project=chromium --workers=1
+```
+
+**Cluster list:**
+```shell
+yarn playwright test scalability/ -g "cluster list|navigation flow: cluster|mixed page" --project=chromium --workers=1
+```
+
+**Sources list:**
+```shell
+yarn playwright test scalability/ -g "sources list" --project=chromium --workers=1
+```
+
+**Sinks list:**
+```shell
+yarn playwright test scalability/ -g "sinks list" --project=chromium --workers=1
+```
+
+**Object explorer:**
+```shell
+yarn playwright test scalability/ -g "object explorer|cold load: object explorer" --project=chromium --workers=1
+```
+
+**Everything:**
+```shell
+yarn playwright test scalability/ --project=chromium --workers=1
+```
+
+#### Configuration
+
+All tests support these environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BASE_URL` | `http://localhost:3000` | Console URL |
+| `REGION_SLUG` | `local-flexible-deployment` | Region path segment |
+| `CLUSTER_NAME` | `mz_catalog_server` | Cluster to test |
+| `CLUSTER_ID` | `s2` | Cluster ID |
+| `MAX_TABS` | `6` | Tabs for stress tests |
+| `HOLD_DURATION` | `120000` | Hold duration (ms) |
+| `E2E_EMAIL` | — | Frontegg email (staging only) |
+| `E2E_PASSWORD` | — | Frontegg password (staging only) |
+
+#### Reading the output
+
+Each test prints a query summary table:
+
+```
+=== Query Summary ===
+Query                                          Cnt     Avg     Max  Err
+-----------------------------------------------------------------------
+clusters (useClusters)                          22   601ms  1076ms    0
+replicaUtilizationHistory                        7   289ms   972ms    0
+...
+```
+
+And a timing breakdown showing where time is spent:
+
+```
+=== Timing Breakdown (avg / max ms) ===
+Query                                          Queue       Server     Download
+------------------------------------------------------------------------------
+clusters (useClusters)                       1/1.161 595/1072.983 1/1.545
+...
+```
+
+High queue times indicate browser connection pool contention (HTTP/1.1 6-connection
+limit). High server times indicate slow SQL execution on the Materialize side.
+
 ## Testing Philosophy
 
 We follow the same testing philosophy as the rest of the company. In particular:
