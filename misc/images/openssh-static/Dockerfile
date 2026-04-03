@@ -61,7 +61,7 @@ RUN git clone --depth 1 --branch ${AWS_LC_VERSION} https://github.com/aws/aws-lc
 
 # Build zlib as a static library.
 WORKDIR /build/zlib
-RUN wget -qO- https://zlib.net/zlib-${ZLIB_VERSION}.tar.gz | tar xz --strip-components=1 \
+RUN wget -qO- https://github.com/madler/zlib/releases/download/v${ZLIB_VERSION}/zlib-${ZLIB_VERSION}.tar.gz | tar xz --strip-components=1 \
     && ./configure --static --prefix=/opt/zlib \
     && make -j"$(nproc)" \
     && make install
