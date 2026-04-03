@@ -27,7 +27,15 @@ use std::sync::Arc;
 /// Returns the [`rustls::crypto::CryptoProvider`] appropriate for the current
 /// build.
 ///
+/// On the first call, this also installs the provider as the process-wide
+/// default so that any rustls usage (including transitive dependencies like
+/// `hyper-rustls` or `tokio-postgres-rustls`) picks it up automatically.
+///
 /// The returned provider is cached in an `Arc` so cloning is cheap.
 pub fn fips_crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
-    Arc::new(rustls::crypto::aws_lc_rs::default_provider())
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+    // Install as the process-wide default. Ignore the error if it was
+    // already installed (e.g. by a previous call).
+    let _ = provider.clone().install_default();
+    Arc::new(provider)
 }
