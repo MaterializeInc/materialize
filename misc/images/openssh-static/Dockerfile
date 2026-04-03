@@ -77,7 +77,7 @@ RUN git clone --depth 1 --branch ${OPENSSH_VERSION} https://github.com/openssh/o
         --without-pam \
         --without-libedit \
         --with-privsep-user=nobody \
-    && make -j"$(nproc)" ssh \
+    && make -j"$(nproc)" ssh CFLAGS="-DBN_FLG_CONSTTIME=0" \
     && strip ssh
 
 # Verify the binary is statically linked and functional.
