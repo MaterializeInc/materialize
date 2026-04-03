@@ -449,7 +449,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
     // is done by starting a web server that awaits the refresh request, which the
@@ -577,7 +577,7 @@ async fn test_auth_expiry() {
 
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_base_require_tls_frontegg() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1320,7 +1320,7 @@ async fn test_auth_base_require_tls_frontegg() {
 /// This test verifies that users can authenticate using OIDC tokens
 /// over TLS connections
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_base_require_tls_oidc() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1504,7 +1504,7 @@ async fn test_auth_base_require_tls_oidc() {
 /// This test verifies that when an audience is configured, only JWTs with
 /// matching `aud` claims are accepted.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_oidc_audience_validation() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1632,7 +1632,7 @@ async fn test_auth_oidc_audience_validation() {
 
 /// Tests OIDC where we don't validate the audience claim.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_oidc_audience_optional() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2274,7 +2274,7 @@ async fn test_auth_oidc_fetch_error() {
 
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_base_disable_tls() {
     let no_headers = HeaderMap::new();
 
@@ -2363,7 +2363,7 @@ async fn test_auth_base_disable_tls() {
 
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_base_require_tls() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2490,7 +2490,7 @@ async fn test_auth_base_require_tls() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_intermediate_ca_no_intermediary() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
@@ -2530,7 +2530,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 configure: TestTlsConfig::with_ca(&ca.ca_cert_path()),
                 assert: Assert::Err(Box::new(|code, message| {
                     assert_none!(code);
-                    assert_contains!(message, "unable to get local issuer certificate");
+                    assert_contains!(message, "UnknownIssuer");
                 })),
             },
         ],
@@ -2539,7 +2539,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_intermediate_ca() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
@@ -2601,7 +2601,7 @@ async fn test_auth_intermediate_ca() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_admin_non_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2749,7 +2749,7 @@ async fn test_auth_admin_non_superuser() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_admin_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2897,7 +2897,7 @@ async fn test_auth_admin_superuser() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_admin_superuser_revoked() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3055,7 +3055,7 @@ async fn test_auth_admin_superuser_revoked() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_deduplication() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3223,7 +3223,7 @@ async fn test_auth_deduplication() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_refresh_task_metrics() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3357,7 +3357,7 @@ async fn test_refresh_task_metrics() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_superuser_can_alter_cluster() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3508,7 +3508,7 @@ async fn test_superuser_can_alter_cluster() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_refresh_dropped_session() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3671,7 +3671,7 @@ async fn test_refresh_dropped_session() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_refresh_dropped_session_lru() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3864,7 +3864,7 @@ async fn test_refresh_dropped_session_lru() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_transient_auth_failures() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3984,7 +3984,7 @@ async fn test_transient_auth_failures() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_transient_auth_failure_on_refresh() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -4115,7 +4115,7 @@ async fn test_transient_auth_failure_on_refresh() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_password_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4205,7 +4205,7 @@ async fn test_password_auth() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_sasl_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4260,7 +4260,7 @@ async fn test_sasl_auth() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_sasl_auth_failure() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4306,7 +4306,7 @@ async fn test_sasl_auth_failure() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_password_auth_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4361,7 +4361,7 @@ async fn test_password_auth_superuser() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_password_auth_alter_role() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4501,7 +4501,7 @@ async fn test_password_auth_alter_role() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_password_auth_http() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4646,7 +4646,7 @@ async fn test_password_auth_http() {
 /// This is a regression test for a bug where WebSocket connections always had superuser=false
 /// because internal_user_metadata was hardcoded to None.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_password_auth_http_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -4853,7 +4853,7 @@ async fn test_password_auth_http_superuser() {
 /// `oidc_user` is also included the explicit credential must win, so
 /// `current_user` should equal `oidc_user`.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_session_auth_does_not_override_credentials() {
     let ca = Ca::new_root("test ca").unwrap();
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
@@ -5237,7 +5237,7 @@ async fn test_auth_autoprovision_oidc_audit_log() {
 /// Tests that OIDC authentication is rejected for a role without the LOGIN
 /// attribute, and succeeds after granting LOGIN.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+#[cfg_attr(miri, ignore)] // unsupported operation: TLS in miri is not supported
 async fn test_auth_oidc_non_login_role() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
