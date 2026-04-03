@@ -47,7 +47,6 @@ class Clusterd(Service):
             "CLUSTERD_INTERNAL_HTTP_LISTEN_ADDR=0.0.0.0:6878",
             "CLUSTERD_SECRETS_READER=local-file",
             "CLUSTERD_SECRETS_READER_LOCAL_FILE_DIR=/mzdata/secrets",
-            "LD_PRELOAD=libeatmydata.so",
             f"CLUSTERD_PERSIST_PUBSUB_URL=http://{mz_service}:6879",
             *environment_extra,
         ]
