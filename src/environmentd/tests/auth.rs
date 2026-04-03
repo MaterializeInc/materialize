@@ -698,7 +698,7 @@ async fn test_auth_base_require_tls_frontegg() {
         metadata: None,
     };
     let frontegg_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &claims,
         &encoding_key,
     )
@@ -710,7 +710,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let user_set_metadata_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &user_set_metadata_claims,
         &encoding_key,
     )
@@ -720,7 +720,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let bad_tenant_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &bad_tenant_claims,
         &encoding_key,
     )
@@ -730,7 +730,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let expired_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &expired_claims,
         &encoding_key,
     )
@@ -744,7 +744,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let service_system_user_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &service_system_user_claims,
         &encoding_key,
     )
@@ -758,7 +758,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let service_user_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &service_user_claims,
         &encoding_key,
     )
@@ -772,7 +772,7 @@ async fn test_auth_base_require_tls_frontegg() {
         ..claims.clone()
     };
     let bad_service_user_jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256),
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
         &bad_service_user_claims,
         &encoding_key,
     )
@@ -1833,7 +1833,8 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
         .unwrap();
 
     // Start first OIDC server
-    let encoding_key1 = String::from_utf8(ca1.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key1 = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let oidc_server1 = OidcMockServer::start(
         None,
         encoding_key1,
@@ -1844,8 +1845,8 @@ async fn test_auth_oidc_issuer_and_audience_switch() {
     .await
     .unwrap();
 
-    // Start second OIDC server (reuses the same ECDSA keypair)
-    let encoding_key2 = String::from_utf8(ca1.key_pem.clone()).unwrap();
+    // Start second OIDC server (reuses the same RSA keypair)
+    let encoding_key2 = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let oidc_server2 = OidcMockServer::start(
         None,
         encoding_key2,
@@ -2335,9 +2336,9 @@ async fn test_auth_base_disable_tls() {
                 assert: Assert::Err(Box::new(|code, message| {
                     // Connecting to an HTTP server via HTTPS does not yield
                     // a graceful error message. This could plausibly change
-                    // due to OpenSSL or Hyper refactorings.
+                    // due to TLS library or Hyper refactorings.
                     assert_none!(code);
-                    assert_contains!(message, "packet length too long");
+                    assert_contains!(message, "InvalidContentType");
                 })),
             },
             // System user cannot login via external ports.
@@ -2518,10 +2519,7 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 options: None,
                 configure: TestTlsConfig::with_ca(&ca.ca_cert_path()),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(
-                        err.to_string_with_causes(),
-                        "unable to get local issuer certificate"
-                    );
+                    assert_contains!(err.to_string_with_causes(), "UnknownIssuer");
                 })),
             },
             TestCase::Http {
