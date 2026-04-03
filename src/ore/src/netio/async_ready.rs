@@ -16,8 +16,6 @@
 use async_trait::async_trait;
 use tokio::io::{self, Interest, Ready};
 use tokio::net::TcpStream;
-use tokio_openssl::SslStream;
-
 /// Asynchronous IO readiness.
 ///
 /// Like [`tokio::io::AsyncRead`] or [`tokio::io::AsyncWrite`], but for
@@ -38,11 +36,11 @@ impl AsyncReady for TcpStream {
 }
 
 #[async_trait]
-impl<S> AsyncReady for SslStream<S>
+impl<S> AsyncReady for tokio_rustls::server::TlsStream<S>
 where
-    S: AsyncReady + Sync,
+    S: AsyncReady + Sync + tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
     async fn ready(&self, interest: Interest) -> io::Result<Ready> {
-        self.get_ref().ready(interest).await
+        self.get_ref().0.ready(interest).await
     }
 }

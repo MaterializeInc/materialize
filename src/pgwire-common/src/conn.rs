@@ -16,8 +16,8 @@ use derivative::Derivative;
 use mz_ore::netio::AsyncReady;
 use mz_server_core::TlsMode;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
-use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
+use tokio_rustls::server::TlsStream;
 
 use crate::ErrorResponse;
 
@@ -27,14 +27,14 @@ pub const MZ_FORWARDED_FOR_KEY: &str = "mz_forwarded_for";
 #[derive(Debug)]
 pub enum Conn<A> {
     Unencrypted(A),
-    Ssl(SslStream<A>),
+    Ssl(TlsStream<A>),
 }
 
 impl<A> Conn<A> {
     pub fn inner_mut(&mut self) -> &mut A {
         match self {
             Conn::Unencrypted(inner) => inner,
-            Conn::Ssl(inner) => inner.get_mut(),
+            Conn::Ssl(inner) => inner.get_mut().0,
         }
     }
 
