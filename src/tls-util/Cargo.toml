@@ -12,12 +12,12 @@ workspace = true
 [dependencies]
 anyhow = "1.0.102"
 mz-ore = { path = "../ore" }
-openssl = { version = "0.10.76", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", features = ["vendored"] }
-postgres-openssl = { version = "0.5.2" }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls-pki-types = { version = "1", features = ["std"] }
 thiserror = "2.0.18"
 tokio = { version = "1.49.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { version = "0.7.15" }
+tokio-rustls = { version = "0.26" }
 tracing = "0.1.44"
 
 [dev-dependencies]

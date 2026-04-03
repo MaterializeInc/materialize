@@ -6375,7 +6375,6 @@ dependencies = [
  "mz-server-core",
  "mz-sql-parser",
  "mz-tls-util",
- "postgres-openssl",
  "regex",
  "reqwest",
  "serde",
@@ -7596,8 +7595,6 @@ dependencies = [
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
- "openssl",
- "postgres-openssl",
  "postgres_array",
  "proptest",
  "proptest-derive",
@@ -8574,12 +8571,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
- "openssl",
- "openssl-sys",
- "postgres-openssl",
+ "rustls",
+ "rustls-pki-types",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
