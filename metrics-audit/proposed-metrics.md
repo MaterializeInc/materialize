@@ -11,6 +11,12 @@
 
 ### Client connections
 
+General notes:
+- Combine `mz_auth_successes_total` and `mz_auth_failures_total` into a single metric? With labels {auth_kind, status=success | failure, reason?=invalid_credentials | ...}
+- Many of the frontegg-only metrics need to be extended to other auth types. Might be a good time to create a common trait rather than an enum
+- All the metrics coming from balancerd will differ depending on SM vs Cloud. Might be worth reusing them.
+- Overall all of these are doable, they just need to be unified / cleaned up.
+
 Metrics for tracking client connections to the Materialize environment.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
@@ -26,13 +32,11 @@ Metrics for tracking client connections to the Materialize environment.
 | `mz_network_bytes_transmitted_total` | Counter | `cluster` | Total bytes sent to SQL clients | `mz_balancer_tenant_connection_tx` (balancerd/src/lib.rs) — labels: [`source`, `tenant`] |
 ---
 
-General notes:
-- Combine `mz_auth_successes_total` and `mz_auth_failures_total` into a single metric? With labels {auth_kind, status=success | failure, reason?=invalid_credentials | ...}
-- Many of the frontegg-only metrics need to be extended to other auth types. Might be a good time to create a common trait rather than an enum
-- All the metrics coming from balancerd will differ depending on SM vs Cloud. Might be worth reusing them.
-- Overall all of these are doable, they just need to be unified / cleaned up.
-
 ### Availability & Health
+
+General notes:
+- For the `mz_clusters` metrics, 'healthy' is quite vague. I think these should be determined by the kubernetes pod metrics like `container_start_time_seconds` for uptime, cpu/memory/disk.
+
 
 Metrics for tracking environment and component health.
 
@@ -47,12 +51,13 @@ Metrics for tracking environment and component health.
 
 Per scrape, do you query and trigger? Or pre-write everything beforehand? Query and trigger is the sql-exporter approach. Pre-writing risks staleness of data.
 
-General notes:
-- For the `mz_clusters` metrics, 'healthy' is quite vague. I think these should be determined by the kubernetes pod metrics like `container_start_time_seconds` for uptime, cpu/memory/disk.
-
 ---
 
 ### Persist (Durable Storage)
+
+General notes:
+- All of these seem to align with existing metrics. TODO (SangJunBak): audit it closely.
+
 
 Metrics for the Persist layer that manages durable storage in S3/blob storage.
 
@@ -72,12 +77,12 @@ Metrics for the Persist layer that manages durable storage in S3/blob storage.
 
 ---
 
-General notes:
-- All of these seem to align with existing metrics. TODO (SangJunBak): audit it closely.
-
 ### Catalog (Metadata Database)
 
 #### Catalog Transactions
+
+General notes:
+- Because transactions are batched via `TransactionBatch`, we can't easily determine the type without greatly increasing the cardinality of the metric. We can track this however through Operations
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -85,12 +90,7 @@ General notes:
 | `mz_catalog_transaction_duration_seconds` | Histogram | `type` | Catalog transaction latency | `mz_catalog_transaction_commit_latency_seconds` (catalog/src/durable/metrics.rs) |
 | `mz_catalog_transaction_errors_total` | Counter | `type`, `error_type` | Failed catalog transactions (error_type: conflict, timeout, connection) | ? | We can wrap the result of `commit_transaction` and increment the counter on Err
 
-General notes:
-- Because transactions are batched via `TransactionBatch`, we can't easily determine the type without greatly increasing the cardinality of the metric. We can do track this however through Operations
-
 #### DDL Operations
-
-Derived from `mz_catalog.mz_audit_events`, which records all schema-changing operations.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -100,16 +100,7 @@ Derived from `mz_catalog.mz_audit_events`, which records all schema-changing ope
 
 #### Catalog Object Inventory
 
-| Metric | Type | Labels | Description | Existing Metric | Notes |
-|--------|------|--------|-------------|-----------------| ------|
-| `mz_catalog_objects_total` | Gauge | `object_type` | Total catalog objects by type (object_type: table, view, materialized_view, source, sink, index, connection, cluster, secret, role, database, schema). Source: `mz_catalog.mz_objects` | `mz_catalog_items` / `mz_*_count` (environmentd/src/http/prometheus.rs) — SQL-based per-type counts: `mz_sources_count`, `mz_views_count`, `mz_mzd_views_count`, `mz_tables_count`, `mz_sinks_count`, `mz_secrets_count`, `mz_connections_count`, `mz_indexes_count` |
-| `mz_catalog_objects_per_schema` | Gauge | `database`, `schema`, `object_type` | Objects per schema for detecting sprawl. Source: `mz_catalog.mz_objects` joined with `mz_schemas` and `mz_databases` | ? |
-| `mz_catalog_dependencies_total` | Gauge | - | Total object dependency edges. Source: `mz_internal.mz_object_dependencies` | ? |
-| `mz_catalog_notices_total` | Counter | `severity` | Catalog notices emitted (severity: warning, notice, debug). `mz_optimization_notices` (adapter/src/metrics.rs) — counter with `notice_type` label | These are optimizer notices, an abandoned frameworks and not actual catalog notices. We can do counts per per process, but this number isn't going to be too useful for info / warning / debug logs. Should we not include these?
-| `mz_catalog_notices_active` | Gauge | `severity` | Currently active catalog notices. Source: `mz_internal.mz_notices` | ? | Should we get rid of this metric, similar to `mz_catalog_notices_total`?
-
 General notes:
-
 
 - For anything related to catalog state, we could re-use the methodology of http/prometheus.rs and use an adapter client to execute queries. Otherwise we can to derive these metrics from a catalog snapshot.
 
@@ -123,26 +114,39 @@ Cons:
 - Relies on clusters and mz_catalog_server being up
 
 
+| Metric | Type | Labels | Description | Existing Metric | Notes |
+|--------|------|--------|-------------|-----------------| ------|
+| `mz_catalog_objects_total` | Gauge | `object_type` | Total catalog objects by type (object_type: table, view, materialized_view, source, sink, index, connection, cluster, secret, role, database, schema). Source: `mz_catalog.mz_objects` | `mz_catalog_items` / `mz_*_count` (environmentd/src/http/prometheus.rs) — SQL-based per-type counts: `mz_sources_count`, `mz_views_count`, `mz_mzd_views_count`, `mz_tables_count`, `mz_sinks_count`, `mz_secrets_count`, `mz_connections_count`, `mz_indexes_count` |
+| `mz_catalog_objects_per_schema` | Gauge | `database`, `schema`, `object_type` | Objects per schema for detecting sprawl. Source: `mz_catalog.mz_objects` joined with `mz_schemas` and `mz_databases` | ? |
+| `mz_catalog_dependencies_total` | Gauge | - | Total object dependency edges. Source: `mz_internal.mz_object_dependencies` | ? |
+| `mz_catalog_notices_total` | Counter | `severity` | Catalog notices emitted (severity: warning, notice, debug). `mz_optimization_notices` (adapter/src/metrics.rs) — counter with `notice_type` label | These are optimizer notices, an abandoned frameworks and not actual catalog notices. We can do counts per per process, but this number isn't going to be too useful for info / warning / debug logs. Should we not include these?
+| `mz_catalog_notices_active` | Gauge | `severity` | Currently active catalog notices. Source: `mz_internal.mz_notices` | ? | Should we get rid of this metric, similar to `mz_catalog_notices_total`?
+
+
 #### In-Memory Catalog (environmentd)
+
+General notes:
+- Some of these metrics are observable on our end, but customers will most likely get more information on their end from direct metrics of their specific components and we just need an opinion. TODO: Similar to metrics-server metrics, we should compile a checklist of metrics their gathering from their consensus system.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_catalog_memory_bytes` | Gauge | - | Approximate memory used by the in-memory catalog in environmentd | `mz_catalog_collection_entries` (catalog/src/durable/metrics.rs) — gauge of entries per collection (not bytes) | It's not easy to get the total size of the catalog based on just the snapshot since most of the data structures in it are dynamically allocated. Need to check if there's a more conventient way, otherwise I wonder the count of each catalog object (via `mz_catalog_collection_entries`) is enough?
-| `mz_catalog_startup_duration_seconds` | Gauge | - | Time taken to load catalog into memory during last environmentd startup | Potentially `mz_catalog_snapshot_seconds` (adapter/src/metrics.rs) — histogram of snapshot load time | This will give us a histogram of all catalog snapshots. However, a user can correlate this metric to when a cutover occurred. But I wonder if the user will have access to this data during cutover. I feel like maybe not? TODO(SangJunBak): Validate this theory
-| `mz_catalog_migration_duration_seconds` | Gauge | `migration` | Time taken for catalog schema migrations during startup | ? |
+| `mz_catalog_memory_bytes` | Gauge | - | Approximate memory used by the in-memory catalog in environmentd | `mz_catalog_collection_entries` (catalog/src/durable/metrics.rs) — gauge of entries per collection (not bytes) | It's not easy to get the total size of the catalog based on just the snapshot since most of the data structures in it are dynamically allocated. Need to check if there's a more conventient way, otherwise I wonder if the count of each catalog object (via `mz_catalog_collection_entries`) is enough?
+| `mz_catalog_startup_duration_seconds` | Gauge | - | Time taken to load catalog into memory during last environmentd startup | Potentially `mz_catalog_snapshot_latency_seconds`  — counter of snapshot load time from the durable catalog | This will give us a counter of how long it took to copy the catalog from durable state
+| `mz_catalog_migration_duration_seconds` | Gauge | `migration` | Time taken for catalog schema migrations during startup | ? | We can add a metric for this
 
-#### Metadata Backend (PostgreSQL) Health (TODO)
+#### Metadata Backend (PostgreSQL) Health
 
 Metrics for the external PostgreSQL instance that durably stores catalog state. These should be monitored alongside standard PostgreSQL metrics.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_catalog_backend_up` | Gauge | - | Whether the catalog backend is reachable (1) or not (0) | ? |
-| `mz_catalog_backend_connections_active` | Gauge | - | Active connections from environmentd to the metadata PostgreSQL | ? |
-| `mz_catalog_backend_query_duration_seconds` | Histogram | `operation` | Latency of queries to the metadata backend (operation: read, write, consolidation) | `mz_catalog_snapshot_latency_seconds` / `mz_catalog_sync_latency_seconds` (catalog/src/durable/metrics.rs) |
+| `mz_catalog_backend_up` | Gauge | - | Whether the catalog backend is reachable (1) or not (0) | `mz_persist_metadata_seconds` `Counter` | If we know persist is down, then the catalog is down
+| `mz_catalog_backend_connections_active` | Gauge | - | Active connections from environmentd to the metadata PostgreSQL | ? | - `mz_persist_postgres_connpool_connections_created` is a counter that counts the number that's connected. Can possibly have a metric that gauges the number of active connections at a given time. </br> - This would be not just consensus but persist in general. Can also use `mz_ts_oracle_postgres_connpool_connections_created`.
+| `mz_catalog_backend_query_duration_seconds` | Histogram | `operation` | Latency of queries to the metadata backend (operation: read, write, consolidation) | `mz_catalog_snapshot_latency_seconds` / `mz_catalog_sync_latency_seconds` (catalog/src/durable/metrics.rs) | Might be able to replace this with persist metrics.
 | `mz_catalog_backend_errors_total` | Counter | `error_type` | Errors communicating with metadata backend (error_type: connection, timeout, conflict) | ? |
-| `mz_catalog_backend_bytes_written_total` | Counter | - | Total bytes written to the metadata backend | ? |
-| `mz_catalog_backend_bytes_read_total` | Counter | - | Total bytes read from the metadata backend | ? |
+| `mz_catalog_backend_bytes_written_total` | Counter | - | Total bytes written to the metadata backend | ? | TODO (SangJunBak): Ask persist if this is possible
+| `mz_catalog_backend_bytes_read_total` | Counter | - | Total bytes read from the metadata backend | ? | TODO (SangJunBak): Find out if you can for the catalog shard
+
 
 ---
 
@@ -150,24 +154,51 @@ Metrics for the external PostgreSQL instance that durably stores catalog state. 
 
 Metrics for connections from Materialize to external systems (Kafka brokers, PostgreSQL databases, MySQL servers, Confluent Schema Registry, SSH tunnels, AWS services). Connections are environment-scoped objects created via `CREATE CONNECTION` and used by sources, sinks, and other objects.
 
+
+General notes:
+We have access to the private link metrics but different source connection errors are lumped in with other source errors with status `Stalled` or `Ceased`. Specifically:
+```
+1. HealthStatusUpdate (healthcheck.rs:528-538) — the internal health reporting enum:
+enum HealthStatusUpdate {
+    Running,
+    Stalled { error: String, hint: Option<String>, should_halt: bool },
+    Ceased { error: String },
+}
+2. StatusNamespace (healthcheck.rs:44-92) — identifies which subsystem produced the error:
+
+Kafka, Postgres, MySql, SqlServer, Ssh, Upsert, Decode, Iceberg, Generator, Internal
+3. StatusUpdate (client.rs:233-259) — what gets written to the history table:
+
+struct StatusUpdate {
+    id: GlobalId,
+    status: Status,  // Starting | Running | Paused | Stalled | Ceased | Dropped
+    error: Option<String>,
+    hints: BTreeSet<String>,
+    namespaced_errors: BTreeMap<String, String>,
+    ...
+}
+```
+We shouldn't log the actual error messages given their freeform strings. We can log the status however.
+
+
 **Source catalog table:** `mz_catalog.mz_connections` (lists all connections with type, owner, and schema).
 
-### Connection Inventory (TODO)
+### Connection Inventory
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_external_connections_total` | Gauge | `type` | Total external connections by type (type: kafka, postgres, mysql, ssh-tunnel, confluent-schema-registry, aws, aws-privatelink) | `mz_connections_count` (environmentd/src/http/prometheus.rs) — SQL-based, grouped by type |
+| `mz_external_connections_total` | Gauge | `type` | Total external connections by type (type: kafka, postgres, mysql, ssh-tunnel, confluent-schema-registry, aws, aws-privatelink) | ? | We have this information in the catalog. Furthermore, aws-privatelink is separate from the other connections (e.g. kafka,postgres,ssh tunnel)
 
-### Connection Status & Health (TODO)
+### Connection Status & Health
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_external_connection_status` | Gauge | `connection`, `type`, `status` | Connection status (1 if in status; status: available, failed, pending). Source: `mz_internal.mz_aws_privatelink_connection_statuses` for PrivateLink; validation checks for others | ? |
-| `mz_external_connection_up` | Gauge | `connection`, `type` | Whether the connection is reachable (1) or not (0), based on periodic validation | ? |
-| `mz_external_connection_validation_duration_seconds` | Histogram | `type` | Connection validation latency (via `VALIDATE CONNECTION`) | ? |
-| `mz_external_connection_validation_failures_total` | Counter | `connection`, `type`, `reason` | Validation failures (reason: authentication, network, tls, timeout, permission) | `mz_webhook_validation_reduce_failures` (adapter/src/metrics.rs) — webhook-specific only |
+| `mz_external_connection_up` | Gauge | `connection`, `type` | Whether the connection is reachable (1) or not (0), based on periodic validation | ? | This seems redundant with the source status
+| `mz_external_connection_validation_duration_seconds` | Histogram | `type` | Connection validation latency (via `VALIDATE CONNECTION`) | ? | TODO: Is this really valuable to record? How can we implement this?
+| `mz_external_connection_validation_failures_total` | Counter | `connection`, `type`, `reason` | Validation failures (reason: authentication, network, tls, timeout, permission) | ? | Not all connections are the same. Furthermore, we only have the status history for privatelink
 
-### Connection Errors (TODO)
+### Connection Errors
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -175,7 +206,7 @@ Metrics for connections from Materialize to external systems (Kafka brokers, Pos
 | `mz_external_connection_retries_total` | Counter | `connection`, `type` | Connection retry attempts | ? |
 | `mz_external_connection_last_error_timestamp_seconds` | Gauge | `connection`, `type` | Unix timestamp of last connection error | ? |
 
-### Connection Lifecycle (TODO)
+### Connection Lifecycle
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -183,16 +214,16 @@ Metrics for connections from Materialize to external systems (Kafka brokers, Pos
 | `mz_external_connection_sessions_total` | Counter | `connection`, `type` | Total sessions established | `mz_sink_rdkafka_connects` (storage/src/metrics/sink/kafka.rs) — Kafka-specific only |
 | `mz_external_connection_sessions_closed_total` | Counter | `connection`, `type`, `reason` | Sessions closed (reason: normal, error, timeout, remote_reset) | `mz_sink_rdkafka_disconnects` (storage/src/metrics/sink/kafka.rs) — Kafka-specific only |
 
-### SSH Tunnel Metrics (TODO)
+### SSH Tunnel Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_ssh_tunnel_active` | Gauge | `connection` | Whether the SSH tunnel is established (1) or not (0) | ? |
 | `mz_ssh_tunnel_establishments_total` | Counter | `connection` | Total tunnel establishments | ? |
 | `mz_ssh_tunnel_failures_total` | Counter | `connection`, `reason` | Tunnel failures (reason: authentication, network, key_mismatch, timeout) | ? |
-| `mz_ssh_tunnel_bytes_forwarded_total` | Counter | `connection`, `direction` | Bytes forwarded through tunnel (direction: inbound, outbound) | ? |
+| `mz_ssh_tunnel_bytes_forwarded_total` | Counter | `connection`, `direction` | Bytes forwarded through tunnel (direction: inbound, outbound) | ? | TODO (SangJunBak) We don't have this and not clear how easy it is to get this.
 
-### AWS PrivateLink Metrics (TODO)
+### AWS PrivateLink Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -205,7 +236,11 @@ Metrics for connections from Materialize to external systems (Kafka brokers, Pos
 
 Metrics scoped to individual clusters and their replicas.
 
-### Resource Utilization (TODO)
+### Resource Utilization
+
+General notes:
+- Many of these metrics are gathered from `metrics-server` which self managed customers can point to themselves. However, for Cloud customers, we'd need to expose this only for that customer. This seems difficult to do, so we can potentially expose these metrics from the cluster controller? Makes total sense for . A bit gross. TODO: Figure out if it's really that difficult in Cloud.
+
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -421,7 +456,7 @@ Metrics for incrementally maintained materialized views and indexes.
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_view_queries_total` | Counter | `view`, `cluster` | Queries executed against view | ? |
 | `mz_view_query_duration_seconds` | Histogram | `view`, `cluster` | View query execution time | ? |
-
+--
 ---
 
 ## Table Metrics (TODO)
