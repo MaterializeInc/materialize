@@ -25,7 +25,7 @@ use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
     SniResolver,
 };
-use mz_environmentd::test_util::{self, Ca, JwtRsaKeyPair, TestTlsConfig, make_pg_tls};
+use mz_environmentd::test_util::{self, Ca, TestTlsConfig, make_pg_tls};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -82,7 +82,7 @@ async fn test_balancer() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
 
     const EXPIRES_IN_SECS: i64 = 50;
     let frontegg_server = FronteggMockServer::start(
@@ -105,7 +105,7 @@ async fn test_balancer() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),

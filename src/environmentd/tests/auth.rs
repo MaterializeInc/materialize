@@ -491,7 +491,7 @@ async fn test_auth_expiry() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
 
     let frontegg_server = FronteggMockServer::start(
         None,
@@ -512,7 +512,7 @@ async fn test_auth_expiry() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -679,7 +679,7 @@ async fn test_auth_base_require_tls_frontegg() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let timestamp = Arc::new(Mutex::new(500_000));
     let now = {
         let timestamp = Arc::clone(&timestamp);
@@ -796,7 +796,7 @@ async fn test_auth_base_require_tls_frontegg() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: "mzadmin".to_string(),
@@ -1327,7 +1327,8 @@ async fn test_auth_base_require_tls_oidc() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -1510,7 +1511,8 @@ async fn test_auth_oidc_audience_validation() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -1637,7 +1639,8 @@ async fn test_auth_oidc_audience_optional() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -1714,7 +1717,8 @@ async fn test_auth_oidc_password_fallback() {
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
@@ -1979,7 +1983,8 @@ async fn test_auth_oidc_authentication_claim_switch() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let oidc_server = OidcMockServer::start(
         None,
         encoding_key,
@@ -2067,7 +2072,8 @@ async fn test_auth_oidc_required_issuer() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -2130,7 +2136,8 @@ async fn test_auth_oidc_no_matching_authentication_claim() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
 
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
@@ -2210,7 +2217,8 @@ async fn test_auth_oidc_fetch_error() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
@@ -2660,7 +2668,7 @@ async fn test_auth_admin_non_superuser() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -2683,7 +2691,7 @@ async fn test_auth_admin_non_superuser() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -2808,7 +2816,7 @@ async fn test_auth_admin_superuser() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -2831,7 +2839,7 @@ async fn test_auth_admin_superuser() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -2956,7 +2964,7 @@ async fn test_auth_admin_superuser_revoked() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -2979,7 +2987,7 @@ async fn test_auth_admin_superuser_revoked() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -3087,7 +3095,7 @@ async fn test_auth_deduplication() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3109,7 +3117,7 @@ async fn test_auth_deduplication() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3255,7 +3263,7 @@ async fn test_refresh_task_metrics() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3277,7 +3285,7 @@ async fn test_refresh_task_metrics() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3416,7 +3424,7 @@ async fn test_superuser_can_alter_cluster() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3439,7 +3447,7 @@ async fn test_superuser_can_alter_cluster() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now,
             admin_role: admin_role.to_string(),
@@ -3540,7 +3548,7 @@ async fn test_refresh_dropped_session() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3562,7 +3570,7 @@ async fn test_refresh_dropped_session() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3714,7 +3722,7 @@ async fn test_refresh_dropped_session_lru() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3736,7 +3744,7 @@ async fn test_refresh_dropped_session_lru() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -3896,7 +3904,7 @@ async fn test_transient_auth_failures() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -3918,7 +3926,7 @@ async fn test_transient_auth_failures() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -4016,7 +4024,7 @@ async fn test_transient_auth_failure_on_refresh() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
     let now = SYSTEM_TIME.clone();
 
     let frontegg_server = FronteggMockServer::start(
@@ -4038,7 +4046,7 @@ async fn test_transient_auth_failure_on_refresh() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -4850,7 +4858,8 @@ async fn test_password_auth_http_superuser() {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_session_auth_does_not_override_credentials() {
     let ca = Ca::new_root("test ca").unwrap();
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
@@ -5027,7 +5036,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
     let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
     let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
 
     let frontegg_server = FronteggMockServer::start(
         None,
@@ -5048,7 +5057,7 @@ async fn test_auth_autoprovision_frontegg_audit_log() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -5140,7 +5149,8 @@ async fn test_auth_autoprovision_oidc_audit_log() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
@@ -5236,7 +5246,8 @@ async fn test_auth_oidc_non_login_role() {
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
         .unwrap();
 
-    let encoding_key = String::from_utf8(ca.key_pem.clone()).unwrap();
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
+    let encoding_key = String::from_utf8(jwt_keys.private_pem.clone()).unwrap();
     let kid = "test-key-1".to_string();
     let oidc_server = OidcMockServer::start(
         None,
