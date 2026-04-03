@@ -23,7 +23,7 @@ use std::collections::binary_heap::BinaryHeap;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolidation};
+use differential_dataflow::{VecCollection, consolidation};
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use mz_timely_util::builder_async::{
@@ -55,18 +55,22 @@ pub struct SourceBatch<D, FromTime, R> {
 /// between source time and system time. Source data arrives via `source_rx` as [`SourceBatch`]
 /// values containing updates and frontier information.
 ///
-/// Returns the reclocked collection at `IntoTime` and a shutdown token.
+/// Returns the reclocked stream at `IntoTime` and a shutdown token.
+///
+/// The output is a raw timely stream of `(D, IntoTime, R)` tuples rather than a differential
+/// collection, because `D` may not satisfy the `Ord` bound required by differential's
+/// `Collection` type. The caller is responsible for any further transformation.
 pub fn channel_reclock<G, D, FromTime, R>(
     remap_collection: VecCollection<G, FromTime, Overflowing<i64>>,
     as_of: Antichain<G::Timestamp>,
     source_rx: mpsc::UnboundedReceiver<SourceBatch<D, FromTime, R>>,
-) -> (VecCollection<G, D, R>, PressOnDropButton)
+) -> (timely::dataflow::StreamVec<G, (D, G::Timestamp, R)>, PressOnDropButton)
 where
     G: Scope,
     G::Timestamp: Timestamp + Lattice + TotalOrder,
-    D: ExchangeData,
+    D: Clone + Send + Sync + 'static,
     FromTime: Timestamp,
-    R: ExchangeData + Semigroup,
+    R: Clone + Send + Sync + Semigroup + 'static,
 {
     let mut builder =
         AsyncOperatorBuilder::new("ChannelReclock".to_string(), remap_collection.scope());
@@ -282,5 +286,5 @@ where
         }
     });
 
-    (output_stream.as_collection(), button.press_on_drop())
+    (output_stream, button.press_on_drop())
 }
