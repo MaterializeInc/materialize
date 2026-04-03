@@ -291,6 +291,8 @@ impl SourceTask for PostgresSourceConnection {
         let source_exports = config.source_exports.clone();
         let source_resume_uppers = config.source_resume_uppers.clone();
         let now_fn = config.now_fn.clone();
+        let storage_config = config.config.clone();
+        let timestamp_interval = config.timestamp_interval;
 
         let task_handle = mz_ore::task::spawn(
             || format!("pg_source_task:{id}"),
@@ -301,6 +303,8 @@ impl SourceTask for PostgresSourceConnection {
                 source_exports,
                 source_resume_uppers,
                 now_fn,
+                storage_config,
+                timestamp_interval,
                 data_tx,
                 probe_tx,
                 health_tx,
@@ -331,16 +335,20 @@ async fn pg_source_task(
     source_exports: BTreeMap<GlobalId, SourceExport<CollectionMetadata>>,
     source_resume_uppers: BTreeMap<GlobalId, Vec<Row>>,
     now_fn: mz_ore::now::NowFn,
+    config: mz_storage_types::configuration::StorageConfiguration,
+    timestamp_interval: Duration,
     data_tx: tokio::sync::mpsc::UnboundedSender<
         SourceBatch<SourceTaskUpdate<MzOffset>, MzOffset, Diff>,
     >,
     probe_tx: tokio::sync::watch::Sender<Option<Probe<MzOffset>>>,
     health_tx: tokio::sync::mpsc::UnboundedSender<HealthStatusMessage>,
-    _resume_rx: tokio::sync::watch::Receiver<Antichain<MzOffset>>,
+    mut resume_rx: tokio::sync::watch::Receiver<Antichain<MzOffset>>,
 ) {
-    // Build table_info from source_exports, same as SourceRender::render.
+    // Build table_info, export_id mapping, and resume uppers.
     let mut table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>> = BTreeMap::new();
+    let mut output_to_export_id: Vec<GlobalId> = Vec::new();
     for (idx, (export_id, export)) in source_exports.iter().enumerate() {
+        output_to_export_id.push(*export_id);
         let SourceExport {
             details,
             storage_metadata: _,
@@ -351,8 +359,6 @@ async fn pg_source_task(
             SourceExportDetails::None => continue,
             _ => panic!("unexpected source export details: {:?}", details),
         };
-        let desc = details.table.clone();
-        let casts = details.column_casts.clone();
         let resume_upper = Antichain::from_iter(
             source_resume_uppers
                 .get(export_id)
@@ -361,9 +367,9 @@ async fn pg_source_task(
                 .map(MzOffset::decode_row),
         );
         let output = SourceOutputInfo {
-            desc,
+            desc: details.table.clone(),
             projection: None,
-            casts,
+            casts: details.column_casts.clone(),
             resume_upper,
             export_id: *export_id,
         };
@@ -373,48 +379,540 @@ async fn pg_source_task(
             .insert(idx, output);
     }
 
-    // Emit initial health status.
-    let export_ids: Vec<Option<GlobalId>> = source_exports
-        .keys()
-        .copied()
-        .map(Some)
-        .chain(std::iter::once(None))
-        .collect();
-    for export_id in &export_ids {
+    // Emit initial health.
+    for export_id in source_exports.keys().copied().map(Some).chain(Some(None)) {
         let _ = health_tx.send(HealthStatusMessage {
-            id: *export_id,
-            namespace: <PostgresSourceConnection as SourceTask>::STATUS_NAMESPACE,
+            id: export_id,
+            namespace: StatusNamespace::Postgres,
             update: HealthStatusUpdate::Running,
         });
     }
 
-    // TODO: This is where the real snapshot + replication logic goes.
-    // For now, emit an initial probe and then wait for cancellation.
-    // The actual implementation will:
-    //   1. Connect to PostgreSQL
-    //   2. Create/verify replication slot
-    //   3. Snapshot tables (parallel COPY via tokio tasks)
-    //   4. Start logical replication stream
-    //   5. Process transactions, sending SourceBatch through data_tx
-    //   6. Monitor resume_rx for backpressure and standby status updates
+    // Run the inner logic. On transient error the task returns and the dataflow
+    // restart machinery will recreate us.
+    let result = pg_source_task_inner(
+        &connection,
+        id,
+        worker_id,
+        &source_exports,
+        &config,
+        timestamp_interval,
+        &now_fn,
+        &mut table_info,
+        &output_to_export_id,
+        &data_tx,
+        &probe_tx,
+        &health_tx,
+        &mut resume_rx,
+    )
+    .await;
 
-    tracing::info!(%id, "timely-{worker_id} pg_source_task started (skeleton)");
+    match result {
+        Ok(()) => tracing::info!(%id, "pg_source_task completed"),
+        Err(err) => {
+            let err_string = err.to_string();
+            tracing::warn!(%id, "pg_source_task error: {err_string}");
+            let _ = health_tx.send(HealthStatusMessage {
+                id: None,
+                namespace: StatusNamespace::Postgres,
+                update: HealthStatusUpdate::halting(err_string, None),
+            });
+        }
+    }
+}
 
-    // Emit a probe so that remap can mint an initial binding.
-    let probe_ts = now_fn().into();
+/// Inner implementation of pg_source_task, factored out for `?` ergonomics.
+async fn pg_source_task_inner(
+    connection: &PostgresSourceConnection,
+    id: GlobalId,
+    worker_id: usize,
+    _source_exports: &BTreeMap<GlobalId, SourceExport<CollectionMetadata>>,
+    config: &mz_storage_types::configuration::StorageConfiguration,
+    timestamp_interval: Duration,
+    now_fn: &mz_ore::now::NowFn,
+    table_info: &mut BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    output_to_export_id: &[GlobalId],
+    data_tx: &tokio::sync::mpsc::UnboundedSender<
+        SourceBatch<SourceTaskUpdate<MzOffset>, MzOffset, Diff>,
+    >,
+    probe_tx: &tokio::sync::watch::Sender<Option<Probe<MzOffset>>>,
+    _health_tx: &tokio::sync::mpsc::UnboundedSender<HealthStatusMessage>,
+    resume_rx: &mut tokio::sync::watch::Receiver<Antichain<MzOffset>>,
+) -> Result<(), TransientError> {
+    use std::pin::pin;
+    use std::sync::Arc;
+
+    use futures::{StreamExt, TryStreamExt};
+    use mz_ore::future::InTask;
+    use postgres_replication::LogicalReplicationStream;
+    use postgres_replication::protocol::ReplicationMessage;
+    use tokio_postgres::types::PgLsn;
+
+    tracing::info!(%id, "timely-{worker_id} pg_source_task started");
+
+    // --- Connect ---
+    let connection_config = connection
+        .connection
+        .config(
+            &config.connection_context.secrets_reader,
+            config,
+            InTask::Yes,
+        )
+        .await?;
+
+    let slot = &connection.publication_details.slot;
+
+    let replication_client = connection_config
+        .connect_replication(&config.connection_context.ssh_tunnel_manager)
+        .await?;
+    let metadata_client = Arc::new(
+        connection_config
+            .connect(
+                "task metadata",
+                &config.connection_context.ssh_tunnel_manager,
+            )
+            .await?,
+    );
+
+    // Ensure the replication slot exists.
+    ensure_replication_slot(&replication_client, slot).await?;
+
+    let slot_metadata = fetch_slot_metadata(
+        &*metadata_client,
+        slot,
+        mz_storage_types::dyncfgs::PG_FETCH_SLOT_RESUME_LSN_INTERVAL.get(config.config_set()),
+    )
+    .await?;
+
+    // Kill stale connection on the slot if any.
+    if let Some(active_pid) = slot_metadata.active_pid {
+        tracing::warn!(%id, %active_pid, "replication slot in use; killing existing connection");
+        let _ = metadata_client
+            .execute("SELECT pg_terminate_backend($1)", &[&active_pid])
+            .await;
+    }
+
+    // --- Compute resume LSN ---
+    let output_uppers: Vec<Antichain<MzOffset>> = table_info
+        .iter()
+        .flat_map(|(_, outputs)| outputs.values().map(|o| o.resume_upper.clone()))
+        .collect();
+    let resume_lsn = output_uppers
+        .iter()
+        .flat_map(|f| f.elements())
+        .map(|&lsn| {
+            if lsn == MzOffset::from(0) {
+                slot_metadata.confirmed_flush_lsn
+            } else {
+                lsn
+            }
+        })
+        .min();
+    let Some(resume_lsn) = resume_lsn else {
+        // All outputs closed.
+        std::future::pending::<()>().await;
+        return Ok(());
+    };
+    tracing::info!(%id, "timely-{worker_id} resume_lsn={resume_lsn}");
+
+    // --- Emit initial probe ---
+    let max_lsn = fetch_max_lsn(&*metadata_client).await?;
     let _ = probe_tx.send(Some(Probe {
-        probe_ts,
-        // Start with minimum frontier — real impl would use pg_current_wal_lsn.
-        upstream_frontier: Antichain::from_elem(MzOffset::from(0u64)),
+        probe_ts: now_fn().into(),
+        upstream_frontier: Antichain::from_elem(max_lsn),
     }));
 
-    // Suppress unused variable warnings for the skeleton.
-    let _ = &connection;
-    let _ = &data_tx;
-    let _ = &table_info;
+    // --- Snapshot ---
+    // Determine which tables need snapshotting (resume_upper == [minimum]).
+    let mut tables_to_snapshot: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>> = BTreeMap::new();
+    let mut rewinds: BTreeMap<usize, replication::RewindRequest> = BTreeMap::new();
 
-    // Wait for cancellation (task abort on drop).
-    std::future::pending::<()>().await;
+    for (&oid, outputs) in table_info.iter() {
+        for (&output_index, info) in outputs {
+            if *info.resume_upper == [MzOffset::from(0u64)] {
+                tables_to_snapshot
+                    .entry(oid)
+                    .or_default()
+                    .insert(output_index, info.clone());
+            }
+        }
+    }
+
+    if !tables_to_snapshot.is_empty() {
+        // Create a temporary replication slot for a consistent snapshot point.
+        let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
+        let (snapshot_lsn, snapshot_id) = {
+            let query = format!(
+                "CREATE_REPLICATION_SLOT {tmp_slot} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT"
+            );
+            let row = mz_postgres_util::simple_query_opt(&replication_client, &query)
+                .await?
+                .unwrap();
+            let lsn: PgLsn = row.get("consistent_point").unwrap().parse().unwrap();
+            let snapshot_id = row.get("snapshot_name").unwrap().to_string();
+            (MzOffset::from(u64::from(lsn)), snapshot_id)
+        };
+        tracing::info!(%id, "snapshot at lsn={snapshot_lsn} snapshot_id={snapshot_id}");
+
+        // Snapshot each table sequentially using the exported snapshot.
+        let snap_client = connection_config
+            .connect("snapshot", &config.connection_context.ssh_tunnel_manager)
+            .await?;
+        snap_client
+            .simple_query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .await?;
+        let set_snap = format!("SET TRANSACTION SNAPSHOT '{snapshot_id}'");
+        snap_client.simple_query(&set_snap).await?;
+
+        for (_oid, outputs) in &tables_to_snapshot {
+            for (&output_index, info) in outputs {
+                let namespace =
+                    mz_sql_parser::ast::Ident::new_unchecked(&info.desc.namespace)
+                        .to_ast_string_stable();
+                let table =
+                    mz_sql_parser::ast::Ident::new_unchecked(&info.desc.name)
+                        .to_ast_string_stable();
+                let column_list = info
+                    .desc
+                    .columns
+                    .iter()
+                    .map(|c| mz_sql_parser::ast::Ident::new_unchecked(&c.name).to_ast_string_stable())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let query = format!(
+                    "COPY (SELECT {column_list} FROM {namespace}.{table}) TO STDOUT (FORMAT TEXT, DELIMITER '\t')"
+                );
+
+                let mut copy_stream = pin!(snap_client.copy_out_simple(&query).await?);
+                let export_id = output_to_export_id[output_index];
+                let mut batch_updates = Vec::new();
+
+                while let Some(bytes) = copy_stream.try_next().await? {
+                    // The COPY data comes as raw tab-delimited text rows.
+                    // Each row is a single Bytes chunk. We pack it into a Row.
+                    let mut row = Row::default();
+                    let mut packer = row.packer();
+                    for field in bytes.split(|&b| b == b'\t') {
+                        if field == b"\\N" {
+                            packer.push(Datum::Null);
+                        } else {
+                            match decode_utf8_text(field) {
+                                Ok(s) => packer.push(s),
+                                Err(err) => {
+                                    // Definite errors get emitted into the data stream.
+                                    let msg = Err(DataflowError::from(err));
+                                    batch_updates.push(((export_id, msg, MzOffset::from(0u64)), MzOffset::from(0u64), Diff::ONE));
+                                    break; // skip rest of this row
+                                }
+                            }
+                        }
+                    }
+
+                    let mut datum_vec = mz_repr::DatumVec::new();
+                    let datums = datum_vec.borrow_with(&row);
+                    let mut final_row = Row::default();
+                    let msg = match cast_row(&info.casts, &datums, &mut final_row) {
+                        Ok(()) => Ok(SourceMessage {
+                            key: Row::default(),
+                            value: final_row,
+                            metadata: Row::default(),
+                        }),
+                        Err(err) => Err(DataflowError::from(err)),
+                    };
+
+                    batch_updates.push(((export_id, msg, MzOffset::from(0u64)), MzOffset::from(0u64), Diff::ONE));
+
+                    // Flush in batches of 1024 to bound latency.
+                    if batch_updates.len() >= 1024 {
+                        let batch = SourceBatch {
+                            updates: std::mem::take(&mut batch_updates),
+                            // During snapshot, frontier stays at minimum — we can't advance
+                            // until rewinds are applied by replication.
+                            frontier: Antichain::from_elem(MzOffset::from(0u64)),
+                        };
+                        if data_tx.send(batch).is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+                // Flush remaining.
+                if !batch_updates.is_empty() {
+                    let batch = SourceBatch {
+                        updates: batch_updates,
+                        frontier: Antichain::from_elem(MzOffset::from(0u64)),
+                    };
+                    if data_tx.send(batch).is_err() {
+                        return Ok(());
+                    }
+                }
+
+                // Record rewind request for this output.
+                rewinds.insert(
+                    output_index,
+                    replication::RewindRequest {
+                        output_index,
+                        snapshot_lsn,
+                    },
+                );
+            }
+        }
+        snap_client.simple_query("COMMIT").await?;
+    }
+
+    // --- Start replication ---
+    let lsn = PgLsn::from(resume_lsn.offset);
+    let query = format!(
+        r#"START_REPLICATION SLOT "{}" LOGICAL {} ("proto_version" '1', "publication_names" {})"#,
+        mz_sql_parser::ast::Ident::new_unchecked(slot).to_ast_string_simple(),
+        lsn,
+        mz_sql_parser::ast::display::escaped_string_literal(&connection.publication),
+    );
+    let copy_stream = replication_client.copy_both_simple(&query).await?;
+    let mut stream = pin!(LogicalReplicationStream::new(copy_stream));
+
+    // Spawn periodic probe ticker.
+    let probe_metadata_client = Arc::clone(&metadata_client);
+    let probe_source_id = id;
+    let probe_now_fn = now_fn.clone();
+    let (probe_inner_tx, mut probe_inner_rx) = tokio::sync::watch::channel(None);
+    let _probe_task = mz_ore::task::spawn(
+        || format!("pg_probe_ticker:{id}"),
+        async move {
+            let mut ticker =
+                crate::source::probe::Ticker::new(move || timestamp_interval, probe_now_fn);
+            while !probe_inner_tx.is_closed() {
+                let probe_ts = ticker.tick().await;
+                match fetch_max_lsn(&*probe_metadata_client).await {
+                    Ok(lsn) => {
+                        let _ = probe_inner_tx.send(Some(Probe {
+                            probe_ts,
+                            upstream_frontier: Antichain::from_elem(lsn),
+                        }));
+                    }
+                    Err(err) => {
+                        tracing::warn!(%probe_source_id, "probe error: {err}");
+                    }
+                }
+            }
+        },
+    )
+    .abort_on_drop();
+
+    // Feedback timer for standby status updates.
+    let mut feedback_timer = tokio::time::interval(Duration::from_secs(1));
+    feedback_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut last_committed_upper = resume_lsn;
+
+    // --- Replication loop ---
+    let mut data_upper = resume_lsn;
+    let mut batch_updates: Vec<(SourceTaskUpdate<MzOffset>, MzOffset, Diff)> = Vec::new();
+
+    loop {
+        tokio::select! {
+            biased;
+
+            // Forward probes to the remap operator.
+            Ok(()) = probe_inner_rx.changed() => {
+                if let Some(probe) = probe_inner_rx.borrow().clone() {
+                    let _ = probe_tx.send(Some(probe));
+                }
+            }
+            // Standby keepalive timer.
+            _ = feedback_timer.tick() => {
+                let lsn = PgLsn::from(last_committed_upper.offset);
+                let ts: i64 = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH + Duration::from_secs(946_684_800))
+                    .unwrap()
+                    .as_micros()
+                    .try_into()
+                    .unwrap();
+                let _ = stream.as_mut().standby_status_update(lsn, lsn, lsn, ts, 1).await;
+            }
+            // Resume upper feedback for committed offset tracking.
+            Ok(()) = resume_rx.changed() => {
+                let upper = resume_rx.borrow().clone();
+                if let Some(lsn) = upper.into_option() {
+                    if last_committed_upper < lsn {
+                        last_committed_upper = lsn;
+                    }
+                }
+            }
+            // Replication stream messages.
+            msg = StreamExt::next(&mut stream) => {
+                let Some(event) = msg else {
+                    return Err(TransientError::ReplicationEOF);
+                };
+                let event = event.map_err(TransientError::SQLClient)?;
+                match event {
+                    ReplicationMessage::XLogData(data) => {
+                        use postgres_replication::protocol::LogicalReplicationMessage::*;
+                        match data.data() {
+                            Begin(begin) => {
+                                let commit_lsn = MzOffset::from(begin.final_lsn());
+                                assert!(
+                                    data_upper <= commit_lsn,
+                                    "data_upper={data_upper} commit_lsn={commit_lsn}"
+                                );
+                                data_upper = commit_lsn + 1;
+
+                                // Process the transaction inline until Commit.
+                                loop {
+                                    let Some(tx_event) = stream.as_mut().next().await else {
+                                        return Err(TransientError::ReplicationEOF);
+                                    };
+                                    let tx_event = tx_event.map_err(TransientError::SQLClient)?;
+                                    let tx_data = match tx_event {
+                                        ReplicationMessage::XLogData(d) => d.into_data(),
+                                        ReplicationMessage::PrimaryKeepAlive(_) => continue,
+                                        _ => return Err(TransientError::UnknownReplicationMessage),
+                                    };
+                                    match tx_data {
+                                        Commit(body) => {
+                                            if commit_lsn != body.commit_lsn().into() {
+                                                return Err(TransientError::InvalidTransaction);
+                                            }
+                                            break;
+                                        }
+                                        Insert(body) => {
+                                            let rel = body.rel_id();
+                                            if let Some(outputs) = table_info.get(&rel) {
+                                                for (&out_idx, info) in outputs {
+                                                    let export_id = output_to_export_id[out_idx];
+                                                    let msg = unpack_and_cast(body.tuple().tuple_data(), info);
+                                                    emit_row(&mut batch_updates, &rewinds, export_id, out_idx, commit_lsn, msg, Diff::ONE);
+                                                }
+                                            }
+                                        }
+                                        Delete(body) => {
+                                            if let Some(old) = body.old_tuple() {
+                                                let rel = body.rel_id();
+                                                if let Some(outputs) = table_info.get(&rel) {
+                                                    for (&out_idx, info) in outputs {
+                                                        let export_id = output_to_export_id[out_idx];
+                                                        let msg = unpack_and_cast(old.tuple_data(), info);
+                                                        emit_row(&mut batch_updates, &rewinds, export_id, out_idx, commit_lsn, msg, Diff::MINUS_ONE);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Update(body) => {
+                                            if let Some(old) = body.old_tuple() {
+                                                let rel = body.rel_id();
+                                                if let Some(outputs) = table_info.get(&rel) {
+                                                    for (&out_idx, info) in outputs {
+                                                        let export_id = output_to_export_id[out_idx];
+                                                        let old_msg = unpack_and_cast(old.tuple_data(), info);
+                                                        let new_msg = unpack_and_cast(body.new_tuple().tuple_data(), info);
+                                                        emit_row(&mut batch_updates, &rewinds, export_id, out_idx, commit_lsn, old_msg, Diff::MINUS_ONE);
+                                                        emit_row(&mut batch_updates, &rewinds, export_id, out_idx, commit_lsn, new_msg, Diff::ONE);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Relation(_) | Truncate(_) | Origin(_) | Type(_) => {}
+                                        Begin(_) => return Err(TransientError::NestedTransaction),
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            _ => return Err(TransientError::BareTransactionEvent),
+                        }
+                    }
+                    ReplicationMessage::PrimaryKeepAlive(keepalive) => {
+                        data_upper = std::cmp::max(data_upper, keepalive.wal_end().into());
+                    }
+                    _ => return Err(TransientError::UnknownReplicationMessage),
+                }
+
+                // Flush batch after every message group.
+                {
+                    rewinds.retain(|_, req| data_upper <= req.snapshot_lsn);
+                    let frontier = if rewinds.is_empty() {
+                        Antichain::from_elem(data_upper)
+                    } else {
+                        // Can't advance past 0 while rewinds are pending.
+                        Antichain::from_elem(MzOffset::from(0u64))
+                    };
+                    if !batch_updates.is_empty() {
+                        let batch = SourceBatch {
+                            updates: std::mem::take(&mut batch_updates),
+                            frontier: frontier.clone(),
+                        };
+                        if data_tx.send(batch).is_err() {
+                            return Ok(());
+                        }
+                    } else if frontier != Antichain::from_elem(MzOffset::from(0u64)) {
+                        // Even without data, send a frontier-only batch to advance progress.
+                        let batch = SourceBatch {
+                            updates: Vec::new(),
+                            frontier,
+                        };
+                        if data_tx.send(batch).is_err() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Unpack a tuple from the replication stream and apply cast expressions.
+fn unpack_and_cast(
+    tuple_data: &[postgres_replication::protocol::TupleData],
+    info: &SourceOutputInfo,
+) -> Result<SourceMessage, DataflowError> {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    for data in tuple_data {
+        let datum = match data {
+            postgres_replication::protocol::TupleData::Text(bytes) => {
+                match decode_utf8_text(bytes) {
+                    Ok(d) => d,
+                    Err(err) => return Err(DataflowError::from(err)),
+                }
+            }
+            postgres_replication::protocol::TupleData::Null => Datum::Null,
+            postgres_replication::protocol::TupleData::UnchangedToast => {
+                return Err(DataflowError::from(DefiniteError::MissingToast));
+            }
+            postgres_replication::protocol::TupleData::Binary(_) => {
+                return Err(DataflowError::from(DefiniteError::UnexpectedBinaryData));
+            }
+        };
+        packer.push(datum);
+    }
+
+    let mut datum_vec = mz_repr::DatumVec::new();
+    let datums = datum_vec.borrow_with(&row);
+    let mut final_row = Row::default();
+    match cast_row(&info.casts, &datums, &mut final_row) {
+        Ok(()) => Ok(SourceMessage {
+            key: Row::default(),
+            value: final_row,
+            metadata: Row::default(),
+        }),
+        Err(err) => Err(DataflowError::from(err)),
+    }
+}
+
+/// Emit a data row (and its rewind if applicable) into the batch.
+fn emit_row(
+    batch: &mut Vec<(SourceTaskUpdate<MzOffset>, MzOffset, Diff)>,
+    rewinds: &BTreeMap<usize, replication::RewindRequest>,
+    export_id: GlobalId,
+    output_index: usize,
+    commit_lsn: MzOffset,
+    row: Result<SourceMessage, DataflowError>,
+    diff: Diff,
+) {
+    let mz_offset_zero = MzOffset::from(0u64);
+    if let Some(req) = rewinds.get(&output_index) {
+        if commit_lsn <= req.snapshot_lsn {
+            batch.push(((export_id, row.clone(), mz_offset_zero), mz_offset_zero, -diff));
+        }
+    }
+    batch.push(((export_id, row, commit_lsn), commit_lsn, diff));
 }
 
 #[derive(Clone, Debug)]
