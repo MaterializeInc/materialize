@@ -13,7 +13,9 @@ workspace = true
 anyhow = "1.0.102"
 async-trait = { version = "0.1.89" }
 clap = { version = "4.5.23", features = ["derive", "env"] }
-openssl = { version = "0.10.76", features = ["vendored"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls-pemfile = "2"
+rustls-pki-types = { version = "1", features = ["std"] }
 schemars = { version = "1.2.1" }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
@@ -27,6 +29,7 @@ mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
 tokio = "1.49.0"
 tokio-metrics = "0.4.9"
+tokio-rustls = "0.26"
 uuid = { version = "1.19.0", features = ["v4"] }
 
 [features]

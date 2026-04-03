@@ -29,8 +29,9 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::AsyncReady;
 use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
-use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
 use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer};
 use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
 use serde::{Deserialize, Serialize};
@@ -458,8 +459,8 @@ where
 /// Configures a server's TLS encryption and authentication.
 #[derive(Clone, Debug)]
 pub struct TlsConfig {
-    /// The SSL context used to manage incoming TLS negotiations.
-    pub context: SslContext,
+    /// The TLS server configuration used for incoming TLS negotiations.
+    pub context: ReloadingSslContext,
     /// The TLS mode.
     pub mode: TlsMode,
 }
@@ -483,18 +484,24 @@ pub struct TlsCertConfig {
 }
 
 impl TlsCertConfig {
-    /// Returns the SSL context to use in TlsConfigs.
-    pub fn load_context(&self) -> Result<SslContext, anyhow::Error> {
-        // Mozilla publishes three presets: old, intermediate, and modern. They
-        // recommend the intermediate preset for general purpose servers, which
-        // is what we use, as it is compatible with nearly every client released
-        // in the last five years but does not include any known-problematic
-        // ciphers. We once tried to use the modern preset, but it was
-        // incompatible with Fivetran, and presumably other JDBC-based tools.
-        let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-        builder.set_certificate_chain_file(&self.cert)?;
-        builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
-        Ok(builder.build().into_context())
+    /// Returns the TLS server configuration.
+    pub fn load_context(&self) -> Result<Arc<rustls::ServerConfig>, anyhow::Error> {
+        // Load certificate chain from PEM file.
+        let cert_pem = std::fs::read(&self.cert)?;
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&cert_pem)
+            .collect::<Result<_, _>>()
+            .map_err(|e| anyhow::anyhow!("failed to parse certificate chain: {e}"))?;
+
+        // Load private key from PEM file.
+        let key_pem = std::fs::read(&self.key)?;
+        let key = PrivateKeyDer::from_pem_slice(&key_pem)
+            .map_err(|e| anyhow::anyhow!("failed to parse private key: {e}"))?;
+
+        let config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, key)?;
+
+        Ok(Arc::new(config))
     }
 
     /// Like [Self::load_context] but attempts to reload the files each time `ticker` yields an item.
@@ -517,7 +524,7 @@ impl TlsCertConfig {
                         Ok(())
                     }
                     Err(err) => {
-                        tracing::error!("failed to reload SSL certificate: {err}");
+                        tracing::error!("failed to reload TLS certificate: {err}");
                         Err(err)
                     }
                 };
@@ -531,16 +538,22 @@ impl TlsCertConfig {
     }
 }
 
-/// An SslContext whose inner value can be updated.
+/// A TLS server configuration whose inner value can be updated (for cert reloading).
 #[derive(Clone, Debug)]
 pub struct ReloadingSslContext {
-    /// The current SSL context.
-    context: Arc<RwLock<SslContext>>,
+    /// The current TLS server configuration.
+    context: Arc<RwLock<Arc<rustls::ServerConfig>>>,
 }
 
 impl ReloadingSslContext {
-    pub fn get(&self) -> RwLockReadGuard<'_, SslContext> {
-        self.context.read().expect("poisoned")
+    /// Returns the current TLS server configuration.
+    pub fn get(&self) -> Arc<rustls::ServerConfig> {
+        self.context.read().expect("poisoned").clone()
+    }
+
+    /// Creates a `tokio_rustls::TlsAcceptor` from the current configuration.
+    pub fn acceptor(&self) -> tokio_rustls::TlsAcceptor {
+        tokio_rustls::TlsAcceptor::from(self.get())
     }
 }
 
