@@ -1726,8 +1726,7 @@ pub fn cert_file_to_der(path: &Path) -> Vec<u8> {
     certs[0].as_ref().to_vec()
 }
 
-/// Configuration for test TLS connections, replacing the old
-/// `FnOnce(&mut SslConnectorBuilder)` closure pattern.
+/// Configuration for test TLS connections.
 #[derive(Clone, Debug)]
 pub struct TestTlsConfig {
     /// CA certificate files to trust. Empty = no custom roots.
