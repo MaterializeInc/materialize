@@ -21,7 +21,6 @@ domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
 futures = "0.3.32"
 humantime = "2.3.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
-hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 launchdarkly-server-sdk = { version = "2.6.2", default-features = false, optional = true }
@@ -34,17 +33,17 @@ mz-dyncfg = { path = "../dyncfg" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", default-features = false, features = ["id_gen"]}
+mz-ore = { path = "../ore", default-features = false, features = ["crypto", "id_gen"]}
 mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
 num_cpus = "1.17.0"
-openssl = { version = "0.10.76", features = ["vendored"] }
 prometheus = { version = "0.14.0", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 proxy-header = "0.1.2"
 semver = "1.0.27"
 tokio = { version = "1.49.0", default-features = false }
-tokio-openssl = "0.6.5"
+tokio-rustls = { version = "0.26", default-features = false }
 tokio-postgres = { version = "0.7.15" }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 tokio-metrics = "0.4.9"
