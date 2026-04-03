@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM distroless-prod-base
+MZFROM prod-base
 
 COPY persistcli mz-catalog-debug /usr/local/bin/
 
