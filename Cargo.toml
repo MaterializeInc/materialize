@@ -336,7 +336,8 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 # Need to upstream a few PRs related to test builders.
 #
 # Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.
-tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc22ed67d072c2d0110455da50539e1cd" }
+# SEC-248: rustls 0.23 + aws-lc-rs migration on feature branch (not yet merged to mz_changes).
+tiberius = { git = "https://github.com/MaterializeInc/tiberius", branch = "rustls-0.23-on-mz-changes" }
 
 # Allows us to use bzip2-sys rather than the rust reimpl.
 # All changes should go to the `mz_changes` branch.
