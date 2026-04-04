@@ -15,7 +15,7 @@ mz-auth = { path = "../auth", default-features = false }
 mz-frontegg-auth = { path = "../frontegg-auth", default-features = false }
 mz-ore = { path = "../ore", features = ["assert"] }
 mz-pgwire-common = { path = "../pgwire-common", default-features = false }
-reqwest = "0.12.24"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
 tokio-postgres = { version = "0.7.15" }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.149"

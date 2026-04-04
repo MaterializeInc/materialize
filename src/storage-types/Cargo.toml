@@ -31,7 +31,7 @@ http = "1.4.0"
 itertools = { version = "0.14.0" }
 mysql_async = { version = "0.36.1", default-features = false, features = [
     "minimal",
-    "native-tls-tls",
+    "rustls-tls",
 ] }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ccsr = { path = "../ccsr" }
@@ -61,11 +61,11 @@ proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-awslc", "libz-static", "zstd"] }
 regex = "1.12.3"
-reqwest = "0.12.28"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["preserve_order"] }
 thiserror = "2.0.18"
-tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
+tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "rustls"], default-features = false }
 timely = "0.28.0"
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }

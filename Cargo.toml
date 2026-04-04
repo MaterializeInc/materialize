@@ -321,7 +321,6 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
-postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.

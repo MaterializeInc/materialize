@@ -21,7 +21,7 @@ byteorder = "1.5"
 bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
-duckdb = { version = "1.4.3", default-features = false, features = ["native-tls"] }
+duckdb = { version = "1.4.3", default-features = false }
 flate2 = "1.1.9"
 futures = "0.3.32"
 globset = "0.4.18"
@@ -63,14 +63,14 @@ prost-types = { version = "0.14.3" }
 rand = "0.9.2"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-awslc", "libz-static", "zstd"] }
 regex = "1.12.3"
-reqwest = { version = "0.12.28", features = ["rustls-tls-webpki-roots-no-provider"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls-webpki-roots-no-provider"] }
 semver = "1.0.27"
 serde = "1.0.219"
 serde_json = { version = "1.0.149", features = ["raw_value"] }
 similar = "2.7.0"
 tempfile = "3.23.0"
 termcolor = "1.4.1"
-tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73"], default-features = false }
+tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "rustls"], default-features = false }
 time = "0.3.17"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

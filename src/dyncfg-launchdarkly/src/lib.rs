@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use hyper_tls::HttpsConnector;
+use hyper_rustls::HttpsConnectorBuilder;
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_dyncfg::{ConfigSet, ConfigUpdates, ConfigVal};
@@ -50,13 +50,16 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
+        let https_connector = || {
+            HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+                .https_or_http()
+                .enable_http1()
+                .build()
+        };
         let config = ld::ConfigBuilder::new(key)
-            .event_processor(
-                ld::EventProcessorBuilder::new().https_connector(HttpsConnector::new()),
-            )
-            .data_source(
-                ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()),
-            )
+            .event_processor(ld::EventProcessorBuilder::new().https_connector(https_connector()))
+            .data_source(ld::StreamingDataSourceBuilder::new().https_connector(https_connector()))
             .build()
             .expect("valid config");
         let client = ld::Client::build(config)?;

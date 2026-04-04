@@ -34,16 +34,20 @@ impl Identity {
         })
     }
 
-    /// Wraps [`reqwest::Identity::from_pkcs12_der`].
+    /// Constructs an identity from PEM-encoded key+cert data.
+    ///
+    /// The `der` field stores the raw PEM bytes, `pass` is unused (kept for
+    /// backward compatibility with serialized data).
     pub fn from_pkcs12_der(der: Vec<u8>, pass: String) -> Result<Self, reqwest::Error> {
-        let _ = reqwest::Identity::from_pkcs12_der(&der, &pass)?;
+        // Validate by trying to construct a reqwest Identity.
+        let _ = reqwest::Identity::from_pem(&der)?;
         Ok(Identity { der, pass })
     }
 }
 
 impl From<Identity> for reqwest::Identity {
     fn from(id: Identity) -> Self {
-        reqwest::Identity::from_pkcs12_der(&id.der, &id.pass).expect("known to be a valid identity")
+        reqwest::Identity::from_pem(&id.der).expect("known to be a valid identity")
     }
 }
 
