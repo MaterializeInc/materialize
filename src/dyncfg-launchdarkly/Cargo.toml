@@ -13,8 +13,8 @@ workspace = true
 [dependencies]
 anyhow = "1.0.102"
 humantime = "2.3.0"
-hyper-rustls = { version = "0.24", default-features = false, features = ["http1", "webpki-roots"] }
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false, features = ["rustls"] }
+hyper-tls = "0.5.0"
+launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }

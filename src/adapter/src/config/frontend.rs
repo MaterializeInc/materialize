@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use derivative::Derivative;
 #[cfg(feature = "telemetry")]
-use hyper_rustls::HttpsConnectorBuilder;
+use hyper_tls::HttpsConnector;
 #[cfg(feature = "telemetry")]
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
@@ -154,17 +154,10 @@ impl SystemParameterFrontend {
 
 #[cfg(feature = "telemetry")]
 fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
-    let https_connector = || {
-        HttpsConnectorBuilder::new()
-            .with_webpki_roots()
-            .https_or_http()
-            .enable_http1()
-            .build()
-    };
     ld::ConfigBuilder::new(api_key)
         .event_processor(
             ld::EventProcessorBuilder::new()
-                .https_connector(https_connector())
+                .https_connector(HttpsConnector::new())
                 .on_success({
                     let last_cse_time_seconds = metrics.last_cse_time_seconds.clone();
                     Arc::new(move |result| {
@@ -178,7 +171,7 @@ fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
                     })
                 }),
         )
-        .data_source(ld::StreamingDataSourceBuilder::new().https_connector(https_connector()))
+        .data_source(ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()))
         .build()
         .expect("valid config")
 }
