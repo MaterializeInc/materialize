@@ -150,7 +150,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             Some(prev) => prev,
                         };
                         if known_lsn < prev_known_lsn {
-                            mz_ore::soft_panic_or_log!(
+                            tracing::warn!(
                                 "upstream SQL Server went backwards \
                                  in time, current LSN: {known_lsn}, \
                                  last known {prev_known_lsn}",
