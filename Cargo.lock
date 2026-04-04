@@ -6549,7 +6549,6 @@ dependencies = [
  "mz-tracing",
  "nix 0.30.1",
  "num_cpus",
- "openssl-sys",
  "opentelemetry",
  "opentelemetry_sdk",
  "pin-project",
@@ -7255,7 +7254,6 @@ dependencies = [
  "mz-ore-proc",
  "num",
  "num-traits",
- "openssl",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -7277,7 +7275,6 @@ dependencies = [
  "stacker",
  "thiserror 2.0.18",
  "tokio",
- "tokio-openssl",
  "tokio-rustls",
  "tokio-test",
  "tonic",
@@ -7338,10 +7335,7 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
- "openssl",
- "openssl-sys",
  "parquet",
- "postgres-openssl",
  "postgres-protocol",
  "prometheus",
  "proptest",
@@ -9763,17 +9757,6 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tokio-postgres",
-]
-
-[[package]]
-name = "postgres-openssl"
-version = "0.5.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
-dependencies = [
- "openssl",
- "tokio",
- "tokio-openssl",
  "tokio-postgres",
 ]
 
@@ -12408,17 +12391,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-openssl"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59df6849caa43bb7567f9a36f863c447d95a11d5903c9cc334ba32576a27eadd"
-dependencies = [
- "openssl",
- "openssl-sys",
- "tokio",
-]
-
-[[package]]
 name = "tokio-postgres"
 version = "0.7.15"
 source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
@@ -14085,3 +14057,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "postgres-openssl"
+version = "0.5.2"
+source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"

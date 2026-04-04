@@ -43,8 +43,6 @@ libc = { version = "0.2.183", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num = "0.4.3"
 num-traits = { version = "0.2", optional = true }
-# The vendored feature is transitively depended upon by tokio-openssl.
-openssl = { version = "0.10.76", features = ["vendored"], optional = true }
 tokio-rustls = { version = "0.26", default-features = false, optional = true }
 parquet = { version = "57", optional = true, default-features = false }
 paste = "1.0.11"
@@ -66,7 +64,6 @@ tokio = { version = "1.49.0", features = [
     "sync",
     "time",
 ], optional = true }
-tokio-openssl = { version = "0.6.5", optional = true }
 thiserror = "2.0.18"
 tracing-capture = { version = "0.1.0", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`

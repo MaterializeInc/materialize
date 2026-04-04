@@ -49,10 +49,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["metrics", "as
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
-openssl = { version = "0.10.76", features = ["vendored"] }
-openssl-sys = { version = "0.9.108", features = ["vendored"] }
 parquet = { version = "57", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
-postgres-openssl = { version = "0.5.2" }
 postgres-protocol = { version = "0.6.9" }
 prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }

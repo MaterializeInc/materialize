@@ -80,8 +80,6 @@ mz-tracing = { path = "../tracing", optional = true }
 nix = { version = "0.30.1", features = ["signal"] }
 num_cpus = "1.17.0"
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "tls12"] }
-# openssl-sys is used for version reporting only (rdkafka still uses openssl internally).
-openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 pin-project = "1.1.11"
