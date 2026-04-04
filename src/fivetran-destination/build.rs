@@ -16,6 +16,9 @@ use std::path::PathBuf;
 const CA_BUNDLE_URL: &str = "https://curl.se/ca/cacert.pem";
 
 fn main() {
+    // Install aws-lc-rs as the CryptoProvider for rustls (reqwest needs one).
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     // Build protobufs.

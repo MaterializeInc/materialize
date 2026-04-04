@@ -198,6 +198,8 @@ pub fn ensure(out_dir: Option<PathBuf>) -> Result<(), anyhow::Error> {
     println!("ensuring all npm packages are up-to-date...");
     let attempts = 3;
 
+    // Install aws-lc-rs as the CryptoProvider for rustls (reqwest needs one).
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let client = reqwest::blocking::Client::new();
     for pkg in NPM_PACKAGES {
         if pkg.compute_digest().ok().as_deref() == Some(&pkg.digest) {

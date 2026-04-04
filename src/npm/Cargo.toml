@@ -14,7 +14,8 @@ anyhow = "1.0.102"
 flate2 = "1.1.9"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "rustls-tls-webpki-roots-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 aws-lc-rs = "1"
 tar = "0.4.44"
 walkdir = "2.5.0"

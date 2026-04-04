@@ -70,7 +70,7 @@ serde_json = { version = "1.0.149", features = ["raw_value"] }
 similar = "2.7.0"
 tempfile = "3.23.0"
 termcolor = "1.4.1"
-tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "rustls"], default-features = false }
+tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73"], default-features = false }
 time = "0.3.17"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
