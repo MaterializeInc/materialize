@@ -283,6 +283,11 @@ wrappers = [
 [[bans.deny]]
 name = "ring"
 wrappers = [
+    # rustls and rustls-webpki use ring as a crypto provider when
+    # activated by aws-config. Our workspace uses aws-lc-rs as the
+    # default provider, but the AWS SDK hasn't migrated off ring yet.
+    "rustls",
+    "rustls-webpki",
     # Third-party crate — TODO: track upstream migration.
     "aws-config",
     # TODO: remove tokio-postgres-rustls dep from environmentd tests
