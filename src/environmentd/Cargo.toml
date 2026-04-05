@@ -36,7 +36,7 @@ include_dir = "0.7.4"
 ipnet = "2.12.0"
 itertools = "0.14.0"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-libc = "0.2.183"
+libc = "0.2.184"
 maplit = "1.0.2"
 mime = "0.3.16"
 mz-alloc = { path = "../alloc" }
@@ -166,7 +166,7 @@ tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4", "with-serd
 
 [build-dependencies]
 anyhow = "1.0.102"
-cc = "1.2.57"
+cc = "1.2.58"
 mz-npm = { path = "../npm" }
 
 [features]

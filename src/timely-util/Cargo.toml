@@ -17,9 +17,9 @@ harness = false
 ahash = { version = "0.8.12", default-features = false }
 bincode = "1.3.3"
 bytemuck = "1.23.1"
-columnar = "0.12.0"
+columnar = "0.12.1"
 columnation = "0.1.2"
-custom-labels = "0.4.5"
+custom-labels = "0.4.6"
 differential-dataflow = "0.21.1"
 either = "1"
 futures-util = "0.3.31"
