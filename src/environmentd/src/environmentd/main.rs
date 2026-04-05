@@ -650,6 +650,9 @@ pub fn main() {
 }
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
+    // Install the process-wide CryptoProvider for rustls before any TLS usage.
+    // Required when both `aws-lc-rs` and `ring` features are active (e.g., --all-features builds).
+    let _ = mz_ore::crypto::fips_crypto_provider();
     mz_ore::panic::install_enhanced_handler();
     let envd_start = Instant::now();
 

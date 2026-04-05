@@ -585,6 +585,8 @@ mod tests {
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn postgres_consensus() -> Result<(), ExternalError> {
+        // Install CryptoProvider for --all-features builds where both ring and aws-lc-rs are active.
+        let _ = mz_ore::crypto::fips_crypto_provider();
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,
             None => {
