@@ -240,6 +240,7 @@ fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, s
 
 #[tokio::main]
 async fn main() {
+    let _ = mz_ore::crypto::fips_crypto_provider();
     mz_ore::panic::install_enhanced_handler();
 
     let args = cli::parse_args(CliConfig {

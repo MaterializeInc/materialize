@@ -253,6 +253,9 @@ impl TestHarness {
 
     /// Starts a test [`TestServer`], returning an error if the server could not be started.
     pub async fn try_start(self) -> Result<TestServer, anyhow::Error> {
+        // Install CryptoProvider early, before any TLS usage. Required for
+        // --all-features builds where both ring and aws-lc-rs are active.
+        let _ = mz_ore::crypto::fips_crypto_provider();
         self.try_start_with_trigger(mz_server_core::cert_reload_never_reload())
             .await
     }
