@@ -970,6 +970,9 @@ mod dictionary {
         inner: super::bytes_container::BytesContainer,
         /// Staging buffer for ingested `Row` types.
         staging: Vec<u8>,
+        /// Statistics gatherer, used to build a safe codec after enough pushes.
+        /// `None` once the codec has been installed or if compression is disabled.
+        stats: Option<ColumnsCodec>,
     }
 
     impl BatchContainer for DatumContainer {
@@ -977,7 +980,7 @@ mod dictionary {
         type ReadItem<'a> = DatumSeq<'a>;
 
         fn with_capacity(size: usize) -> Self {
-            let codec = if crate::row_spine::DICTIONARY_COMPRESSION
+            let stats = if crate::row_spine::DICTIONARY_COMPRESSION
                 .load(std::sync::atomic::Ordering::Relaxed)
             {
                 Some(Default::default())
@@ -986,9 +989,10 @@ mod dictionary {
             };
 
             Self {
-                codec,
+                codec: None,
                 inner: BatchContainer::with_capacity(size),
                 staging: Vec::new(),
+                stats,
             }
         }
         fn merge_capacity(cont1: &Self, cont2: &Self) -> Self {
@@ -1005,6 +1009,7 @@ mod dictionary {
                 codec,
                 inner: BatchContainer::merge_capacity(&cont1.inner, &cont2.inner),
                 staging: Vec::new(),
+                stats: None,
             }
         }
         #[inline]
@@ -1057,6 +1062,9 @@ mod dictionary {
             if let Some(codec) = &mut self.codec {
                 codec.clear();
             }
+            if let Some(stats) = &mut self.stats {
+                stats.clear();
+            }
         }
     }
 
@@ -1083,17 +1091,36 @@ mod dictionary {
         }
     }
 
+    /// Number of pushes before stats are used to build a safe codec.
+    /// Needs to be large enough for MG to distinguish heavy hitters
+    /// (we're looking for ~128 values with counts well above 1).
+    const STATS_THRESHOLD: usize = 64 * 1024;
+
     impl PushInto<DatumSeq<'_>> for DatumContainer {
         #[inline]
         fn push_into(&mut self, item: DatumSeq<'_>) {
+            // Check if we've gathered enough stats to install a safe codec.
+            if self.codec.is_none() && self.stats.is_some() && self.inner.len() >= STATS_THRESHOLD {
+                let stats = self.stats.take().unwrap();
+                self.codec = Some(stats.new_safe());
+            }
+
             if let Some(codec) = &mut self.codec {
+                // Encode using the installed codec.
                 codec.encode(item.bytes_iter(), &mut self.staging);
+            } else if let Some(stats) = &mut self.stats {
+                // Stats-gathering phase: feed MG but store raw bytes.
+                stats.encode(item.bytes_iter(), &mut self.staging);
+                self.staging.clear();
+                for slice in item.bytes_iter() {
+                    self.staging.extend_from_slice(slice);
+                }
             } else {
+                // No codec, no stats: raw copy.
                 for slice in item.bytes_iter() {
                     self.staging.extend_from_slice(slice);
                 }
             }
-            // TODO: Copy rather than clone, into better storage.
             self.inner.push_ref(&self.staging[..]);
             self.staging.clear();
         }
@@ -1349,6 +1376,18 @@ mod row_codec {
             }
         }
 
+        impl ColumnsCodec {
+            /// Construct a codec using only structurally safe tags.
+            pub(in crate::row_spine) fn new_safe(&self) -> Self {
+                let columns = self.columns.iter().map(DictionaryCodec::new_safe).collect();
+                Self {
+                    columns,
+                    total: 0,
+                    bytes: 0,
+                }
+            }
+        }
+
         #[derive(Debug, Copy, Clone)]
         pub struct ColumnsIter<'a> {
             // Optional only to support borrowing owned as this
@@ -1406,6 +1445,11 @@ mod row_codec {
         use std::collections::BTreeMap;
 
         pub use super::{BytesMap, Codec, MisraGries};
+
+        /// First byte value that is structurally unused by the datum encoding.
+        /// All byte values >= this are safe to use as dictionary tags without
+        /// observing the data, since no datum's first byte can have this value.
+        pub const SAFE_TAG_BASE: u8 = 122;
 
         /// A type that can both encode and decode sequences of byte slices.
         #[derive(Default, Debug)]
@@ -1524,6 +1568,41 @@ mod row_codec {
                 DictionaryIter {
                     index: None,
                     data: row.data(),
+                }
+            }
+        }
+
+        impl DictionaryCodec {
+            /// Construct a codec using only structurally safe tags (>= SAFE_TAG_BASE).
+            /// These tags never collide with datum first-bytes, so the codec can be
+            /// installed without observing all data first.
+            pub(super) fn new_safe(stats: &Self) -> Self {
+                let mut mg = stats
+                    .stats
+                    .0
+                    .clone()
+                    .done()
+                    .into_iter()
+                    .filter(|(next_bytes, count)| next_bytes.len() > 1 && count > &1);
+                let mut encode = BTreeMap::new();
+                let mut decode = BytesMap::default();
+                // Fill slots 0..SAFE_TAG_BASE with None (reserved for datum tags).
+                for _ in 0..SAFE_TAG_BASE {
+                    decode.push(None);
+                }
+                // Assign dictionary entries to safe tags.
+                for tag in SAFE_TAG_BASE..=255 {
+                    if let Some((next_bytes, _count)) = mg.next() {
+                        decode.push(Some(&next_bytes[..]));
+                        encode.insert(next_bytes, tag);
+                    }
+                }
+                Self {
+                    encode,
+                    decode,
+                    stats: (MisraGries::default(), [0u64; 4]),
+                    bytes: 0,
+                    total: 0,
                 }
             }
         }
