@@ -292,7 +292,7 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 /// Enable per-column dictionary compression for row containers in arrangements.
 pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION: Config<bool> = Config::new(
     "enable_arrangement_dictionary_compression",
-    true,
+    false,
     "Enable arrangement dictionary compression.",
 );
 

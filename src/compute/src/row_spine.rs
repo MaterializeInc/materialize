@@ -768,6 +768,12 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
+                if let Some(codec) = &self.inner.result.keys.codec {
+                    codec.report();
+                }
+                if let Some(codec) = &self.inner.result.vals.vals.codec {
+                    codec.report();
+                }
                 self.inner.done(description)
             }
             fn seal(
@@ -807,13 +813,7 @@ mod dictionary {
                     DatumContainer,
                 >>::key_val_upd_counts(&chain[..]);
                 let mut builder = Self::with_capacity(keys, vals, upds);
-                if let Some(key_codec) = &key_codec {
-                    key_codec.report();
-                }
                 builder.inner.result.keys.codec = key_codec;
-                if let Some(val_codec) = &val_codec {
-                    val_codec.report();
-                }
                 builder.inner.result.vals.vals.codec = val_codec;
 
                 for mut chunk in chain.drain(..) {
@@ -851,6 +851,9 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
+                if let Some(codec) = &self.inner.result.keys.codec {
+                    codec.report();
+                }
                 self.inner.done(description)
             }
             fn seal(
@@ -881,10 +884,6 @@ mod dictionary {
                     TimelyStack<V>,
                 >>::key_val_upd_counts(&chain[..]);
                 let mut builder = Self::with_capacity(keys, vals, upds);
-
-                if let Some(key_codec) = &key_codec {
-                    key_codec.report();
-                }
                 builder.inner.result.keys.codec = key_codec;
 
                 for mut chunk in chain.drain(..) {
@@ -918,6 +917,9 @@ mod dictionary {
                 self.inner.push(chunk)
             }
             fn done(self, description: Description<Self::Time>) -> Self::Output {
+                if let Some(codec) = &self.inner.result.keys.codec {
+                    codec.report();
+                }
                 self.inner.done(description)
             }
             fn seal(
@@ -948,9 +950,6 @@ mod dictionary {
                     TimelyStack<()>,
                 >>::key_val_upd_counts(&chain[..]);
                 let mut builder = Self::with_capacity(keys, vals, upds);
-                if let Some(key_codec) = &key_codec {
-                    key_codec.report();
-                }
                 builder.inner.result.keys.codec = key_codec;
 
                 for mut chunk in chain.drain(..) {
@@ -1037,21 +1036,43 @@ mod dictionary {
 
         #[inline(always)]
         fn into_owned<'a>(item: Self::ReadItem<'a>) -> Self::Owned {
+            // Fast path: unencoded data is already row-formatted bytes.
+            if item.iter.index.is_none() {
+                // SAFETY: `iter.data` is raw row-encoded bytes when there is no codec.
+                return unsafe { Row::from_bytes_unchecked(item.iter.data) };
+            }
             Row::pack(item)
         }
 
         #[inline(always)]
         fn clone_onto<'a>(item: Self::ReadItem<'a>, other: &mut Self::Owned) {
+            // Fast path: unencoded data is already row-formatted bytes.
+            if item.iter.index.is_none() {
+                let mut packer = other.packer();
+                // SAFETY: `iter.data` is raw row-encoded bytes when there is no codec.
+                unsafe { packer.extend_by_slice_unchecked(item.iter.data) };
+                return;
+            }
             other.packer().extend(item);
         }
 
         #[inline(always)]
         fn push_ref(&mut self, item: Self::ReadItem<'_>) {
+            // Fast path: both sides unencoded — push raw bytes directly.
+            if self.codec.is_none() && self.stats.is_none() && item.iter.index.is_none() {
+                self.inner.push_ref(item.iter.data);
+                return;
+            }
             self.push_into(item);
         }
 
         #[inline(always)]
         fn push_own(&mut self, item: &Self::Owned) {
+            // Fast path: container is unencoded — push raw row bytes directly.
+            if self.codec.is_none() && self.stats.is_none() {
+                self.inner.push_ref(item.data());
+                return;
+            }
             self.push_into(item);
         }
 
@@ -1099,6 +1120,13 @@ mod dictionary {
     impl PushInto<DatumSeq<'_>> for DatumContainer {
         #[inline]
         fn push_into(&mut self, item: DatumSeq<'_>) {
+            // Fast path: container and item are both unencoded.
+            // This is the hot path when dictionary compression is disabled.
+            if self.codec.is_none() && self.stats.is_none() && item.iter.index.is_none() {
+                self.inner.push_ref(item.iter.data);
+                return;
+            }
+
             // Check if we've gathered enough stats to install a safe codec.
             if self.codec.is_none() && self.stats.is_some() && self.inner.len() >= STATS_THRESHOLD {
                 let stats = self.stats.take().unwrap();
