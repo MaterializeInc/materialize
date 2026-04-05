@@ -1138,6 +1138,10 @@ mod dictionary {
     impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
         #[inline(always)]
         fn eq(&self, other: &DatumSeq<'a>) -> bool {
+            // Fast path: both sides are unencoded raw row bytes.
+            if self.iter.index.is_none() && other.iter.index.is_none() {
+                return self.iter.data == other.iter.data;
+            }
             Iterator::eq(self.iter, other.iter)
         }
     }
@@ -1145,13 +1149,35 @@ mod dictionary {
     impl<'a, 'b> PartialOrd<DatumSeq<'a>> for DatumSeq<'b> {
         #[inline(always)]
         fn partial_cmp(&self, other: &DatumSeq<'a>) -> Option<Ordering> {
-            let len1: usize = self.iter.map(|b| b.len()).sum();
-            let len2: usize = other.iter.map(|b| b.len()).sum();
-            if len1 == len2 {
-                // Lexicographic, when lengths are equal.
-                Some(self.iter.flatten().cmp(other.iter.flatten()))
-            } else {
-                Some(len1.cmp(&len2))
+            // Fast path: both sides are unencoded raw row bytes.
+            if self.iter.index.is_none() && other.iter.index.is_none() {
+                let left = self.iter.data;
+                let right = other.iter.data;
+                return Some(match left.len().cmp(&right.len()) {
+                    Ordering::Equal => left.cmp(right),
+                    other => other,
+                });
+            }
+            // Slow path: at least one side is dictionary-encoded.
+            // Fused length + lexicographic comparison in a single pass per side.
+            // Row ordering is: shorter < longer; equal lengths compared lexicographically.
+            let mut left = self.iter.flatten();
+            let mut right = other.iter.flatten();
+            let mut first_diff = Ordering::Equal;
+            loop {
+                match (left.next(), right.next()) {
+                    (Some(l), Some(r)) => {
+                        if first_diff == Ordering::Equal {
+                            first_diff = l.cmp(r);
+                        }
+                    }
+                    // Left exhausted first: left is shorter, so Less.
+                    (None, Some(_)) => return Some(Ordering::Less),
+                    // Right exhausted first: right is shorter, so Greater.
+                    (Some(_), None) => return Some(Ordering::Greater),
+                    // Same length: use first lexicographic difference.
+                    (None, None) => return Some(first_diff),
+                }
             }
         }
     }
@@ -1420,7 +1446,7 @@ mod row_codec {
                         output.extend(bytes);
                     }
                     // Stats stuff.
-                    self.stats.0.insert(bytes.to_owned());
+                    self.stats.0.insert_ref(bytes);
                     let tag = bytes[0];
                     let tag_idx: usize = (tag % 4).into();
                     self.stats.1[tag_idx] |= 1 << (tag >> 2);
@@ -1581,17 +1607,26 @@ mod row_codec {
 
     mod misra_gries {
 
+        use std::collections::BTreeMap;
+
         /// Maintains a summary of "heavy hitters" in a presented collection of items.
+        ///
+        /// Uses a `BTreeMap` internally so that repeated observations of the same
+        /// element only allocate once (on first sighting). Tidy is performed when
+        /// the number of *distinct* elements exceeds `2 * k`, reducing to at most
+        /// `k` entries.
         #[derive(Clone, Debug)]
-        pub struct MisraGries<T> {
-            pub inner: Vec<(T, usize)>,
+        pub struct MisraGries<T: Ord> {
+            inner: BTreeMap<T, usize>,
+            k: usize,
         }
 
-        impl<T> Default for MisraGries<T> {
+        impl<T: Ord> Default for MisraGries<T> {
             #[inline(always)]
             fn default() -> Self {
                 Self {
-                    inner: Vec::with_capacity(1024),
+                    inner: BTreeMap::new(),
+                    k: 512,
                 }
             }
         }
@@ -1605,46 +1640,44 @@ mod row_codec {
             /// Inserts multiple copies of an element to the summary.
             #[inline]
             pub fn update(&mut self, element: T, count: usize) {
-                self.inner.push((element, count));
-                if self.inner.len() == self.inner.capacity() {
+                *self.inner.entry(element).or_insert(0) += count;
+                if self.inner.len() > 2 * self.k {
                     self.tidy();
                 }
             }
-            // /// Allocates a Misra-Gries summary which intends to hold up to `k` examples.
-            // ///
-            // /// After `n` insertions it will contain only elements that were inserted at least `n/k` times.
-            // /// The actual memory use is proportional to `2 * k`, so that we can amortize the consolidation.
-            // pub fn with_capacity(k: usize) -> Self {
-            //     Self {
-            //         inner: Vec::with_capacity(2 * k),
-            //     }
-            // }
 
             /// Completes the summary, and extracts the items and their counts.
-            pub fn done(mut self) -> Vec<(T, usize)> {
-                use differential_dataflow::consolidation::consolidate;
-                consolidate(&mut self.inner);
-                self.inner.sort_by(|x, y| y.1.cmp(&x.1));
-                self.inner
+            pub fn done(self) -> Vec<(T, usize)> {
+                let mut result: Vec<_> = self.inner.into_iter().collect();
+                result.sort_by(|x, y| y.1.cmp(&x.1));
+                result
             }
 
-            /// Internal method that reduces the summary down to at most `k-1` distinct items, by repeatedly
-            /// removing sets of `k` distinct items. The removal is biased towards the lowest counts, so as
-            /// to preserve fidelity around the larger counts, for whatever that is worth.
+            /// Reduces the summary down to at most `k` distinct items by
+            /// subtracting the (k+1)-th largest count from all entries and
+            /// discarding those that drop to zero or below.
             fn tidy(&mut self) {
-                use differential_dataflow::consolidation::consolidate;
-                consolidate(&mut self.inner);
-                self.inner.sort_by(|x, y| y.1.cmp(&x.1));
-                let k = self.inner.capacity() / 2;
-                if self.inner.len() > k {
-                    let sub_weight = self.inner[k].1 - 1;
-                    self.inner.truncate(k);
-                    for (_, weight) in self.inner.iter_mut() {
-                        *weight -= sub_weight;
-                    }
-                    while self.inner.last().map(|x| x.1) == Some(0) {
-                        self.inner.pop();
-                    }
+                let mut counts: Vec<usize> = self.inner.values().copied().collect();
+                counts.sort_unstable_by(|a, b| b.cmp(a));
+                // The (k+1)-th largest count, or 0 if fewer than k+1 entries.
+                let sub_weight = counts.get(self.k).copied().unwrap_or(0);
+                if sub_weight > 0 {
+                    self.inner.retain(|_, count| {
+                        *count = count.saturating_sub(sub_weight);
+                        *count > 0
+                    });
+                }
+            }
+        }
+
+        impl MisraGries<Vec<u8>> {
+            /// Insert a borrowed byte slice, only allocating if the key is new.
+            #[inline]
+            pub fn insert_ref(&mut self, element: &[u8]) {
+                if let Some(count) = self.inner.get_mut(element) {
+                    *count += 1;
+                } else {
+                    self.insert(element.to_owned());
                 }
             }
         }

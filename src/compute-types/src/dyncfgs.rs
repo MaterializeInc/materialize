@@ -303,7 +303,6 @@ pub const ENABLE_ACTIVE_DATAFLOW_CANCELATION: Config<bool> = Config::new(
     "Whether to use `drop_dataflow` to actively cancel compute dataflows.",
 );
 
-
 /// Whether to enable the peek response stash, for sending back large peek
 /// responses. The response stash will only be used for results that exceed
 /// `compute_peek_response_stash_threshold_bytes`.
