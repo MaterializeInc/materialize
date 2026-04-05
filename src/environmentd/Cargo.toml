@@ -84,7 +84,7 @@ opentelemetry = { version = "0.31.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 pin-project = "1.1.11"
 postgres = { version = "0.19.12", optional = true }
-tokio-postgres-rustls = { version = "0.13", optional = true }
+mz-tls-util = { path = "../tls-util", optional = true }
 rcgen = { version = "0.14", optional = true, default-features = false, features = ["crypto", "pem", "aws_lc_rs"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"], optional = true }
 rustls-pemfile = { version = "2", optional = true }
@@ -184,7 +184,7 @@ test = [
     "postgres",
     "regex",
     "rustls",
-    "tokio-postgres-rustls",
+    "mz-tls-util",
     "tokio-rustls",
     "rcgen",
     "rustls-pemfile",

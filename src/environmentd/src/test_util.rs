@@ -58,6 +58,7 @@ use mz_server_core::listeners::{
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
+use mz_tls_util::MakeRustlsConnect;
 use mz_tracing::CloneableEnvFilter;
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
@@ -70,7 +71,6 @@ use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 use tokio_postgres::config::{Host, SslMode};
 use tokio_postgres::{AsyncMessage, Client};
-use tokio_postgres_rustls::MakeRustlsConnect;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::cors::AllowOrigin;
 use tracing::Level;
