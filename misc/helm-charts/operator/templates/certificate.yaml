@@ -32,7 +32,7 @@ spec:
     - {{ include "materialize-operator.fullname" . }}.{{ .Release.Namespace }}.svc
   secretName: {{ include "materialize-operator.fullname" . }}-cert
   privateKey:
-    algorithm: Ed25519
+    algorithm: ECDSA
     rotationPolicy: Always
   issuerRef:
     name: {{ include "materialize-operator.fullname" . }}-self-signed
