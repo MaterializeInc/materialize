@@ -125,7 +125,7 @@ impl ClientConfig {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .build()
-            .unwrap();
+            .map_err(|e| anyhow::anyhow!("failed to build schema registry HTTP client: {e}"))?;
 
         Client::new(inner, self.url, self.auth, timeout)
     }
