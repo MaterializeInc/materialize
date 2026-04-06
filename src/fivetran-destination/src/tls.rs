@@ -85,10 +85,10 @@ where
     type Error = rustls_pki_types::InvalidDnsNameError;
 
     fn make_tls_connect(&mut self, domain: &str) -> Result<Self::TlsConnect, Self::Error> {
-        // Unix socket paths (e.g. "/var/run/postgresql") are not valid DNS names.
-        // tokio-postgres still calls make_tls_connect for Unix socket connections,
-        // but TLS is never actually negotiated, so we use "localhost" as a placeholder.
-        let server_name = if domain.starts_with('/') {
+        // For Unix socket connections, tokio-postgres passes an empty string as
+        // the domain. Socket paths starting with "/" are also not valid DNS names.
+        // TLS is never negotiated over Unix sockets, so use a placeholder.
+        let server_name = if domain.is_empty() || domain.starts_with('/') {
             ServerName::try_from("localhost").unwrap()
         } else {
             ServerName::try_from(domain.to_owned())?
