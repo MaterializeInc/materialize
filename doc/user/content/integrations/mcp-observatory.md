@@ -181,16 +181,49 @@ curl -X POST https://<region-id>.materialize.cloud/api/mcp/observatory \
 
 ### Enabling the endpoint
 
-The observatory endpoint is disabled by default. Enable it at runtime:
+The observatory endpoint is disabled by default.
+
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
+
+Contact [Materialize support](https://materialize.com/docs/support/) to enable
+the MCP observatory endpoint for your environment. The following parameters
+control MCP behavior:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `enable_mcp_observatory` | `false` | Enable or disable the `/api/mcp/observatory` endpoint. |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
-```mzsql
-ALTER SYSTEM SET enable_mcp_observatory = true;
+{{< /tab >}}
+
+{{< tab "Self-Managed" >}}
+
+Enable the endpoint by setting system parameters in your
+[configuration file](/self-managed-deployments/configuration-system-parameters/):
+
+```yaml
+system_parameters:
+  enable_mcp_observatory: "true"
 ```
+
+Or via the [Materialize Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed):
+
+```hcl
+system_parameters = {
+  enable_mcp_observatory = "true"
+}
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_mcp_observatory` | `false` | Enable or disable the `/api/mcp/observatory` endpoint. |
+| `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 When the endpoint is disabled, requests return HTTP 503 (Service Unavailable).
 

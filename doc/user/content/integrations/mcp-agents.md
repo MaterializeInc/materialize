@@ -181,8 +181,15 @@ curl -X POST https://<region-id>.materialize.cloud/api/mcp/agents \
 
 ### Enabling the endpoint
 
-The agents endpoint is disabled by default. Enable it at runtime using system
-parameters:
+The agents endpoint is disabled by default.
+
+{{< tabs >}}
+
+{{< tab "Cloud" >}}
+
+Contact [Materialize support](https://materialize.com/docs/support/) to enable
+the MCP agents endpoint for your environment. The following parameters control
+MCP behavior:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -190,9 +197,35 @@ parameters:
 | `enable_mcp_agents_query_tool` | `false` | Show or hide the `query` tool on the agents endpoint. |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
-```mzsql
-ALTER SYSTEM SET enable_mcp_agents = true;
+{{< /tab >}}
+
+{{< tab "Self-Managed" >}}
+
+Enable the endpoint by setting system parameters in your
+[configuration file](/self-managed-deployments/configuration-system-parameters/):
+
+```yaml
+system_parameters:
+  enable_mcp_agents: "true"
 ```
+
+Or via the [Materialize Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed):
+
+```hcl
+system_parameters = {
+  enable_mcp_agents = "true"
+}
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `enable_mcp_agents` | `false` | Enable or disable the `/api/mcp/agents` endpoint. |
+| `enable_mcp_agents_query_tool` | `false` | Show or hide the `query` tool on the agents endpoint. |
+| `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 When the endpoint is disabled, requests return HTTP 503 (Service Unavailable).
 
