@@ -350,8 +350,9 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_changes` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c31a98afe789" }
+# SEC-239: reqwest native-tls -> rustls on feature branch (not yet merged to mz_changes).
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", branch = "jasonhernandez/rustls-migration" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", branch = "jasonhernandez/rustls-migration" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.
