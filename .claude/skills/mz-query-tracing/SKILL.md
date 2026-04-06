@@ -1,11 +1,11 @@
 ---
 name: mz-query-tracing
 description: >
-  This skill should be used when the user wants to debug or trace where time is
-  spent during query execution in Materialize. Trigger when the user mentions
-  tracing queries, span analysis, query latency breakdown, Tempo traces,
-  trace IDs, or wants to understand where time goes in CREATE TABLE, SELECT,
-  INSERT, DROP, or any other SQL statement execution.
+  Debug where time is spent during SQL execution using distributed tracing
+  (OpenTelemetry / Tempo). Trigger when the user asks "why is this query slow",
+  "where is the time going", "this SELECT takes forever", or wants a latency
+  breakdown for any SQL statement. Also trigger on mentions of tracing queries,
+  span analysis, Tempo traces, trace IDs, or opentelemetry_filter.
 ---
 
 # Query Tracing Skill
