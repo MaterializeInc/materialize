@@ -1,5 +1,5 @@
 ---
-name: adapter-guide
+name: mz-adapter-guide
 description: >
   This skill should be used when the user works on the adapter layer,
   coordinator, pgwire, frontend peek path, peek client, timestamp oracle,

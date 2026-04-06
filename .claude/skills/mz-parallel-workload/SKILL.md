@@ -1,5 +1,5 @@
 ---
-name: parallel-workload
+name: mz-parallel-workload
 description: >
   This skill should be used when the user wants to extend the parallel-workload
   test framework, add a new action, modify existing actions, or add SQL coverage

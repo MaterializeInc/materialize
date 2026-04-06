@@ -1,5 +1,5 @@
 ---
-name: platform-checks
+name: mz-platform-checks
 description: >
   This skill should be used when the user wants to create, modify, or debug a
   platform check. Trigger when the user mentions "platform check", "platform-checks",

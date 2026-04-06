@@ -1,5 +1,5 @@
 ---
-name: debug-ci
+name: mz-debug-ci
 description: Investigate CI failures on a PR using gh and bk CLI tools. Triggers when asked about failing checks, Buildkite failures, or CI issues on a PR.
 argument-hint: <PR number or GitHub PR URL>
 ---

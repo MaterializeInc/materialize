@@ -1,5 +1,5 @@
 ---
-name: query-tracing
+name: mz-query-tracing
 description: >
   This skill should be used when the user wants to debug or trace where time is
   spent during query execution in Materialize. Trigger when the user mentions
@@ -164,7 +164,7 @@ parent span IDs are base64-encoded, not hex. The analysis script handles this.
 Use the `trace_tree.py` script in this skill directory to analyze traces:
 
 ```bash
-python3 .claude/skills/query-tracing/trace_tree.py /tmp/claude-1000/trace.json "My Query"
+python3 .claude/skills/mz-query-tracing/trace_tree.py /tmp/claude-1000/trace.json "My Query"
 ```
 
 ## Interpreting Results

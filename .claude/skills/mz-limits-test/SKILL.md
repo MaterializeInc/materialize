@@ -1,5 +1,5 @@
 ---
-name: limits-test
+name: mz-limits-test
 description: >
   This skill should be used when the user wants to add, modify, or debug a limits
   test. Trigger when the user mentions "limits test", "Generator subclass",
