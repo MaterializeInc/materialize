@@ -85,7 +85,14 @@ where
     type Error = rustls_pki_types::InvalidDnsNameError;
 
     fn make_tls_connect(&mut self, domain: &str) -> Result<Self::TlsConnect, Self::Error> {
-        let server_name = ServerName::try_from(domain.to_owned())?;
+        // Unix socket paths (e.g. "/var/run/postgresql") are not valid DNS names.
+        // tokio-postgres still calls make_tls_connect for Unix socket connections,
+        // but TLS is never actually negotiated, so we use "localhost" as a placeholder.
+        let server_name = if domain.starts_with('/') {
+            ServerName::try_from("localhost").unwrap()
+        } else {
+            ServerName::try_from(domain.to_owned())?
+        };
         Ok(RustlsConnect {
             connector: TlsConnector::from(self.config.clone()),
             server_name,
