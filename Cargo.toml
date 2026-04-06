@@ -333,6 +333,10 @@ launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 
+# Fix rustls backend: PKCS#8 key parsing and skip_domain_validation string match.
+# All changes should go to the `rustls-fixes` branch.
+mysql_async = { git = "https://github.com/MaterializeInc/mysql_async", branch = "rustls-fixes" }
+
 # Need to upstream a few PRs related to test builders.
 #
 # Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.

@@ -166,7 +166,7 @@ contains:requires both SSL KEY and SSL CERTIFICATE
 contains:requires both SSL KEY and SSL CERTIFICATE
 
 ! ALTER CONNECTION schema_registry SET (SSL KEY = SECRET invalid_secret), SET (SSL CERTIFICATE = 'x') WITH (VALIDATE = true);
-contains:No supported data to decode
+contains:failed to parse private key PEM
 
 ! ALTER CONNECTION schema_registry SET (SSL CERTIFICATE AUTHORITY = 'x') WITH (VALIDATE = true);
 contains:CERTIFICATE
