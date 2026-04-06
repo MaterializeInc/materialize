@@ -107,6 +107,16 @@ pub static CREATE_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::ne
 });
 pub static EMPTY_ITEM_USAGE: LazyLock<BTreeSet<CatalogItemType>> = LazyLock::new(BTreeSet::new);
 
+/// Context for indirect privilege errors, where a user tries to access an object
+/// but fails because the object's owner lacks privileges on a dependency.
+#[derive(Debug, Clone)]
+pub struct IndirectPrivilegeContext {
+    /// The object the user was originally trying to access.
+    pub requested_object_description: ErrorMessageObjectDescription,
+    /// The owner of the requested object (who lacks the required privilege).
+    pub requested_object_owner: String,
+}
+
 /// Errors that can occur due to an unauthorized action.
 #[derive(Debug, thiserror::Error)]
 pub enum UnauthorizedError {
@@ -125,6 +135,11 @@ pub enum UnauthorizedError {
         object_description: ErrorMessageObjectDescription,
         role_name: String,
         privileges: String,
+        /// The owner of the object that lacks the required privilege.
+        object_owner_name: Option<String>,
+        /// Context for indirect errors (when a dependency of the requested object
+        /// is inaccessible due to the owner's missing privileges).
+        indirect_context: Option<IndirectPrivilegeContext>,
     },
     // TODO(jkosh44) When we implement parameter privileges, this can be replaced with a regular
     //  privilege error.
@@ -149,9 +164,32 @@ impl UnauthorizedError {
                 object_description,
                 role_name,
                 privileges,
-            } => Some(format!(
-                "The '{role_name}' role needs {privileges} privileges on {object_description}"
-            )),
+                object_owner_name,
+                indirect_context,
+            } => {
+                let mut details = Vec::new();
+
+                // Main privilege requirement
+                details.push(format!(
+                    "The '{}' role needs {} privileges on {}",
+                    role_name, privileges, object_description
+                ));
+
+                // Add owner information if available
+                if let Some(owner) = object_owner_name {
+                    details.push(format!("The owner of {} is '{}'", object_description, owner));
+                }
+
+                // Add indirect context if this is an indirect error
+                if let Some(ctx) = indirect_context {
+                    details.push(format!(
+                        "{} references {}",
+                        ctx.requested_object_description, object_description
+                    ));
+                }
+
+                Some(details.join("\n"))
+            }
             UnauthorizedError::MzSystem { .. } => {
                 Some(format!("You must be the '{}' role", SYSTEM_USER.name))
             }
@@ -163,6 +201,39 @@ impl UnauthorizedError {
                 Some("Please disconnect and re-connect with a valid role.".into())
             }
             UnauthorizedError::Ownership { .. } | UnauthorizedError::RoleMembership { .. } => None,
+        }
+    }
+
+    pub fn hint(&self) -> Option<String> {
+        match &self {
+            UnauthorizedError::Privilege {
+                object_description,
+                role_name,
+                privileges,
+                object_owner_name,
+                indirect_context,
+            } => {
+                // Determine the appropriate GRANT command
+                let grant_target = match indirect_context {
+                    Some(ctx) => &ctx.requested_object_owner,
+                    None => role_name,
+                };
+
+                // Build the hint message
+                let granter = match object_owner_name {
+                    Some(owner) => format!("The owner ('{}') of {} or a superuser", owner, object_description),
+                    None => "A superuser".to_string(),
+                };
+
+                Some(format!(
+                    "{} can grant access: GRANT {} ON {} TO '{}'",
+                    granter, privileges, object_description, grant_target
+                ))
+            }
+            UnauthorizedError::Ownership { .. } => Some(
+                "Ownership can be changed by the current owner or a superuser using ALTER ... OWNER TO.".to_string()
+            ),
+            _ => None,
         }
     }
 }
@@ -1782,15 +1853,90 @@ fn check_object_privileges(
         if !role_privileges.contains(acl_mode) {
             let role_name = catalog.get_role(&role_id).name().to_string();
             let privileges = acl_mode.to_error_string();
+            let object_description =
+                ErrorMessageObjectDescription::from_sys_id(&object_id, catalog);
+
+            // Get owner information for the object
+            let object_owner_name = get_object_owner_name(&object_id, catalog);
+
+            // Determine if this is an indirect error (the failing role is not the current user,
+            // meaning a view/MV owner lacks privileges on a dependency)
+            let indirect_context = if role_id != current_role_id {
+                // Find the dependent object(s) that caused this indirect check.
+                // The role_id is the owner of a view/MV that references the failing object.
+                find_indirect_context(&object_id, &role_id, catalog)
+            } else {
+                None
+            };
+
             return Err(UnauthorizedError::Privilege {
-                object_description: ErrorMessageObjectDescription::from_sys_id(&object_id, catalog),
+                object_description,
                 role_name,
                 privileges,
+                object_owner_name,
+                indirect_context,
             });
         }
     }
 
     Ok(())
+}
+
+/// Gets the owner name for an object, if available.
+fn get_object_owner_name(object_id: &SystemObjectId, catalog: &impl SessionCatalog) -> Option<String> {
+    match object_id {
+        SystemObjectId::System => None,
+        SystemObjectId::Object(ObjectId::Cluster(id)) => {
+            Some(catalog.get_role(&catalog.get_cluster(*id).owner_id()).name().to_string())
+        }
+        SystemObjectId::Object(ObjectId::Database(id)) => {
+            Some(catalog.get_role(&catalog.get_database(id).owner_id()).name().to_string())
+        }
+        SystemObjectId::Object(ObjectId::Schema((db_spec, schema_spec))) => {
+            Some(catalog.get_role(&catalog.get_schema(db_spec, schema_spec).owner_id()).name().to_string())
+        }
+        SystemObjectId::Object(ObjectId::Item(id)) => {
+            Some(catalog.get_role(&catalog.get_item(id).owner_id()).name().to_string())
+        }
+        SystemObjectId::Object(ObjectId::Role(_)) => None, // Roles don't have owners in this sense
+        SystemObjectId::Object(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
+            Some(catalog.get_role(&catalog.get_cluster_replica(*cluster_id, *replica_id).owner_id()).name().to_string())
+        }
+        SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
+            Some(catalog.get_role(&catalog.get_network_policy(id).owner_id()).name().to_string())
+        }
+    }
+}
+
+/// Finds the context for an indirect privilege error by looking for views/MVs
+/// owned by the given role that reference the failing object.
+fn find_indirect_context(
+    failing_object_id: &SystemObjectId,
+    owner_role_id: &RoleId,
+    catalog: &impl SessionCatalog,
+) -> Option<IndirectPrivilegeContext> {
+    // Only Item objects can have dependents
+    let failing_item_id = match failing_object_id {
+        SystemObjectId::Object(ObjectId::Item(id)) => id,
+        _ => return None,
+    };
+
+    // Look through items that use this object to find one owned by owner_role_id
+    let item = catalog.get_item(failing_item_id);
+    for dependent_id in item.used_by() {
+        let dependent_item = catalog.get_item(dependent_id);
+        if &dependent_item.owner_id() == owner_role_id {
+            let dependent_description =
+                ErrorMessageObjectDescription::from_id(&ObjectId::Item(*dependent_id), catalog);
+            let owner_name = catalog.get_role(owner_role_id).name().to_string();
+            return Some(IndirectPrivilegeContext {
+                requested_object_description: dependent_description,
+                requested_object_owner: owner_name,
+            });
+        }
+    }
+
+    None
 }
 
 pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {

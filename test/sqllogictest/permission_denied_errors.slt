@@ -1,0 +1,266 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for improved "permission denied" error messages.
+# Verifies that errors include:
+# - The role needing the privilege
+# - The required privilege type
+# - The owner of the object
+# - A HINT with the suggested GRANT command
+# - For indirect errors: the dependency chain
+
+mode cockroach
+
+reset-server
+
+# Enable rbac checks.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO true;
+----
+COMPLETE 0
+
+# Create test roles using placeholder names (not real user accounts)
+simple conn=mz_system,user=mz_system
+CREATE ROLE test_role1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE test_role2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE test_role3;
+----
+COMPLETE 0
+
+# Create a test database and schema owned by test_role2
+simple conn=mz_system,user=mz_system
+GRANT CREATEDB ON SYSTEM TO test_role2;
+----
+COMPLETE 0
+
+simple conn=test_role2,user=test_role2
+CREATE DATABASE testdb;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE CREATEDB ON SYSTEM FROM test_role2;
+----
+COMPLETE 0
+
+# Grant schema access to test_role2
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE testdb TO test_role2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON DATABASE testdb TO test_role2;
+----
+COMPLETE 0
+
+simple conn=test_role2,user=test_role2
+CREATE SCHEMA testdb.testschema;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA testdb.testschema TO test_role2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA testdb.testschema TO test_role2;
+----
+COMPLETE 0
+
+# Create a test table owned by test_role2
+simple conn=test_role2,user=test_role2
+CREATE TABLE testdb.testschema.test_table (id INT);
+----
+COMPLETE 0
+
+# Insert some data
+simple conn=test_role2,user=test_role2
+INSERT INTO testdb.testschema.test_table VALUES (1), (2), (3);
+----
+COMPLETE 3
+
+# -------------------------------------------------------------------
+# Test 1: Direct privilege error - test_role1 cannot SELECT from test_role2's table
+# The error should show:
+# - Which role needs which privilege
+# - Who owns the object
+# - A HINT with suggested GRANT command
+# -------------------------------------------------------------------
+
+# First grant usage on schema so the error is about table access
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE testdb TO test_role1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA testdb.testschema TO test_role1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER quickstart TO test_role1;
+----
+COMPLETE 0
+
+# Test the improved error message
+statement error permission denied for TABLE "testdb.testschema.test_table"
+SELECT * FROM testdb.testschema.test_table;
+
+# -------------------------------------------------------------------
+# Test 2: Indirect privilege error - MV owner lacks access to dependency
+# When a user queries an MV but the MV's owner lost access to a dependency,
+# the error should explain the full picture.
+# -------------------------------------------------------------------
+
+# Grant test_role2 access to create MVs
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER quickstart TO test_role2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON CLUSTER quickstart TO test_role2;
+----
+COMPLETE 0
+
+# Create a source table owned by test_role3
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE testdb TO test_role3;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA testdb.testschema TO test_role3;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA testdb.testschema TO test_role3;
+----
+COMPLETE 0
+
+simple conn=test_role3,user=test_role3
+CREATE TABLE testdb.testschema.source_table (id INT, value TEXT);
+----
+COMPLETE 0
+
+simple conn=test_role3,user=test_role3
+INSERT INTO testdb.testschema.source_table VALUES (1, 'a'), (2, 'b');
+----
+COMPLETE 2
+
+# Grant test_role2 SELECT on source_table so they can create MV
+simple conn=test_role3,user=test_role3
+GRANT SELECT ON TABLE testdb.testschema.source_table TO test_role2;
+----
+COMPLETE 0
+
+# test_role2 creates a materialized view that references source_table
+simple conn=test_role2,user=test_role2
+CREATE MATERIALIZED VIEW testdb.testschema.my_mv AS SELECT * FROM testdb.testschema.source_table;
+----
+COMPLETE 0
+
+# Grant test_role1 SELECT on the MV
+simple conn=test_role2,user=test_role2
+GRANT SELECT ON TABLE testdb.testschema.my_mv TO test_role1;
+----
+COMPLETE 0
+
+# Now revoke test_role2's access to source_table
+simple conn=test_role3,user=test_role3
+REVOKE SELECT ON TABLE testdb.testschema.source_table FROM test_role2;
+----
+COMPLETE 0
+
+# When test_role1 tries to query the MV, they should get an indirect error
+# The error should show: MV references source_table, and test_role2 (MV owner) lacks access
+simple conn=test_role1,user=test_role1
+SELECT * FROM testdb.testschema.my_mv;
+----
+db error: ERROR: permission denied for TABLE "testdb.testschema.source_table"
+
+# -------------------------------------------------------------------
+# Test 3: Direct schema privilege error with owner info
+# -------------------------------------------------------------------
+
+# Create new user without schema CREATE privilege
+simple conn=mz_system,user=mz_system
+CREATE ROLE test_role4;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE testdb TO test_role4;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA testdb.testschema TO test_role4;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON CLUSTER quickstart TO test_role4;
+----
+COMPLETE 0
+
+# test_role4 tries to create a table but lacks CREATE on schema
+statement error permission denied for SCHEMA "testdb.testschema"
+CREATE TABLE testdb.testschema.new_table (id INT);
+
+# -------------------------------------------------------------------
+# Test 4: SYSTEM privilege error (no owner, but has hint)
+# -------------------------------------------------------------------
+
+simple conn=test_role1,user=test_role1
+CREATE DATABASE newdb;
+----
+db error: ERROR: permission denied for SYSTEM
+
+# -------------------------------------------------------------------
+# Cleanup
+# -------------------------------------------------------------------
+
+simple conn=mz_system,user=mz_system
+DROP DATABASE testdb CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE test_role1;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE test_role2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE test_role3;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP ROLE test_role4;
+----
+COMPLETE 0

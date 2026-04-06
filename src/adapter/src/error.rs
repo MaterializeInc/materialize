@@ -556,6 +556,7 @@ impl AdapterError {
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
             ),
+            AdapterError::Unauthorized(e) => e.hint(),
             _ => None,
         }
     }

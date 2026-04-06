@@ -64,18 +64,23 @@ REVOKE USAGE ON CLUSTER quickstart FROM PUBLIC;
 COMPLETE 0
 
 # CREATE CONNECTION
+# Note: Error messages now include owner info and HINT with suggested GRANT command
 
 simple conn=joe,user=joe
 CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'joe' role needs CREATE privileges on SCHEMA "materialize.public"
+The owner of SCHEMA "materialize.public" is 'mz_system'
+HINT: The owner ('mz_system') of SCHEMA "materialize.public" or a superuser can grant access: GRANT CREATE ON SCHEMA "materialize.public" TO 'joe'
 
 simple conn=child,user=child
 CREATE CONNECTION conn TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false);
 ----
 db error: ERROR: permission denied for SCHEMA "materialize.public"
 DETAIL: The 'child' role needs CREATE privileges on SCHEMA "materialize.public"
+The owner of SCHEMA "materialize.public" is 'mz_system'
+HINT: The owner ('mz_system') of SCHEMA "materialize.public" or a superuser can grant access: GRANT CREATE ON SCHEMA "materialize.public" TO 'child'
 
 simple conn=mz_system,user=mz_system
 GRANT CREATE ON SCHEMA materialize.public TO joe;
@@ -98,18 +103,21 @@ REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 COMPLETE 0
 
 # CREATE DATABASE
+# Note: SYSTEM errors don't have an owner, but still include HINT
 
 simple conn=joe,user=joe
 CREATE DATABASE d;
 ----
 db error: ERROR: permission denied for SYSTEM
 DETAIL: The 'joe' role needs CREATEDB privileges on SYSTEM
+HINT: A superuser can grant access: GRANT CREATEDB ON SYSTEM TO 'joe'
 
 simple conn=child,user=child
 CREATE DATABASE d;
 ----
 db error: ERROR: permission denied for SYSTEM
 DETAIL: The 'child' role needs CREATEDB privileges on SYSTEM
+HINT: A superuser can grant access: GRANT CREATEDB ON SYSTEM TO 'child'
 
 simple conn=mz_system,user=mz_system
 GRANT CREATEDB ON SYSTEM TO joe;
