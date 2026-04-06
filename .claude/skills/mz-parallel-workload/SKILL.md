@@ -1,13 +1,13 @@
 ---
 name: mz-parallel-workload
 description: >
-  This skill should be used when the user wants to extend the parallel-workload
-  test framework, add a new action, modify existing actions, or add SQL coverage
-  to parallel workload. Trigger when the user mentions "parallel workload",
-  "parallel-workload", "action.py" in the context of parallel workload,
-  or wants to test for panics or unexpected query errors under concurrency.
-  Use this skill even if the user just says "add this to parallel workload" or
-  references a bug that panics under concurrent DDL/DML.
+  Extend the parallel-workload stress-testing framework, which runs random SQL
+  actions concurrently to catch panics and unexpected errors (not performance
+  measurement — see mz-benchmark for that). Trigger when the user mentions
+  "parallel workload", "parallel-workload", "action.py" in the context of
+  parallel workload, or wants to test for panics or unexpected query errors under
+  concurrency. Use this skill even if the user just says "add this to parallel
+  workload" or references a bug that panics under concurrent DDL/DML.
 ---
 
 # Extending Parallel Workload
