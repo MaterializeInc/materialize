@@ -326,12 +326,24 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 
-# Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
+# Add enable_reqwest_rustls_no_provider feature to avoid pulling in ring,
+# which conflicts with aws-lc-fips-sys in FIPS builds.
+# See https://github.com/Azure/azure-sdk-for-rust/issues/1680
+azure_core = { git = "https://github.com/MaterializeInc/azure-sdk-for-rust.git", branch = "mz/enable-reqwest-rustls-no-provider" }
+azure_identity = { git = "https://github.com/MaterializeInc/azure-sdk-for-rust.git", branch = "mz/enable-reqwest-rustls-no-provider" }
+azure_storage = { git = "https://github.com/MaterializeInc/azure-sdk-for-rust.git", branch = "mz/enable-reqwest-rustls-no-provider" }
+azure_storage_blobs = { git = "https://github.com/MaterializeInc/azure-sdk-for-rust.git", branch = "mz/enable-reqwest-rustls-no-provider" }
+azure_svc_blobstorage = { git = "https://github.com/MaterializeInc/azure-sdk-for-rust.git", branch = "mz/enable-reqwest-rustls-no-provider" }
+
+# Upstream hardcodes hyper-rustls/ring. Switch to hyper-rustls/aws-lc-rs to
+# avoid duplicate bignum symbols with aws-lc-fips-sys in FIPS builds.
+launchdarkly-sdk-transport = { git = "https://github.com/MaterializeInc/rust-sdk-transport.git", branch = "mz/aws-lc-rs-instead-of-ring" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+# Branch adds ssl-awslc feature to build librdkafka against aws-lc instead of
+# vendored OpenSSL, eliminating duplicate crypto library symbols.
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", branch = "jasonhernandez/ssl-awslc" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", branch = "jasonhernandez/ssl-awslc" }
 
 # Fix rustls backend: PKCS#8 key parsing and skip_domain_validation string match.
 # All changes should go to the `rustls-fixes` branch.
@@ -359,7 +371,9 @@ iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.g
 # The main change is allowing the TLS implementation to be selected via features.
 # Hopefully we can upstream these changes eventually.
 # Additionally we keep the apache crates updated to latest versions.
-duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
+# Branch mz/rustls-tls-no-provider changes libduckdb-sys default from
+# reqwest/rustls-tls (ring) to reqwest/rustls-tls-webpki-roots-no-provider (aws-lc-rs).
+duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", branch = "mz/rustls-tls-no-provider" }
 
 
 # BEGIN LINT CONFIG

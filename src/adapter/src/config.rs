@@ -91,7 +91,10 @@ impl SystemParameterSyncConfig {
 
 #[derive(Debug, Clone)]
 pub(super) struct Metrics {
+    // TODO(SEC-259): restore metric callbacks lost in LD SDK 3.0 upgrade.
+    #[allow(dead_code)]
     pub last_cse_time_seconds: UIntGauge,
+    #[allow(dead_code)]
     pub last_sse_time_seconds: UIntGauge,
     pub params_changed: IntCounter,
 }

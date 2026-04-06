@@ -24,8 +24,25 @@
 
 use std::sync::Arc;
 
+/// Auto-install the crypto provider when any binary links mz-ore with the
+/// `crypto` feature. This ensures reqwest (with `rustls-tls-*-no-provider`)
+/// can build TLS clients in any context — main binaries, test binaries, and
+/// build scripts — without requiring explicit `fips_crypto_provider()` calls.
+///
+/// In FIPS mode, uses the FIPS-validated aws-lc module. Otherwise, uses the
+/// standard aws-lc-rs provider. The two paths link different C libraries
+/// (aws-lc-fips-sys vs aws-lc-sys) and must not both be active.
+#[ctor::ctor]
+fn auto_install_crypto_provider() {
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+    let _ = provider.install_default();
+}
+
 /// Returns the [`rustls::crypto::CryptoProvider`] appropriate for the current
 /// build.
+///
+/// - With the `fips` feature: uses the FIPS 140-3 validated aws-lc module.
+/// - Without `fips`: uses the standard aws-lc-rs provider.
 ///
 /// On the first call, this also installs the provider as the process-wide
 /// default so that any rustls usage (including transitive dependencies like
@@ -33,9 +50,10 @@ use std::sync::Arc;
 ///
 /// The returned provider is cached in an `Arc` so cloning is cheap.
 pub fn fips_crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    // Both paths use aws_lc_rs::default_provider(), but with the `fips`
+    // feature enabled, aws-lc-rs links against aws-lc-fips-sys instead of
+    // aws-lc-sys, providing the FIPS-validated cryptographic module.
     let provider = rustls::crypto::aws_lc_rs::default_provider();
-    // Install as the process-wide default. Ignore the error if it was
-    // already installed (e.g. by a previous call).
     let _ = provider.clone().install_default();
     Arc::new(provider)
 }

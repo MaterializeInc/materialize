@@ -10,12 +10,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
-#[cfg(feature = "telemetry")]
-use hyper_tls::HttpsConnector;
 #[cfg(feature = "telemetry")]
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
@@ -68,7 +65,7 @@ impl SystemParameterFrontend {
     /// Create a new [SystemParameterFrontend] initialize.
     ///
     /// This will create and initialize an [ld::Client] instance. The
-    /// [ld::Client::initialized_async] call will be attempted in a loop with an
+    /// [ld::Client::wait_for_initialization] call will be attempted in a loop with an
     /// exponential backoff with power `2s` and max duration `60s`.
     pub async fn from(sync_config: &SystemParameterSyncConfig) -> Result<Self, anyhow::Error> {
         match &sync_config.backend_config {
@@ -154,24 +151,11 @@ impl SystemParameterFrontend {
 
 #[cfg(feature = "telemetry")]
 fn ld_config(api_key: &str, metrics: &Metrics) -> ld::Config {
+    // TODO: re-add on_success callback for last_cse_time_seconds metric once
+    // we can reference hyper-rustls 0.24 types for EventProcessorBuilder<C>.
+    // The LD SDK with the `rustls` feature creates default hyper-rustls connectors.
+    let _ = metrics;
     ld::ConfigBuilder::new(api_key)
-        .event_processor(
-            ld::EventProcessorBuilder::new()
-                .https_connector(HttpsConnector::new())
-                .on_success({
-                    let last_cse_time_seconds = metrics.last_cse_time_seconds.clone();
-                    Arc::new(move |result| {
-                        if let Ok(ts) = u64::try_from(result.time_from_server / 1000) {
-                            last_cse_time_seconds.set(ts);
-                        } else {
-                            tracing::warn!(
-                                "Cannot convert time_from_server / 1000 from u128 to u64"
-                            );
-                        }
-                    })
-                }),
-        )
-        .data_source(ld::StreamingDataSourceBuilder::new().https_connector(HttpsConnector::new()))
         .build()
         .expect("valid config")
 }
@@ -187,14 +171,11 @@ async fn ld_client(
     // Start and initialize LD client for the frontend. The callback passed
     // will export the last time when an SSE event from the LD server was
     // received in a Prometheus metric.
-    ld_client.start_with_default_executor_and_callback({
-        let last_sse_time_seconds = metrics.last_sse_time_seconds.clone();
-        let now_fn = now_fn.clone();
-        Arc::new(move |_ev| {
-            let ts = now_fn() / 1000;
-            last_sse_time_seconds.set(ts);
-        })
-    });
+    // TODO: The 3.0 SDK removed start_with_default_executor_and_callback.
+    // Re-add SSE timestamp metric (last_sse_time_seconds) once the SDK
+    // exposes an event callback or observable connection state.
+    let _ = (metrics, now_fn);
+    ld_client.start_with_default_executor();
 
     let max_backoff = Duration::from_secs(60);
     let mut backoff = Duration::from_secs(5);

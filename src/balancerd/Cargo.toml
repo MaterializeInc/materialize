@@ -23,7 +23,7 @@ humantime = "2.3.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-util = "0.1.20"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false, optional = true }
+launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["hyper-rustls-webpki-roots", "crypto-aws-lc-rs"], optional = true }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }

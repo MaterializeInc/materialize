@@ -40,7 +40,7 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema} timestamp=1
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://ssl-basic.schema-registry.local:8082'
   )
-contains:certificate verify failed
+contains:UnknownIssuer
 
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://ssl-basic.schema-registry.local:8082',
@@ -176,10 +176,10 @@ contains:CERTIFICATE
 > ALTER CONNECTION schema_registry RESET (SSL CERTIFICATE);
 
 ! ALTER CONNECTION schema_registry RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:self-signed certificate in certificate chain
+contains:UnknownIssuer
 
 ! ALTER CONNECTION schema_registry RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY);
-contains:self-signed certificate in certificate chain
+contains:UnknownIssuer
 
 ! ALTER CONNECTION schema_registry RESET (USERNAME);
 contains:Unauthorized

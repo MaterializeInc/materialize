@@ -52,10 +52,10 @@ contains:error sending request for url
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:failed to build schema registry HTTP client
+contains:CertificateUnknown
 
-# This is a bad error message to indicate "invalid client certificate" but
-# it's not under our control. With rustls, the error is about inconsistent keys.
+# Key-cert mismatch: schema-registry cert with kafka key. Rustls detects the
+# mismatch when building the TLS client config.
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl.schema-registry.local:8082',
     SSL CERTIFICATE = '${schema-registry-crt}',

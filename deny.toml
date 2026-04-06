@@ -148,7 +148,24 @@ skip = [
     { name = "toml_edit", version = "0.22.27" },
     { name = "webpki-roots", version = "0.26.11" },
     { name = "winnow", version = "0.7.15" },
+
 ]
+
+# Use rustls + aws-lc-rs instead. native-tls pulls in OpenSSL which causes
+# symbol collisions with aws-lc-rs and prevents FIPS compliance.
+[[bans.deny]]
+name = "native-tls"
+
+# Use rustls + aws-lc-rs instead. hyper-tls depends on native-tls.
+[[bans.deny]]
+name = "hyper-tls"
+
+# Use aws-lc-rs (via rdkafka ssl-awslc) instead of vendored OpenSSL.
+[[bans.deny]]
+name = "openssl-sys"
+
+[[bans.deny]]
+name = "openssl-src"
 
 [[bans.deny]]
 crate = "crossbeam-channel@0.5.14"
@@ -199,7 +216,7 @@ wrappers = [
     "hyper-rustls",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
-    "native-tls",
+    "launchdarkly-sdk-transport",
     "opendal",
     "os_info",
     "postgres",

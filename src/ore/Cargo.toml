@@ -19,7 +19,9 @@ anyhow = { version = "1.0.102", optional = true }
 # Exceptions: `either` (zero deps, quasi-stdlib) and `zeroize` (zero runtime
 # deps, security-critical — must be available unconditionally so that
 # `ore::secure` types are always accessible without feature-flag opt-in).
-# aws-lc-rs is the FIPS 140-3 validated crypto backend. When the `fips` feature
+# aws-lc-rs is the crypto backend. default-features=false avoids pulling in
+# aws-lc-sys unconditionally; the `crypto` or `fips` features select which
+# C library to link (aws-lc-sys vs aws-lc-fips-sys).
 # is enabled, it links against aws-lc-fips-sys (the validated module).
 aws-lc-rs = { version = "1", optional = true }
 async-trait = { version = "0.1.89", optional = true }
@@ -87,7 +89,7 @@ http = { version = "1.4.0", optional = true }
 tracing = { version = "0.1.44", optional = true }
 tracing-opentelemetry = { version = "0.32.1", optional = true }
 tonic = { version = "0.14.2", features = ["transport"], optional = true }
-hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "http2", "native-tokio", "tls12"], optional = true }
+hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "http1", "http2", "native-tokio", "tls12"], optional = true }
 hyper-util = { version = "0.1.20", optional = true }
 opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"], optional = true }
@@ -154,10 +156,12 @@ assert-no-tracing = []
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
-# FIPS 140-3 compliance: use aws-lc-rs as the crypto backend.
-# `crypto` enables aws-lc-rs in standard (non-FIPS) mode.
-# `fips` enables aws-lc-rs with FIPS 140-3 validated module.
-crypto = ["aws-lc-rs", "rustls"]
+# `crypto` enables the aws-lc-rs crypto backend in standard (non-FIPS) mode.
+# `fips` enables the FIPS 140-3 validated module. These features are mutually
+# exclusive at link time (aws-lc-sys vs aws-lc-fips-sys duplicate symbols).
+# Do NOT activate both (e.g., via `--all-features`). CI excludes mz-ore from
+# --all-features runs to avoid this; mz-ore is tested transitively via deps.
+crypto = ["aws-lc-rs", "rustls", "ctor"]
 fips = ["crypto", "aws-lc-rs/fips"]
 
 [[test]]

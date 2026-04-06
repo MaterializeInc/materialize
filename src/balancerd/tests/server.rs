@@ -46,6 +46,7 @@ use uuid::Uuid;
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_balancer() {
+    let _ = mz_ore::crypto::fips_crypto_provider();
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
