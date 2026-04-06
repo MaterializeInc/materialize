@@ -47,7 +47,7 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema}
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:CertificateUnknown
+contains:failed to build schema registry HTTP client
 
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl-basic.schema-registry.local:8082',

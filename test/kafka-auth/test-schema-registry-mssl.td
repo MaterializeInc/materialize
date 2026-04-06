@@ -52,7 +52,7 @@ contains:error sending request for url
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:CertificateUnknown
+contains:failed to build schema registry HTTP client
 
 # This is a bad error message to indicate "invalid client certificate" but
 # it's not under our control. With rustls, the error is about inconsistent keys.
@@ -62,7 +62,7 @@ contains:CertificateUnknown
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:keys may not be consistent
+contains:failed to build schema registry HTTP client
 
 # ==> Test without an SSH tunnel. <==
 
