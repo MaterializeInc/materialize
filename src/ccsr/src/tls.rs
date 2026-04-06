@@ -28,6 +28,10 @@ impl Identity {
     pub fn from_pem(key: &[u8], cert: &[u8]) -> Result<Self, anyhow::Error> {
         let mut archive = pkcs12der_from_pem(key, cert)
             .map_err(|e| anyhow::anyhow!("failed to build PKCS#12 identity: {e}"))?;
+        // Also validate that reqwest can parse the PEM identity, since the
+        // From<Identity> conversion uses expect() and must not panic.
+        reqwest::Identity::from_pem(&archive.der)
+            .map_err(|e| anyhow::anyhow!("failed to build reqwest identity: {e}"))?;
         Ok(Identity {
             der: std::mem::take(&mut archive.der),
             pass: std::mem::take(&mut archive.pass),
