@@ -108,6 +108,10 @@ const getNavItems = ({
               },
             ]
           : []),
+        {
+          label: "Maintained objects",
+          href: `/regions/${regionSlug}/maintained-objects`,
+        },
         ...(canViewQueryHistory
           ? [
               {

@@ -35,6 +35,7 @@ export function buildLargestClusterReplicaQuery(clusterId: string) {
         "cr.id",
       )
       .select([
+        "cr.id",
         "cr.name",
         "cr.size",
         sql<string | null>`crhm.heap_limit::text`.as("heapLimit"),
@@ -42,6 +43,7 @@ export function buildLargestClusterReplicaQuery(clusterId: string) {
       ])
       .where("cr.cluster_id", "=", clusterId)
       .groupBy([
+        "cr.id",
         "cr.name",
         "cr.size",
         "crs.memory_bytes",
