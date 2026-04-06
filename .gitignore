@@ -67,3 +67,4 @@ uv.lock
 /misc/kind/cache/
 /plots/
 /test/testdrive/types.parquet*
+.playwright-mcp/

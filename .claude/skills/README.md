@@ -4,6 +4,12 @@ This directory contains skills that teach Claude Code how to work effectively in
 the Materialize codebase. Skills are triggered automatically based on context, or
 can be invoked explicitly with `/<skill-name>`.
 
+## Console
+
+| Skill | Trigger | What it does |
+|---|---|---|
+| **console-papercut** | Papercut issues, CNS-* references | Pulls a papercut from Linear, fixes it using existing codebase patterns, verifies in browser, and opens a PR |
+
 ## Development Workflow
 
 | Skill | Trigger | What it does |

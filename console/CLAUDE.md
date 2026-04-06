@@ -172,38 +172,153 @@ These are enforced by ESLint to ensure consistent patterns:
 - Extract components only when actually reusable
 - Co-locate tests with components (e.g., `Component.tsx` and `Component.test.tsx`)
 
+### Page Component Structure
+
+Every feature page follows this pattern — outer wrapper with error boundary + suspense, inner component with logic:
+
+```tsx
+export const MyPage = () => (
+  <AppErrorBoundary fallback={<ErrorBox message="Failed to load data" />}>
+    <React.Suspense fallback={<LoadingContainer />}>
+      <MyPageInner />
+    </React.Suspense>
+  </AppErrorBoundary>
+);
+
+const MyPageInner = () => {
+  const { data, refetch } = useMyData();
+  if (!data?.length) return <EmptyListWrapper>...</EmptyListWrapper>;
+  return <MainContentContainer>...</MainContentContainer>;
+};
+```
+
+### Overflow Menu Pattern
+
+Use `OverflowMenu` with `{ visible, render }` objects — conditionally show items without nulls in JSX:
+
+```tsx
+<OverflowMenu
+  items={[
+    { visible: canEdit, render: () => <EditMenuItem /> },
+    { visible: canDelete, render: () => <DeleteMenuItem onDelete={refetch} /> },
+  ]}
+/>
+```
+
+### Toast Deduplication
+
+Reuse toast IDs to prevent stacking on repeated events:
+
+```tsx
+const TOAST_ID = "my-feature-status";
+if (!toast.isActive(TOAST_ID)) {
+  toast({ id: TOAST_ID, description: "Connection restored" });
+}
+```
+
+### Theme Tokens
+
+Reference semantic theme tokens — never use raw color values:
+
+```tsx
+// Good: uses theme-aware token
+<Box bg="background.secondary" color="foreground.primary" />
+
+// Bad: hardcoded color
+<Box bg="#f5f5f5" color="#333" />
+```
+
+Light/dark mode palettes are in `src/theme/light.ts` and `src/theme/dark.ts`. Use `useTheme<MaterializeTheme>()` when accessing custom theme properties.
+
 ## API & Data Fetching
 
 ### Kysely Query Builder
 
-Kysely provides type-safe SQL against the Materialize system catalog:
+Queries follow a 3-part pattern: builder function, type inference, and fetch wrapper:
 
 ```tsx
-// Query builder pattern
-export const buildClustersQuery = () => {
+// 1. Query builder
+export const buildClustersQuery = (filters?: Filters) => {
   return queryBuilder
     .selectFrom("mz_clusters as c")
     .select(["c.id", "c.name"])
     .$if(condition, (qb) => qb.select("extra_field"))
     .compile();
 };
+
+// 2. Type inference from builder
+export type Cluster = InferResult<ReturnType<typeof buildClustersQuery>>[0];
+
+// 3. Fetch wrapper with Sentry span
+export async function fetchClusters(params, queryKey, requestOptions?) {
+  const compiled = buildClustersQuery(params).compile();
+  return Sentry.startSpan({ name: "clusters-query", op: "http.client" }, () =>
+    executeSqlV2({ queries: compiled, queryKey, requestOptions })
+  );
+}
 ```
 
 - Use `sql` tagged template for raw SQL to prevent injection
 - Use `$if()` only for optional selects (per Kysely docs)
 
-### useSql Hooks
+### Query Keys
 
-- `useSql` / `useSqlTyped` - Declarative data fetching with automatic polling/refetch
-- `useSqlLazy` - Imperative calls for form submissions and user actions
-- `useSqlMany` - Multiple queries in a single request
+Define hierarchical query keys per feature for targeted cache invalidation:
+
+```tsx
+export const clusterQueryKeys = {
+  all: () => buildRegionQueryKey("clusters"),
+  list: (filters?) => [...clusterQueryKeys.all(), buildQueryKeyPart("list", filters)],
+  replicas: (params) => [...clusterQueryKeys.all(), buildQueryKeyPart("replicas", params)],
+};
+```
+
+### Data Fetching Hooks
+
+- `useSuspenseQuery` — for required data (must be inside Suspense boundary)
+- `useQuery` — for optional data
+- `useSqlTyped` / `useSql` — declarative data fetching with automatic polling/refetch
+- `useSqlLazy` — imperative calls for form submissions and user actions
+- `useSqlMany` — multiple queries in a single request
+- Set `refetchInterval` for metrics/status queries (not static data)
+- Set `staleTime` to reduce unnecessary refetches
+
+### Form Patterns
+
+Forms use React Hook Form with `mode: "onTouched"` (validate on blur, not keystroke):
+
+```tsx
+const { register, handleSubmit, setError, formState } = useForm<FormState>({
+  mode: "onTouched",
+});
+
+// useSqlLazy for submission
+const { runSql, loading } = useSqlLazy({ queryBuilder: (values) => buildStatement(values) });
+
+const onSubmit = (values: FormState) => {
+  runSql(values, {
+    onSuccess: () => { onClose(); toast({ description: "Created" }); },
+    onError: (err) => {
+      if (isDuplicateNameError(err)) setError("name", { message: "Name exists" });
+      else setGeneralFormError(err.message);
+    },
+  });
+};
+```
+
+- Separate field-specific errors (`setError`) from general form errors (state)
+- Parse SQL errors with helper functions (e.g., `isDuplicateReplicaName()`)
+- Toast on success, inline Alert on error
+- Loading state on submit button via `isLoading={loading}`
 
 ### Error Handling
 
 - Don't expose HTTP status codes in user-facing error messages
 - Use generic fallback: "An error occurred" for unexpected errors
+- Use custom error classes for specific types (`PermissionError`, `DatabaseError`)
+- Parse error details with helpers (`isPermissionError()`, `duplicateReplicaName()`)
+- `PermissionError` sets `skipQueryRetry = true` — don't retry auth failures
 - Consider transactions when creating multiple related objects
-- Extract common error messages to shared utilities
 
 ## Testing
 
