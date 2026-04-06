@@ -1,5 +1,11 @@
 # Materialize
 
+## Skills
+
+This repo has Materialize-specific skills in `.claude/skills/`. Before starting
+a task, check if a relevant `mz-*` skill exists — they encode project-specific
+conventions and save significant time.
+
 ## Code navigation
 
 When tracing how an operation flows through the codebase, read these files first:

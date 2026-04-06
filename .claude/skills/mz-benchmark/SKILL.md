@@ -1,14 +1,16 @@
 ---
 name: mz-benchmark
 description: >
-  This skill should be used when the user wants to add, modify, or debug a
-  benchmark scenario for performance testing. Trigger when the user mentions
+  Add, modify, or debug benchmark scenarios for measuring Materialize
+  performance. Covers three frameworks: Feature Benchmark (single-operation
+  micro-benchmarks), Scalability Test (SQL throughput under concurrency), and
+  Parallel Benchmark (sustained latency over time via scenarios.py). Trigger on
   "benchmark", "feature benchmark", "scalability test", "parallel benchmark",
-  "performance regression", "micro-benchmark", "TPS", "latency test", or wants
-  to measure how fast a SQL operation runs. Also trigger when the user edits
-  files in misc/python/materialize/feature_benchmark/scenarios/,
-  misc/python/materialize/scalability/workload/workloads/, or
-  misc/python/materialize/parallel_benchmark/scenarios.py.
+  "performance regression", "micro-benchmark", "TPS", "latency test", or when
+  editing files in feature_benchmark/scenarios/, scalability/workload/workloads/,
+  or parallel_benchmark/scenarios.py. Note: this is about benchmark measurement
+  frameworks, not the parallel-workload stress-testing framework (which tests for
+  panics under concurrency, not performance).
 ---
 
 # Benchmark Frameworks
