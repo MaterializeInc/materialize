@@ -9,8 +9,8 @@ description: >
   cargo test, nextest, flaky tests, or test failures. Use this skill even if the
   user just says "test this" or "how do I verify this works" without naming a
   specific framework. For deep guidance on specific frameworks, see the dedicated
-  skills: platform-checks (upgrade/restart survival), parallel-workload
-  (concurrent stress testing), and limits-test (scaling to many objects).
+  skills: mz-platform-checks (upgrade/restart survival), mz-parallel-workload
+  (concurrent stress testing), and mz-limits-test (scaling to many objects).
 ---
 
 # Testing Materialize
