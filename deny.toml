@@ -282,14 +282,6 @@ wrappers = [
 # Use `aws_lc_rs` instead of `ring` — ring is not FIPS-validated.
 [[bans.deny]]
 name = "ring"
-wrappers = [
-    # rustls and rustls-webpki have ring activated via feature unification
-    # from kube (kubernetes client) which enables hyper-rustls/ring.
-    "rustls",
-    "rustls-webpki",
-    # Third-party crate — TODO: track upstream migration.
-    "aws-config",
-]
 
 # Use `aws_lc_rs::pbkdf2` instead.
 [[bans.deny]]
