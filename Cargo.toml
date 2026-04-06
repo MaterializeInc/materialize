@@ -330,8 +330,10 @@ serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
 launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
-rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
-rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
+# Branch adds ssl-awslc feature to use pre-built AWS-LC instead of vendored OpenSSL,
+# eliminating openssl-sys from the dependency tree for FIPS compliance.
+rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", branch = "jasonhernandez/ssl-awslc" }
+rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", branch = "jasonhernandez/ssl-awslc" }
 
 # Fix rustls backend: PKCS#8 key parsing and skip_domain_validation string match.
 # All changes should go to the `rustls-fixes` branch.
