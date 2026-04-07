@@ -346,13 +346,10 @@ def run_cargo_nextest(
         "--profile=ci",
     ]
 
-    # Exclude mz-ore from --all-features because its `fips` and `crypto`
-    # features are mutually exclusive (aws-lc-sys vs aws-lc-fips-sys symbols).
-    # mz-ore is tested separately below with explicit feature sets.
     pkgs = [
         f"--package={p['name']}"
         for p in metadata["packages"]
-        if p["name"] not in ("mz-environmentd", "mz-balancerd", "mz-ore")
+        if p["name"] not in ("mz-environmentd", "mz-balancerd")
     ]
 
     # Build `nextest_test_args` based on args and Buildkite parallelism
@@ -442,33 +439,6 @@ def run_cargo_nextest(
             # general.
             f"--test-threads={multiprocessing.cpu_count()}",
             *nextest_test_args,
-        ],
-        env=env,
-    )
-
-    # Test mz-ore separately with non-fips features. The `fips` and `crypto`
-    # features are mutually exclusive at link time (duplicate C symbols), so
-    # mz-ore can't be included in the --all-features run above.
-    # All mz-ore features except `fips` are tested here; `fips` should be
-    # tested in a dedicated FIPS CI job.
-    ore_features = [
-        f
-        for f in next(p for p in metadata["packages"] if p["name"] == "mz-ore")[
-            "features"
-        ]
-        if f != "fips"
-    ]
-    spawn.runv(
-        [
-            "cargo",
-            "nextest",
-            "run",
-            "--no-fail-fast",
-            "--cargo-profile=ci",
-            "--profile=ci",
-            f"--features={','.join(ore_features)}",
-            f"--test-threads={multiprocessing.cpu_count()}",
-            "--package=mz-ore",
         ],
         env=env,
     )

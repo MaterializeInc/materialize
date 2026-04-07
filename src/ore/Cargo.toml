@@ -157,12 +157,12 @@ assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
 # `crypto` enables the aws-lc-rs crypto backend in standard (non-FIPS) mode.
-# `fips` enables the FIPS 140-3 validated module. These features are mutually
-# exclusive at link time (aws-lc-sys vs aws-lc-fips-sys duplicate symbols).
-# Do NOT activate both (e.g., via `--all-features`). CI excludes mz-ore from
-# --all-features runs to avoid this; mz-ore is tested transitively via deps.
+# `fips` is a marker feature for FIPS 140-3 builds. It does NOT activate
+# aws-lc-rs/fips at the Cargo level to avoid duplicate symbol conflicts with
+# `crypto` under --all-features. Actual FIPS builds must pass
+# --cfg=aws_lc_fips or use the dedicated FIPS build profile (SEC-260).
 crypto = ["aws-lc-rs", "rustls", "ctor"]
-fips = ["crypto", "aws-lc-rs/fips"]
+fips = ["crypto"]
 
 [[test]]
 name = "future"
