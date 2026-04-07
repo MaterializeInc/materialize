@@ -14,7 +14,7 @@ mz-clusterd = { path = "../clusterd", default-features = false }
 mz-environmentd = { path = "../environmentd", default-features = false }
 
 [build-dependencies]
-custom-labels = "0.4.5"
+custom-labels = "0.4.6"
 
 [features]
 default = ["mz-clusterd/default", "mz-environmentd/default"]

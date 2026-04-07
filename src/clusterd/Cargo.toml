@@ -46,7 +46,7 @@ tower = "0.5.3"
 tracing = "0.1.44"
 
 [build-dependencies]
-custom-labels = "0.4.5"
+custom-labels = "0.4.6"
 
 [features]
 default = ["tokio-console", "mz-alloc-default"]
