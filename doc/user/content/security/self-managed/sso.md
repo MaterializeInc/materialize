@@ -295,7 +295,7 @@ ALTER SYSTEM SET oidc_issuer = 'https://your-org.okta.com/oauth2/default';
 ALTER SYSTEM SET oidc_audience = '["YOUR_CLIENT_ID"]';
 ALTER SYSTEM SET oidc_authentication_claim = 'email';
 ALTER SYSTEM SET console_oidc_client_id = 'YOUR_CLIENT_ID';
-ALTER SYSTEM SET console_oidc_scopes = 'openid';
+ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 ```
 
 ## Step 4. Verify the configuration
