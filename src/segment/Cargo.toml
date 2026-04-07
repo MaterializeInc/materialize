@@ -10,12 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono.workspace = true
+chrono = { workspace = true, features = ["std"], default-features = false }
 mz-ore = { path = "../ore", features = ["async"], default-features = false }
-segment.workspace = true
+segment = { workspace = true, default-features = false }
 serde_json.workspace = true
 time.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
 uuid.workspace = true
 

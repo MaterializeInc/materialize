@@ -99,6 +99,7 @@ pub fn install_enhanced_handler() {
         // Report the panic to Sentry.
         // Note that we can't use `sentry_panic::panic_handler` because that requires the panic
         // integration to be enabled.
+        #[cfg(feature = "sentry")]
         sentry::Hub::with_active(|hub| {
             let event = sentry_panic::PanicIntegration::new().event_from_panic_info(panic_info);
             hub.capture_event(event);

@@ -19,11 +19,17 @@ anyhow = { workspace = true, optional = true }
 # Exceptions: `either` (zero deps, quasi-stdlib) and `zeroize` (zero runtime
 # deps, security-critical — must be available unconditionally so that
 # `ore::secure` types are always accessible without feature-flag opt-in).
+# aws-lc-rs is the crypto backend. default-features=false avoids pulling in
+# aws-lc-sys unconditionally; the `crypto` or `fips` features select which
+# C library to link (aws-lc-sys vs aws-lc-fips-sys).
+# is enabled, it links against aws-lc-fips-sys (the validated module).
+aws-lc-rs = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
+rustls = { workspace = true, features = ["aws_lc_rs"], optional = true, default-features = false }
 bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
-chrono = { workspace = true, optional = true }
-clap = { workspace = true, optional = true, features = ["env", "string"] }
+chrono = { workspace = true, features = ["std"], optional = true, default-features = false }
+clap = { workspace = true, features = ["env", "string"], optional = true }
 columnation = { workspace = true, optional = true }
 columnar = { workspace = true, optional = true }
 compact_bytes = { workspace = true, optional = true }
@@ -39,22 +45,20 @@ libc = { workspace = true, optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num.workspace = true
 num-traits = { workspace = true, optional = true }
-# The vendored feature is transitively depended upon by tokio-openssl.
-openssl = { workspace = true, optional = true }
-parquet = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true, default-features = false }
+parquet = { workspace = true, optional = true, default-features = false }
 paste.workspace = true
 pin-project.workspace = true
-prometheus = { workspace = true, optional = true }
-proptest = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true, default-features = false }
+proptest = { workspace = true, features = ["std"], optional = true, default-features = false }
 proptest-derive = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
 stacker = { workspace = true, optional = true }
-sentry = { workspace = true, optional = true }
+sentry = { workspace = true, features = ["backtrace", "contexts", "debug-images", "reqwest"], optional = true, default-features = false }
 sentry-panic = { workspace = true, optional = true }
-serde.workspace = true
-tokio = { workspace = true, optional = true }
-tokio-openssl = { workspace = true, optional = true }
+serde = { workspace = true, features = ["derive"] }
+tokio = { workspace = true, features = ["fs", "io-util", "net", "rt-multi-thread", "sync", "time",], optional = true }
 thiserror.workspace = true
 tracing-capture = { workspace = true, optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
@@ -63,23 +67,21 @@ tracing-capture = { workspace = true, optional = true }
 # log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
-tracing-subscriber = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true, features = ["v4", "v7"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json", "tracing-log",], optional = true }
+uuid = { workspace = true, features = ["v4", "v7"], optional = true }
 url = { workspace = true, features = ["serde"] }
-zeroize.workspace = true
+zeroize = { workspace = true, features = ["derive", "serde"] }
 
 # For the `tracing` feature
 http = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true }
-tokio-native-tls = { workspace = true, optional = true }
-native-tls = { workspace = true, optional = true }
-hyper-tls = { version = "0.6.0", optional = true }
+tonic = { workspace = true, features = ["transport"], optional = true }
+hyper-rustls = { workspace = true, features = ["aws-lc-rs", "http1", "http2", "native-tokio", "tls12"], optional = true, default-features = false }
 hyper-util = { workspace = true, optional = true }
-opentelemetry = { workspace = true, optional = true }
-opentelemetry-otlp = { workspace = true, optional = true }
-opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry = { workspace = true, features = ["trace"], optional = true }
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic"], optional = true }
+opentelemetry_sdk = { workspace = true, features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"], optional = true }
 console-subscriber = { workspace = true, optional = true }
 sentry-tracing = { workspace = true, optional = true }
 turmoil = { workspace = true, optional = true }
@@ -87,12 +89,12 @@ yansi = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow.workspace = true
-criterion.workspace = true
+criterion = { workspace = true, features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
-proptest.workspace = true
+proptest = { workspace = true, features = ["std"], default-features = false }
 scopeguard.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-test.workspace = true
 tracing-subscriber.workspace = true
 
@@ -102,9 +104,8 @@ async = [
     "async-trait",
     "futures",
     "metrics",
-    "openssl",
     "tokio/tracing",
-    "tokio-openssl",
+    "tokio-rustls",
     "tokio",
     "dep:tracing",
 ]
@@ -119,20 +120,19 @@ tracing = [
     "tracing-subscriber",
     "tracing-subscriber/ansi",
     "tracing-opentelemetry",
-    "tokio-native-tls",
-    "native-tls",
     "http",
-    "hyper-tls",
+    "hyper-rustls",
     "hyper-util",
     "metrics",
     "opentelemetry",
     "opentelemetry-otlp",
     "opentelemetry_sdk",
+    "rustls",
     "tonic",
-    "sentry",
-    "sentry-tracing",
     "yansi",
 ]
+# Sentry error reporting. Split from `tracing` so FIPS builds can exclude it.
+sentry = ["dep:sentry", "dep:sentry-tracing"]
 tokio-console = ["console-subscriber", "tokio", "tokio/tracing", "network"]
 cli = ["clap"]
 stack = ["stacker"]
@@ -144,6 +144,13 @@ assert-no-tracing = []
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
+# `crypto` enables the aws-lc-rs crypto backend in standard (non-FIPS) mode.
+# `fips` is a marker feature for FIPS 140-3 builds. It does NOT activate
+# aws-lc-rs/fips at the Cargo level to avoid duplicate symbol conflicts with
+# `crypto` under --all-features. Actual FIPS builds must pass
+# --cfg=aws_lc_fips or use the dedicated FIPS build profile (SEC-260).
+crypto = ["aws-lc-rs", "rustls", "ctor"]
+fips = ["crypto"]
 
 [[test]]
 name = "future"

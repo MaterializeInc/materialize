@@ -12,23 +12,23 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 array-concat.workspace = true
-aws-sdk-sts.workspace = true
+aws-sdk-sts = { workspace = true, features = ["rt-tokio",], default-features = false }
 bitflags.workspace = true
-chrono.workspace = true
-clap.workspace = true
+chrono = { workspace = true, features = ["std"], default-features = false }
+clap = { workspace = true, features = ["derive"] }
 derivative.workspace = true
-dynfmt.workspace = true
+dynfmt = { workspace = true, features = ["curly"] }
 enum-kinds.workspace = true
-fail.workspace = true
+fail = { workspace = true, features = ["failpoints"] }
 globset.workspace = true
 hex.workspace = true
 http.workspace = true
 iceberg.workspace = true
-imbl.workspace = true
+imbl = { workspace = true, features = ["serde"] }
 ipnet.workspace = true
 itertools.workspace = true
 maplit.workspace = true
-mysql_async.workspace = true
+mysql_async = { workspace = true, features = ["minimal",], default-features = false }
 mz-arrow-util = { path = "../arrow-util" }
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
@@ -64,19 +64,19 @@ mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-txn-wal = { path = "../txn-wal" }
 paste.workspace = true
-prometheus.workspace = true
+prometheus = { workspace = true, default-features = false }
 protobuf-native.workspace = true
-proptest.workspace = true
-proptest-derive.workspace = true
-prost.workspace = true
-rdkafka.workspace = true
+proptest = { workspace = true, features = ["std"], default-features = false }
+proptest-derive = { workspace = true, features = ["boxed_union"] }
+prost = { workspace = true, features = ["no-recursion-limit"] }
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-awslc", "libz-static", "zstd",] }
 regex.workspace = true
-reqwest.workspace = true
-serde.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs"] }
 tokio-postgres = { workspace = true, features = ["serde"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true

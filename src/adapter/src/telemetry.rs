@@ -11,11 +11,24 @@
 
 use chrono::{DateTime, Utc};
 use mz_audit_log::ObjectType;
+#[cfg(feature = "telemetry")]
 use mz_sql::catalog::EnvironmentId;
 use mz_sql_parser::ast::StatementKind;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "telemetry")]
 use serde_json::json;
 use uuid::Uuid;
+
+/// A type alias for the segment analytics client.
+///
+/// When the `telemetry` feature is enabled, this is `Option<mz_segment::Client>`.
+/// When disabled (e.g., FIPS builds), it is `()` — a zero-size type that is
+/// trivially constructed and never sends data.
+#[cfg(feature = "telemetry")]
+pub type SegmentClient = Option<mz_segment::Client>;
+/// See the `telemetry`-enabled variant for documentation.
+#[cfg(not(feature = "telemetry"))]
+pub type SegmentClient = ();
 
 /// Details to attach to a Segment event.
 #[derive(Debug, Clone, Default)]
@@ -30,6 +43,7 @@ pub struct EventDetails<'a> {
 }
 
 /// Extension trait for [`mz_segment::Client`].
+#[cfg(feature = "telemetry")]
 pub trait SegmentClientExt {
     /// Tracks an event associated with an environment.
     fn environment_track<S>(
@@ -42,6 +56,7 @@ pub trait SegmentClientExt {
         S: Into<String>;
 }
 
+#[cfg(feature = "telemetry")]
 impl SegmentClientExt for mz_segment::Client {
     /// Tracks an event associated with an environment.
     ///

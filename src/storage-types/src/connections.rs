@@ -2006,15 +2006,13 @@ impl MySqlConnection<InlinedConnection> {
                 .read_string_in_task_if(in_task, identity.key)
                 .await?;
             let cert = identity.cert.get_string(in_task, secrets_reader).await?;
-            let mut archive = mz_tls_util::pkcs12der_from_pem(key.as_bytes(), cert.as_bytes())?;
-            let der = std::mem::take(&mut archive.der);
-            let pass = std::mem::take(&mut archive.pass);
 
-            // Add client identity to SSLOpts
+            // Add client identity to SSLOpts (cert chain + private key as PEM)
             ssl_opts = ssl_opts.map(|opts| {
-                opts.with_client_identity(Some(
-                    mysql_async::ClientIdentity::new(der.into()).with_password(pass),
-                ))
+                opts.with_client_identity(Some(mysql_async::ClientIdentity::new(
+                    cert.into_bytes().into(),
+                    key.into_bytes().into(),
+                )))
             });
         }
 

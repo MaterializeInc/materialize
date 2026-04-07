@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-reqwest.workspace = true
-serde.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots-no-provider"], default-features = false }
+serde = { workspace = true, features = ["derive"] }
 
 [features]
 default = []

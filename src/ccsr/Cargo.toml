@@ -11,22 +11,23 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-native-tls.workspace = true
-openssl.workspace = true
-reqwest.workspace = true
+base64.workspace = true
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls-webpki-roots-no-provider",], default-features = false }
+rustls.workspace = true
+rustls-pki-types.workspace = true
 mz-tls-util = { path = "../tls-util" }
-proptest.workspace = true
+proptest = { workspace = true, features = ["std"], default-features = false }
 proptest-derive.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 url = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-hyper.workspace = true
+hyper = { workspace = true, features = ["server"] }
 hyper-util.workspace = true
 mz-ore = { path = "../ore", features = ["async", "test"] }
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 tracing.workspace = true
 
 [build-dependencies]

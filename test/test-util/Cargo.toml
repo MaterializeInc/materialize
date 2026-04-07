@@ -11,11 +11,11 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
+chrono = { workspace = true, features = ["std"], default-features = false }
 mz-kafka-util = { path = "../../src/kafka-util" }
 mz-ore = { path = "../../src/ore", features = ["async"] }
 rand.workspace = true
-rdkafka.workspace = true
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-awslc", "libz-static", "zstd"] }
 tokio.workspace = true
 tokio-postgres.workspace = true
 tracing.workspace = true

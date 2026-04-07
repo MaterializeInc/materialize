@@ -13,11 +13,11 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 humantime.workspace = true
-launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"] }
+launchdarkly-server-sdk = { workspace = true, features = ["hyper-rustls-webpki-roots", "crypto-aws-lc-rs"], default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
-tokio.workspace = true
+tokio = { workspace = true }
 tracing.workspace = true
 
 [features]

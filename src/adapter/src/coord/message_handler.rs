@@ -41,6 +41,7 @@ use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
+#[cfg(feature = "telemetry")]
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
 
@@ -617,6 +618,7 @@ impl Coordinator {
     async fn message_cluster_event(&mut self, event: ClusterEvent) {
         event!(Level::TRACE, event = format!("{:?}", event));
 
+        #[cfg(feature = "telemetry")]
         if let Some(segment_client) = &self.segment_client {
             let env_id = &self.catalog().config().environment_id;
             let mut properties = json!({

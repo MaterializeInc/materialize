@@ -45,24 +45,24 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema}
 contains:error sending request for url
 
 # This is a bad error message to indicate "disallowed client certificate" but
-# it's not under our control.
+# it's not under our control. With rustls, the alert text is CertificateUnknown.
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl.schema-registry.local:8082',
     SSL CERTIFICATE = '${kafka-crt}',
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:alert certificate unknown
+contains:CertificateUnknown
 
-# This is a bad error message to indicate "invalid client certificate" but
-# it's not under our control.
+# Key-cert mismatch: schema-registry cert with kafka key. Rustls detects the
+# mismatch when building the TLS client config.
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl.schema-registry.local:8082',
     SSL CERTIFICATE = '${schema-registry-crt}',
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:key values mismatch
+contains:failed to build schema registry HTTP client
 
 # ==> Test without an SSH tunnel. <==
 

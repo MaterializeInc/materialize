@@ -8,9 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use aws_config::{BehaviorVersion, ConfigLoader};
-use aws_smithy_runtime::client::http::hyper_014::HyperClientBuilder;
-use aws_smithy_runtime_api::client::http::HttpClient;
-use hyper_tls::HttpsConnector;
 
 #[cfg(feature = "s3")]
 pub mod s3;
@@ -31,16 +28,7 @@ pub fn defaults() -> ConfigLoader {
     #[allow(clippy::disallowed_methods)]
     let loader = aws_config::defaults(behavior_version);
 
-    // Install our custom HTTP client.
-    let loader = loader.http_client(http_client());
-
+    // The AWS SDK's default HTTP client uses rustls, which aligns with our
+    // FIPS 140-3 compliance strategy (aws-lc-rs as crypto backend).
     loader
-}
-
-/// Returns an HTTP client for use with the AWS SDK that is appropriately
-/// configured for Materialize.
-pub fn http_client() -> impl HttpClient {
-    // The default AWS HTTP client uses rustls, while our company policy is to
-    // use native TLS.
-    HyperClientBuilder::new().build(HttpsConnector::new())
 }

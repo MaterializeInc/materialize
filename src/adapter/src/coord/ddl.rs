@@ -55,6 +55,7 @@ use crate::coord::Coordinator;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Session, Transaction, TransactionOps};
+#[cfg(feature = "telemetry")]
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContext, catalog, flags};
@@ -564,26 +565,29 @@ impl Coordinator {
         .instrument(info_span!("coord::catalog_transact_with::finalize"))
         .await;
 
-        let conn = conn_id.and_then(|id| self.active_conns.get(id));
-        if let Some(segment_client) = &self.segment_client {
-            for VersionedEvent::V1(event) in audit_events {
-                let event_type = format!(
-                    "{} {}",
-                    event.object_type.as_title_case(),
-                    event.event_type.as_title_case()
-                );
-                segment_client.environment_track(
-                    &self.catalog().config().environment_id,
-                    event_type,
-                    json!({ "details": event.details.as_json() }),
-                    EventDetails {
-                        user_id: conn
-                            .and_then(|c| c.user().external_metadata.as_ref())
-                            .map(|m| m.user_id),
-                        application_name: conn.map(|c| c.application_name()),
-                        ..Default::default()
-                    },
-                );
+        #[cfg(feature = "telemetry")]
+        {
+            let conn = conn_id.and_then(|id| self.active_conns.get(id));
+            if let Some(segment_client) = &self.segment_client {
+                for VersionedEvent::V1(event) in audit_events {
+                    let event_type = format!(
+                        "{} {}",
+                        event.object_type.as_title_case(),
+                        event.event_type.as_title_case()
+                    );
+                    segment_client.environment_track(
+                        &self.catalog().config().environment_id,
+                        event_type,
+                        json!({ "details": event.details.as_json() }),
+                        EventDetails {
+                            user_id: conn
+                                .and_then(|c| c.user().external_metadata.as_ref())
+                                .map(|m| m.user_id),
+                            application_name: conn.map(|c| c.application_name()),
+                            ..Default::default()
+                        },
+                    );
+                }
             }
         }
 

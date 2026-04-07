@@ -14,7 +14,7 @@ anyhow.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 bincode.workspace = true
-clap = { workspace = true, features = ["env"] }
+clap = { workspace = true, features = ["env", "derive"] }
 futures.workspace = true
 itertools.workspace = true
 mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
@@ -25,14 +25,14 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-feat
 mz-ore = { path = "../ore", default-features = false }
 os_info.workspace = true
 pin-project.workspace = true
-prometheus.workspace = true
+prometheus = { workspace = true, default-features = false }
 semver = { workspace = true, features = ["serde"] }
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 sysinfo.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
-sentry-tracing.workspace = true
+sentry-tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["turmoil"] }
@@ -41,4 +41,5 @@ tracing-subscriber.workspace = true
 turmoil.workspace = true
 
 [features]
-default = []
+default = ["sentry"]
+sentry = ["dep:sentry-tracing"]

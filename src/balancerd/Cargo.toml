@@ -15,36 +15,35 @@ async-trait.workspace = true
 axum.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
-chrono.workspace = true
-clap = { workspace = true, features = ["env"] }
-domain.workspace = true
+chrono = { workspace = true, features = ["std"], default-features = false }
+clap = { workspace = true, features = ["derive", "env"] }
+domain = { workspace = true, features = ["resolv"], default-features = false }
 futures.workspace = true
 humantime.workspace = true
-hyper.workspace = true
-hyper-openssl.workspace = true
+hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util.workspace = true
-jsonwebtoken.workspace = true
-launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"] }
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
+launchdarkly-server-sdk = { workspace = true, features = ["hyper-rustls-webpki-roots", "crypto-aws-lc-rs"], optional = true, default-features = false }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
-mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
+mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly", optional = true }
 mz-dyncfg-file= { path = "../dyncfg-file" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-mz-ore = { path = "../ore", default-features = false, features = ["id_gen"]}
+mz-ore = { path = "../ore", default-features = false, features = ["crypto", "id_gen"]}
 mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
 num_cpus.workspace = true
-openssl.workspace = true
-prometheus.workspace = true
+prometheus = { workspace = true, default-features = false }
+rustls = { workspace = true, features = ["aws_lc_rs"], default-features = false }
 proxy-header.workspace = true
 semver.workspace = true
-tokio.workspace = true
-tokio-openssl.workspace = true
+tokio = { workspace = true }
+tokio-rustls = { workspace = true, default-features = false }
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true
@@ -57,11 +56,13 @@ uuid.workspace = true
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
 mz-frontegg-mock = { path = "../frontegg-mock" }
 postgres.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
 tempfile.workspace = true
 
 [features]
-default = ["mz-alloc-default"]
+default = ["mz-alloc-default", "telemetry"]
+# Third-party telemetry SDKs. Disabled in FIPS builds.
+telemetry = ["dep:launchdarkly-server-sdk", "dep:mz-dyncfg-launchdarkly"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]

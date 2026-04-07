@@ -195,8 +195,13 @@ steps:
 
       - id: lint-macos
         label: ":rust: macOS Clippy"
-        # Running on a manually installed macOS agent, so make sure we don't go out of disk
-        command: "cargo clippy --all-targets -- -D warnings; if [ $(du -sg target | cut -f1) -gt 50 ]; then rm -rf target; fi"
+        # Running on a manually installed macOS agent, so make sure we don't go out of disk.
+        # AWS-LC is built automatically from source by rdkafka-sys's build.rs
+        # when /opt/aws-lc is not present. The result is cached in cargo's
+        # target directory.
+        command: |
+          cargo clippy --all-targets -- -D warnings
+          if [ $$(du -sg target | cut -f1) -gt 50 ]; then rm -rf target; fi
         env:
           CARGO_INCREMENTAL: "0"
           RUSTUP_TOOLCHAIN: $RUST_VERSION

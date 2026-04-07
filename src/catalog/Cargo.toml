@@ -16,8 +16,8 @@ base64.workspace = true
 bincode.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 bytesize.workspace = true
-chrono.workspace = true
-clap.workspace = true
+chrono = { workspace = true, features = ["std"], default-features = false }
+clap = { workspace = true, features = ["derive"] }
 derivative.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
@@ -50,11 +50,10 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-transform = { path = "../transform" }
-openssl.workspace = true
 paste.workspace = true
-prometheus.workspace = true
-proptest.workspace = true
-proptest-derive.workspace = true
+prometheus = { workspace = true, default-features = false }
+proptest = { workspace = true, features = ["std"], default-features = false }
+proptest-derive = { workspace = true, features = ["boxed_union"] }
 prost.workspace = true
 rand.workspace = true
 semver.workspace = true
@@ -62,7 +61,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_plain.workspace = true
 static_assertions.workspace = true
-sha2.workspace = true
+aws-lc-rs.workspace = true
 thiserror.workspace = true
 timely.workspace = true
 tokio.workspace = true

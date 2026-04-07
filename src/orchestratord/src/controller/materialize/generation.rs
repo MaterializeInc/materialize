@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+use aws_lc_rs::digest;
 use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec},
@@ -35,7 +36,6 @@ use mz_server_core::listeners::{
 use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tracing::{error, trace};
 
 use super::Error;
@@ -433,9 +433,12 @@ impl Resources {
     // ideally we would just be able to hash the objects directly, but the
     // generated kubernetes objects don't implement the Hash trait
     pub fn generate_hash(&self) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(&serde_json::to_string(self).unwrap());
-        format!("{:x}", hasher.finalize())
+        let data = serde_json::to_string(self).unwrap();
+        digest::digest(&digest::SHA256, data.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
     }
 }
 

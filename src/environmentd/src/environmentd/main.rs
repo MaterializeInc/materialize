@@ -650,6 +650,9 @@ pub fn main() {
 }
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
+    // Install the process-wide CryptoProvider for rustls before any TLS usage.
+    // Required when both `aws-lc-rs` and `ring` features are active (e.g., --all-features builds).
+    let _ = mz_ore::crypto::fips_crypto_provider();
     mz_ore::panic::install_enhanced_handler();
     let envd_start = Instant::now();
 
@@ -1200,13 +1203,8 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
 }
 
 fn build_info() -> Vec<String> {
-    let openssl_version =
-        unsafe { CStr::from_ptr(openssl_sys::OpenSSL_version(openssl_sys::OPENSSL_VERSION)) };
     let rdkafka_version = unsafe { CStr::from_ptr(rdkafka_sys::bindings::rd_kafka_version_str()) };
-    vec![
-        openssl_version.to_string_lossy().into_owned(),
-        format!("librdkafka v{}", rdkafka_version.to_string_lossy()),
-    ]
+    vec![format!("librdkafka v{}", rdkafka_version.to_string_lossy())]
 }
 
 #[derive(Debug, Clone)]

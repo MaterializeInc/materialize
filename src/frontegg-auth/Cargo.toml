@@ -12,29 +12,29 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
-clap = { workspace = true, features = ["env", "wrap_help"] }
+clap = { workspace = true, features = ["wrap_help", "env", "derive"] }
 derivative.workspace = true
 futures.workspace = true
-jsonwebtoken.workspace = true
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 lru.workspace = true
 mz-auth = { path = "../auth", default-features = false }
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
-prometheus.workspace = true
-reqwest.workspace = true
-reqwest-middleware.workspace = true
+prometheus = { workspace = true, default-features = false }
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
+reqwest-middleware = { workspace = true, features = ["json"] }
 reqwest-retry.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 axum.workspace = true
 mz-ore = { path = "../ore", features = ["network", "test"] }
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []

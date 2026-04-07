@@ -18,6 +18,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use aws_lc_rs::digest;
 use differential_dataflow::lattice::Lattice;
 use futures::{FutureExt, StreamExt};
 use itertools::Itertools;
@@ -41,7 +42,6 @@ use mz_repr::Diff;
 use mz_storage_client::controller::PersistEpoch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
-use sha2::Digest;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -1848,7 +1848,12 @@ impl DurableCatalogState for PersistCatalogState {
 
 /// Deterministically generate a shard ID for the given `organization_id` and `seed`.
 pub fn shard_id(organization_id: Uuid, seed: usize) -> ShardId {
-    let hash = sha2::Sha256::digest(format!("{organization_id}{seed}")).to_vec();
+    let hash = digest::digest(
+        &digest::SHA256,
+        format!("{organization_id}{seed}").as_bytes(),
+    )
+    .as_ref()
+    .to_vec();
     soft_assert_eq_or_log!(hash.len(), 32, "SHA256 returns 32 bytes (256 bits)");
     let uuid = Uuid::from_slice(&hash[0..16]).expect("from_slice accepts exactly 16 bytes");
     ShardId::from_str(&format!("s{uuid}")).expect("known to be valid")

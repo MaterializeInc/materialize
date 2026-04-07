@@ -15,15 +15,15 @@ path = "src/bin/crd_writer.rs"
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
+chrono = { workspace = true, default-features = false }
 futures.workspace = true
-indexmap.workspace = true
-k8s-openapi.workspace = true
-kube.workspace = true
+indexmap = { workspace = true, features = ["std"], default-features = false }
+k8s-openapi = { workspace = true, features = ["schemars", "v1_32"] }
+kube = { workspace = true, features = ["client", "derive", "rustls-tls", "aws-lc-rs", "ws", "runtime"], default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-server-core = { path = "../server-core", default-features = false }
 rand.workspace = true
-schemars.workspace = true
+schemars = { workspace = true, features = ["uuid1"] }
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

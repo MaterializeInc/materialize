@@ -11,31 +11,30 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
-clap = { workspace = true, features = ["env"] }
+chrono = { workspace = true, default-features = false }
+clap = { workspace = true, features = ["derive", "env"] }
 csv-async.workspace = true
 futures.workspace = true
-k8s-openapi.workspace = true
-kube.workspace = true
+k8s-openapi = { workspace = true, features = ["v1_32"] }
+kube = { workspace = true, features = ["client", "runtime"], default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources"}
 mz-ore = { path = "../ore", features = ["cli", "test"] }
 mz-server-core = { path = "../server-core"}
 mz-sql-parser = { path = "../sql-parser" }
 mz-tls-util = { path = "../tls-util" }
-postgres-openssl.workspace = true
 regex.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["stream", "rustls-tls-webpki-roots-no-provider"], default-features = false }
 serde.workspace = true
 serde_yaml.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 url = { workspace = true, features = ["serde"] }
 walkdir.workspace = true
-zip.workspace = true
+zip = { workspace = true, features = ["deflate-flate2"], default-features = false }
 
 [features]
 default = []

@@ -62,7 +62,11 @@ use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
 };
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
+use crate::telemetry::SegmentClient;
+#[cfg(feature = "telemetry")]
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
+#[cfg(not(feature = "telemetry"))]
+use crate::telemetry::{self, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
 
@@ -108,7 +112,7 @@ pub struct Client {
     now: NowFn,
     metrics: Metrics,
     environment_id: EnvironmentId,
-    segment_client: Option<mz_segment::Client>,
+    segment_client: SegmentClient,
 }
 
 impl Client {
@@ -118,7 +122,7 @@ impl Client {
         metrics: Metrics,
         now: NowFn,
         environment_id: EnvironmentId,
-        segment_client: Option<mz_segment::Client>,
+        segment_client: SegmentClient,
     ) -> Client {
         // Connection ids are 32 bits and have 3 parts.
         // 1. MSB bit is always 0 because these are interpreted as an i32, and it is possible some
@@ -573,7 +577,7 @@ pub struct SessionClient {
     // method must ensure that `Session` is `Some` before it returns.
     session: Option<Session>,
     timeouts: Timeout,
-    segment_client: Option<mz_segment::Client>,
+    segment_client: SegmentClient,
     environment_id: EnvironmentId,
     /// Client for frontend peek sequencing; populated at connection startup.
     peek_client: PeekClient,
@@ -600,41 +604,44 @@ impl SessionClient {
         }
     }
 
-    fn track_statement_parse_failure(&self, parse_error: &ParserStatementError) {
-        let session = self.session.as_ref().expect("session invariant violated");
-        let Some(user_id) = session.user().external_metadata.as_ref().map(|m| m.user_id) else {
-            return;
-        };
-        let Some(segment_client) = &self.segment_client else {
-            return;
-        };
-        let Some(statement_kind) = parse_error.statement else {
-            return;
-        };
-        let Some((action, object_type)) = telemetry::analyze_audited_statement(statement_kind)
-        else {
-            return;
-        };
-        let event_type = StatementFailureType::ParseFailure;
-        let event_name = format!(
-            "{} {} {}",
-            object_type.as_title_case(),
-            action.as_title_case(),
-            event_type.as_title_case(),
-        );
-        segment_client.environment_track(
-            &self.environment_id,
-            event_name,
-            json!({
-                "statement_kind": statement_kind,
-                "error": &parse_error.error,
-            }),
-            EventDetails {
-                user_id: Some(user_id),
-                application_name: Some(session.application_name()),
-                ..Default::default()
-            },
-        );
+    fn track_statement_parse_failure(&self, _parse_error: &ParserStatementError) {
+        #[cfg(feature = "telemetry")]
+        {
+            let session = self.session.as_ref().expect("session invariant violated");
+            let Some(user_id) = session.user().external_metadata.as_ref().map(|m| m.user_id) else {
+                return;
+            };
+            let Some(segment_client) = &self.segment_client else {
+                return;
+            };
+            let Some(statement_kind) = _parse_error.statement else {
+                return;
+            };
+            let Some((action, object_type)) = telemetry::analyze_audited_statement(statement_kind)
+            else {
+                return;
+            };
+            let event_type = StatementFailureType::ParseFailure;
+            let event_name = format!(
+                "{} {} {}",
+                object_type.as_title_case(),
+                action.as_title_case(),
+                event_type.as_title_case(),
+            );
+            segment_client.environment_track(
+                &self.environment_id,
+                event_name,
+                json!({
+                    "statement_kind": statement_kind,
+                    "error": &_parse_error.error,
+                }),
+                EventDetails {
+                    user_id: Some(user_id),
+                    application_name: Some(session.application_name()),
+                    ..Default::default()
+                },
+            );
+        }
     }
 
     // Verify and return the named prepared statement. We need to verify each use

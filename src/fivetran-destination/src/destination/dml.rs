@@ -13,12 +13,12 @@ use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
 use async_compression::tokio::bufread::{GzipDecoder, ZstdDecoder};
+use aws_lc_rs::digest;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use mz_sql_parser::ast::{Ident, UnresolvedItemName};
 use postgres_protocol::escape;
 use prost::bytes::{BufMut, BytesMut};
-use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt, BufReader};
 use tokio_postgres::types::{Format, IsNull, ToSql, Type, to_sql_checked};
@@ -491,9 +491,14 @@ async fn get_scratch_table<'a>(
 
     // To make sure the table name is unique, and under the Materialize identifier limits, we name
     // the scratch table with a hash.
-    let mut hasher = Sha256::new();
-    hasher.update(&format!("{database}.{schema}.{}", table.name));
-    let scratch_table_name = format!("{:x}", hasher.finalize());
+    let scratch_table_name = digest::digest(
+        &digest::SHA256,
+        format!("{database}.{schema}.{}", table.name).as_bytes(),
+    )
+    .as_ref()
+    .iter()
+    .map(|b| format!("{b:02x}"))
+    .collect::<String>();
 
     let qualified_scratch_table_name = UnresolvedItemName::qualified(&[
         Ident::new(SCRATCH_TABLE_SCHEMA).context("scratch schema")?,

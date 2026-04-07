@@ -11,16 +11,16 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-compression.workspace = true
+async-compression = { workspace = true, features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
 async-trait.workspace = true
-aws-credential-types.workspace = true
-aws-sdk-sts.workspace = true
+aws-credential-types = { workspace = true, features = ["hardcoded-credentials"] }
+aws-sdk-sts = { workspace = true, features = ["rt-tokio"], default-features = false }
 aws-types.workspace = true
-arrow.workspace = true
+arrow = { workspace = true, default-features = false }
 byteorder.workspace = true
 bytes.workspace = true
-chrono.workspace = true
-clap.workspace = true
+chrono = { workspace = true, features = ["std"], default-features = false }
+clap = { workspace = true, features = ["derive"] }
 duckdb.workspace = true
 flate2.workspace = true
 futures.workspace = true
@@ -32,7 +32,7 @@ itertools.workspace = true
 junit-report.workspace = true
 maplit.workspace = true
 md-5.workspace = true
-mysql_async.workspace = true
+mysql_async = { workspace = true, features = ["minimal"], default-features = false }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }
@@ -44,7 +44,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-license-keys = { path = "../license-keys" }
-mz-ore = { path = "../ore", features = ["async"] }
+mz-ore = { path = "../ore", features = ["async", "crypto"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
@@ -54,27 +54,27 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
-parquet.workspace = true
+parquet = { workspace = true, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"], default-features = false }
 postgres_array.workspace = true
 postgres-protocol.workspace = true
-prost.workspace = true
-prost-reflect.workspace = true
+prost = { workspace = true, features = ["no-recursion-limit"] }
+prost-reflect = { workspace = true, features = ["serde"] }
 prost-types.workspace = true
 rand.workspace = true
-rdkafka.workspace = true
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-awslc", "libz-static", "zstd"] }
 regex.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
 semver.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 similar.workspace = true
 tempfile.workspace = true
 termcolor.workspace = true
-tiberius.workspace = true
+tiberius = { workspace = true, features = ["sql-browser-tokio", "tds73"], default-features = false }
 time.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-tokio.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
+tokio = { workspace = true, features = ["process"] }
 tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-serde_json-1"] }
 tokio-stream.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }

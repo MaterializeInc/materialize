@@ -469,6 +469,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "asn1-rs"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56624a96882bb8c26d61312ae18cb45868e5a9992ea73c58e45c3101e56a1e60"
+dependencies = [
+ "asn1-rs-derive",
+ "asn1-rs-impl",
+ "displaydoc",
+ "nom",
+ "num-traits",
+ "rusticata-macros",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
+name = "asn1-rs-derive"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3109e49b1e4909e9db6515a30c633684d68cdeaa252f215214cb4fa1a5bfee2c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+ "synstructure",
+]
+
+[[package]]
+name = "asn1-rs-impl"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b18050c2cd6fe86c3a76584ef5e0baf286d038cda203eb6223df2cc413565f7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "assert_cmd"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -563,18 +602,6 @@ dependencies = [
  "event-listener 5.4.1",
  "event-listener-strategy",
  "pin-project-lite",
-]
-
-[[package]]
-name = "async-native-tls"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d57d4cec3c647232e1094dc013546c0b33ce785d8aeb251e1f20dfaf8a9a13fe"
-dependencies = [
- "futures-util",
- "native-tls",
- "thiserror 1.0.69",
- "url",
 ]
 
 [[package]]
@@ -1075,13 +1102,18 @@ dependencies = [
  "aws-smithy-async",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "h2 0.3.26",
- "h2 0.4.12",
- "http 0.2.12",
- "http-body 0.4.6",
- "hyper 0.14.32",
+ "h2",
+ "http 1.4.0",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
  "pin-project-lite",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
+ "tower 0.5.3",
  "tracing",
 ]
 
@@ -1227,7 +1259,7 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper",
  "hyper-util",
  "itoa",
  "matchit",
@@ -1293,8 +1325,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b552ad43a45a746461ec3d3a51dfb6466b4759209414b439c165eb6a6b7729e"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1323,8 +1354,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88ddd80344317c40c04b603807b63a5cefa532f1b43522e72f480a988141f744"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "async-lock",
  "async-process",
@@ -1344,8 +1374,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59f838159f4d29cb400a14d9d757578ba495ae64feb07a7516bf9e4415127126"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "RustyXML",
  "async-lock",
@@ -1363,8 +1392,7 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97e83c3636ae86d9a6a7962b2112e3b19eb3903915c50ce06ff54ff0a2e6a7e4"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -1384,8 +1412,7 @@ dependencies = [
 [[package]]
 name = "azure_svc_blobstorage"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e6c6f20c5611b885ba94c7bae5e02849a267381aecb8aee577e8c35ff4064c6"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "azure_core",
  "bytes",
@@ -1504,7 +1531,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2211,6 +2238,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-foundation"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2741,8 +2778,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid",
- "pem-rfc7468",
  "zeroize",
+]
+
+[[package]]
+name = "der-parser"
+version = "10.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07da5016415d5a3c4dd39b11ed26f915f52fc4e0dc197d87908bc916e51bc1a6"
+dependencies = [
+ "asn1-rs",
+ "displaydoc",
+ "nom",
+ "num-bigint",
+ "num-traits",
+ "rusticata-macros",
 ]
 
 [[package]]
@@ -2906,6 +2956,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "displaydoc"
+version = "0.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "dissimilar"
 version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2979,7 +3040,7 @@ checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
 [[package]]
 name = "duckdb"
 version = "1.4.3"
-source = "git+https://github.com/MaterializeInc/duckdb-rs.git?rev=752c7efe2582#752c7efe25820590f590fb0a112443b9ddd396e7"
+source = "git+https://github.com/MaterializeInc/duckdb-rs.git?branch=mz%2Frustls-tls-no-provider#7cadc3d9ef8ea5e78ff84f2881bae79ee84eef7d"
 dependencies = [
  "arrow",
  "cast",
@@ -3490,21 +3551,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
-name = "foreign-types"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1"
-dependencies = [
- "foreign-types-shared",
-]
-
-[[package]]
-name = "foreign-types-shared"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b"
-
-[[package]]
 name = "form_urlencoded"
 version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3852,25 +3898,6 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
-dependencies = [
- "bytes",
- "fnv",
- "futures-core",
- "futures-sink",
- "futures-util",
- "http 0.2.12",
- "indexmap 2.11.4",
- "slab",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
-name = "h2"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3c0b69cfcb4e1b9f1bf2f53f95f766e4661169728ec61cd3fe5a0166f2d1386"
@@ -4146,30 +4173,6 @@ checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
 
 [[package]]
 name = "hyper"
-version = "0.14.32"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41dfc780fdec9373c01bae43289ea34c972e40ee3c9f6b3c8801a35f35586ce7"
-dependencies = [
- "bytes",
- "futures-channel",
- "futures-core",
- "futures-util",
- "h2 0.3.26",
- "http 0.2.12",
- "http-body 0.4.6",
- "httparse",
- "httpdate",
- "itoa",
- "pin-project-lite",
- "socket2 0.5.10",
- "tokio",
- "tower-service",
- "tracing",
- "want",
-]
-
-[[package]]
-name = "hyper"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
@@ -4178,7 +4181,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "h2 0.4.12",
+ "h2",
  "http 1.4.0",
  "http-body 1.0.1",
  "httparse",
@@ -4201,33 +4204,14 @@ dependencies = [
  "futures-util",
  "headers",
  "http 1.4.0",
- "hyper 1.8.1",
- "hyper-tls 0.6.0",
+ "hyper",
+ "hyper-rustls",
  "hyper-util",
- "native-tls",
  "pin-project-lite",
  "tokio",
- "tokio-native-tls",
+ "tokio-rustls",
  "tower-service",
-]
-
-[[package]]
-name = "hyper-openssl"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "527d4d619ca2c2aafa31ec139a3d1d60bf557bf7578a1f20f743637eccd9ca19"
-dependencies = [
- "http 1.4.0",
- "hyper 1.8.1",
- "hyper-util",
- "linked_hash_set",
- "once_cell",
- "openssl",
- "openssl-sys",
- "parking_lot",
- "pin-project",
- "tower-layer",
- "tower-service",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -4238,13 +4222,16 @@ checksum = "2d191583f3da1305256f22463b9bb0471acad48a4e534a5218b9963e9c1f59b2"
 dependencies = [
  "futures-util",
  "http 1.4.0",
- "hyper 1.8.1",
+ "hyper",
  "hyper-util",
+ "log",
  "rustls",
+ "rustls-native-certs",
  "rustls-pki-types",
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -4253,39 +4240,10 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3203a961e5c83b6f5498933e78b6b263e208c197b63e9c6c53cc82ffd3f63793"
 dependencies = [
- "hyper 1.8.1",
+ "hyper",
  "hyper-util",
  "pin-project-lite",
  "tokio",
- "tower-service",
-]
-
-[[package]]
-name = "hyper-tls"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6183ddfa99b85da61a140bea0efc93fdf56ceaa041b37d553518030827f9905"
-dependencies = [
- "bytes",
- "hyper 0.14.32",
- "native-tls",
- "tokio",
- "tokio-native-tls",
-]
-
-[[package]]
-name = "hyper-tls"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
-dependencies = [
- "bytes",
- "http-body-util",
- "hyper 1.8.1",
- "hyper-util",
- "native-tls",
- "tokio",
- "tokio-native-tls",
  "tower-service",
 ]
 
@@ -4301,17 +4259,15 @@ dependencies = [
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
- "hyper 1.8.1",
+ "hyper",
  "ipnet",
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
- "system-configuration",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry",
 ]
 
 [[package]]
@@ -4331,7 +4287,7 @@ dependencies = [
 [[package]]
 name = "iceberg"
 version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=c31a98afe789#c31a98afe789b0dcfd2ab9cc23e2ecf5120aaaac"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?branch=jasonhernandez%2Frustls-migration#1e645104fd7a2e1254d698b3ea939c0365a8ae37"
 dependencies = [
  "anyhow",
  "apache-avro",
@@ -4387,7 +4343,7 @@ dependencies = [
 [[package]]
 name = "iceberg-catalog-rest"
 version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=c31a98afe789#c31a98afe789b0dcfd2ab9cc23e2ecf5120aaaac"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?branch=jasonhernandez%2Frustls-migration#1e645104fd7a2e1254d698b3ea939c0365a8ae37"
 dependencies = [
  "async-trait",
  "aws-credential-types",
@@ -4512,7 +4468,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.16.1",
+ "hashbrown 0.15.3",
  "serde",
  "serde_core",
 ]
@@ -4853,16 +4809,16 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
- "hyper-openssl",
+ "hyper",
+ "hyper-rustls",
  "hyper-timeout",
  "hyper-util",
  "jiff",
  "jsonpath-rust",
  "k8s-openapi",
  "kube-core",
- "openssl",
  "pem",
+ "rustls",
  "secrecy",
  "serde",
  "serde_json",
@@ -4939,20 +4895,18 @@ dependencies = [
 [[package]]
 name = "launchdarkly-sdk-transport"
 version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fe83622d04dfcaaeac0b5e3aaa1cc156eb1e70c8b68dfcaffaee4365faa00d3"
+source = "git+https://github.com/MaterializeInc/rust-sdk-transport.git?branch=mz%2Faws-lc-rs-instead-of-ring#a709da30804655660c950ba38a4609a941cfbc1f"
 dependencies = [
  "bytes",
  "futures",
  "http 1.4.0",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper",
  "hyper-http-proxy",
+ "hyper-rustls",
  "hyper-timeout",
- "hyper-tls 0.6.0",
  "hyper-util",
  "log",
- "native-tls",
  "no-proxy",
  "tower 0.4.13",
 ]
@@ -4963,6 +4917,7 @@ version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc7d03f7f2557dfebc24147d90b2080313fd5a60a4de5219dce1b574956f1c4e"
 dependencies = [
+ "aws-lc-rs",
  "bitflags 2.11.0",
  "bytes",
  "chrono",
@@ -4976,7 +4931,6 @@ dependencies = [
  "log",
  "lru",
  "moka",
- "openssl",
  "parking_lot",
  "rand 0.9.2",
  "serde",
@@ -5110,13 +5064,17 @@ checksum = "48f5d2a454e16a5ea0f4ced81bd44e4cfc7bd3a507b61887c99fd3538b28e4af"
 [[package]]
 name = "libduckdb-sys"
 version = "1.4.3"
-source = "git+https://github.com/MaterializeInc/duckdb-rs.git?rev=752c7efe2582#752c7efe25820590f590fb0a112443b9ddd396e7"
+source = "git+https://github.com/MaterializeInc/duckdb-rs.git?branch=mz%2Frustls-tls-no-provider#7cadc3d9ef8ea5e78ff84f2881bae79ee84eef7d"
 dependencies = [
+ "aws-lc-rs",
  "flate2",
+ "pkg-config",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tar",
+ "vcpkg",
  "zip",
 ]
 
@@ -5200,21 +5158,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9d240c6f7e1ba3a28b0249f774e6a9dd0175054b52dfbb61b16eb8505c3785c9"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "linked-hash-map"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0717cef1bc8b636c6e1c1bbdefc09e6322da8a9321966e8928ef80d20f7f770f"
-
-[[package]]
-name = "linked_hash_set"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47186c6da4d81ca383c7c47c1bfc80f4b95f4720514d860a5407aaf4233f9588"
-dependencies = [
- "linked-hash-map",
 ]
 
 [[package]]
@@ -5457,8 +5400,7 @@ checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
 [[package]]
 name = "mysql_async"
 version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1d9585dc9058886ff3a1f48a23024dd1d054264dee7c5ae0e4bd640c953bee5"
+source = "git+https://github.com/MaterializeInc/mysql_async?branch=rustls-fixes#7458c7bc0ae5c0e19d2995b552cb271f10f85d6b"
 dependencies = [
  "bytes",
  "crossbeam-queue",
@@ -5469,20 +5411,22 @@ dependencies = [
  "keyed_priority_queue",
  "lru",
  "mysql_common",
- "native-tls",
  "pem",
  "percent-encoding",
  "rand 0.9.2",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
- "tokio-native-tls",
+ "tokio-rustls",
  "tokio-util",
  "tracing",
  "twox-hash",
  "url",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -5523,7 +5467,7 @@ dependencies = [
  "clap",
  "csv",
  "dirs",
- "hyper 1.8.1",
+ "hyper",
  "indicatif",
  "maplit",
  "mz-build-info",
@@ -5533,10 +5477,10 @@ dependencies = [
  "mz-ore",
  "mz-sql-parser",
  "open",
- "openssl-probe",
+ "openssl-probe 0.1.6",
  "reqwest",
  "rpassword",
- "security-framework",
+ "security-framework 2.11.1",
  "semver",
  "serde",
  "serde-aux",
@@ -5560,6 +5504,7 @@ dependencies = [
  "arrow",
  "async-stream",
  "async-trait",
+ "aws-lc-rs",
  "base64 0.22.1",
  "bytes",
  "bytesize",
@@ -5623,7 +5568,6 @@ dependencies = [
  "mz-timestamp-oracle",
  "mz-tracing",
  "mz-transform",
- "openssl",
  "opentelemetry",
  "prometheus",
  "prost",
@@ -5634,7 +5578,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
- "sha2",
  "smallvec",
  "static_assertions",
  "thiserror 2.0.18",
@@ -5794,15 +5737,12 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-sdk-s3",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
  "aws-smithy-types",
  "aws-types",
  "bytes",
  "bytesize",
  "futures",
  "http 1.4.0",
- "hyper-tls 0.5.0",
  "mz-ore",
  "pin-project",
  "thiserror 2.0.18",
@@ -5824,8 +5764,7 @@ dependencies = [
  "domain",
  "futures",
  "humantime",
- "hyper 1.8.1",
- "hyper-openssl",
+ "hyper",
  "hyper-util",
  "jsonwebtoken",
  "launchdarkly-server-sdk",
@@ -5845,17 +5784,17 @@ dependencies = [
  "mz-server-core",
  "mz-tracing",
  "num_cpus",
- "openssl",
  "postgres",
  "prometheus",
  "proxy-header",
  "reqwest",
+ "rustls",
  "semver",
  "tempfile",
  "tokio",
  "tokio-metrics",
- "tokio-openssl",
  "tokio-postgres",
+ "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
  "tracing",
@@ -5888,6 +5827,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-lc-rs",
  "base64 0.22.1",
  "bincode",
  "bytes",
@@ -5927,7 +5867,6 @@ dependencies = [
  "mz-storage-client",
  "mz-storage-types",
  "mz-transform",
- "openssl",
  "paste",
  "prometheus",
  "proptest",
@@ -5938,7 +5877,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
- "sha2",
  "static_assertions",
  "thiserror 2.0.18",
  "timely",
@@ -6003,17 +5941,18 @@ name = "mz-ccsr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "hyper 1.8.1",
+ "base64 0.22.1",
+ "hyper",
  "hyper-util",
  "mz-build-tools",
  "mz-ore",
  "mz-tls-util",
- "native-tls",
- "openssl",
  "proptest",
  "proptest-derive",
  "prost-build",
  "reqwest",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
  "tokio",
@@ -6108,7 +6047,7 @@ dependencies = [
  "custom-labels",
  "fail",
  "futures",
- "hyper 1.8.1",
+ "hyper",
  "hyper-util",
  "mz-alloc",
  "mz-alloc-default",
@@ -6298,7 +6237,6 @@ dependencies = [
  "mz-server-core",
  "mz-sql-parser",
  "mz-tls-util",
- "postgres-openssl",
  "regex",
  "reqwest",
  "serde",
@@ -6415,15 +6353,15 @@ dependencies = [
  "http 1.4.0",
  "http-body-util",
  "humantime",
- "hyper 1.8.1",
- "hyper-openssl",
- "hyper-tls 0.6.0",
+ "hyper",
+ "hyper-rustls",
  "hyper-util",
  "include_dir",
  "insta",
  "ipnet",
  "itertools 0.14.0",
  "jsonwebtoken",
+ "libc",
  "maplit",
  "mime",
  "mz-adapter",
@@ -6469,27 +6407,28 @@ dependencies = [
  "mz-sql",
  "mz-sql-parser",
  "mz-storage-types",
+ "mz-tls-util",
  "mz-tracing",
  "nix 0.30.1",
  "num_cpus",
- "openssl",
- "openssl-sys",
  "opentelemetry",
  "opentelemetry_sdk",
  "pin-project",
  "postgres",
- "postgres-openssl",
  "postgres-protocol",
  "postgres_array",
  "predicates 3.1.4",
  "prometheus",
  "proptest",
  "rand 0.9.2",
+ "rcgen",
  "rdkafka",
  "rdkafka-sys",
  "regex",
  "reqwest",
  "rlimit",
+ "rustls",
+ "rustls-pemfile",
  "semver",
  "sentry-tracing",
  "serde",
@@ -6505,6 +6444,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-postgres",
+ "tokio-rustls",
  "tokio-stream",
  "tower 0.5.3",
  "tower-http",
@@ -6635,6 +6575,7 @@ name = "mz-fivetran-destination"
 version = "0.0.0"
 dependencies = [
  "async-compression",
+ "aws-lc-rs",
  "bytes",
  "clap",
  "csv-async",
@@ -6645,20 +6586,20 @@ dependencies = [
  "mz-ore",
  "mz-pgrepr",
  "mz-sql-parser",
- "openssl",
- "postgres-openssl",
  "postgres-protocol",
  "prost",
  "prost-build",
  "prost-types",
  "reqwest",
+ "rustls",
+ "rustls-pki-types",
  "serde",
  "serde_json",
- "sha2",
  "socket2 0.6.0",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-util",
  "tonic",
@@ -6727,16 +6668,16 @@ name = "mz-frontegg-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "axum-extra",
  "base64 0.22.1",
  "chrono",
  "clap",
- "hyper 1.8.1",
+ "hyper",
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
- "openssl",
  "reqwest",
  "serde",
  "serde_json",
@@ -6756,7 +6697,7 @@ dependencies = [
  "axum-extra",
  "headers",
  "http 1.4.0",
- "hyper 1.8.1",
+ "hyper",
  "include_dir",
  "mz-ore",
  "prometheus",
@@ -6982,11 +6923,12 @@ name = "mz-npm"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "flate2",
  "hex",
  "hex-literal",
  "reqwest",
- "sha2",
+ "rustls",
  "tar",
  "walkdir",
 ]
@@ -6996,11 +6938,11 @@ name = "mz-oidc-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "jsonwebtoken",
  "mz-ore",
- "openssl",
  "reqwest",
  "serde",
  "serde_json",
@@ -7029,6 +6971,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-lc-rs",
  "chrono",
  "clap",
  "fail",
@@ -7044,7 +6987,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tracing",
 ]
@@ -7106,6 +7048,7 @@ version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-lc-rs",
  "axum",
  "clap",
  "futures",
@@ -7131,7 +7074,6 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
- "sha2",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
@@ -7147,6 +7089,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-lc-rs",
  "bytemuck",
  "bytes",
  "chrono",
@@ -7163,17 +7106,15 @@ dependencies = [
  "futures",
  "hibitset",
  "http 1.4.0",
- "hyper-tls 0.6.0",
+ "hyper-rustls",
  "hyper-util",
  "itertools 0.14.0",
  "lgalloc",
  "libc",
  "mz-ore",
  "mz-ore-proc",
- "native-tls",
  "num",
  "num-traits",
- "openssl",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -7184,6 +7125,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "rand 0.9.2",
+ "rustls",
  "scopeguard",
  "sentry",
  "sentry-panic",
@@ -7194,8 +7136,7 @@ dependencies = [
  "stacker",
  "thiserror 2.0.18",
  "tokio",
- "tokio-native-tls",
- "tokio-openssl",
+ "tokio-rustls",
  "tokio-test",
  "tonic",
  "tracing",
@@ -7255,10 +7196,7 @@ dependencies = [
  "mz-persist-types",
  "mz-postgres-client",
  "mz-proto",
- "openssl",
- "openssl-sys",
  "parquet",
- "postgres-openssl",
  "postgres-protocol",
  "prometheus",
  "proptest",
@@ -7269,7 +7207,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "timely",
  "tokio",
@@ -7459,11 +7396,9 @@ dependencies = [
  "mz-repr",
  "mz-server-core",
  "mz-sql",
- "openssl",
  "postgres",
  "tokio",
  "tokio-metrics",
- "tokio-openssl",
  "tokio-stream",
  "tokio-util",
  "tracing",
@@ -7482,8 +7417,8 @@ dependencies = [
  "mz-ore",
  "mz-server-core",
  "tokio",
- "tokio-openssl",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
@@ -7515,8 +7450,6 @@ dependencies = [
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
- "openssl",
- "postgres-openssl",
  "postgres_array",
  "proptest",
  "proptest-derive",
@@ -7764,8 +7697,9 @@ dependencies = [
  "futures",
  "mz-dyncfg",
  "mz-ore",
- "openssl",
  "proxy-header",
+ "rustls",
+ "rustls-pemfile",
  "schemars",
  "scopeguard",
  "serde",
@@ -7773,6 +7707,7 @@ dependencies = [
  "socket2 0.6.0",
  "tokio",
  "tokio-metrics",
+ "tokio-rustls",
  "tokio-stream",
  "tracing",
  "uuid",
@@ -8065,6 +8000,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "aws-credential-types",
+ "aws-lc-rs",
  "aws-sdk-sts",
  "axum",
  "bincode",
@@ -8128,7 +8064,6 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
- "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "tiberius",
@@ -8320,8 +8255,6 @@ dependencies = [
  "mz-timely-util",
  "mz-tls-util",
  "mz-tracing",
- "native-tls",
- "openssl",
  "proptest",
  "proptest-derive",
  "prost",
@@ -8493,12 +8426,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
- "openssl",
- "openssl-sys",
- "postgres-openssl",
+ "rustls",
+ "rustls-pki-types",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
@@ -8577,23 +8510,6 @@ dependencies = [
  "mz-ore-build",
  "quote",
  "syn 2.0.114",
- "tempfile",
-]
-
-[[package]]
-name = "native-tls"
-version = "0.2.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cdede44f9a69cab2899a2049e2c3bd49bf911a157f6a3353d4a91c61abbce44"
-dependencies = [
- "libc",
- "log",
- "openssl",
- "openssl-probe",
- "openssl-sys",
- "schannel",
- "security-framework",
- "security-framework-sys",
  "tempfile",
 ]
 
@@ -8882,6 +8798,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oid-registry"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12f40cff3dde1b6087cc5d5f5d4d65712f34016a03ed60e9c08dcc392736b5b7"
+dependencies = [
+ "asn1-rs",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8977,58 +8902,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "openssl"
-version = "0.10.76"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "951c002c75e16ea2c65b8c7e4d3d51d5530d8dfa7d060b4776828c88cfb18ecf"
-dependencies = [
- "bitflags 2.11.0",
- "cfg-if",
- "foreign-types",
- "libc",
- "once_cell",
- "openssl-macros",
- "openssl-sys",
-]
-
-[[package]]
-name = "openssl-macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
-]
-
-[[package]]
 name = "openssl-probe"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 
 [[package]]
-name = "openssl-src"
-version = "300.3.1+3.3.1"
+name = "openssl-probe"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7259953d42a81bf137fbbd73bd30a8e1914d6dce43c2b90ed575783a22608b91"
-dependencies = [
- "cc",
-]
-
-[[package]]
-name = "openssl-sys"
-version = "0.9.112"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57d55af3b3e226502be1526dfdba67ab0e9c96fc293004e79576b2b9edb0dbdb"
-dependencies = [
- "cc",
- "libc",
- "openssl-src",
- "pkg-config",
- "vcpkg",
-]
+checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "opentelemetry"
@@ -9659,17 +9542,6 @@ dependencies = [
  "futures-util",
  "log",
  "tokio",
- "tokio-postgres",
-]
-
-[[package]]
-name = "postgres-openssl"
-version = "0.5.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
-dependencies = [
- "openssl",
- "tokio",
- "tokio-openssl",
  "tokio-postgres",
 ]
 
@@ -10383,9 +10255,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "rcgen"
+version = "0.14.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10b99e0098aa4082912d4c649628623db6aba77335e4f4569ff5083a6448b32e"
+dependencies = [
+ "aws-lc-rs",
+ "pem",
+ "rustls-pki-types",
+ "time",
+ "x509-parser",
+ "yasna",
+]
+
+[[package]]
 name = "rdkafka"
 version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#642daa6e293065ec653c04f2d1147a7675ce2430"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?branch=jasonhernandez%2Fssl-awslc#a69cac460b423a272d31a85b4273d51ee77c2b46"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -10402,13 +10288,12 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.3.0+2.5.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#642daa6e293065ec653c04f2d1147a7675ce2430"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?branch=jasonhernandez%2Fssl-awslc#a69cac460b423a272d31a85b4273d51ee77c2b46"
 dependencies = [
  "cmake",
  "libc",
  "libz-sys",
  "num_enum 0.5.11",
- "openssl-sys",
  "pkg-config",
  "zstd-sys",
 ]
@@ -10558,27 +10443,26 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.4.12",
+ "h2",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper",
  "hyper-rustls",
- "hyper-tls 0.6.0",
  "hyper-util",
  "js-sys",
  "log",
  "mime",
- "native-tls",
  "percent-encoding",
  "pin-project-lite",
+ "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-native-tls",
+ "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
  "tower-http",
@@ -10588,6 +10472,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
+ "webpki-roots 1.0.6",
 ]
 
 [[package]]
@@ -10616,7 +10501,7 @@ dependencies = [
  "futures",
  "getrandom 0.2.16",
  "http 1.4.0",
- "hyper 1.8.1",
+ "hyper",
  "reqwest",
  "reqwest-middleware",
  "retry-policies",
@@ -10824,6 +10709,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusticata-macros"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "faf0c4a6ece9950b9abdb62b1cfcf2a68b3b67a10ba445b3bb85be2a293d0632"
+dependencies = [
+ "nom",
+]
+
+[[package]]
 name = "rustix"
 version = "0.38.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10851,15 +10745,38 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.23"
+version = "0.23.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47796c98c480fce5406ef69d1c76378375492c3b0a0de587be0c1d9feb12f395"
+checksum = "758025cb5fccfd3bc2fd74708fd4682be41d99e5dff73c377c0646c6012c73a4"
 dependencies = [
+ "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-native-certs"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "612460d5f7bea540c490b2b6395d8e34a953e52b491accd6c86c8164c5932a63"
+dependencies = [
+ "openssl-probe 0.2.1",
+ "rustls-pki-types",
+ "schannel",
+ "security-framework 3.7.0",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
@@ -10873,10 +10790,11 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.102.8"
+version = "0.103.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
+checksum = "20a6af516fea4b20eccceaf166e8aa666ac996208e8a644ce3ef5aa783bc7cd4"
 dependencies = [
+ "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted 0.9.0",
@@ -11007,7 +10925,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
 dependencies = [
  "bitflags 2.11.0",
- "core-foundation",
+ "core-foundation 0.9.4",
+ "core-foundation-sys",
+ "libc",
+ "security-framework-sys",
+]
+
+[[package]]
+name = "security-framework"
+version = "3.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7f4bc775c73d9a02cde8bf7b2ec4c9d12743edf609006c7facc23998404cd1d"
+dependencies = [
+ "bitflags 2.11.0",
+ "core-foundation 0.10.1",
  "core-foundation-sys",
  "libc",
  "security-framework-sys",
@@ -11064,7 +10995,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f925d575b468e88b079faf590a8dd0c9c99e2ec29e9bab663ceb8b45056312f"
 dependencies = [
  "httpdate",
- "native-tls",
  "reqwest",
  "sentry-backtrace",
  "sentry-contexts",
@@ -11072,7 +11002,6 @@ dependencies = [
  "sentry-debug-images",
  "sentry-tracing",
  "tokio",
- "ureq",
 ]
 
 [[package]]
@@ -11385,16 +11314,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
- "sha2-asm",
-]
-
-[[package]]
-name = "sha2-asm"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b845214d6175804686b2bd482bcffe96651bb2d1200742b712003504a2dac1ab"
-dependencies = [
- "cc",
 ]
 
 [[package]]
@@ -11769,6 +11688,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "synstructure"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "sysctl"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11795,27 +11725,6 @@ dependencies = [
  "once_cell",
  "rayon",
  "winapi",
-]
-
-[[package]]
-name = "system-configuration"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a13f3d0daba03132c0aa9767f98351b3488edc2c100cda2d2ec2b04f3d8d3c8b"
-dependencies = [
- "bitflags 2.11.0",
- "core-foundation",
- "system-configuration-sys",
-]
-
-[[package]]
-name = "system-configuration-sys"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e1d1b10ced5ca923a1fcb8d03e96b8d3268065d724548c0211415ff6ac6bac4"
-dependencies = [
- "core-foundation-sys",
- "libc",
 ]
 
 [[package]]
@@ -11975,9 +11884,8 @@ dependencies = [
 [[package]]
 name = "tiberius"
 version = "0.12.3"
-source = "git+https://github.com/MaterializeInc/tiberius?rev=64ca594cc22ed67d072c2d0110455da50539e1cd#64ca594cc22ed67d072c2d0110455da50539e1cd"
+source = "git+https://github.com/MaterializeInc/tiberius?branch=rustls-0.23-on-mz-changes#1afec24e5a2de6bbed67173d052c24fb31ae1b3c"
 dependencies = [
- "async-native-tls",
  "async-trait",
  "asynchronous-codec",
  "byteorder",
@@ -11991,8 +11899,12 @@ dependencies = [
  "once_cell",
  "pin-project-lite",
  "pretty-hex",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pemfile",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "tracing",
  "uuid",
@@ -12205,27 +12117,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-native-tls"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
-dependencies = [
- "native-tls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-openssl"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59df6849caa43bb7567f9a36f863c447d95a11d5903c9cc334ba32576a27eadd"
-dependencies = [
- "openssl",
- "openssl-sys",
- "tokio",
-]
-
-[[package]]
 name = "tokio-postgres"
 version = "0.7.15"
 source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
@@ -12374,11 +12265,11 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "flate2",
- "h2 0.4.12",
+ "h2",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper",
  "hyper-timeout",
  "hyper-util",
  "percent-encoding",
@@ -12945,35 +12836,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
-name = "ureq"
-version = "3.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d39cb1dbab692d82a977c0392ffac19e188bd9186a9f32806f0aaa859d75585a"
-dependencies = [
- "base64 0.22.1",
- "der",
- "log",
- "native-tls",
- "percent-encoding",
- "rustls-pki-types",
- "ureq-proto",
- "utf-8",
- "webpki-root-certs",
-]
-
-[[package]]
-name = "ureq-proto"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d81f9efa9df032be5934a46a068815a10a042b494b6a58cb0a1a97bb5467ed6f"
-dependencies = [
- "base64 0.22.1",
- "http 1.4.0",
- "httparse",
- "log",
-]
-
-[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13270,10 +13132,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "webpki-root-certs"
-version = "1.0.5"
+name = "webpki-roots"
+version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "36a29fc0408b113f68cf32637857ab740edfafdf460c326cd2afaa2d84cc05dc"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.6",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -13359,35 +13230,6 @@ name = "windows-link"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "45e46c0661abb7180e7b9c281db115305d49ca1709ab8242adf09666d2173c65"
-
-[[package]]
-name = "windows-registry"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b3bab093bdd303a1240bb99b8aba8ea8a69ee19d34c9e2ef9594e708a4878820"
-dependencies = [
- "windows-link 0.1.1",
- "windows-result",
- "windows-strings",
-]
-
-[[package]]
-name = "windows-result"
-version = "0.3.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56f42bd332cc6c8eac5af113fc0c1fd6a8fd2aa08a0119358686e5160d0586c6"
-dependencies = [
- "windows-link 0.1.1",
-]
-
-[[package]]
-name = "windows-strings"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
-dependencies = [
- "windows-link 0.1.1",
-]
 
 [[package]]
 name = "windows-sys"
@@ -13583,6 +13425,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "x509-parser"
+version = "0.18.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d43b0f71ce057da06bc0851b23ee24f3f86190b07203dd8f567d0b706a185202"
+dependencies = [
+ "asn1-rs",
+ "aws-lc-rs",
+ "data-encoding",
+ "der-parser",
+ "lazy_static",
+ "nom",
+ "oid-registry",
+ "rusticata-macros",
+ "thiserror 2.0.18",
+ "time",
+]
+
+[[package]]
 name = "xattr"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13619,6 +13479,15 @@ name = "yansi"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
+
+[[package]]
+name = "yasna"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e17bb3549cc1321ae1296b9cdc2698e2b6cb1992adfa19a8c72e5b7a738f44cd"
+dependencies = [
+ "time",
+]
 
 [[package]]
 name = "zerocopy"

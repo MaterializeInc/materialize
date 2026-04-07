@@ -23,22 +23,22 @@ bench = false
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
 anyhow.workspace = true
-arrow.workspace = true
+arrow = { workspace = true, default-features = false }
 async-trait.workspace = true
 async-stream.workspace = true
-aws-config.workspace = true
-aws-credential-types.workspace = true
-aws-sdk-s3.workspace = true
+aws-config = { workspace = true, default-features = false }
+aws-credential-types = { workspace = true, features = ["hardcoded-credentials"] }
+aws-sdk-s3 = { workspace = true, features = ["rt-tokio"], default-features = false }
 aws-types.workspace = true
-azure_identity.workspace = true
-azure_storage.workspace = true
-azure_storage_blobs.workspace = true
-azure_core.workspace = true
+azure_identity = { workspace = true, features = ["enable_reqwest_rustls_no_provider", "old_azure_cli"], default-features = false }
+azure_storage = { workspace = true, features = ["enable_reqwest_rustls_no_provider", "hmac_rust"], default-features = false }
+azure_storage_blobs = { workspace = true, features = ["enable_reqwest_rustls_no_provider", "hmac_rust"], default-features = false }
+azure_core = { workspace = true, features = ["enable_reqwest_rustls_no_provider", "hmac_rust"], default-features = false }
 base64.workspace = true
 bytes.workspace = true
 deadpool-postgres.workspace = true
 differential-dataflow.workspace = true
-fail.workspace = true
+fail = { workspace = true, features = ["failpoints"] }
 futures-util.workspace = true
 mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 itertools.workspace = true
@@ -49,21 +49,18 @@ mz-ore = { path = "../ore", default-features = false, features = ["metrics", "as
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
-openssl.workspace = true
-openssl-sys.workspace = true
-parquet.workspace = true
-postgres-openssl.workspace = true
+parquet = { workspace = true, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"], default-features = false }
 postgres-protocol.workspace = true
-prometheus.workspace = true
-proptest.workspace = true
-proptest-derive.workspace = true
-prost.workspace = true
+prometheus = { workspace = true, default-features = false }
+proptest = { workspace = true, features = ["std"], default-features = false }
+proptest-derive = { workspace = true, features = ["boxed_union"] }
+prost = { workspace = true, features = ["no-recursion-limit"] }
 rand = { workspace = true, features = ["small_rng"] }
-reqwest.workspace = true
-serde.workspace = true
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls-webpki-roots-no-provider", "charset", "http2"], default-features = false }
+serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, optional = true }
 timely.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres.workspace = true
 tracing.workspace = true
 turmoil = { workspace = true, optional = true }
@@ -71,15 +68,8 @@ url.workspace = true
 urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
-# While this crate doesn't directly depend on `sha2` we want to ensure that the
-# `asm` feature is enabled since computing SHA256 hashes is taking a
-# significant amount of CPU time when uploading data to S3
-[dependencies.sha2]
-workspace = true
-features = ["asm"]
-
 [dev-dependencies]
-mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["crypto", "test"] }
 serde_json.workspace = true
 tempfile.workspace = true
 

@@ -39,7 +39,6 @@ use std::time::Duration;
 use console_subscriber::ConsoleLayer;
 use derivative::Derivative;
 use http::HeaderMap;
-use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::trace::TracerProvider;
@@ -70,12 +69,34 @@ use crate::metrics::MetricsRegistry;
 use crate::netio::SocketAddr;
 use crate::now::{EpochMillis, NowFn, SYSTEM_TIME};
 
+/// Trait alias for sentry event filter functions.
+///
+/// When the `sentry` feature is enabled, `F` must be
+/// `Fn(&tracing::Metadata) -> sentry_tracing::EventFilter`. When disabled,
+/// any `Send + Sync + 'static` type satisfies the bound.
+#[cfg(feature = "sentry")]
+pub trait SentryFilter:
+    Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static
+{
+}
+#[cfg(feature = "sentry")]
+impl<F> SentryFilter for F where
+    F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static
+{
+}
+
+/// See [`SentryFilter`] — this is the no-sentry variant.
+#[cfg(not(feature = "sentry"))]
+pub trait SentryFilter: Send + Sync + 'static {}
+#[cfg(not(feature = "sentry"))]
+impl<F: Send + Sync + 'static> SentryFilter for F {}
+
 /// Application tracing configuration.
 ///
 /// See the [`configure`] function for details.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct TracingConfig<F> {
+pub struct TracingConfig<F = ()> {
     /// The name of the service.
     pub service_name: &'static str,
     /// Configuration of the stderr log.
@@ -93,7 +114,12 @@ pub struct TracingConfig<F> {
     #[derivative(Debug = "ignore")]
     pub capture: Option<SharedStorage>,
     /// Optional Sentry configuration.
+    #[cfg(feature = "sentry")]
     pub sentry: Option<SentryConfig<F>>,
+    /// Phantom data to keep `F` used when sentry is disabled.
+    #[cfg(not(feature = "sentry"))]
+    #[derivative(Debug = "ignore")]
+    pub _phantom: std::marker::PhantomData<F>,
     /// The version of this build of the service.
     pub build_version: &'static str,
     /// The commit SHA of this build of the service.
@@ -103,6 +129,7 @@ pub struct TracingConfig<F> {
 }
 
 /// Configures Sentry reporting.
+#[cfg(feature = "sentry")]
 #[derive(Debug, Clone)]
 pub struct SentryConfig<F> {
     /// Sentry data source name to submit events to.
@@ -320,10 +347,9 @@ pub static GLOBAL_SUBSCRIBER: OnceLock<GlobalSubscriber> = OnceLock::new();
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
-pub async fn configure<F>(config: TracingConfig<F>) -> Result<TracingHandle, anyhow::Error>
-where
-    F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
-{
+pub async fn configure<F: SentryFilter>(
+    config: TracingConfig<F>,
+) -> Result<TracingHandle, anyhow::Error> {
     let stderr_log_layer: Box<dyn Layer<Registry> + Send + Sync> = match config.stderr_log.format {
         StderrLogFormat::Text { prefix } => {
             // See: https://no-color.org/
@@ -385,16 +411,13 @@ where
             .connect_with_connector_lazy({
                 let mut http = HttpConnector::new();
                 http.enforce_http(false);
-                HttpsConnector::from((
-                    http,
-                    // This is the same as the default, plus an h2 ALPN request.
-                    tokio_native_tls::TlsConnector::from(
-                        native_tls::TlsConnector::builder()
-                            .request_alpns(&["h2"])
-                            .build()
-                            .unwrap(),
-                    ),
-                ))
+                hyper_rustls::HttpsConnectorBuilder::new()
+                    .with_provider_and_native_roots(rustls::crypto::aws_lc_rs::default_provider())
+                    .expect("native root certs")
+                    .https_or_http()
+                    .enable_http1()
+                    .enable_http2()
+                    .wrap_connector(http)
             });
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
@@ -480,6 +503,7 @@ where
         None
     };
 
+    #[cfg(feature = "sentry")]
     let (sentry_layer, sentry_reloader): (_, DirectiveReloader) =
         if let Some(sentry_config) = config.sentry {
             let guard = sentry::init((
@@ -553,6 +577,14 @@ where
             let reloader = Arc::new(|_| Ok(()));
             (None, reloader)
         };
+    #[cfg(not(feature = "sentry"))]
+    let (sentry_layer, sentry_reloader): (
+        Option<tracing_subscriber::layer::Identity>,
+        DirectiveReloader,
+    ) = {
+        let reloader = Arc::new(|_| Ok(()));
+        (None, reloader)
+    };
 
     #[cfg(feature = "capture")]
     let capture = config.capture.map(|storage| CaptureLayer::new(&storage));

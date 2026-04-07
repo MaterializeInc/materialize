@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 axum.workspace = true
-clap.workspace = true
+clap = { workspace = true, features = [ "derive" ] }
 csv.workspace = true
 dirs.workspace = true
 indicatif.workspace = true
@@ -26,17 +26,17 @@ mz-sql-parser = { path = "../sql-parser" }
 open.workspace = true
 openssl-probe.workspace = true
 hyper.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls-webpki-roots-no-provider", "charset", "http2"], default-features = false }
 rpassword.workspace = true
 semver.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde-aux.workspace = true
 serde_json.workspace = true
 tabled.workspace = true
 time.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["full"] }
 toml.workspace = true
-toml_edit.workspace = true
+toml_edit = { workspace = true, features = ["serde"] }
 thiserror.workspace = true
 uuid.workspace = true
 url.workspace = true

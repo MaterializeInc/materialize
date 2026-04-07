@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-jsonwebtoken.workspace = true
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["network"] }
-reqwest.workspace = true
-serde.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots-no-provider"], default-features = false }
+serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 serde_json.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 url.workspace = true

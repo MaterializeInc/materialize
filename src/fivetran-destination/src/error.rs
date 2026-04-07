@@ -73,7 +73,7 @@ pub enum OpErrorKind {
     #[error("filesystem error: {0:?}")]
     Filesystem(#[from] std::io::Error),
     #[error("cryptography error: {0:?}")]
-    Crypto(#[from] openssl::error::ErrorStack),
+    Crypto(#[from] aws_lc_rs::error::Unspecified),
     #[error("failure when parsing csv: {0:?}")]
     CsvReader(#[from] csv_async::Error),
     #[error("failed to map csv to table: {msg}\ntable: {table:?}\ncsv headers: {headers:?}")]

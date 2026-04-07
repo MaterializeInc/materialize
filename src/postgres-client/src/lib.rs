@@ -114,7 +114,7 @@ impl PostgresClient {
 
         let tls = mz_tls_util::make_tls(&pg_config).map_err(|tls_err| match tls_err {
             mz_tls_util::TlsError::Generic(e) => PostgresError::Indeterminate(e),
-            mz_tls_util::TlsError::OpenSsl(e) => PostgresError::Indeterminate(anyhow::anyhow!(e)),
+            mz_tls_util::TlsError::Rustls(e) => PostgresError::Indeterminate(anyhow::anyhow!(e)),
         })?;
 
         let manager = Manager::from_config(

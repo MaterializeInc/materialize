@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-chrono.workspace = true
+chrono = { workspace = true, features = ["std"], default-features = false }
 differential-dataflow.workspace = true
 futures.workspace = true
 itertools.workspace = true
@@ -29,13 +29,13 @@ mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
-prometheus.workspace = true
-rdkafka.workspace = true
-serde.workspace = true
+prometheus = { workspace = true, default-features = false }
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-awslc", "libz-static", "zstd",] }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 smallvec = { workspace = true, features = ["serde", "union"] }
 timely.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs", "rt", "sync", "test-util", "time",] }
 tracing.workspace = true
 uuid.workspace = true
 
