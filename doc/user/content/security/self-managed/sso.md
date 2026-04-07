@@ -11,7 +11,7 @@ menu:
 
 {{< public-preview />}}
 
-Single sign-on (SSO) allows users to authenticate with Self-Managed Materialize
+Single sign-on (SSO) allows users to authenticate to Self-Managed Materialize
 using their organization's identity provider (IdP) via
 [OpenID Connect (OIDC)](https://openid.net/developers/how-connect-works/).
 Instead of managing passwords directly in Materialize, users sign in through
