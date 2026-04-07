@@ -311,7 +311,7 @@ ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 1. Sign in through your IdP. After successful authentication, you are redirected
    back to the Materialize console.
 
-1. To confirm which SQL role you've signed in as via SSO, open the [SQL Shell](/console/sql-shell/) in the Materialize console. In the welcome message, you should see the role's name labelled under "User". This is derived from the `oidc_authentication_claim` claim in your identity token:
+1. To confirm which role you've signed in as via SSO, open the [SQL Shell](/console/sql-shell/) in the Materialize console. In the welcome message, you should see the role name labelled under "User". This is derived from the `oidc_authentication_claim` claim in your identity token:
 
 ![Materialize console Shell](/images/console/console.png "Materialize console Shell")
 
