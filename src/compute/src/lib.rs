@@ -15,11 +15,11 @@ pub mod memory_limiter;
 pub mod server;
 
 mod arrangement;
-mod command_channel;
-mod compute_state;
+pub mod command_channel;
+pub mod compute_state;
 mod extensions;
 mod logging;
-mod metrics;
+pub mod metrics;
 mod render;
 mod row_spine;
 mod sink;

@@ -50,25 +50,24 @@ where
 
 /// Metadata about timely workers in this process.
 pub struct TimelyContainer<C: ClusterSpec> {
-    /// Channels over which to send endpoints for wiring up a new Client
-    client_txs: Vec<
+    /// Channels over which to send endpoints for wiring up a new Client.
+    pub client_txs: Vec<
         mpsc::UnboundedSender<(
             Uuid,
             mpsc::UnboundedReceiver<C::Command>,
             mpsc::UnboundedSender<C::Response>,
         )>,
     >,
-    /// Thread guards that keep worker threads alive
-    worker_guards: WorkerGuards<()>,
+    /// Thread guards that keep worker threads alive.
+    pub worker_guards: Option<WorkerGuards<()>>,
+    /// Cached worker thread handles. Populated from `worker_guards` on creation,
+    /// or set directly for containers that share guards with another container.
+    pub worker_threads: Vec<Thread>,
 }
 
 impl<C: ClusterSpec> TimelyContainer<C> {
     fn worker_threads(&self) -> Vec<Thread> {
-        self.worker_guards
-            .guards()
-            .iter()
-            .map(|h| h.thread().clone())
-            .collect()
+        self.worker_threads.clone()
     }
 }
 
@@ -286,9 +285,15 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
         })
         .map_err(|e| anyhow!(e))?;
 
+        let worker_threads = worker_guards
+            .guards()
+            .iter()
+            .map(|h| h.thread().clone())
+            .collect();
         Ok(TimelyContainer {
             client_txs,
-            worker_guards,
+            worker_guards: Some(worker_guards),
+            worker_threads,
         })
     }
 }

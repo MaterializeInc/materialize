@@ -6078,6 +6078,7 @@ dependencies = [
  "axum",
  "clap",
  "custom-labels",
+ "differential-dataflow",
  "fail",
  "futures",
  "hyper 1.8.1",
@@ -6097,6 +6098,8 @@ dependencies = [
  "mz-ore",
  "mz-persist-client",
  "mz-prof-http",
+ "mz-repr",
+ "mz-rocksdb",
  "mz-service",
  "mz-storage",
  "mz-storage-client",
@@ -6106,9 +6109,11 @@ dependencies = [
  "nix 0.30.1",
  "num_cpus",
  "serde",
+ "timely",
  "tokio",
  "tower 0.5.3",
  "tracing",
+ "uuid",
 ]
 
 [[package]]

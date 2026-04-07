@@ -166,7 +166,7 @@ impl InternalCommandReceiver {
     }
 }
 
-pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
+pub fn setup_command_sequencer<'w, A: Allocate>(
     timely_worker: &'w mut TimelyWorker<A>,
 ) -> (InternalCommandSender, InternalCommandReceiver) {
     let (input_tx, input_rx) = mpsc::channel();

@@ -110,12 +110,12 @@ pub async fn serve(
 ///
 /// A nonce change informs workers that subsequent commands come a from a new client connection
 /// and therefore require reconciliation.
-struct NonceChange(Uuid);
+pub struct NonceChange(pub Uuid);
 
 /// Endpoint used by workers to receive compute commands.
 ///
 /// Observes nonce changes in the command stream and converts them into receive errors.
-struct CommandReceiver {
+pub struct CommandReceiver {
     /// The channel supplying commands.
     inner: command_channel::Receiver,
     /// The ID of the Timely worker.
@@ -127,7 +127,8 @@ struct CommandReceiver {
 }
 
 impl CommandReceiver {
-    fn new(inner: command_channel::Receiver, worker_id: usize) -> Self {
+    /// Create a new `CommandReceiver`.
+    pub fn new(inner: command_channel::Receiver, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
@@ -140,7 +141,7 @@ impl CommandReceiver {
     ///
     /// If the next command has a different nonce, this method instead returns an `Err`
     /// containing the new nonce.
-    fn try_recv(&mut self) -> Result<Option<ComputeCommand>, NonceChange> {
+    pub fn try_recv(&mut self) -> Result<Option<ComputeCommand>, NonceChange> {
         if let Some(command) = self.stashed_command.take() {
             return Ok(Some(command));
         }
@@ -158,13 +159,18 @@ impl CommandReceiver {
             Err(NonceChange(nonce))
         }
     }
+
+    /// Returns `true` if there are no pending commands.
+    pub fn is_empty(&self) -> bool {
+        self.stashed_command.is_none()
+    }
 }
 
-/// Endpoint used by workers to send sending compute responses.
+/// Endpoint used by workers to send compute responses.
 ///
 /// Tags responses with the current nonce, allowing receivers to filter out responses intended for
 /// previous client connections.
-pub(crate) struct ResponseSender {
+pub struct ResponseSender {
     /// The channel consuming responses.
     inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
     /// The ID of the Timely worker.
@@ -174,7 +180,8 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    /// Create a new `ResponseSender`.
+    pub fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
         Self {
             inner,
             worker_id,
@@ -183,7 +190,7 @@ impl ResponseSender {
     }
 
     /// Set the cluster protocol nonce.
-    fn set_nonce(&mut self, nonce: Uuid) {
+    pub fn set_nonce(&mut self, nonce: Uuid) {
         self.nonce = Some(nonce);
     }
 
@@ -202,28 +209,30 @@ impl ResponseSender {
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A: Allocate> {
+pub struct Worker<'w, A: Allocate> {
     /// The underlying Timely worker.
-    timely_worker: &'w mut TimelyWorker<A>,
+    pub timely_worker: &'w mut TimelyWorker<A>,
     /// The channel over which commands are received.
-    command_rx: CommandReceiver,
+    pub command_rx: CommandReceiver,
     /// The channel over which responses are sent.
-    response_tx: ResponseSender,
-    compute_state: Option<ComputeState>,
+    pub response_tx: ResponseSender,
+    /// The compute state, present after `CreateInstance`.
+    pub compute_state: Option<ComputeState>,
     /// Compute metrics.
-    metrics: WorkerMetrics,
+    pub metrics: WorkerMetrics,
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
-    persist_clients: Arc<PersistClientCache>,
+    pub persist_clients: Arc<PersistClientCache>,
     /// Context necessary for rendering txn-wal operators.
-    txns_ctx: TxnsContext,
+    pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
-    tracing_handle: Arc<TracingHandle>,
-    context: ComputeInstanceContext,
+    pub tracing_handle: Arc<TracingHandle>,
+    /// Other configuration for compute.
+    pub context: ComputeInstanceContext,
     /// The process-global metrics registry.
-    metrics_registry: MetricsRegistry,
+    pub metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
-    workers_per_process: usize,
+    pub workers_per_process: usize,
 }
 
 impl ClusterSpec for Config {
@@ -332,12 +341,13 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    fn set_nonce(&mut self, nonce: Uuid) {
+    /// Set the nonce on the response sender.
+    pub fn set_nonce(&mut self, nonce: Uuid) {
         self.response_tx.set_nonce(nonce);
     }
 
     /// Handles commands for a client connection, returns when the nonce changes.
-    fn run_client(&mut self) -> Result<Infallible, NonceChange> {
+    pub fn run_client(&mut self) -> Result<Infallible, NonceChange> {
         self.reconcile()?;
 
         // The last time we did periodic maintenance.
@@ -389,14 +399,16 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         }
     }
 
-    fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
+    /// Handle all pending commands in the command channel.
+    pub fn handle_pending_commands(&mut self) -> Result<(), NonceChange> {
         while let Some(cmd) = self.command_rx.try_recv()? {
             self.handle_command(cmd);
         }
         Ok(())
     }
 
-    fn handle_command(&mut self, cmd: ComputeCommand) {
+    /// Handle a single compute command.
+    pub fn handle_command(&mut self, cmd: ComputeCommand) {
         match &cmd {
             ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
@@ -414,7 +426,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         self.activate_compute().unwrap().handle_compute_command(cmd);
     }
 
-    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_, A>> {
+    /// Activate compute state, creating an `ActiveComputeState` with access to the timely worker.
+    pub fn activate_compute(&mut self) -> Option<ActiveComputeState<'_, A>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,
@@ -430,7 +443,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     ///
     /// This method blocks if no command is currently available, but takes care to step the Timely
     /// worker while doing so.
-    fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
+    pub fn recv_command(&mut self) -> Result<ComputeCommand, NonceChange> {
         loop {
             if let Some(cmd) = self.command_rx.try_recv()? {
                 return Ok(cmd);
@@ -462,7 +475,8 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
     /// Some additional tidying happens, cleaning up pending peeks, reported frontiers, and creating a new
     /// subscribe response buffer. We will need to be vigilant with future modifications to `ComputeState` to
     /// line up changes there with clean resets here.
-    fn reconcile(&mut self) -> Result<(), NonceChange> {
+    /// Reconcile compute state after a nonce change.
+    pub fn reconcile(&mut self) -> Result<(), NonceChange> {
         // To initialize the connection, we want to drain all commands until we receive a
         // `ComputeCommand::InitializationComplete` command to form a target command state.
         let mut new_commands = Vec::new();
@@ -747,7 +761,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
 ///
 /// The [`Worker`] expects a pair of persistent channels, with punctuation marking reconnects,
 /// while the [`ClusterClient`] provides a new pair of channels on each reconnect.
-fn spawn_channel_adapter(
+pub fn spawn_channel_adapter(
     mut client_rx: mpsc::UnboundedReceiver<(
         Uuid,
         mpsc::UnboundedReceiver<ComputeCommand>,
