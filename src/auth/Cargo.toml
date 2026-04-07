@@ -16,7 +16,7 @@ serde.workspace = true
 proptest-derive.workspace = true
 proptest.workspace = true
 static_assertions.workspace = true
-openssl.workspace = true
+aws-lc-rs.workspace = true
 itertools.workspace = true
 
 [features]

@@ -5718,10 +5718,10 @@ dependencies = [
 name = "mz-auth"
 version = "0.0.0"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "itertools 0.14.0",
  "mz-ore",
- "openssl",
  "proptest",
  "proptest-derive",
  "serde",
@@ -5752,10 +5752,10 @@ name = "mz-avro"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "byteorder",
  "chrono",
  "crc32fast",
- "digest",
  "enum-kinds",
  "flate2",
  "itertools 0.14.0",
@@ -5764,7 +5764,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "sha2",
  "snap",
  "tracing",
  "uuid",
@@ -6527,6 +6526,7 @@ version = "0.0.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "aws-lc-rs",
  "bytes",
  "bytesize",
  "chrono",
@@ -6576,10 +6576,7 @@ dependencies = [
  "seahash",
  "serde",
  "serde_json",
- "sha1",
- "sha2",
  "smallvec",
- "subtle",
  "tracing",
  "uncased",
  "unicode-normalization",
@@ -6844,6 +6841,7 @@ name = "mz-license-keys"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "aws-sdk-kms",
  "base64 0.22.1",
  "clap",
@@ -6852,7 +6850,6 @@ dependencies = [
  "pem",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "utoipa",
  "uuid",
@@ -8041,12 +8038,12 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "futures",
  "itertools 0.14.0",
  "mz-ore",
  "openssh",
  "openssh-mux-client",
- "openssl",
  "rand 0.9.2",
  "scopeguard",
  "serde",

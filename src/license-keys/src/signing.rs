@@ -10,6 +10,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::anyhow;
+use aws_lc_rs::digest;
 use aws_sdk_kms::{
     primitives::Blob,
     types::{MessageType, SigningAlgorithmSpec},
@@ -17,7 +18,6 @@ use aws_sdk_kms::{
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, Header};
 use pem::Pem;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{ExpirationBehavior, ISSUER, Payload};
@@ -86,9 +86,8 @@ async fn sign(
     key_id: &str,
     message: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
-    let mut hasher = Sha256::new();
-    hasher.update(message);
-    let digest = hasher.finalize().to_vec();
+    let hash = digest::digest(&digest::SHA256, message);
+    let digest = hash.as_ref().to_vec();
 
     if let Some(sig) = client
         .sign()
