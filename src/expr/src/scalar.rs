@@ -378,7 +378,8 @@ impl MirScalarExpr {
                 // Also, we don't want to insert a function call that doesn't preserve
                 // uniqueness. E.g., if `a` has an integer type, we don't want to do
                 // a surprise rounding for `WHERE a = 3.14`.
-                if func.preserves_uniqueness() && inverse_func.preserves_uniqueness() {
+                if func.preserves_uniqueness() {
+                    let inverse_preserves = inverse_func.preserves_uniqueness();
                     let lit_inv = eval(&MirScalarExpr::CallUnary {
                         func: inverse_func,
                         expr: Box::new(literal.clone()),
@@ -386,7 +387,20 @@ impl MirScalarExpr {
                     // The evaluation can error out, e.g., when casting a too large int32 to int16.
                     // This case is handled by `impossible_literal_equality_because_types`.
                     if !lit_inv.is_literal_err() {
-                        return (*inner_expr.clone(), lit_inv);
+                        if inverse_preserves {
+                            return (*inner_expr.clone(), lit_inv);
+                        }
+                        // When the inverse doesn't preserve uniqueness (e.g.,
+                        // numeric-to-uint64 rounds), verify with a round-trip:
+                        // func(inverse(literal)) must equal the original literal.
+                        // This ensures the inverse produced the exact pre-image.
+                        let round_trip = eval(&MirScalarExpr::CallUnary {
+                            func: func.clone(),
+                            expr: Box::new(lit_inv.clone()),
+                        });
+                        if !round_trip.is_literal_err() && round_trip == *literal {
+                            return (*inner_expr.clone(), lit_inv);
+                        }
                     }
                 }
             }
@@ -429,14 +443,28 @@ impl MirScalarExpr {
 
         if let MirScalarExpr::CallUnary { func, .. } = other_side {
             if let Some(inverse_func) = func.inverse() {
-                if inverse_func.preserves_uniqueness()
-                    && eval(&MirScalarExpr::CallUnary {
-                        func: inverse_func,
-                        expr: Box::new(literal.clone()),
-                    })
-                    .is_literal_err()
-                {
+                let lit_inv = eval(&MirScalarExpr::CallUnary {
+                    func: inverse_func.clone(),
+                    expr: Box::new(literal.clone()),
+                });
+                if inverse_func.preserves_uniqueness() && lit_inv.is_literal_err() {
                     return true;
+                }
+                // When the inverse doesn't preserve uniqueness but func does
+                // (e.g., uint64-to-numeric with numeric-to-uint64 inverse),
+                // the equality is impossible if the inverse errors OR if a
+                // round-trip check fails (the literal has no pre-image under func).
+                if func.preserves_uniqueness() && !inverse_func.preserves_uniqueness() {
+                    if lit_inv.is_literal_err() {
+                        return true;
+                    }
+                    let round_trip = eval(&MirScalarExpr::CallUnary {
+                        func: func.clone(),
+                        expr: Box::new(lit_inv),
+                    });
+                    if round_trip.is_literal_err() || round_trip != *literal {
+                        return true;
+                    }
                 }
             }
         }

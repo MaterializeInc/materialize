@@ -149,6 +149,10 @@ impl EagerUnaryFunc for CastUint32ToNumeric {
         self.0.is_some()
     }
 
+    fn preserves_uniqueness(&self) -> bool {
+        true
+    }
+
     fn inverse(&self) -> Option<crate::UnaryFunc> {
         to_unary!(super::CastNumericToUint32)
     }

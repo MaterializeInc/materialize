@@ -1416,3 +1416,99 @@ LIMIT 3 OFFSET 1;
 2  l2
 1  a
 1  l1
+
+# -------------------------------------------------------
+# Tests for cast inversion with unsigned integer types.
+# When a uint column is compared to an integer literal, the planner resolves to
+# (Numeric, Numeric) equality because there's no implicit cast from int4 to uint8.
+# The cast inversion in `invert_casts_on_expr_eq_literal` should move the cast from
+# the column to the literal, enabling index lookups.
+# -------------------------------------------------------
+
+statement ok
+CREATE TABLE t_uint(a uint8);
+
+statement ok
+CREATE INDEX idx_t_uint_a ON t_uint(a);
+
+statement ok
+INSERT INTO t_uint VALUES (0), (5), (42);
+
+# Integer literal comparison should use index lookup via cast inversion
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT a FROM t_uint WHERE a = 5;
+----
+Explained Query (fast path):
+  Project (#0{a})
+    ReadIndex on=materialize.public.t_uint idx_t_uint_a=[lookup value=(5)]
+
+Used Indexes:
+  - materialize.public.idx_t_uint_a (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT a FROM t_uint WHERE a = 5;
+----
+5
+
+# IN list should also use index lookup
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT a FROM t_uint WHERE a IN (0, 42);
+----
+Explained Query (fast path):
+  Project (#0{a})
+    ReadIndex on=materialize.public.t_uint idx_t_uint_a=[lookup values=[(0); (42)]]
+
+Used Indexes:
+  - materialize.public.idx_t_uint_a (lookup)
+
+Target cluster: quickstart
+
+EOF
+
+query I rowsort
+SELECT a FROM t_uint WHERE a IN (0, 42);
+----
+0
+42
+
+# Negative literal: impossible equality (uint8 can't hold negative values)
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT a FROM t_uint WHERE a = -1;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT a FROM t_uint WHERE a = -1;
+----
+
+# Fractional numeric literal: round-trip check should detect this as impossible
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
+SELECT a FROM t_uint WHERE a = 3.14;
+----
+Explained Query (fast path):
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
+
+query I
+SELECT a FROM t_uint WHERE a = 3.14;
+----
