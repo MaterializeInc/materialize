@@ -20,7 +20,7 @@ mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
 rand = "0.9.2"
 regex = "1.12.3"
-timely = "0.28.0"
+timely = "0.28.1"
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.44"
 uuid = "1.19.0"

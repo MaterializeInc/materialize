@@ -41,7 +41,7 @@ prometheus = { version = "0.14.0", default-features = false }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
-timely = "0.28.0"
+timely = "0.28.1"
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
