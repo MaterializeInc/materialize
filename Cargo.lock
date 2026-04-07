@@ -1991,9 +1991,9 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 
 [[package]]
 name = "columnar"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85ca2714c125771c449f4dfe3a088f1081d7b581480c26438d0733467da477fc"
+checksum = "161f39fb04ec1e1446e76f65ee5fc19f59240d9095b0b89b9a325da608c927f1"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -2458,9 +2458,9 @@ checksum = "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1"
 
 [[package]]
 name = "custom-labels"
-version = "0.4.5"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a750ea4bdb7dbf9584b5d5c668bfa3835f88275781a947b5ea0212945bbdd41f"
+checksum = "4121f4f539659ad975da5bc6702b7d7d6de59ff1bbaec328dfe7dd5058052ef2"
 dependencies = [
  "bindgen",
  "cc",
@@ -5784,7 +5784,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5921,7 +5921,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -6072,7 +6072,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -6363,7 +6363,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "anyhow",
  "askama",
@@ -6872,7 +6872,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7078,7 +7078,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7259,7 +7259,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -8335,7 +8335,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.19.0-rc.1"
+version = "26.19.0-rc.2"
 dependencies = [
  "anyhow",
  "arrow",
@@ -9957,7 +9957,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "343d3bd7056eda839b03204e68deff7d1b13aba7af2b2fd16890697274262ee7"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "petgraph",
@@ -9978,7 +9978,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.114",
