@@ -1886,25 +1886,9 @@ fn check_object_privileges(
 fn get_object_owner_name(object_id: &SystemObjectId, catalog: &impl SessionCatalog) -> Option<String> {
     match object_id {
         SystemObjectId::System => None,
-        SystemObjectId::Object(ObjectId::Cluster(id)) => {
-            Some(catalog.get_role(&catalog.get_cluster(*id).owner_id()).name().to_string())
-        }
-        SystemObjectId::Object(ObjectId::Database(id)) => {
-            Some(catalog.get_role(&catalog.get_database(id).owner_id()).name().to_string())
-        }
-        SystemObjectId::Object(ObjectId::Schema((db_spec, schema_spec))) => {
-            Some(catalog.get_role(&catalog.get_schema(db_spec, schema_spec).owner_id()).name().to_string())
-        }
-        SystemObjectId::Object(ObjectId::Item(id)) => {
-            Some(catalog.get_role(&catalog.get_item(id).owner_id()).name().to_string())
-        }
-        SystemObjectId::Object(ObjectId::Role(_)) => None, // Roles don't have owners in this sense
-        SystemObjectId::Object(ObjectId::ClusterReplica((cluster_id, replica_id))) => {
-            Some(catalog.get_role(&catalog.get_cluster_replica(*cluster_id, *replica_id).owner_id()).name().to_string())
-        }
-        SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
-            Some(catalog.get_role(&catalog.get_network_policy(id).owner_id()).name().to_string())
-        }
+        SystemObjectId::Object(oid) => catalog
+            .get_owner_id(oid)
+            .map(|role_id| catalog.get_role(&role_id).name().to_string()),
     }
 }
 
