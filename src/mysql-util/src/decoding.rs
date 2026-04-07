@@ -31,6 +31,12 @@ pub fn pack_mysql_row(
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
 
+    // If a column name begins with '@', then the binlog does not have full row metadata,
+    // meaning that full column names are not available and we need to rely on the order
+    // of the columns in the upstream table matching the order of the columns in the row.
+    // This is a fallback for MySQL servers that do not have `binlog_row_metadata` set to
+    // `FULL`. If the first column name does not begin with '@', then we can assume that
+    // full metadata is available and we can match columns by name.
     let row_values: Vec<Value> = if row
         .columns_ref()
         .first()
