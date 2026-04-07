@@ -347,8 +347,7 @@ ALTER SYSTEM SET console_oidc_scopes = 'openid email';
 
 ## Connecting via SQL clients
 
-To connect to Materialize using a SQL client like `psql`, you need an OIDC
-token and the `oidc_auth_enabled=true` connection option.
+To connect to Materialize using a SQL client like `psql`, you need an OIDC ID token and the `oidc_auth_enabled=true` connection option.
 
 {{< important >}}
 The `oidc_auth_enabled=true` connection option is **required** for OIDC
