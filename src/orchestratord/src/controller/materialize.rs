@@ -408,6 +408,45 @@ impl k8s_controller::Context for Context {
             }
             // There are changes pending, and we want to apply them.
             (false, true, true) => {
+                if !mz.within_upgrade_window() {
+                    let last_completed_rollout_environmentd_image_ref =
+                        status.last_completed_rollout_environmentd_image_ref;
+
+                    self.update_status(
+                        &mz_api,
+                        mz,
+                        MaterializeStatus {
+                            active_generation,
+                            last_completed_rollout_request: status.last_completed_rollout_request,
+                            last_completed_rollout_environmentd_image_ref:
+                                last_completed_rollout_environmentd_image_ref.clone(),
+                            resource_id: status.resource_id,
+                            resources_hash: status.resources_hash,
+                            conditions: vec![Condition {
+                                type_: "UpToDate".into(),
+                                status: "False".into(),
+                                last_transition_time: Time(Timestamp::now()),
+                                message: format!(
+                                    "Refusing to upgrade from {} to {}. \
+                                     More than one major version from \
+                                     last successful rollout. If coming \
+                                     from Self Managed 25.2, upgrade to \
+                                     materialize/environmentd:v0.147.20 \
+                                     first.",
+                                    last_completed_rollout_environmentd_image_ref
+                                        .expect("should be set if upgrade window check fails"),
+                                    &mz.spec.environmentd_image_ref,
+                                ),
+                                observed_generation: mz.meta().generation,
+                                reason: "FailedDeploy".into(),
+                            }],
+                        },
+                        active_generation != desired_generation,
+                    )
+                    .await?;
+                    return Ok(None);
+                }
+
                 // we remove the environment resources hash annotation here
                 // because if we fail halfway through applying the resources,
                 // things will be in an inconsistent state, and we don't want
@@ -454,45 +493,6 @@ impl k8s_controller::Context for Context {
                         .await?
                 };
                 let status = mz.status();
-
-                if !mz.within_upgrade_window() {
-                    let last_completed_rollout_environmentd_image_ref =
-                        status.last_completed_rollout_environmentd_image_ref;
-
-                    self.update_status(
-                        &mz_api,
-                        mz,
-                        MaterializeStatus {
-                            active_generation,
-                            last_completed_rollout_request: status.last_completed_rollout_request,
-                            last_completed_rollout_environmentd_image_ref:
-                                last_completed_rollout_environmentd_image_ref.clone(),
-                            resource_id: status.resource_id,
-                            resources_hash: status.resources_hash,
-                            conditions: vec![Condition {
-                                type_: "UpToDate".into(),
-                                status: "False".into(),
-                                last_transition_time: Time(Timestamp::now()),
-                                message: format!(
-                                    "Refusing to upgrade from {} to {}. \
-                                     More than one major version from \
-                                     last successful rollout. If coming \
-                                     from Self Managed 25.2, upgrade to \
-                                     materialize/environmentd:v0.147.20 \
-                                     first.",
-                                    last_completed_rollout_environmentd_image_ref
-                                        .expect("should be set if upgrade window check fails"),
-                                    &mz.spec.environmentd_image_ref,
-                                ),
-                                observed_generation: mz.meta().generation,
-                                reason: "FailedDeploy".into(),
-                            }],
-                        },
-                        active_generation != desired_generation,
-                    )
-                    .await?;
-                    return Ok(None);
-                }
 
                 if mz.spec.rollout_strategy
                     == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
