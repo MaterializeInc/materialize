@@ -260,6 +260,12 @@ resolver = "3"
 edition = "2024"
 rust-version = "1.94.1"
 
+[workspace.dependencies]
+columnar = "0.12.1"
+differential-dataflow = "0.22.0"
+differential-dogs3 = "0.22.0"
+timely = "0.28.1"
+
 [profile.dev]
 split-debuginfo = "unpacked"
 
