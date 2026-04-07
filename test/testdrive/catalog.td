@@ -530,7 +530,6 @@ mz_kafka_sinks                 ""
 mz_kafka_sources               ""
 mz_list_types                  ""
 mz_map_types                   ""
-mz_materialized_views          ""
 mz_operators                   ""
 mz_pseudo_types                ""
 mz_role_auth                   ""
@@ -561,6 +560,7 @@ name                cluster             comment
 mz_databases        mz_catalog_server   ""
 mz_role_members     mz_catalog_server   ""
 mz_schemas          mz_catalog_server   ""
+mz_materialized_views mz_catalog_server ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -629,6 +629,7 @@ mz_webhook_sources                       ""
 name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
+mz_builtin_materialized_views            ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""
@@ -816,7 +817,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-57
+56
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

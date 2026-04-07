@@ -44,7 +44,7 @@ use mz_repr::{
     ArrayRustType, Datum, DatumList, DatumMap, ExcludeNull, FromDatum, InputDatumType, Row,
     RowArena, SqlScalarType, strconv,
 };
-use mz_sql_parser::ast::display::FormatMode;
+use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_pretty::{PrettyConfig, pretty_str};
 use num::traits::CheckedNeg;
 use sha1::Sha1;
@@ -2316,6 +2316,18 @@ fn pretty_sql<'a>(sql: &str, width: i32, temp_storage: &'a RowArena) -> Result<&
     .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
     let pretty = temp_storage.push_string(pretty);
     Ok(pretty)
+}
+
+#[sqlfunc]
+fn redact_sql(sql: &str) -> Result<String, EvalError> {
+    let stmts = mz_sql_parser::parser::parse_statements(sql)
+        .map_err(|e| EvalError::RedactError(e.to_string().into()))?;
+    match stmts.len() {
+        1 => Ok(stmts[0].ast.to_ast_string_redacted()),
+        n => Err(EvalError::RedactError(
+            format!("expected a single statement, found {n}").into(),
+        )),
+    }
 }
 
 #[sqlfunc(propagates_nulls = true)]
