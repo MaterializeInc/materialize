@@ -346,6 +346,8 @@ Only one statement per call is allowed. Write operations (`INSERT`, `UPDATE`,
 Use `SHOW TABLES FROM mz_internal` or `SHOW TABLES FROM mz_catalog` to
 discover more tables.
 
+{{% include-headless "/headless/mcp-troubleshooting" %}}
+
 ## Related pages
 
 - [MCP Server for Agents](/integrations/mcp-agents/)

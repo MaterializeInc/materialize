@@ -568,6 +568,8 @@ Execute a SQL `SELECT` statement against your data products.
 }
 ```
 
+{{% include-headless "/headless/mcp-troubleshooting" %}}
+
 ## Related pages
 
 - [MCP Server for Observability](/integrations/mcp-observatory/)
