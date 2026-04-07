@@ -30,29 +30,24 @@ pub fn pack_mysql_row(
     table_desc: &MySqlTableDesc,
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
-    // let row_values = row.unwrap();
-    let included_col_names = table_desc
-        .columns
-        .iter()
-        .map(|col| col.name.as_str())
-        .collect::<Vec<_>>();
 
-    let row_col_names = row
+    let row_values: Vec<Value> = if row
         .columns_ref()
-        .iter()
-        .map(|col| col.name_str().clone())
-        .collect::<Vec<_>>();
-
-    let row_values: Vec<Value> = if row_col_names
-        .get(0)
-        .is_some_and(|col_name| col_name.starts_with("@"))
+        .first()
+        .is_some_and(|col| col.name_ref().starts_with(b"@"))
     {
         row.unwrap()
     } else {
         row.columns_ref()
             .iter()
             .enumerate()
-            .filter(|(_, col)| included_col_names.contains(&col.name_str().as_ref()))
+            .filter(|(_, col)| {
+                table_desc
+                    .columns
+                    .iter()
+                    .filter(|col| col.column_type.is_some())
+                    .any(|c| c.name.as_str() == col.name_str())
+            })
             .map(|(i, _)| {
                 row.as_ref(i)
                     .expect("Can't unwrap row if some of columns was taken")
@@ -61,7 +56,12 @@ pub fn pack_mysql_row(
             .collect()
     };
 
-    for values in table_desc.columns.iter().zip_longest(row_values) {
+    for values in table_desc
+        .columns
+        .iter()
+        .filter(|col| col.column_type.is_some())
+        .zip_longest(row_values)
+    {
         let (col_desc, value) = match values {
             EitherOrBoth::Both(col_desc, value) => (col_desc, value),
             EitherOrBoth::Left(col_desc) => {

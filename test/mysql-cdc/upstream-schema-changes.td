@@ -144,15 +144,13 @@ ALTER TABLE foo DROP COLUMN value;
 contains:incompatible schema change
 
 > DROP TABLE foo4;
-> DROP SOURCE mysql_src CASCADE;
 
 # Test with multiple excluded columns.
 $ mysql-execute name=mysql
 CREATE TABLE bar (name VARCHAR(16), value VARCHAR(32), age BIGINT, location VARCHAR(32), meta_col VARCHAR(32));
 INSERT INTO bar VALUES ('a', 'apple', 5, 'orchard', 'blah'), ('b', 'banana', 7, 'tree', 'blahblah');
 
-> CREATE SOURCE mysql_src2 FROM MYSQL CONNECTION mysql_conn;
-> CREATE TABLE bar1 FROM SOURCE mysql_src2 (REFERENCE public.bar) WITH (EXCLUDE COLUMNS = (meta_col, location));
+> CREATE TABLE bar1 FROM SOURCE mysql_src (REFERENCE public.bar) WITH (EXCLUDE COLUMNS = (meta_col, location));
 
 > SELECT * FROM bar1;
 a apple 5
@@ -172,4 +170,4 @@ ALTER TABLE bar ADD COLUMN lastname VARCHAR(16) AFTER `name`;
 a apple 5
 b banana 7
 
-> DROP SOURCE mysql_src2 CASCADE;
+> DROP SOURCE mysql_src CASCADE;
