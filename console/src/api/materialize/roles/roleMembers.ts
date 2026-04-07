@@ -50,11 +50,15 @@ export function buildRoleMembershipQuery(filters: RoleMembershipFilters = {}) {
   }
 
   if (filters.memberType === "users") {
-    qb = qb.where(sql<boolean>`child.rolcanlogin`);
+    qb = qb.where(
+      sql<boolean>`(COALESCE(child.rolcanlogin, false) = true OR child.name LIKE '%@%')`,
+    );
   }
 
   if (filters.memberType === "roles") {
-    qb = qb.where(sql<boolean>`NOT child.rolcanlogin`);
+    qb = qb.where(
+      sql<boolean>`NOT (COALESCE(child.rolcanlogin, false) = true OR child.name LIKE '%@%')`,
+    );
   }
 
   return qb;

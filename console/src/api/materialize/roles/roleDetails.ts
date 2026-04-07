@@ -28,7 +28,7 @@ export function buildRoleDetailsQuery(params: RoleDetailsParameters) {
           .select(
             sql<
               string[] | null
-            >`list_agg(member_role.name ORDER BY member_role.name) FILTER (WHERE member_role.rolcanlogin)`.as(
+            >`list_agg(member_role.name ORDER BY member_role.name) FILTER (WHERE COALESCE(member_role.rolcanlogin, false) = true OR member_role.name LIKE '%@%')`.as(
               "users",
             ),
           )
@@ -44,7 +44,7 @@ export function buildRoleDetailsQuery(params: RoleDetailsParameters) {
           .select(
             sql<
               string[] | null
-            >`list_agg(member_role.name ORDER BY member_role.name) FILTER (WHERE NOT member_role.rolcanlogin)`.as(
+            >`list_agg(member_role.name ORDER BY member_role.name) FILTER (WHERE NOT (COALESCE(member_role.rolcanlogin, false) = true OR member_role.name LIKE '%@%'))`.as(
               "grantedToRoles",
             ),
           )
