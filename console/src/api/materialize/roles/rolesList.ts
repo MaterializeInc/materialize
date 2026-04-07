@@ -23,7 +23,9 @@ export function buildRolesListQuery() {
           .innerJoin("mz_roles as member_role", "member_role.id", "rm.member")
           .select((sub) => sub.fn.count("rm.member").as("member_count"))
           .whereRef("rm.role_id", "=", "r.id")
-          .where(sql<boolean>`member_role.rolcanlogin`)
+          .where(
+            sql<boolean>`(COALESCE(member_role.rolcanlogin, false) = true OR member_role.name LIKE '%@%')`,
+          )
           .as("counts"),
       (join) => join.onTrue(),
     )
@@ -43,7 +45,9 @@ export function buildRolesListQuery() {
       sql<number>`COALESCE(owned.owned_count, 0)`.as("ownedObjectsCount"),
     ])
     .where("r.name", "not like", "mz_%")
-    .where(sql<boolean>`NOT r.rolcanlogin`)
+    .where(
+      sql<boolean>`NOT (COALESCE(r.rolcanlogin, false) = true OR r.name LIKE '%@%')`,
+    )
     .orderBy("roleName");
 }
 
