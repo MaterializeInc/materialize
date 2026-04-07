@@ -1215,24 +1215,6 @@ impl MirScalarExpr {
                                     .map(|(a, b)| a.clone().call_binary(b.clone(), func::Eq))
                                     .collect(),
                             )
-                        } else if matches!(*func, BinaryFunc::Eq(_))
-                            && (matches!(**expr1, MirScalarExpr::CallUnary { .. })
-                                || matches!(**expr2, MirScalarExpr::CallUnary { .. }))
-                        {
-                            // For equality predicates like `Cast(col) = literal`,
-                            // try to invert the cast to `col = inverse_cast(literal)`.
-                            // This enables index usage and key inference.
-                            // We only attempt this when at least one side is a function
-                            // call (potential cast), to avoid an infinite loop: without
-                            // this guard, `invert_casts_on_expr_eq_literal` can flip the
-                            // operand order even when no inversion occurs, which fights
-                            // with the canonical ordering above and prevents convergence.
-                            let rewritten = e.invert_casts_on_expr_eq_literal();
-                            if rewritten != *e {
-                                *e = rewritten;
-                            } else if e.impossible_literal_equality_because_types() {
-                                *e = MirScalarExpr::literal_false();
-                            }
                         }
                     }
                     MirScalarExpr::CallVariadic { .. } => {
