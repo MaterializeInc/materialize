@@ -376,7 +376,6 @@ junit-report = "0.8.3"
 k8s-controller = "0.10.0"
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
 kube = { version = "3.0.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 lgalloc = "0.6.0"
 libc = "0.2.184"
 lru = "0.16.3"
@@ -595,9 +594,6 @@ postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array"
 
 # Waiting on https://github.com/MaterializeInc/serde-value/pull/35.
 serde-value = { git = "https://github.com/MaterializeInc/serde-value.git" }
-
-# Waiting for resolution of https://github.com/launchdarkly/rust-server-sdk/issues/116
-launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server-sdk", rev = "3e0a0b98b09a2970f292577a07e1c9382b65b5da" }
 
 # Waiting on https://github.com/edenhill/librdkafka/pull/4051.
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
