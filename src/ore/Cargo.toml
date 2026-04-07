@@ -33,7 +33,7 @@ derivative = { version = "2.2.0" }
 either = "1.15.0"
 futures = { version = "0.3.32", optional = true }
 hibitset = { version = "0.6.4", optional = true }
-itertools = "0.14.0"
+itertools.workspace = true
 lgalloc = { version = "0.6", optional = true }
 libc = { version = "0.2.184", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
@@ -42,7 +42,7 @@ num-traits = { version = "0.2", optional = true }
 # The vendored feature is transitively depended upon by tokio-openssl.
 openssl = { version = "0.10.76", features = ["vendored"], optional = true }
 parquet = { version = "57", optional = true, default-features = false }
-paste = "1.0.11"
+paste.workspace = true
 pin-project = "1.1.11"
 prometheus = { version = "0.14.0", default-features = false, optional = true }
 proptest = { version = "1.10.0", default-features = false, features = ["std"], optional = true }
@@ -62,7 +62,7 @@ tokio = { version = "1.49.0", features = [
     "time",
 ], optional = true }
 tokio-openssl = { version = "0.6.5", optional = true }
-thiserror = "2.0.18"
+thiserror.workspace = true
 tracing-capture = { version = "0.1.0", optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up

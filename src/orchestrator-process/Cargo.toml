@@ -16,7 +16,7 @@ async-trait = "0.1.89"
 chrono = { version = "0.4.39", default-features = false, features = ["clock"] }
 futures = "0.3.32"
 hex = "0.4.3"
-itertools = "0.14.0"
+itertools.workspace = true
 libc = "0.2.184"
 maplit = "1.0.2"
 mz-orchestrator = { path = "../orchestrator", default-features = false }

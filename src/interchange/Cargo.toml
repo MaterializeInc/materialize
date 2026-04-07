@@ -21,7 +21,7 @@ bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 differential-dataflow.workspace = true
-itertools = "0.14.0"
+itertools.workspace = true
 maplit = "1.0.2"
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-ccsr = { path = "../ccsr" }
@@ -45,7 +45,7 @@ tokio = { version = "1.49.0", features = ["macros"] }
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]

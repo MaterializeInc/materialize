@@ -261,9 +261,15 @@ edition = "2024"
 rust-version = "1.94.1"
 
 [workspace.dependencies]
+bytesize = "2.1.0"
 columnar = "0.12.1"
 differential-dataflow = "0.22.0"
 differential-dogs3 = "0.22.0"
+itertools = "0.14.0"
+paste = "1.0.11"
+prost-build = "0.14.3"
+static_assertions = "1.1"
+thiserror = "2.0.18"
 timely = "0.28.1"
 
 [profile.dev]

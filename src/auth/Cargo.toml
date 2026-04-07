@@ -15,9 +15,9 @@ mz-ore = { path = "../ore", features = ["test"] }
 serde = "1.0.219"
 proptest-derive = "0.8.0"
 proptest = "1.10.0"
-static_assertions = "1.1"
+static_assertions.workspace = true
 openssl = { version = "0.10.76", features = ["vendored"] }
-itertools = "0.14.0"
+itertools.workspace = true
 
 [features]
 default = []

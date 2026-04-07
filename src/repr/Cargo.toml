@@ -40,7 +40,7 @@ dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow.workspace = true
 enum-kinds = "0.5.1"
 hex = "0.4.3"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = [
     "bytes",
@@ -66,7 +66,7 @@ ryu = "1.0.23"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
-static_assertions = "1.1"
+static_assertions.workspace = true
 strsim = "0.11.1"
 timely.workspace = true
 tokio-postgres = { version = "0.7.15" }
@@ -75,7 +75,7 @@ url = { version = "2.5.8", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
-thiserror = "2.0.18"
+thiserror.workspace = true
 tracing = { version = "0.1.44" }
 
 # for the tracing feature
@@ -90,7 +90,7 @@ rand = "0.9.2"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = [

@@ -14,7 +14,7 @@ workspace = true
 anyhow = "1.0.102"
 backtrace = "0.3.76"
 flate2 = "1.1.9"
-itertools = "0.14.0"
+itertools.workspace = true
 jemalloc_pprof = { version = "0.8.2", optional = true }
 pprof_util = "0.8.2"
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
@@ -27,7 +27,7 @@ tokio = { version = "1.49.0", features = ["time"] }
 [build-dependencies]
 anyhow = "1.0.102"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = []

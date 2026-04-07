@@ -17,7 +17,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 derivative = "2.2.0"
 differential-dataflow.workspace = true
 futures = "0.3.32"
-itertools = { version = "0.14.0" }
+itertools.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-controller-types = { path = "../controller-types" }

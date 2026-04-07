@@ -12,14 +12,14 @@ workspace = true
 [dependencies]
 anyhow = "1.0.102"
 async-stream = "0.3.6"
-bytesize = "2.1.0"
+bytesize.workspace = true
 columnar.workspace = true
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow.workspace = true
 differential-dogs3.workspace = true
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.32"
-itertools = "0.14.0"
+itertools.workspace = true
 lgalloc = "0.6"
 mz-cluster = { path = "../cluster" }
 mz-cluster-client = { path = "../cluster-client" }

@@ -33,4 +33,4 @@ chrono = ["dep:chrono", "dep:chrono-tz"]
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true

@@ -13,7 +13,7 @@ workspace = true
 columnar.workspace = true
 columnation = "0.1.2"
 differential-dataflow.workspace = true
-itertools = "0.14.0"
+itertools.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing", "metrics"] }

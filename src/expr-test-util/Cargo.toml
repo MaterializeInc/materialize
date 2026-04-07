@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-itertools = "0.14.0"
+itertools.workspace = true
 mz-expr = { path = "../expr" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }

@@ -22,7 +22,7 @@ dec = "0.4.8"
 derivative = "2.2.0"
 futures = "0.3.32"
 hex = "0.4.3"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
@@ -34,8 +34,8 @@ proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["union"] }
-static_assertions = "1.1"
-thiserror = "2.0.18"
+static_assertions.workspace = true
+thiserror.workspace = true
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["net"] }
@@ -49,7 +49,7 @@ tracing-subscriber = "0.3.23"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = []

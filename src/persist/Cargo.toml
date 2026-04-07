@@ -41,7 +41,7 @@ differential-dataflow.workspace = true
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures-util = "0.3.31"
 mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
-itertools = "0.14.0"
+itertools.workspace = true
 md-5 = "0.10.6"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-dyncfg = { path = "../dyncfg" }
@@ -85,7 +85,7 @@ tempfile = "3.23.0"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]

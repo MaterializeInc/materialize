@@ -39,7 +39,7 @@ differential-dataflow.workspace = true
 futures = "0.3.32"
 futures-util = "0.3"
 hex = "0.4.3"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["bytes", "process", "panic", "test", "tracing"] }
@@ -76,7 +76,7 @@ tempfile = "3.23.0"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 tonic-prost-build = "0.14.5"
 
 [features]

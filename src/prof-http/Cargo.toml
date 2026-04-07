@@ -13,7 +13,7 @@ workspace = true
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 axum = "0.8.8"
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
-bytesize = "2.1.0"
+bytesize.workspace = true
 cfg-if = "1.0.4"
 headers = "0.4.1"
 http = "1.4.0"
