@@ -288,7 +288,8 @@ spec:
 ### Configure via SQL
 
 Alternatively, connect as `mz_system` and set the parameters using
-`ALTER SYSTEM SET`:
+`ALTER SYSTEM SET`. The `mz_system` user always authenticates with a password,
+even when OIDC is enabled.
 
 ```mzsql
 ALTER SYSTEM SET oidc_issuer = 'https://your-org.okta.com/oauth2/default';
