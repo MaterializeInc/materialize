@@ -60,3 +60,7 @@ a avocado
 c cherry
 
 > DROP SOURCE mysql_src CASCADE;
+
+# Restore to a clean state so other tests are unaffected.
+$ mysql-execute name=mysql
+SET GLOBAL binlog_row_metadata = FULL;
