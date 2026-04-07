@@ -9,56 +9,36 @@ menu:
     weight: 10
 ---
 
-If you have an existing Materialize deployment using password authentication, you
+If you have an existing Materialize deployment using Password/SASL-SCRAM authentication, you
 can migrate to OIDC without losing access to existing roles and their owned
-objects. The key is to configure `oidc_authentication_claim` so that the claim
-value in the JWT matches the existing SQL username for each user.
+objects. The key is to configure `oidc_authentication_claim` so that the value
+in the JWT matches the existing Materialize user or service account's role name.
 
-## Step 1. Review existing roles
+## Step 1. Identify existing roles and choose an authentication claim
 
-List the current roles in your Materialize deployment:
-
-```mzsql
-SELECT name FROM mz_roles WHERE name NOT LIKE 'mz_%';
-```
-
-Note these usernames — you will need to ensure they match the OIDC token claim
-values.
-
-## Step 2. Choose the right authentication claim
-
-The `oidc_authentication_claim` parameter determines which JWT claim maps to the
-Materialize role name. When a user authenticates via OIDC, Materialize looks up
-the value of this claim and uses it as the username.
-
-To preserve access to existing roles, set `oidc_authentication_claim` to a claim
-whose value matches the existing SQL username for each user. Common options:
-
-| Claim | Example value | When to use |
-|-------|---------------|-------------|
-| `email` | `alice@your-org.com` | If existing roles are named after email addresses |
-| `preferred_username` | `alice` | If existing roles use short usernames |
-| `sub` (default) | `auth0\|abc123` | If existing roles match the IdP's subject identifiers |
-
-For example, if your existing roles are email addresses like
-`alice@your-org.com`, set:
+Identify the login roles in your Materialize deployment:
 
 ```mzsql
-ALTER SYSTEM SET oidc_authentication_claim = 'email';
+SELECT name FROM mz_roles WHERE name NOT LIKE 'mz_%' AND rolcanlogin = true;
 ```
 
-When `alice@your-org.com` signs in via OIDC, Materialize resolves the `email`
-claim from the JWT and matches it to the existing `alice@your-org.com` role.
-The user retains all privileges and object ownership from the original role.
+Users and service accounts authenticate using ID or access tokens issued by their IdP. As the admin, you need to choose the claim in these tokens whose value matches the existing role names in Materialize. The `oidc_authentication_claim` parameter tells Materialize which JWT claim to use as the role name during OIDC authentication. For more details, see [Mapping IdP Users to Materialize Roles](/security/self-managed/sso/#mapping-idp-users-to-materialize-roles).
 
-## Step 3. Configure OIDC
+In most cases, this will work if your existing role names are **email
+addresses** (e.g., `alice@your-org.com`), since the `email` claim in the JWT
+naturally matches.
+
+If no JWT claim maps to an existing role name, you will need to recreate the
+role.
+
+## Step 2. Configure OIDC
 
 Follow the steps in [Single sign-on (SSO)](/security/self-managed/sso/) to
 configure your identity provider and enable OIDC authentication.
 
-## Step 4. Verify the migration
+## Step 3. Verify the migration
 
-After enabling OIDC, have each user sign in and verify their role username is the same as before.
+After enabling OIDC, have each user sign in and verify their role name is the same as before.
 
 ## See also
 
