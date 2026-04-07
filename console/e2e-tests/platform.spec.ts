@@ -98,7 +98,7 @@ for (const region of REGIONS) {
     await page.getByRole("textbox", { name: "Name" }).fill(apiKeyName);
     await page.getByRole("button", { name: "Create password" }).click();
     await page.getByText(`New password "${apiKeyName}"`).waitFor();
-    await page.getByRole("button", { name: "visibility" }).click();
+    await page.getByRole("button", { name: "visibility" }).first().click();
     const passwordField = page.getByLabel("clientId");
     const password = await passwordField.evaluate((e) => e.textContent);
     assert(!!password, "Expected a password to be created");
