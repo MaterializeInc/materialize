@@ -81,6 +81,9 @@ additional applications in the [Service accounts](#service-accounts) section.
 1. Go to the **Assignments** tab and assign the users or groups that should have
    access to Materialize.
 
+   When a user authenticates via SSO, Materialize uses a JWT claim to determine
+   the role name. See [Mapping IdP Users to Materialize Roles](#mapping-idp-users-to-materialize-roles) for more details.
+
 1. Configure the authorization server. In the Okta Admin Console, go to
    **Security** > **API** and click on the authorization server you want to
    use (e.g., **default**).
@@ -148,6 +151,9 @@ additional applications in the [Service accounts](#service-accounts) section.
    groups** and assign the users or groups that should have access to
    Materialize.
 
+   When a user authenticates via SSO, Materialize uses a JWT claim to determine
+   the role name. See [Mapping IdP Users to Materialize Roles](#mapping-idp-users-to-materialize-roles) for more details.
+
 {{< /tab >}}
 {{< tab "Generic OIDC" >}}
 
@@ -164,6 +170,9 @@ additional applications in the [Service accounts](#service-accounts) section.
 1. Ensure the `openid` scope is available.
 
 1. Assign users or groups that should have access to Materialize.
+
+   When a user authenticates via SSO, Materialize uses a JWT claim to determine
+   the role name. See [Mapping IdP Users to Materialize Roles](#mapping-idp-users-to-materialize-roles) for more details.
 
 {{< /tab >}}
 {{< /tabs >}}
@@ -230,7 +239,7 @@ or SQL commands, but it is strongly recommended to use a ConfigMap.
 |-----------|-------------|----------|---------|
 | `oidc_issuer` | The OIDC issuer URL (e.g., `https://your-org.okta.com/oauth2/default`). Materialize uses this to discover the JWKS endpoint for token validation. | Yes | None |
 | `oidc_audience` | A JSON array of expected audience values for token validation (e.g., `["your-client-id"]`). Use the **client ID from [Step 1](#step-1-configure-your-identity-provider)**. Materialize checks that the JWT's `aud` claim contains at least one of these values. **By default, this is empty, and audience validation is skipped.**| No | `[]` |
-| `oidc_authentication_claim` | The JWT claim to use as the Materialize username. For ID tokens (human users), common values are `email` or `preferred_username`. For access tokens from the [Client Credentials flow](#client-credentials-flow), ensure this claim exists in the token. | No | `sub` |
+| `oidc_authentication_claim` | The JWT claim to use as the Materialize username. | No | `sub` |
 | `console_oidc_client_id` | The OIDC client ID used by the web console for the authorization code flow. | For console login | Empty |
 | `console_oidc_scopes` | Space-separated OIDC scopes requested by the web console when obtaining a token. Scopes control which claims are included in the token. The `openid` scope is required to obtain an ID token. Add `email` to include the `email` claim, or `profile` to include name claims. If `oidc_authentication_claim` references a claim like `email`, you must request the corresponding scope here. | For console login | Empty |
 
@@ -240,6 +249,27 @@ When `oidc_audience` is empty, audience validation is skipped. This means
 Materialize, including tokens issued for other applications. **Always set
 `oidc_audience` in production environments.**
 {{</ warning >}}
+
+### Mapping IdP Users to Materialize Roles
+
+When a user authenticates into Materialize, their role name is the value of the JWT claim keyed by `oidc_authentication_claim`.
+
+For example, if `oidc_authentication_claim` is set to `email` and a user authenticates with the following JWT:
+
+```json
+{
+  "sub": "auth0|abc123",
+  "email": "alice@your-org.com",
+  "name": "Alice",
+  "iat": 1516239022
+}
+```
+
+Their role name will be `alice@your-org.com`.
+
+For ID tokens (human users), a common claim is `email`. For access tokens from the [Client Credentials flow](#client-credentials-flow), ensure this claim exists in the token.
+
+If a user tries to login and the role doesn't exist, the role will be auto-provisioned. See [Auto-provisioned roles](#auto-provisioned-roles) for more details.
 
 ### Configure via ConfigMap
 
@@ -368,44 +398,26 @@ You can also obtain an ID token outside the console using OIDC CLI tools such as
 ## Auto-provisioned roles
 
 Each user who authenticates via OIDC is associated with a single database role
-in Materialize. When a user signs in and no matching role exists, Materialize
-**automatically creates** a role for them. The role name is the value of the JWT
-claim configured in `oidc_authentication_claim`.
-
-For example, if `oidc_authentication_claim` is set to `email` and a user signs
-in with the following JWT:
-
-```json
-{
-  "sub": "auth0|abc123",
-  "email": "alice@your-org.com",
-  "name": "Alice",
-  "iat": 1516239022
-}
-```
-
-Materialize creates a role named `alice@your-org.com`.
+in Materialize through `oidc_authentication_claim`. When a user signs in and no matching role exists, Materialize
+**automatically creates** a role for them.
 
 Auto-provisioned roles:
-
 - Have default privileges only.
 - Must be granted additional privileges through
   [RBAC](/security/self-managed/access-control/manage-roles/).
 - Are not automatically removed when the user is removed from the IdP. See
   [De-provisioning users](#de-provisioning-users) for cleanup instructions.
 
-{{< note >}}
-If the claim value does not match an existing role, Materialize auto-provisions
-a new role. To avoid orphaned roles, verify the claim mapping before switching
-users over. Using [jwt.io](https://jwt.io), you can confirm the claim value
-matches the existing SQL username.
-{{</ note >}}
+### Pre-provisioning roles
 
-{{< important >}}
-Materialize does not support mapping IdP groups to database roles. After a user
-is auto-provisioned, configure their privileges separately using
-[RBAC](/security/self-managed/access-control/manage-roles/).
-{{</ important >}}
+An administrator can create roles before users login, rather than rely on
+auto-provisioning. To pre-provision a role, connect as a superuser and create
+the role with a name matching the expected JWT claim value:
+```mzsql
+CREATE ROLE "alice@your-org.com" WITH LOGIN;
+```
+Learn how to manage pre-provisioned roles in
+To configure privileges for pre-provisioned roles, see [Manage database roles](/security/self-managed/access-control/manage-roles/).
 
 ### Auditing auto-provisioned roles
 
