@@ -311,7 +311,7 @@ pub enum MySqlSourcePurificationError {
     #[error(transparent)]
     InvalidConnection(#[from] MySqlConnectionValidationError),
     #[error(
-        "The MySQLsystem variable 'binlog_row_metadata' is set to an unsupported value: {setting}. Materialize requires this variable to be set to 'FULL' to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
+        "The MySQL system variable 'binlog_row_metadata' is set to an unsupported value: {setting}. Materialize requires this variable to be set to 'FULL' to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
     )]
     UnsupportedBinlogMetadataSetting { setting: String },
 }
