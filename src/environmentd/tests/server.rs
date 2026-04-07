@@ -4969,7 +4969,7 @@ fn test_webhook_request_compression() {
 
 /// Helper to set up an MCP test server and run datadriven tests.
 fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
-    let version_re = Regex::new(r#"\d+\.\d+\.\d+(\.\d+)?(-dev(\.\d+)?)?"#).unwrap();
+    let version_re = Regex::new(r#"\d+\.\d+\.\d+(\.\d+)?(-dev(\.\d+)?|-rc\.\d+)?"#).unwrap();
 
     datadriven::walk(testdata_path, |f| {
         let server = harness.clone().start_blocking();
