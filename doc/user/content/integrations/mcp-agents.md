@@ -42,8 +42,14 @@ To create an app password:
 
 {{< tab "Self-Managed" >}}
 
-Use the login role credentials you created for MCP access (see
-[Authentication and access control](#rbac)).
+Create a login role for MCP access:
+
+```mzsql
+CREATE ROLE my_agent LOGIN PASSWORD 'your_password_here';
+```
+
+Use `my_agent` as the user and the password you set. See
+[Authentication and access control](#rbac) for setting up privileges.
 
 {{< /tab >}}
 
@@ -88,11 +94,34 @@ https://<region-id>.materialize.cloud/api/mcp/agents
 
 {{< tab "Self-Managed" >}}
 
-Use your Materialize host and the HTTP port (default `6876`):
+Your MCP endpoint URL is:
 
 ```
 http://<host>:6876/api/mcp/agents
 ```
+
+Where `<host>` is the load balancer address for your Materialize deployment.
+To find it, run the Terraform output command for your cloud provider:
+
+```bash
+# AWS
+terraform output -raw nlb_dns_name
+
+# GCP
+terraform output -raw balancerd_load_balancer_ip
+
+# Azure
+terraform output -raw balancerd_load_balancer_ip
+```
+
+For local [kind](/self-managed-deployments/installation/install-on-local-kind/)
+clusters, use port forwarding:
+
+```bash
+kubectl port-forward svc/<instance-name>-balancerd 6876:6876 -n materialize-environment
+```
+
+Then connect to `http://localhost:6876/api/mcp/agents`.
 
 {{< /tab >}}
 
@@ -201,21 +230,40 @@ MCP behavior:
 
 {{< tab "Self-Managed" >}}
 
-Enable the endpoint by setting system parameters in your
-[configuration file](/self-managed-deployments/configuration-system-parameters/):
+Enable the endpoint using one of these methods:
+
+**Option 1: Configuration file**
+
+Set the parameter in your
+[system parameters configuration file](/self-managed-deployments/configuration-system-parameters/):
 
 ```yaml
 system_parameters:
   enable_mcp_agents: "true"
 ```
 
-Or via the [Materialize Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed):
+**Option 2: Terraform**
+
+Set the parameter via the [Materialize Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed):
 
 ```hcl
 system_parameters = {
   enable_mcp_agents = "true"
 }
 ```
+
+**Option 3: SQL**
+
+Connect as `mz_system` and run:
+
+```mzsql
+ALTER SYSTEM SET enable_mcp_agents = true;
+```
+
+{{< note >}}
+These parameters are only accessible to the `mz_system` and `mz_support`
+roles. Regular database users cannot view or modify them.
+{{< /note >}}
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|

@@ -50,7 +50,6 @@ See also the following integration guides for BI tools:
 
 - [MCP Server for Agents](/integrations/mcp-agents/) — built-in endpoint for exposing real-time data products to AI agents
 - [MCP Server for Observability](/integrations/mcp-observatory/) — built-in endpoint for AI-powered troubleshooting via system catalog
-- [MCP Server (Python)](/integrations/llm/) — standalone Python server with `stdio` and `sse` transport support, for use outside the built-in endpoints
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 
 ## Foreign data wrapper
