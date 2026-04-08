@@ -41,7 +41,9 @@ from materialize.source_table_migration import (
 
 
 def create_mysql(mysql_version: str) -> MySql:
-    return MySql(version=mysql_version, additional_args=["--binlog_row_metadata=MINIMAL"])
+    return MySql(
+        version=mysql_version, additional_args=["--binlog_row_metadata=MINIMAL"]
+    )
 
 
 def create_mysql_replica(mysql_version: str) -> MySql:
@@ -191,10 +193,15 @@ def workflow_schema_change_restart(
 
 
 def _make_inserts(*, txns: int, txn_size: int) -> tuple[str, int]:
-    sql = "\n".join([f"""
+    sql = "\n".join(
+        [
+            f"""
             SET @i:=0;
             INSERT INTO many_inserts (f2) SELECT @i:=@i+1 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {txn_size};
-            """ for i in range(0, txns)])
+            """
+            for i in range(0, txns)
+        ]
+    )
     records = txns * txn_size
     return (sql, records)
 
@@ -223,7 +230,8 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
         # Set up the MySQL server with the initial records, set up the connection to
         # the MySQL server in Materialize.
         c.testdrive(
-            dedent(f"""
+            dedent(
+                f"""
                 $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
                 ALTER SYSTEM SET max_mysql_connections = 100
 
@@ -238,23 +246,28 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
                 USE public;
                 DROP TABLE IF EXISTS many_inserts;
                 CREATE TABLE many_inserts (pk SERIAL PRIMARY KEY, f2 BIGINT);
-                """)
+                """
+            )
             + dedent(initial_sql)
-            + dedent("""
+            + dedent(
+                """
                 > DROP SOURCE IF EXISTS s1 CASCADE;
-                """)
+                """
+            )
         )
 
     # Start inserting in the background.
 
     def do_inserts(c: Composition):
-        x = dedent(f"""
+        x = dedent(
+            f"""
             $ mysql-connect name=mysql url=mysql://root@mysql password={MySql.DEFAULT_ROOT_PASSWORD}
 
             $ mysql-execute name=mysql
             USE public;
             {concurrent_sql}
-            """)
+            """
+        )
         c.testdrive(args=["--no-reset"], input=x)
 
     insert_thread = threading.Thread(target=do_inserts, args=(c,))
@@ -264,11 +277,13 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     # Create the source.
     c.testdrive(
         args=["--no-reset"],
-        input=dedent("""
+        input=dedent(
+            """
             > CREATE SOURCE s1
                 FROM MYSQL CONNECTION mysql_conn
                 FOR TABLES (public.many_inserts);
-            """),
+            """
+        ),
     )
 
     # Ensure the source eventually sees the right number of records.
@@ -277,10 +292,12 @@ def workflow_many_inserts(c: Composition, parser: WorkflowArgumentParser) -> Non
     print("--- Validate concurrent inserts")
     c.testdrive(
         args=["--no-reset"],
-        input=dedent(f"""
+        input=dedent(
+            f"""
             > SELECT count(*) FROM many_inserts
             {initial_records + concurrent_records}
-            """),
+            """
+        ),
     )
 
 

@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
-use mz_mysql_util::{MySqlError, SchemaRequest, query_sys_var, schema_info};
+use mz_mysql_util::{MySqlError, SchemaRequest, schema_info};
 
 use super::{DefiniteError, MySqlTableName, SourceOutputInfo};
 
@@ -46,7 +46,7 @@ where
     .collect();
 
     let full_metadata = conn
-        .query_first::<String, String>(format!("SELECT @@binlog_row_metadata"))
+        .query_first::<String, String>("SELECT @@binlog_row_metadata".to_string())
         .await?
         .unwrap()
         .to_uppercase()
