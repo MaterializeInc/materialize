@@ -121,6 +121,8 @@ impl<T: Columnation> ColumnationStack<T> {
             }
         }
         unsafe {
+            // Unsafety justified in that `write_position` is no greater than
+            // `self.local.len()` and so this exposes no invalid data.
             self.local.set_len(write_position);
         }
     }

@@ -22,7 +22,6 @@ pub mod builder;
 
 use std::hash::Hash;
 
-use crate::columnation::{ColInternalMerger, ColumnationStack};
 use columnar::Borrow;
 use columnar::bytes::indexed;
 use columnar::common::IterOwn;
@@ -35,6 +34,8 @@ use timely::Accountable;
 use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::ContainerBytes;
+
+use crate::columnation::{ColInternalMerger, ColumnationStack};
 
 /// A batcher for columnar storage.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
