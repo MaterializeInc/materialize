@@ -27,14 +27,14 @@ reqwest-retry = "0.8.0"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio = { version = "1.49.0", features = ["macros"] }
+tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 axum = "0.8.8"
 mz-ore = { path = "../ore", features = ["network", "test"] }
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+tokio.workspace = true
 
 [features]
 default = []

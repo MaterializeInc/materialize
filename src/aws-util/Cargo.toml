@@ -27,7 +27,7 @@ hyper-tls = "0.5.0"
 mz-ore = { path = "../ore", features = ["async"], default-features = false }
 pin-project.workspace = true
 thiserror.workspace = true
-tokio = { version = "1.49.0", default-features = false, features = ["macros"] }
+tokio.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]

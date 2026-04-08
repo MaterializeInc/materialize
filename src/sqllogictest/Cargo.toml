@@ -51,7 +51,7 @@ serde_json.workspace = true
 tempfile.workspace = true
 time = "0.3.17"
 tracing.workspace = true
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-postgres = { workspace = true, features = [
     "with-chrono-0_4",
     "with-uuid-1",

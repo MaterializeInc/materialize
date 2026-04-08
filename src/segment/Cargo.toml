@@ -15,7 +15,7 @@ mz-ore = { path = "../ore", features = ["async"], default-features = false }
 segment = { version = "0.2.6", features = ["native-tls-vendored"], default-features = false }
 serde_json.workspace = true
 time = "0.3.17"
-tokio = { version = "1.49.0", features = ["sync"] }
+tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

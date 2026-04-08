@@ -17,7 +17,7 @@ mz-ore = { path = "../ore", features = ["metrics"] }
 paste.workspace = true
 prometheus.workspace = true
 thiserror.workspace = true
-tokio = { version = "1.49.0", features = ["sync", "time"] }
+tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 

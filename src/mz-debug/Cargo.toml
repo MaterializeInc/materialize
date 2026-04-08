@@ -28,7 +28,7 @@ regex.workspace = true
 reqwest = { version = "0.12.28", features = ["stream"] }
 serde.workspace = true
 serde_yaml = "0.9.34"
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true

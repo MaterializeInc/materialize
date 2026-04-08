@@ -308,6 +308,7 @@ static_assertions = "1.1"
 tempfile = "3.23.0"
 thiserror = "2.0.18"
 timely = "0.28.1"
+tokio = { version = "1.49.0", features = ["full", "test-util"] }
 tokio-metrics = "0.4.9"
 tokio-postgres = "0.7.15"
 tokio-stream = "0.1.18"

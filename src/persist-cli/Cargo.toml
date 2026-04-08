@@ -42,7 +42,7 @@ prometheus.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 timely.workspace = true
-tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
+tokio.workspace = true
 tracing.workspace = true
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }

@@ -20,7 +20,7 @@ reqwest = { version = "0.12.28", default-features = false }
 openssl.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1.49.0", default-features = false }
+tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

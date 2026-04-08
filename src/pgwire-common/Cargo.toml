@@ -17,7 +17,7 @@ bytesize.workspace = true
 derivative.workspace = true
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-openssl = "0.6.5"
 tokio-postgres.workspace = true
 tracing.workspace = true

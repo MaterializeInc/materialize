@@ -25,7 +25,7 @@ tracing.workspace = true
 futures.workspace = true
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-metrics.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 

@@ -32,7 +32,7 @@ rand.workspace = true
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde.workspace = true
 serde_json.workspace = true
-tokio = { version = "1.49.0", features = ["macros", "rt", "sync"] }
+tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 url.workspace = true

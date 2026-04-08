@@ -108,7 +108,7 @@ stacker = "0.1.23"
 sysctl = "0.7.1"
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = { version = "1.49.0", features = ["sync"] }
+tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
 tokio-metrics.workspace = true

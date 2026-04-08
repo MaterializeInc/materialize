@@ -37,7 +37,7 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 timely.workspace = true
-tokio = "1.49.0"
+tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

@@ -69,7 +69,7 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely.workspace = true
-tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util", "time"] }
+tokio.workspace = true
 tokio-postgres = { workspace = true, features = ["serde"] }
 tracing.workspace = true
 url = { workspace = true, features = ["serde"] }

@@ -43,7 +43,7 @@ openssl.workspace = true
 prometheus.workspace = true
 proxy-header = "0.1.2"
 semver.workspace = true
-tokio = { version = "1.49.0", default-features = false }
+tokio.workspace = true
 tokio-openssl = "0.6.5"
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }

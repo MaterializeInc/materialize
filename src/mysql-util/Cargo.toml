@@ -51,4 +51,4 @@ prost-build.workspace = true
 default = ["mz-build-tools/default"]
 
 [dev-dependencies]
-tokio = { version = "1.49.0", features = ["test-util"] }
+tokio.workspace = true

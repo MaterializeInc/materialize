@@ -24,7 +24,7 @@ prometheus.workspace = true
 prost.workspace = true
 serde = { workspace = true, features = ["rc"] }
 timely.workspace = true
-tokio = { version = "1.49.0", default-features = false, features = ["rt", "rt-multi-thread"] }
+tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 

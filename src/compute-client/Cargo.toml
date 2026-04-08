@@ -37,7 +37,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 timely.workspace = true
-tokio = "1.49.0"
+tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 

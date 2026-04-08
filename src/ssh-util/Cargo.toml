@@ -24,7 +24,7 @@ serde_json.workspace = true
 ssh-key = { version = "0.6.7" }
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
 zeroize = { version = "1.8.2", features = ["serde"] }

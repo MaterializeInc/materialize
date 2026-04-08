@@ -89,7 +89,7 @@ sha2.workspace = true
 smallvec = { workspace = true, features = ["union"] }
 static_assertions.workspace = true
 timely.workspace = true
-tokio = { version = "1.49.0", features = ["rt", "time"] }
+tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true

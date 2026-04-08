@@ -31,7 +31,7 @@ socket2 = "0.6.0"
 thiserror.workspace = true
 tonic = { version = "0.14.2", features = ["gzip"] }
 tonic-prost = "0.14.5"
-tokio = { version = "1.49.0", features = ["rt"] }
+tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
 tokio-util = { workspace = true, features = ["io"] }

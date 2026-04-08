@@ -35,13 +35,13 @@ seahash = "4"
 serde.workspace = true
 serde_json.workspace = true
 timely.workspace = true
-tokio = { version = "1.49.0", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
+tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio"] }
-tokio = { version = "1.49.0", features = ["macros"] }
+tokio.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

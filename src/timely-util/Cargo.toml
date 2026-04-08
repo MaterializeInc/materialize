@@ -28,7 +28,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["async", "proc
 num-traits = "0.2"
 serde.workspace = true
 timely.workspace = true
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "time"] }
+tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 

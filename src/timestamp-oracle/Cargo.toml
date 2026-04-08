@@ -25,7 +25,7 @@ mz-repr = { path = "../repr", features = ["tracing"] }
 postgres-protocol.workspace = true
 rand.workspace = true
 serde.workspace = true
-tokio = { version = "1.49.0", features = ["rt", "time"] }
+tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 

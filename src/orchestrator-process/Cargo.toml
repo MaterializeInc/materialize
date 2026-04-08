@@ -29,7 +29,7 @@ serde_json.workspace = true
 scopeguard.workspace = true
 sha1 = "0.10.6"
 sysinfo = "0.29.11"
-tokio = { version = "1.49.0", features = ["fs", "process", "time"] }
+tokio.workspace = true
 tracing.workspace = true
 
 [features]

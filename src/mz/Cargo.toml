@@ -34,7 +34,7 @@ serde-aux = "4.7.0"
 serde_json.workspace = true
 tabled = "0.20.0"
 time = "0.3.17"
-tokio = { version = "1.49.0", features = ["full"] }
+tokio.workspace = true
 toml = "0.8.22"
 toml_edit = { version = "0.22.26", features = ["serde"] }
 thiserror.workspace = true

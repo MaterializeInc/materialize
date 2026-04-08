@@ -30,7 +30,7 @@ uuid = { workspace = true, optional = true, features = ["v4"] }
 [dev-dependencies]
 clap.workspace = true
 mz-aws-util = { path = "../aws-util" }
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+tokio.workspace = true
 
 [features]
 default = []

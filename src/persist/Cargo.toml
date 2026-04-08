@@ -63,7 +63,7 @@ reqwest = { version = "0.12.28", features = ["blocking", "json", "default-tls", 
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
 timely.workspace = true
-tokio = { version = "1.49.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
+tokio.workspace = true
 tokio-postgres.workspace = true
 tracing.workspace = true
 turmoil = { version = "0.7.1", optional = true }

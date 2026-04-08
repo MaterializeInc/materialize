@@ -18,7 +18,7 @@ mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 num_cpus.workspace = true
 prometheus.workspace = true
-tokio = { version = "1.49.0", features = ["macros", "sync", "rt"] }
+tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

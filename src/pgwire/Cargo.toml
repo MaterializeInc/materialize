@@ -34,7 +34,7 @@ mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
 openssl.workspace = true
 postgres = { version = "0.19.12" }
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-stream.workspace = true
 tokio-openssl = "0.6.5"
 tokio-util = { workspace = true, features = ["codec"] }

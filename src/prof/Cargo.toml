@@ -22,7 +22,7 @@ pprof = "0.15.0"
 prost.workspace = true
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
 tracing.workspace = true
-tokio = { version = "1.49.0", features = ["time"] }
+tokio.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true

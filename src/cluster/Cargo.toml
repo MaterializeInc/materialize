@@ -21,7 +21,7 @@ mz-service = { path = "../service" }
 rand.workspace = true
 regex.workspace = true
 timely.workspace = true
-tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "net"] }
+tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

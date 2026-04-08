@@ -16,6 +16,6 @@ mz-kafka-util = { path = "../../src/kafka-util" }
 mz-ore = { path = "../../src/ore", features = ["async"] }
 rand.workspace = true
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-postgres.workspace = true
 tracing.workspace = true

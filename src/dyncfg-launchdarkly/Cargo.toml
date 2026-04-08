@@ -18,7 +18,7 @@ launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
-tokio = { version = "1.49.0", default-features = false }
+tokio.workspace = true
 tracing.workspace = true
 
 [features]

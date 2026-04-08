@@ -29,7 +29,7 @@ prometheus.workspace = true
 semver = { workspace = true, features = ["serde"] }
 serde.workspace = true
 sysinfo = "0.29.11"
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
 sentry-tracing = "0.46.1"

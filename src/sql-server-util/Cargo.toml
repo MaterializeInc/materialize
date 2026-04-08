@@ -38,7 +38,7 @@ static_assertions.workspace = true
 thiserror.workspace = true
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely.workspace = true
-tokio = { version = "1.49.0", features = ["net"] }
+tokio.workspace = true
 tokio-stream.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 tracing.workspace = true
