@@ -153,7 +153,7 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             "mz_pending_cluster_replicas",
         ),
         MigrationStep::replacement(
-            "26.19.0-dev.0",
+            "26.20.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_materialized_views",
