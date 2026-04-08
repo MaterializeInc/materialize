@@ -14,7 +14,7 @@ name = "cdc"
 
 [dependencies]
 anyhow.workspace = true
-async-stream = "0.3.3"
+async-stream.workspace = true
 base64.workspace = true
 chrono.workspace = true
 columnation.workspace = true
@@ -28,7 +28,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-cloud-resources = { path = "../cloud-resources" }
-ordered-float = { version = "5.1.0", features = ["serde"] }
+ordered-float.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true

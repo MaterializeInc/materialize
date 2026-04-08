@@ -16,7 +16,7 @@ axum.workspace = true
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 headers = "0.4.1"
 http.workspace = true
-hyper = { version = "1.4.1", features = ["http1", "server"] }
+hyper.workspace = true
 include_dir = "0.7.4"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing"] }
 prometheus.workspace = true

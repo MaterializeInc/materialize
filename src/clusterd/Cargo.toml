@@ -15,8 +15,8 @@ axum.workspace = true
 clap = { workspace = true, features = ["env"] }
 fail.workspace = true
 futures.workspace = true
-hyper = "1.4.1"
-hyper-util = "0.1.20"
+hyper.workspace = true
+hyper-util.workspace = true
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }

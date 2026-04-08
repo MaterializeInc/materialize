@@ -25,7 +25,7 @@ mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
 mz-sql-parser = { path = "../sql-parser" }
 open = "5.3.3"
 openssl-probe = "0.1.6"
-hyper = "1.4.1"
+hyper.workspace = true
 reqwest.workspace = true
 rpassword = "7.4.0"
 semver.workspace = true

@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+jsonwebtoken.workspace = true
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["network"] }
 reqwest.workspace = true

@@ -28,14 +28,14 @@ futures.workspace = true
 headers = "0.4.1"
 http.workspace = true
 humantime.workspace = true
-hyper = { version = "1.4.1", features = ["http1", "server"] }
+hyper.workspace = true
 hyper-openssl = "0.10.2"
 hyper-tls = "0.6.0"
-hyper-util = "0.1.20"
+hyper-util.workspace = true
 include_dir = "0.7.4"
 ipnet = "2.12.0"
 itertools.workspace = true
-jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+jsonwebtoken.workspace = true
 libc = "0.2.184"
 maplit.workspace = true
 mime = "0.3.16"
@@ -86,8 +86,8 @@ openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 pin-project.workspace = true
-postgres = { version = "0.19.12", optional = true }
-postgres-openssl = { version = "0.5.2", optional = true }
+postgres = { workspace = true, optional = true }
+postgres-openssl = { workspace = true, optional = true }
 prometheus.workspace = true
 rdkafka-sys = { version = "4.3.0", features = [
     "cmake-build",
@@ -137,26 +137,21 @@ datadriven.workspace = true
 fallible-iterator = "0.2.0"
 flate2.workspace = true
 http-body-util = "0.1.3"
-insta = { version = "1.45", features = ["json"] }
+insta.workspace = true
 itertools.workspace = true
-jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+jsonwebtoken.workspace = true
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
 mz-oidc-mock = { path = "../oidc-mock", default-features = false }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgtest = { path = "../pgtest" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
-postgres = { version = "0.19.12", features = ["with-chrono-0_4"] }
+postgres.workspace = true
 postgres-protocol.workspace = true
 postgres_array = { version = "0.11.0" }
 predicates = "3.1.4"
 proptest.workspace = true
-rdkafka = { version = "0.29.0", features = [
-    "cmake-build",
-    "ssl-vendored",
-    "libz-static",
-    "zstd",
-] }
+rdkafka.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
 serde_urlencoded = "0.7.1"

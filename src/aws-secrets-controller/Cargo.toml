@@ -15,8 +15,8 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-aws-config = { version = "1.8.15", default-features = false }
-aws-credential-types = { version = "1.2.8", features = ["hardcoded-credentials"] }
+aws-config.workspace = true
+aws-credential-types.workspace = true
 aws-sdk-secretsmanager = { version = "1.99.0", default-features = false, features = ["rt-tokio"] }
 aws-types.workspace = true
 futures.workspace = true

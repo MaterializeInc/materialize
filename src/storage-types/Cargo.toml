@@ -17,8 +17,8 @@ harness = false
 anyhow.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
-aws-config = { version = "1.8.15", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.8", features = ["hardcoded-credentials"] }
+aws-config.workspace = true
+aws-credential-types.workspace = true
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-types.workspace = true
 bytes.workspace = true
@@ -29,10 +29,7 @@ differential-dataflow.workspace = true
 hex.workspace = true
 http.workspace = true
 itertools.workspace = true
-mysql_async = { version = "0.36.2", default-features = false, features = [
-    "minimal",
-    "native-tls-tls",
-] }
+mysql_async.workspace = true
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
@@ -61,7 +58,7 @@ openssl.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
-rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true
@@ -79,8 +76,8 @@ iceberg = "0.7.0"
 iceberg-catalog-rest = "0.7.0"
 
 [dev-dependencies]
-criterion = { version = "0.8.2" }
-insta = { version = "1.45", features = ["json"] }
+criterion.workspace = true
+insta.workspace = true
 mz-persist = { path = "../persist" }
 rand.workspace = true
 

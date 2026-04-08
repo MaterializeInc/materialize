@@ -31,7 +31,7 @@ harness = false
 anyhow.workspace = true
 arrayvec = "0.7.6"
 arrow.workspace = true
-async-stream = "0.3.6"
+async-stream.workspace = true
 async-trait.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["env"] }
@@ -67,7 +67,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["html_reports"] }
+criterion.workspace = true
 datadriven = { workspace = true, features = ["async"] }
 futures-task = "0.3.31"
 num_cpus.workspace = true

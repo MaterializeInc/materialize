@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-byteorder = "1.4.3"
+byteorder.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 dec.workspace = true

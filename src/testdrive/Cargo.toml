@@ -13,11 +13,11 @@ workspace = true
 anyhow.workspace = true
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
 async-trait.workspace = true
-aws-credential-types = { version = "1.2.10", features = ["hardcoded-credentials"] }
+aws-credential-types.workspace = true
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-types.workspace = true
 arrow.workspace = true
-byteorder = "1.5"
+byteorder.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -32,7 +32,7 @@ itertools.workspace = true
 junit-report = "0.8.3"
 maplit.workspace = true
 md-5.workspace = true
-mysql_async = { version = "0.36.2", default-features = false, features = ["minimal"] }
+mysql_async.workspace = true
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }
@@ -54,14 +54,14 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
-parquet = { version = "57", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
+parquet.workspace = true
 postgres_array = { version = "0.11.0" }
 postgres-protocol.workspace = true
 prost.workspace = true
 prost-reflect = { version = "0.16.3", features = ["serde"] }
 prost-types = { version = "0.14.3" }
 rand.workspace = true
-rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
+rdkafka.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 semver.workspace = true

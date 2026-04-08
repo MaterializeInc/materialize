@@ -15,14 +15,14 @@ bench = false
 
 [dependencies]
 anyhow.workspace = true
-async-stream = "0.3.6"
+async-stream.workspace = true
 async-trait.workspace = true
-aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
+aws-credential-types.workspace = true
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 arrow.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 bytesize.workspace = true
-bincode = "1"
+bincode.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 columnation.workspace = true
@@ -36,7 +36,7 @@ iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools.workspace = true
 maplit.workspace = true
-mysql_async = { version = "0.36.2", default-features = false, features = ["minimal", "binlog"] }
+mysql_async.workspace = true
 mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
 mz-arrow-util = { path = "../arrow-util" }
 mz-build-info = { path = "../build-info" }
@@ -65,7 +65,7 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-parquet = { version = "57", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
+parquet.workspace = true
 pin-project.workspace = true
 postgres-replication = { version = "0.6.7" }
 prometheus.workspace = true
@@ -73,12 +73,7 @@ prost.workspace = true
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
 rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
-rdkafka = { version = "0.29.0", features = [
-    "cmake-build",
-    "ssl-vendored",
-    "libz-static",
-    "zstd",
-] }
+rdkafka.workspace = true
 regex.workspace = true
 rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"

@@ -14,7 +14,7 @@ anyhow.workspace = true
 mz-ore = { path = "../ore", default-features = false }
 openssl.workspace = true
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
-postgres-openssl = { version = "0.5.2" }
+postgres-openssl.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true

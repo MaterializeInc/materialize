@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 arrow.workspace = true
-async-stream = "0.3.6"
+async-stream.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
@@ -101,11 +101,11 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["async_tokio"] }
+criterion.workspace = true
 datadriven.workspace = true
 mz-persist = { path = "../persist", features = ["turmoil"] }
 mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
-turmoil = "0.7.1"
+turmoil.workspace = true
 
 [[bench]]
 name = "catalog"

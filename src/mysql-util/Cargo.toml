@@ -11,8 +11,8 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-aws-config = { version = "1.8.15", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.8" }
+aws-config.workspace = true
+aws-credential-types.workspace = true
 aws-sigv4 = { version = "1.3.6" }
 aws-types.workspace = true
 chrono.workspace = true
@@ -27,10 +27,7 @@ mz-ssh-util = { path = "../ssh-util" }
 mysql_common = { version = "0.35.5", default-features = false, features = [
     "chrono",
 ] }
-mysql_async = { version = "0.36.2", default-features = false, features = [
-    "minimal",
-    "tracing",
-] }
+mysql_async.workspace = true
 prost.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true

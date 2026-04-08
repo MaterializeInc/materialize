@@ -20,7 +20,7 @@ mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = fal
 mz-pgrepr = { path = "../pgrepr", default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 openssl.workspace = true
-postgres-openssl = "0.5.2"
+postgres-openssl.workspace = true
 postgres-protocol.workspace = true
 prost.workspace = true
 prost-types = { version = "0.14.3" }
@@ -40,7 +40,7 @@ tracing-core = "0.1.35"
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
-insta = "1.45"
+insta.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

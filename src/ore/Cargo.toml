@@ -34,14 +34,14 @@ either = "1.15.0"
 futures = { workspace = true, optional = true }
 hibitset = { version = "0.6.4", optional = true }
 itertools.workspace = true
-lgalloc = { version = "0.6", optional = true }
+lgalloc = { workspace = true, optional = true }
 libc = { version = "0.2.184", optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num = "0.4.3"
 num-traits = { version = "0.2", optional = true }
 # The vendored feature is transitively depended upon by tokio-openssl.
 openssl = { workspace = true, optional = true }
-parquet = { version = "57", optional = true, default-features = false }
+parquet = { workspace = true, optional = true }
 paste.workspace = true
 pin-project.workspace = true
 prometheus = { workspace = true, optional = true }
@@ -76,18 +76,18 @@ tonic = { version = "0.14.2", features = ["transport"], optional = true }
 tokio-native-tls = { version = "0.3.1", optional = true }
 native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
-hyper-util = { version = "0.1.20", optional = true }
+hyper-util = { workspace = true, optional = true }
 opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
 opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"], optional = true }
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"], optional = true }
 console-subscriber = { version = "0.5.0", optional = true }
 sentry-tracing = { version = "0.46.1", optional = true }
-turmoil = { version = "0.7.1", optional = true }
+turmoil = { workspace = true, optional = true }
 yansi = { version = "1.0.1", optional = true }
 
 [dev-dependencies]
 anyhow.workspace = true
-criterion = { version = "0.8.2", features = ["async_tokio"] }
+criterion.workspace = true
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest.workspace = true
 scopeguard.workspace = true
