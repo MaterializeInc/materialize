@@ -635,18 +635,22 @@ where
 
     fn extract(
         &mut self,
+        position: &mut usize,
         upper: AntichainRef<T>,
         frontier: &mut Antichain<T>,
         keep: &mut Self,
         ship: &mut Self,
     ) {
-        for (data, time, diff) in self.iter() {
+        let len = self[..].len();
+        while *position < len && !keep.at_capacity() && !ship.at_capacity() {
+            let (data, time, diff) = &self[*position];
             if upper.less_equal(time) {
                 frontier.insert_with(time, |time| time.clone());
                 keep.copy_destructured(data, time, diff);
             } else {
                 ship.copy_destructured(data, time, diff);
             }
+            *position += 1;
         }
     }
 }
