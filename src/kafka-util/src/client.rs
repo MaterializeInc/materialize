@@ -585,6 +585,7 @@ where
     /// Otherwise, use our "default tunnel" rewriting strategy to attempt to rewrite this broker's address
     /// and record it in the book of rewrites.
     fn resolve_broker_addr(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, io::Error> {
+        info!("kafka: resolve_broker_addr called for {}:{}", host, port);
         let return_rewrite = |rewrite: &BrokerRewriteHandle| -> Result<Vec<SocketAddr>, io::Error> {
             let rewrite = match rewrite {
                 BrokerRewriteHandle::Simple(rewrite) => rewrite.clone(),
@@ -695,7 +696,23 @@ where
                     // Rewrite according to the routing rules.
                     TunnelConfig::Rules(rules) => {
                         // If no rules match, just use the address as-is.
-                        rules.rewrite(&addr).unwrap_or(addr).to_socket_addrs()
+                        let resolved = rules.rewrite(&addr).unwrap_or_else(|| addr.clone());
+                        match resolved.to_socket_addrs() {
+                            Ok(addrs) => {
+                                info!(
+                                    "kafka: resolve_broker_addr {}:{} -> {}:{} resolved to {:?}",
+                                    host, port, resolved.host, resolved.port, addrs,
+                                );
+                                Ok(addrs)
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "kafka: resolve_broker_addr {}:{} -> {}:{} DNS resolution FAILED: {e}",
+                                    host, port, resolved.host, resolved.port,
+                                );
+                                Err(e)
+                            }
+                        }
                     }
                     // We leave the broker's address as it is.
                     TunnelConfig::None => {
@@ -704,7 +721,13 @@ where
                 }
             }
             // This broker's address was already rewritten. Reuse the existing rewrite.
-            Some(rewrite) => return_rewrite(&rewrite),
+            Some(rewrite) => {
+                info!(
+                    "kafka: resolve_broker_addr {}:{} using cached rewrite",
+                    host, port
+                );
+                return_rewrite(&rewrite)
+            }
         }
     }
 

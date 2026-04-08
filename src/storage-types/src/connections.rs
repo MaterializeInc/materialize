@@ -55,7 +55,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::AlterCompatible;
@@ -983,13 +983,16 @@ impl KafkaConnection {
             }
             _ => self.brokers.iter().map(|b| &b.address).join(","),
         };
-        options.insert("bootstrap.servers".into(), brokers.into());
+        options.insert("bootstrap.servers".into(), brokers.clone().into());
         let security_protocol = match (self.tls.is_some(), self.sasl.is_some()) {
             (false, false) => "PLAINTEXT",
             (true, false) => "SSL",
             (false, true) => "SASL_PLAINTEXT",
             (true, true) => "SASL_SSL",
         };
+        info!(
+            "kafka: create_with_context bootstrap.servers={brokers}, security_protocol={security_protocol}"
+        );
         options.insert("security.protocol".into(), security_protocol.into());
         if let Some(tls) = &self.tls {
             if let Some(root_cert) = &tls.root_cert {
@@ -1128,6 +1131,16 @@ impl KafkaConnection {
                 }));
             }
         }
+        info!(
+            "kafka: tunnel config set to {}",
+            match &self.default_tunnel {
+                Tunnel::Direct => "Direct".to_string(),
+                Tunnel::AwsPrivatelink(_) => "AwsPrivatelink (static host)".to_string(),
+                Tunnel::AwsPrivatelinks(pl) =>
+                    format!("AwsPrivatelinks ({} rules)", pl.rules.len()),
+                Tunnel::Ssh(_) => "Ssh".to_string(),
+            }
+        );
 
         // Here, we preemptively rewrite broker addresses.
         // In concept, this overlaps with 'TunnelingClientContext::resolve_broker_addr'.
@@ -1232,11 +1245,16 @@ impl KafkaConnection {
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
         // error is buried in the librdkafka logs, which are not visible to users.
+        info!("kafka: starting connection validation via fetch_metadata (timeout={timeout:?})");
         let result = mz_ore::task::spawn_blocking(|| "kafka_get_metadata", {
             let consumer = Arc::clone(&consumer);
             move || consumer.fetch_metadata(None, timeout)
         })
         .await;
+        info!(
+            "kafka: connection validation result: {}",
+            if result.is_ok() { "success" } else { "failed" },
+        );
         match result {
             Ok(_) => Ok(()),
             // The error returned by `fetch_metadata` does not provide any details which makes for
