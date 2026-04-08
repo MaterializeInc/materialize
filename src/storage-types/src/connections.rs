@@ -1218,6 +1218,14 @@ impl KafkaConnection {
         _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), anyhow::Error> {
+        // TEMPORARY: Force debug-level librdkafka logging during validation so
+        // we can see transport errors in environmentd logs.
+        let mut storage_configuration = storage_configuration.clone();
+        storage_configuration
+            .connection_context
+            .librdkafka_log_level = tracing::Level::DEBUG;
+        let storage_configuration = &storage_configuration;
+
         let (context, error_rx) = MzClientContext::with_errors();
         let consumer: BaseConsumer<_> = self
             .create_with_context(
