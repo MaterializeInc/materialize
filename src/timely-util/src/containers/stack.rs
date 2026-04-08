@@ -14,12 +14,14 @@
 // limitations under the License.
 
 //! A chunked columnar container based on the columnation library. It stores the local
-//! portion in region-allocated data, too, which is different to the `TimelyStack` type.
+//! portion in region-allocated data, too, which is different to the `ColumnationStack` type.
 
 use std::cell::Cell;
 
-use differential_dataflow::containers::{Columnation, TimelyStack};
+use columnation::Columnation;
 use timely::container::{ContainerBuilder, PushInto};
+
+use crate::columnation::ColumnationStack;
 
 /// A Stacked container builder that keep track of container memory usage.
 #[derive(Default)]
@@ -31,9 +33,9 @@ pub struct AccountedStackBuilder<CB> {
 impl<T, CB> ContainerBuilder for AccountedStackBuilder<CB>
 where
     T: Clone + Columnation + 'static,
-    CB: ContainerBuilder<Container = TimelyStack<T>>,
+    CB: ContainerBuilder<Container = ColumnationStack<T>>,
 {
-    type Container = TimelyStack<T>;
+    type Container = ColumnationStack<T>;
 
     fn extract(&mut self) -> Option<&mut Self::Container> {
         let container = self.builder.extract()?;

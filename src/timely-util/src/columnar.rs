@@ -28,19 +28,19 @@ use columnar::common::IterOwn;
 use columnar::{Columnar, Ref};
 use columnar::{FromBytes, Index, Len};
 use differential_dataflow::Hashable;
-use differential_dataflow::containers::TimelyStack;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::implementations::merge_batcher::container::ColInternalMerger;
 use mz_ore::region::Region;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::ContainerBytes;
 
+use crate::columnation::{ColInternalMerger, ColumnationStack};
+
 /// A batcher for columnar storage.
 pub type Col2ValBatcher<K, V, T, R> = MergeBatcher<
     Column<((K, V), T, R)>,
-    batcher::Chunker<TimelyStack<((K, V), T, R)>>,
+    batcher::Chunker<ColumnationStack<((K, V), T, R)>>,
     ColInternalMerger<(K, V), T, R>,
 >;
 /// A batcher for columnar storage with unit values.

@@ -129,10 +129,11 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
-use differential_dataflow::containers::{Columnation, TimelyStack};
+use columnation::Columnation;
 use differential_dataflow::trace::implementations::BatchContainer;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
+use mz_timely_util::columnation::ColumnationStack;
 use timely::PartialOrder;
 use timely::container::SizableContainer;
 use timely::progress::Antichain;
@@ -849,19 +850,19 @@ impl<D: Data> From<Cursor<D>> for Chain<D> {
 /// All updates in a chunk are sorted by (time, data) and consolidated.
 ///
 /// We would like all chunks to have the same fixed size, to make it easy for the allocator to
-/// re-use chunk allocations. Unfortunately, the current `TimelyStack`/`ChunkedStack` API doesn't
+/// re-use chunk allocations. Unfortunately, the current `ColumnationStack`/`ChunkedStack` API doesn't
 /// provide a convenient way to pre-size regions, so chunks are currently only fixed-size in
 /// spirit.
 struct Chunk<D: Data> {
     /// The contained updates.
-    data: TimelyStack<(D, Timestamp, Diff)>,
+    data: ColumnationStack<(D, Timestamp, Diff)>,
     /// Cached value of the current chunk size, for efficient updating of metrics.
     cached_size: Option<SizeMetrics>,
 }
 
 impl<D: Data> Default for Chunk<D> {
     fn default() -> Self {
-        let mut data = TimelyStack::default();
+        let mut data = ColumnationStack::default();
         data.ensure_capacity(&mut None);
 
         Self {

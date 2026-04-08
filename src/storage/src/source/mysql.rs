@@ -56,7 +56,6 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
@@ -64,6 +63,7 @@ use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
+use mz_timely_util::columnation::ColumnationStack;
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
@@ -380,7 +380,7 @@ pub(crate) struct RewindRequest {
 
 type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
     T,
-    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
+    AccountedStackBuilder<CapacityContainerBuilder<ColumnationStack<(D, T, Diff)>>>,
 >;
 
 async fn return_definite_error(

@@ -14,13 +14,12 @@
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::implementations::merge_batcher::container::ColInternalMerger;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
 use timely::dataflow::ScopeParent;
 
 use crate::row_spine::RowValBuilder;
@@ -32,13 +31,14 @@ pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
 pub(crate) mod spines {
     use std::rc::Rc;
 
-    use differential_dataflow::containers::{Columnation, TimelyStack};
+    use columnation::Columnation;
     use differential_dataflow::trace::implementations::ord_neu::{
         OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
     };
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::implementations::{Layout, Update};
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use mz_timely_util::columnation::ColumnationStack;
 
     use crate::row_spine::OffsetOptimized;
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
@@ -47,13 +47,13 @@ pub(crate) mod spines {
     pub type ColValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<MzStack<((K, V), T, R)>>>>;
     pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R>;
     pub type ColValBuilder<K, V, T, R> =
-        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, TimelyStack<((K, V), T, R)>>>;
+        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, ColumnationStack<((K, V), T, R)>>>;
 
     /// A spine for generic keys
     pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>;
     pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R>;
     pub type ColKeyBuilder<K, T, R> =
-        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, TimelyStack<((K, ()), T, R)>>>;
+        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, ColumnationStack<((K, ()), T, R)>>>;
 
     /// A layout based on chunked timely stacks
     pub struct MzStack<U: Update> {
@@ -67,10 +67,10 @@ pub(crate) mod spines {
         U::Time: Columnation,
         U::Diff: Columnation,
     {
-        type KeyContainer = TimelyStack<U::Key>;
-        type ValContainer = TimelyStack<U::Val>;
-        type TimeContainer = TimelyStack<U::Time>;
-        type DiffContainer = TimelyStack<U::Diff>;
+        type KeyContainer = ColumnationStack<U::Key>;
+        type ValContainer = ColumnationStack<U::Val>;
+        type TimeContainer = ColumnationStack<U::Time>;
+        type DiffContainer = ColumnationStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
 }
@@ -143,18 +143,18 @@ where
 /// Trait for data types that can be used in Materialize's dataflow, supporting both columnar and
 /// columnation.
 pub trait MzData:
-    differential_dataflow::containers::Columnation
+    columnation::Columnation
     + for<'a> columnar::Columnar<Container: Container<Ref<'a>: Copy + Ord> + Clone + Send>
 {
 }
 
 impl<T> MzData for T
 where
-    T: differential_dataflow::containers::Columnation,
+    T: columnation::Columnation,
     T: for<'a> columnar::Columnar<Container: Clone + Send>,
     for<'a> Ref<'a, T>: Copy + Ord,
 {
 }
 
-pub trait MzArrangeData: differential_dataflow::containers::Columnation {}
-impl<T> MzArrangeData for T where T: differential_dataflow::containers::Columnation {}
+pub trait MzArrangeData: columnation::Columnation {}
+impl<T> MzArrangeData for T where T: columnation::Columnation {}
