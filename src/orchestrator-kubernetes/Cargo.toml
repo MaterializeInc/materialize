@@ -10,12 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
+anyhow.workspace = true
+async-trait.workspace = true
 chrono = { version = "0.4.39", default-features = false }
 clap = { version = "4.5.23", features = ["derive"] }
 fail.workspace = true
-futures = "0.3.32"
+futures.workspace = true
 maplit.workspace = true
 mz-cloud-resources = { path = "../cloud-resources", default-features = false, features = ["vpc-endpoints"] }
 mz-orchestrator = { path = "../orchestrator", default-features = false }
@@ -29,7 +29,7 @@ serde.workspace = true
 serde_json = "1.0.149"
 sha2 = "0.10.9"
 tokio = "1.49.0"
-tracing = "0.1.44"
+tracing.workspace = true
 
 [features]
 default = []

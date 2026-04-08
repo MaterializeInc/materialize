@@ -10,12 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
+anyhow.workspace = true
+async-trait.workspace = true
 clap = { version = "4.5.23", features = ["env", "derive"] }
-derivative = "2.2.0"
+derivative.workspace = true
 futures-core = "0.3.31"
-http = "1.4.0"
+http.workspace = true
 humantime = { version = "2.3.0" }
 mz-build-info = { path = "../build-info", default-features = false }
 mz-orchestrator = { path = "../orchestrator", default-features = false }
@@ -24,7 +24,7 @@ mz-repr = { path = "../repr", default-features = false, optional = true }
 mz-service = { path = "../service", default-features = false }
 mz-tracing = { path = "../tracing", default-features = false }
 sentry-tracing = { version = "0.46.1" }
-tracing = { version = "0.1.44" }
+tracing.workspace = true
 tracing-capture = { version = "0.1.0", optional = true }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 opentelemetry = { version = "0.31.0", features = ["trace"] }

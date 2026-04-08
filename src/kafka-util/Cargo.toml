@@ -10,17 +10,17 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 aws-config = { version = "1.8.15", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.8" }
 aws-sigv4 = { version = "1.3.6" }
 aws-types.workspace = true
-base64 = "0.22.1"
+base64.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 crossbeam = "0.8.4"
 fancy-regex = "0.16.2"
-futures = "0.3.32"
+futures.workspace = true
 itertools.workspace = true
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
@@ -34,7 +34,7 @@ serde.workspace = true
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["macros", "rt", "sync"] }
 thiserror.workspace = true
-tracing = "0.1.44"
+tracing.workspace = true
 url = "2.5.8"
 
 [build-dependencies]

@@ -10,10 +10,10 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = { version = "0.1.89" }
+anyhow.workspace = true
+async-trait.workspace = true
 clap = { version = "4.5.23", features = ["derive", "env"] }
-openssl = { version = "0.10.76", features = ["vendored"] }
+openssl.workspace = true
 schemars = { version = "1.2.1" }
 scopeguard.workspace = true
 serde.workspace = true
@@ -21,8 +21,8 @@ serde_json = "1.0.149"
 socket2 = "0.6.0"
 tokio-stream = "0.1.18"
 proxy-header = "0.1.2"
-tracing = "0.1.44"
-futures = "0.3.32"
+tracing.workspace = true
+futures.workspace = true
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
 tokio = "1.49.0"

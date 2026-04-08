@@ -13,14 +13,14 @@ workspace = true
 name = "cdc"
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 async-stream = "0.3.3"
-base64 = "0.22.1"
+base64.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 columnation.workspace = true
 dec = "0.4.8"
-derivative = "2.2.0"
-futures = "0.3.32"
+derivative.workspace = true
+futures.workspace = true
 hex.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["async"] }
@@ -41,7 +41,7 @@ timely.workspace = true
 tokio = { version = "1.49.0", features = ["net"] }
 tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["compat"] }
-tracing = "0.1.44"
+tracing.workspace = true
 uuid = "1.19.0"
 
 [dev-dependencies]

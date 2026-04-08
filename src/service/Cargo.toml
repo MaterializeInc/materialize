@@ -10,12 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 async-stream = "0.3.6"
-async-trait = "0.1.89"
+async-trait.workspace = true
 bincode = "1.3.3"
 clap = { version = "4.5.23", features = ["env", "derive"] }
-futures = "0.3.32"
+futures.workspace = true
 itertools.workspace = true
 mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }
@@ -25,13 +25,13 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-feat
 mz-ore = { path = "../ore", default-features = false }
 os_info = "3.11.0"
 pin-project.workspace = true
-prometheus = { version = "0.14.0", default-features = false }
+prometheus.workspace = true
 semver = { version = "1.0.27", features = ["serde"] }
 serde.workspace = true
 sysinfo = "0.29.11"
 tokio = "1.49.0"
 tokio-stream = "0.1.18"
-tracing = "0.1.44"
+tracing.workspace = true
 sentry-tracing = "0.46.1"
 
 [dev-dependencies]

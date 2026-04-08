@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 aws-config = { version = "1.8.15", default-features = false }
 aws-sdk-s3 = { version = "1.122.0", default-features = false, features = [
     "rt-tokio",
@@ -21,8 +21,8 @@ aws-smithy-types = { version = "1.1.8", features = ["byte-stream-poll-next"] }
 aws-types.workspace = true
 bytes = "1.11.1"
 bytesize.workspace = true
-futures = "0.3.32"
-http = "1.4.0"
+futures.workspace = true
+http.workspace = true
 hyper-tls = "0.5.0"
 mz-ore = { path = "../ore", features = ["async"], default-features = false }
 pin-project.workspace = true

@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 async-stream = "0.3.6"
 bytesize.workspace = true
 columnar.workspace = true
@@ -18,7 +18,7 @@ dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow.workspace = true
 differential-dogs3.workspace = true
 fail.workspace = true
-futures = "0.3.32"
+futures.workspace = true
 itertools.workspace = true
 lgalloc = "0.6"
 mz-cluster = { path = "../cluster" }
@@ -37,13 +37,13 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-prometheus = { version = "0.14.0", default-features = false }
+prometheus.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "net"] }
-tracing = "0.1.44"
+tracing.workspace = true
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]

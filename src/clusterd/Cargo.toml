@@ -10,11 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 axum = "0.8.8"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 fail.workspace = true
-futures = "0.3.32"
+futures.workspace = true
 hyper = "1.4.1"
 hyper-util = "0.1.20"
 mz-alloc = { path = "../alloc" }
@@ -43,7 +43,7 @@ num_cpus.workspace = true
 serde.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util"] }
 tower = "0.5.3"
-tracing = "0.1.44"
+tracing.workspace = true
 
 [build-dependencies]
 custom-labels = "0.4.6"

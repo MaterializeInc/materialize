@@ -261,30 +261,40 @@ edition = "2024"
 rust-version = "1.94.1"
 
 [workspace.dependencies]
+anyhow = "1.0.102"
+async-trait = "0.1.89"
 aws-types = "1.3.9"
+base64 = "0.22.1"
 bytesize = "2.1.0"
 columnar = "0.12.1"
 columnation = "0.1.2"
+derivative = "2.2.0"
 differential-dataflow = "0.22.0"
 differential-dogs3 = "0.22.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 flate2 = "1.1.9"
+futures = "0.3.32"
 hex = "0.4.3"
+http = "1.4.0"
 itertools = "0.14.0"
 maplit = "1.0.2"
 md-5 = "0.10.6"
 num_cpus = "1.17.0"
+openssl = { version = "0.10.76", features = ["vendored"] }
 paste = "1.0.11"
 pin-project = "1.1.11"
 postgres-protocol = "0.6.9"
+prometheus = { version = "0.14.0", default-features = false }
 prost-build = "0.14.3"
+regex = "1.12.3"
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 static_assertions = "1.1"
 thiserror = "2.0.18"
 timely = "0.28.1"
 tokio-metrics = "0.4.9"
+tracing = "0.1.44"
 uncased = "0.9.7"
 
 [profile.dev]

@@ -10,10 +10,10 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 itertools.workspace = true
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["network", "async", "test"] }
 tokio = { version = "1.49.0", features = ["macros"] }
 tokio-postgres = { version = "0.7.15" }
-tracing = "0.1.44"
+tracing.workspace = true

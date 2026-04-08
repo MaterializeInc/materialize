@@ -10,11 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 async-stream = "0.3.6"
-async-trait = "0.1.89"
+async-trait.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["clock"] }
-futures = "0.3.32"
+futures.workspace = true
 hex.workspace = true
 itertools.workspace = true
 libc = "0.2.184"
@@ -30,7 +30,7 @@ scopeguard.workspace = true
 sha1 = "0.10.6"
 sysinfo = "0.29.11"
 tokio = { version = "1.49.0", features = ["fs", "process", "time"] }
-tracing = "0.1.44"
+tracing.workspace = true
 
 [features]
 default = []

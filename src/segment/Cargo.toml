@@ -16,7 +16,7 @@ segment = { version = "0.2.6", features = ["native-tls-vendored"], default-featu
 serde_json = "1.0.149"
 time = "0.3.17"
 tokio = { version = "1.49.0", features = ["sync"] }
-tracing = "0.1.44"
+tracing.workspace = true
 uuid = "1.19.0"
 
 [features]

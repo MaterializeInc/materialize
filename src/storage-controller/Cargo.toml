@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
+anyhow.workspace = true
+async-trait.workspace = true
 bytes = "1.11.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-derivative = "2.2.0"
+derivative.workspace = true
 differential-dataflow.workspace = true
-futures = "0.3.32"
+futures.workspace = true
 itertools.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
@@ -42,7 +42,7 @@ timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tokio-stream = "0.1.18"
-tracing = "0.1.44"
+tracing.workspace = true
 uuid = "1.19.0"
 
 [features]

@@ -10,11 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
+anyhow.workspace = true
+async-trait.workspace = true
 bytesize.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
-derivative = "2.2.0"
+derivative.workspace = true
 futures-core = "0.3.31"
 mz-ore = { path = "../ore", default-features = false }
 serde.workspace = true

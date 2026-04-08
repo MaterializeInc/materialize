@@ -21,7 +21,7 @@ mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
 serde.workspace = true
 timely.workspace = true
-tracing = "0.1.44"
+tracing.workspace = true
 
 [features]
 default = []

@@ -14,9 +14,9 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 async-stream = "0.3.6"
-async-trait = "0.1.89"
+async-trait.workspace = true
 aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 arrow = { version = "57", default-features = false }
@@ -31,7 +31,7 @@ csv-core = { version = "0.1.13" }
 dec = "0.4.8"
 differential-dataflow.workspace = true
 fail.workspace = true
-futures = "0.3.32"
+futures.workspace = true
 iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools.workspace = true
@@ -68,7 +68,7 @@ mz-txn-wal = { path = "../txn-wal" }
 parquet = { version = "57", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
 pin-project.workspace = true
 postgres-replication = { version = "0.6.7" }
-prometheus = { version = "0.14.0", default-features = false }
+prometheus.workspace = true
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
@@ -79,7 +79,7 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-regex = { version = "1.12.3" }
+regex.workspace = true
 rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
 serde.workspace = true
@@ -92,13 +92,13 @@ tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["io"] }
-tracing = "0.1.44"
+tracing.workspace = true
 thiserror.workspace = true
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 arrow-ipc = "57"
 
 [dev-dependencies]
-async-trait = "0.1.89"
+async-trait.workspace = true
 axum = "0.8.8"
 clap = { version = "4.5.23", features = ["derive", "env"] }
 humantime = "2.3.0"

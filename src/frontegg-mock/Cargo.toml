@@ -10,10 +10,10 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 axum = "0.8.8"
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
-base64 = "0.22.1"
+base64.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 hyper = { version = "1.4.1", features = ["http1", "server"] }
@@ -23,13 +23,13 @@ mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
 serde.workspace = true
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", default-features = false }
-tracing = "0.1.44"
+tracing.workspace = true
 tracing-subscriber = "0.3.23"
 uuid = "1.19.0"
 
 [dev-dependencies]
 reqwest = { version = "0.12.28", features = ["json"] }
-openssl = { version = "0.10.76", features = ["vendored"] }
+openssl.workspace = true
 
 [features]
 default = []

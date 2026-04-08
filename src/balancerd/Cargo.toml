@@ -10,15 +10,15 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
+anyhow.workspace = true
+async-trait.workspace = true
 axum = "0.8.8"
 bytes = "1.11.1"
 bytesize.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
-futures = "0.3.32"
+futures.workspace = true
 humantime = "2.3.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
@@ -39,8 +39,8 @@ mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
 num_cpus.workspace = true
-openssl = { version = "0.10.76", features = ["vendored"] }
-prometheus = { version = "0.14.0", default-features = false }
+openssl.workspace = true
+prometheus.workspace = true
 proxy-header = "0.1.2"
 semver = "1.0.27"
 tokio = { version = "1.49.0", default-features = false }
@@ -49,7 +49,7 @@ tokio-postgres = { version = "0.7.15" }
 tokio-util = { version = "0.7.18", features = ["codec"] }
 tokio-metrics.workspace = true
 tower = "0.5.3"
-tracing = "0.1.44"
+tracing.workspace = true
 tracing-subscriber = "0.3.23"
 uuid = "1.19.0"
 

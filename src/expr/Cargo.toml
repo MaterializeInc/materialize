@@ -23,7 +23,7 @@ harness = false
 
 [dependencies]
 aho-corasick = "1.1.4"
-anyhow = "1.0.102"
+anyhow.workspace = true
 bytes = "1.11.1"
 bytesize.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
@@ -32,7 +32,7 @@ crc32fast = "1.4.2"
 csv = "1.4.0"
 differential-dataflow.workspace = true
 dec = "0.4.8"
-derivative = "2.2.0"
+derivative.workspace = true
 encoding = "0.2.0"
 enum-iterator = "2.1.0"
 fallible-iterator = "0.2.0"
@@ -57,7 +57,7 @@ num_enum = "0.7.6"
 ordered-float = { version = "5.1.0", features = ["serde"] }
 paste.workspace = true
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-regex = "1.12.3"
+regex.workspace = true
 regex-syntax = "0.8.10"
 seahash = "4.1.0"
 serde.workspace = true
@@ -65,7 +65,7 @@ serde_json = "1.0.149"
 sha1 = "0.10.6"
 sha2 = "0.10.9"
 subtle = "2.6.1"
-tracing = "0.1.44"
+tracing.workspace = true
 uncased.workspace = true
 unicode-normalization = "0.1.25"
 uuid = { version = "1.19.0", features = ["v5"] }

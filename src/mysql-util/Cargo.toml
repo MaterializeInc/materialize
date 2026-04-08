@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 aws-config = { version = "1.8.15", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.8" }
 aws-sigv4 = { version = "1.3.6" }
@@ -35,11 +35,11 @@ prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 fancy-regex = "0.16.2"
-regex = "1.12.3"
+regex.workspace = true
 serde.workspace = true
 serde_json = { version = "1.0.149" }
 thiserror.workspace = true
-tracing = "0.1.44"
+tracing.workspace = true
 url = "2.5.8"
 uuid = { version = "1.19.0", features = ["v4"] }
 

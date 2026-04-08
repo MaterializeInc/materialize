@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 native-tls = "0.2.14"
-openssl = { version = "0.10.76", features = ["vendored"] }
+openssl.workspace = true
 reqwest = { version = "0.12.28", features = [
     "blocking",
     "json",
@@ -31,7 +31,7 @@ hyper-util = "0.1.20"
 mz-ore = { path = "../ore", features = ["async", "test"] }
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["macros"] }
-tracing = "0.1.44"
+tracing.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }

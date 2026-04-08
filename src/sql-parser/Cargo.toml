@@ -21,7 +21,7 @@ phf = { version = "0.13.1", features = ["uncased"] }
 serde.workspace = true
 smallvec = { version = "1.15.1", features = ["union"] }
 thiserror.workspace = true
-tracing = "0.1.44"
+tracing.workspace = true
 uncased.workspace = true
 unicode-width = { version = "0.2.2", optional = true }
 
@@ -33,7 +33,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 mz-sql-parser = { path = ".", default-features = false, features = ["test"] }
 
 [build-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 mz-ore-build = { path = "../ore-build", default-features = false }
 mz-walkabout = { path = "../walkabout", default-features = false }
 

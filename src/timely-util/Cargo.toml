@@ -29,7 +29,7 @@ num-traits = "0.2"
 serde.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "time"] }
-tracing = "0.1.44"
+tracing.workspace = true
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 
 # This crate is used for capturing memory usage in a unit test. It is feature
