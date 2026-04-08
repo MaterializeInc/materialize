@@ -75,12 +75,24 @@ def main():
             ]
         )
         # Commit here instead of in bump-version so we have access to the correct git author
-        spawn.runv(["git", "commit", "-am", f"release: bump to version {version}"])
+        # On re-runs, the diff may already be committed, so skip if clean.
+        diff_rc = spawn.run_and_get_return_code(
+            ["git", "diff", "HEAD", "--compact-summary", "--exit-code"]
+        )
+        if diff_rc != 0:
+            spawn.runv(["git", "commit", "-am", f"release: bump to version {version}"])
+        else:
+            print("No changes to commit (already committed)")
         if args.dry_run:
             print("Dry run: skipping tag, and push")
             return
         print("Tagging version")
-        tag_annotated(version)
+        # On re-runs the tag may already exist; skip if so.
+        tag_rc = spawn.run_and_get_return_code(["git", "rev-parse", f"refs/tags/{version}"])
+        if tag_rc != 0:
+            tag_annotated(version)
+        else:
+            print(f"Tag {version} already exists, skipping")
         print("Pushing tag to Materialize repo")
         spawn.runv(["git", "push", args.remote, version])
     finally:
