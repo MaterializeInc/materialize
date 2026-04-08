@@ -75,7 +75,11 @@ impl MySqlTableDesc {
     /// exceptions:
     /// - `self`'s columns are a prefix of `other`'s columns.
     /// - `self`'s keys are all present in `other`
-    pub fn determine_compatibility(&self, other: &MySqlTableDesc) -> Result<(), anyhow::Error> {
+    pub fn determine_compatibility(
+        &self,
+        other: &MySqlTableDesc,
+        full_metadata: bool,
+    ) -> Result<(), anyhow::Error> {
         if self == other {
             return Ok(());
         }
@@ -95,16 +99,26 @@ impl MySqlTableDesc {
         // ignore extra columns from `other.columns`.
         let mut other_columns = other.columns.iter();
         for self_column in &self.columns {
-            let other_column = other_columns
-                .by_ref()
-                .find(|c| c.name == self_column.name)
-                .ok_or_else(|| {
+            let other_column = if full_metadata {
+                other_columns
+                    .by_ref()
+                    .find(|c| c.name == self_column.name)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "column {} no longer present in table {}",
+                            self_column.name,
+                            self.name
+                        )
+                    })?
+            } else {
+                other_columns.next().ok_or_else(|| {
                     anyhow::anyhow!(
                         "column {} no longer present in table {}",
                         self_column.name,
                         self.name
                     )
-                })?;
+                })?
+            };
             if !self_column.is_compatible(other_column) {
                 bail!(
                     "column {} in table {} has been altered",
@@ -113,7 +127,6 @@ impl MySqlTableDesc {
                 );
             }
         }
-
         // Our keys are all still present in exactly the same shape.
         // TODO: Implement a more relaxed key compatibility check:
         // We should check that for all keys that we know about there exists an upstream key whose

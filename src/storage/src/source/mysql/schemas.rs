@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use mysql_async::prelude::Queryable;
-use mz_mysql_util::{MySqlError, SchemaRequest, schema_info};
+use mz_mysql_util::{MySqlError, SchemaRequest, query_sys_var, schema_info};
 
 use super::{DefiniteError, MySqlTableName, SourceOutputInfo};
 
@@ -45,6 +45,13 @@ where
     })
     .collect();
 
+    let full_metadata = conn
+        .query_first::<String, String>(format!("SELECT @@binlog_row_metadata"))
+        .await?
+        .unwrap()
+        .to_uppercase()
+        == "FULL";
+
     Ok(expected
         .into_iter()
         .flat_map(|(table, outputs)| {
@@ -64,13 +71,15 @@ where
                             )),
                         );
                         match new_desc {
-                            Ok(desc) => match output.desc.determine_compatibility(&desc) {
-                                Ok(()) => None,
-                                Err(err) => Some((
-                                    output,
-                                    DefiniteError::IncompatibleSchema(err.to_string()),
-                                )),
-                            },
+                            Ok(desc) => {
+                                match output.desc.determine_compatibility(&desc, full_metadata) {
+                                    Ok(()) => None,
+                                    Err(err) => Some((
+                                        output,
+                                        DefiniteError::IncompatibleSchema(err.to_string()),
+                                    )),
+                                }
+                            }
                             Err(err) => {
                                 Some((output, DefiniteError::IncompatibleSchema(err.to_string())))
                             }
