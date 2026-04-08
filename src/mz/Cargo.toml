@@ -16,7 +16,7 @@ csv = "1.4.0"
 dirs = "6.0.0"
 indicatif = "0.18.4"
 termcolor = "1.4.1"
-maplit = "1.0.2"
+maplit.workspace = true
 mz-cloud-api = { path = "../cloud-api" }
 mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }

@@ -17,7 +17,7 @@ byteorder = "1.4.3"
 bytes = "1.11.1"
 bytesize.workspace = true
 csv-core = "0.1.13"
-enum-kinds = "0.5.1"
+enum-kinds.workspace = true
 futures = "0.3.32"
 itertools.workspace = true
 mz-adapter = { path = "../adapter" }
@@ -38,7 +38,7 @@ tokio = "1.49.0"
 tokio-stream = "0.1.18"
 tokio-openssl = "0.6.5"
 tokio-util = { version = "0.7.18", features = ["codec"] }
-tokio-metrics = "0.4.9"
+tokio-metrics.workspace = true
 tracing = "0.1.44"
 uuid = { version = "1.19.0", features = ["v4"] }
 

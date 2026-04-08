@@ -33,13 +33,13 @@ bytemuck = { version = "1.23.1", features = ["latest_stable_rust"] }
 bytes = "1.11.1"
 cfg-if = "1.0.4"
 columnar.workspace = true
-columnation = "0.1.2"
+columnation.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 compact_bytes = "0.2.1"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow.workspace = true
-enum-kinds = "0.5.1"
-hex = "0.4.3"
+enum-kinds.workspace = true
+hex.workspace = true
 itertools.workspace = true
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = [
@@ -59,7 +59,7 @@ mz-timely-util = { path = "../timely-util", default-features = false }
 num-traits = "0.2.15"
 num_enum = "0.7.6"
 ordered-float = { version = "5.1.0", features = ["serde"] }
-postgres-protocol = { version = "0.6.9" }
+postgres-protocol.workspace = true
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 regex = "1.12.3"
 ryu = "1.0.23"

@@ -17,7 +17,7 @@ columnar.workspace = true
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow.workspace = true
 differential-dogs3.workspace = true
-fail = { version = "0.5.1", features = ["failpoints"] }
+fail.workspace = true
 futures = "0.3.32"
 itertools.workspace = true
 lgalloc = "0.6"
@@ -38,7 +38,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 prometheus = { version = "0.14.0", default-features = false }
-scopeguard = "1.2.0"
+scopeguard.workspace = true
 serde.workspace = true
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
 timely.workspace = true

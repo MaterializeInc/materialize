@@ -18,7 +18,7 @@ ahash = { version = "0.8.12", default-features = false }
 bincode = "1.3.3"
 bytemuck = "1.23.1"
 columnar.workspace = true
-columnation = "0.1.2"
+columnation.workspace = true
 custom-labels = "0.4.6"
 differential-dataflow.workspace = true
 either = "1"

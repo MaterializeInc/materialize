@@ -17,11 +17,11 @@ anyhow = "1.0.102"
 async-stream = "0.3.3"
 base64 = "0.22.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-columnation = "0.1.2"
+columnation.workspace = true
 dec = "0.4.8"
 derivative = "2.2.0"
 futures = "0.3.32"
-hex = "0.4.3"
+hex.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["async"] }
 mz-proto = { path = "../proto" }

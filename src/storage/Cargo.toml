@@ -25,17 +25,17 @@ bytesize.workspace = true
 bincode = "1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
-columnation = "0.1.2"
+columnation.workspace = true
 crossbeam-channel = "0.5.15"
 csv-core = { version = "0.1.13" }
 dec = "0.4.8"
 differential-dataflow.workspace = true
-fail = { version = "0.5.1", features = ["failpoints"] }
+fail.workspace = true
 futures = "0.3.32"
 iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools.workspace = true
-maplit = "1.0.2"
+maplit.workspace = true
 mysql_async = { version = "0.36.2", default-features = false, features = ["minimal", "binlog"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
 mz-arrow-util = { path = "../arrow-util" }
@@ -66,7 +66,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 parquet = { version = "57", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
-pin-project = "1.1.11"
+pin-project.workspace = true
 postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }

@@ -36,10 +36,10 @@ derivative = "2.2.0"
 encoding = "0.2.0"
 enum-iterator = "2.1.0"
 fallible-iterator = "0.2.0"
-hex = "0.4.3"
+hex.workspace = true
 hmac = "0.12.1"
 itertools.workspace = true
-md-5 = "0.10.6"
+md-5.workspace = true
 murmur2 = "0.1.0"
 mz-expr-derive = { path = "../expr-derive", features = ["test"] }
 mz-lowertest = { path = "../lowertest" }
@@ -66,7 +66,7 @@ sha1 = "0.10.6"
 sha2 = "0.10.9"
 subtle = "2.6.1"
 tracing = "0.1.44"
-uncased = "0.9.7"
+uncased.workspace = true
 unicode-normalization = "0.1.25"
 uuid = { version = "1.19.0", features = ["v5"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }

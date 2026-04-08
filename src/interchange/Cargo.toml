@@ -22,7 +22,7 @@ chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 differential-dataflow.workspace = true
 itertools.workspace = true
-maplit = "1.0.2"
+maplit.workspace = true
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["network", "cli"] }

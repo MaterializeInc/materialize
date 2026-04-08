@@ -16,7 +16,7 @@ anyhow = "1.0.102"
 arrow = { version = "57", default-features = false }
 bytes = { version = "1.11.1", features = ["serde"] }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-hex = "0.4.3"
+hex.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }
 mz-proto = { path = "../proto", default-features = false }

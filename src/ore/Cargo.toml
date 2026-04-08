@@ -24,7 +24,7 @@ bytemuck = { version = "1.23.1", optional = true }
 bytes = { version = "1.11.1", optional = true }
 chrono = { version = "0.4.39", default-features = false, features = ["std"], optional = true }
 clap = { version = "4.5.23", features = ["env", "string"], optional = true }
-columnation = { version = "0.1.2", optional = true }
+columnation = { workspace = true, optional = true }
 columnar = { workspace = true, optional = true }
 compact_bytes = { version = "0.2.1", optional = true }
 ctor = { version = "0.6.3", optional = true }
@@ -43,7 +43,7 @@ num-traits = { version = "0.2", optional = true }
 openssl = { version = "0.10.76", features = ["vendored"], optional = true }
 parquet = { version = "57", optional = true, default-features = false }
 paste.workspace = true
-pin-project = "1.1.11"
+pin-project.workspace = true
 prometheus = { version = "0.14.0", default-features = false, optional = true }
 proptest = { version = "1.10.0", default-features = false, features = ["std"], optional = true }
 proptest-derive = { version = "0.8.0", optional = true }
@@ -102,7 +102,7 @@ anyhow = { version = "1.0.102" }
 criterion = { version = "0.8.2", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
-scopeguard = "1.2.0"
+scopeguard.workspace = true
 serde_json = "1.0.149"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.5"

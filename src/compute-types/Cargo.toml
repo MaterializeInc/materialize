@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 columnar.workspace = true
-columnation = "0.1.2"
+columnation.workspace = true
 differential-dataflow.workspace = true
 itertools.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
