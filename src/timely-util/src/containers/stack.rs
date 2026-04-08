@@ -18,9 +18,10 @@
 
 use std::cell::Cell;
 
-use crate::columnation::ColumnationStack;
 use columnation::Columnation;
 use timely::container::{ContainerBuilder, PushInto};
+
+use crate::columnation::ColumnationStack;
 
 /// A Stacked container builder that keep track of container memory usage.
 #[derive(Default)]

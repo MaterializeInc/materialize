@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker, ready};
 
-use crate::columnation::ColumnationStack;
 use differential_dataflow::containers::Columnation;
 use futures_util::Stream;
 use futures_util::task::ArcWake;
@@ -41,6 +40,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
+use crate::columnation::ColumnationStack;
 use crate::containers::stack::AccountedStackBuilder;
 
 /// Builds async operators with generic shape.
