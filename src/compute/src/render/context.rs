@@ -452,7 +452,10 @@ where
     /// Returns the collection as a Vec-based collection, converting from columnar if needed.
     pub fn as_vec_collection(
         &self,
-    ) -> (VecCollection<S, Row, Diff>, VecCollection<S, DataflowError, Diff>) {
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
         if let Some((col_oks, col_errs)) = &self.columnar_collection {
             let vec_oks = crate::render::columnar::columnar_to_vec(col_oks.clone());
             (vec_oks, col_errs.clone())
@@ -877,7 +880,10 @@ where
 
         // Materialize a Vec collection for arrangement creation.
         // This is a local cache; we convert back to columnar at the end if needed.
-        let mut cached_vec: Option<(VecCollection<S, Row, Diff>, VecCollection<S, DataflowError, Diff>)> = None;
+        let mut cached_vec: Option<(
+            VecCollection<S, Row, Diff>,
+            VecCollection<S, DataflowError, Diff>,
+        )> = None;
         if form_raw_collection {
             cached_vec = Some(self.as_collection_core(
                 input_mfp,
@@ -891,9 +897,7 @@ where
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
 
-                let (oks, errs) = cached_vec
-                    .take()
-                    .expect("Collection constructed above");
+                let (oks, errs) = cached_vec.take().expect("Collection constructed above");
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();

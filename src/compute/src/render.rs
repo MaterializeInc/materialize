@@ -378,12 +378,9 @@ pub fn build_compute_dataflow<A: Allocate>(
                 for (id, (oks, errs)) in imported_sources.into_iter() {
                     let oks_entered = oks.enter(region);
                     let errs_entered = errs.enter(region);
-                    let columnar_oks =
-                        crate::render::columnar::vec_to_columnar(oks_entered);
-                    let bundle = CollectionBundle::from_columnar_collections(
-                        columnar_oks,
-                        errs_entered,
-                    );
+                    let columnar_oks = crate::render::columnar::vec_to_columnar(oks_entered);
+                    let bundle =
+                        CollectionBundle::from_columnar_collections(columnar_oks, errs_entered);
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
                 }
@@ -492,12 +489,9 @@ pub fn build_compute_dataflow<A: Allocate>(
                     };
                     let oks_entered = oks.enter_region(region);
                     let errs_entered = errs.enter_region(region);
-                    let columnar_oks =
-                        crate::render::columnar::vec_to_columnar(oks_entered);
-                    let bundle = CollectionBundle::from_columnar_collections(
-                        columnar_oks,
-                        errs_entered,
-                    );
+                    let columnar_oks = crate::render::columnar::vec_to_columnar(oks_entered);
+                    let bundle =
+                        CollectionBundle::from_columnar_collections(columnar_oks, errs_entered);
                     // Associate collection bundle with the source identifier.
                     context.insert_id(id, bundle);
                 }
@@ -760,7 +754,10 @@ where
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
-                println!("columnar_collection available: {:?}", bundle.columnar_collection.is_some());
+                println!(
+                    "columnar_collection available: {:?}",
+                    bundle.columnar_collection.is_some()
+                );
                 println!(
                     "keys available: {:?}",
                     bundle.arranged.keys().collect::<Vec<_>>()
@@ -856,7 +853,10 @@ where
                 compute_state.traces.set(idx_id, trace);
             }
             None => {
-                println!("columnar_collection available: {:?}", bundle.columnar_collection.is_some());
+                println!(
+                    "columnar_collection available: {:?}",
+                    bundle.columnar_collection.is_some()
+                );
                 println!(
                     "keys available: {:?}",
                     bundle.arranged.keys().collect::<Vec<_>>()
@@ -1219,8 +1219,7 @@ where
                     .as_collection();
 
                 // Produce a columnar-only collection for downstream operators.
-                let columnar_oks =
-                    crate::render::columnar::vec_to_columnar(ok_collection);
+                let columnar_oks = crate::render::columnar::vec_to_columnar(ok_collection);
                 CollectionBundle::from_columnar_collections(columnar_oks, err_collection)
             }
             Get { id, keys, plan } => {
@@ -1343,8 +1342,7 @@ where
                     let negated = crate::render::columnar::negate_columnar(col_oks.clone());
                     CollectionBundle::from_columnar_collections(negated, col_errs.clone())
                 } else {
-                    let (oks, errs) =
-                        input.as_specific_collection(None, &self.config_set);
+                    let (oks, errs) = input.as_specific_collection(None, &self.config_set);
                     CollectionBundle::from_collections(oks.negate(), errs)
                 }
             }
@@ -1370,14 +1368,10 @@ where
                         col_oks.push(oks.clone());
                         col_errs.push(errs.clone());
                     }
-                    let col_oks = differential_dataflow::collection::concatenate(
-                        &mut self.scope,
-                        col_oks,
-                    );
-                    let col_errs = differential_dataflow::collection::concatenate(
-                        &mut self.scope,
-                        col_errs,
-                    );
+                    let col_oks =
+                        differential_dataflow::collection::concatenate(&mut self.scope, col_oks);
+                    let col_errs =
+                        differential_dataflow::collection::concatenate(&mut self.scope, col_errs);
                     if consolidate_output {
                         // Consolidation requires Vec-based collections; convert, consolidate, convert back.
                         let vec_oks = crate::render::columnar::columnar_to_vec(col_oks);
@@ -1394,8 +1388,7 @@ where
                     let mut oks = Vec::new();
                     let mut errs = Vec::new();
                     for bundle in bundles {
-                        let (os, es) =
-                            bundle.as_specific_collection(None, &self.config_set);
+                        let (os, es) = bundle.as_specific_collection(None, &self.config_set);
                         oks.push(os);
                         errs.push(es);
                     }
