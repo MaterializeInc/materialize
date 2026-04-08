@@ -268,6 +268,7 @@ differential-dogs3 = "0.22.0"
 itertools = "0.14.0"
 paste = "1.0.11"
 prost-build = "0.14.3"
+serde = { version = "1.0.219", features = ["derive"] }
 static_assertions = "1.1"
 thiserror = "2.0.18"
 timely = "0.28.1"

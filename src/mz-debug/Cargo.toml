@@ -26,7 +26,7 @@ mz-tls-util = { path = "../tls-util" }
 postgres-openssl = { version = "0.5.2" }
 regex = "1.12.3"
 reqwest = { version = "0.12.28", features = ["stream"] }
-serde = "1.0.219"
+serde.workspace = true
 serde_yaml = "0.9.34"
 tokio = "1.49.0"
 tokio-postgres = { version = "0.7.15" }

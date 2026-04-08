@@ -32,7 +32,7 @@ proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = [
     "no-recursion-limit",
 ], optional = true }
-serde = { version = "1.0.219", features = ["derive"], optional = true }
+serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync"] }
 tokio-postgres = { version = "0.7.15" }

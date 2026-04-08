@@ -36,7 +36,7 @@ proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 fancy-regex = "0.16.2"
 regex = "1.12.3"
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 serde_json = { version = "1.0.149" }
 thiserror.workspace = true
 tracing = "0.1.44"

@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 phf = { version = "0.13.1", features = ["uncased"] }
 uncased = "0.9.7"
 

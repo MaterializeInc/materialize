@@ -26,7 +26,7 @@ futures-util = "0.3.31"
 lgalloc = "0.6"
 mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing"] }
 num-traits = "0.2"
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "time"] }
 tracing = "0.1.44"

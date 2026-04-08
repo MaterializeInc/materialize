@@ -18,7 +18,7 @@ itertools.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["stack", "assert-no-tracing"] }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
 phf = { version = "0.13.1", features = ["uncased"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 smallvec = { version = "1.15.1", features = ["union"] }
 thiserror.workspace = true
 tracing = "0.1.44"
