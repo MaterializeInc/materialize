@@ -135,7 +135,7 @@ mod tests {
     fn round_trip_vec_columnar_vec() {
         timely::execute_directly(|worker| {
             let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> = Rc::new(RefCell::new(Vec::new()));
-            let results_capture = results.clone();
+            let results_capture = Rc::clone(&results);
 
             let (mut input, probe) = worker.dataflow::<u64, _, _>(|scope| {
                 let (input, collection) = scope.new_collection::<Row, Diff>();
@@ -174,7 +174,7 @@ mod tests {
             let mut actual = results.borrow().clone();
             actual.sort_by(|a, b| a.0.cmp(&b.0));
 
-            let mut expected = vec![
+            let mut expected = [
                 (row1, 0u64, one),
                 (row2, 0u64, one),
                 (row3, 0u64, one),
@@ -183,7 +183,7 @@ mod tests {
             expected.sort_by(|a, b| a.0.cmp(&b.0));
 
             assert_eq!(actual.len(), expected.len(), "Row count mismatch");
-            for (a, e) in actual.iter().zip(expected.iter()) {
+            for (a, e) in itertools::Itertools::zip_eq(actual.iter(), expected.iter()) {
                 assert_eq!(a.0, e.0, "Row data mismatch");
                 assert_eq!(a.1, e.1, "Timestamp mismatch");
                 assert_eq!(a.2, e.2, "Diff mismatch");
@@ -196,7 +196,7 @@ mod tests {
     fn round_trip_multiple_timestamps() {
         timely::execute_directly(|worker| {
             let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> = Rc::new(RefCell::new(Vec::new()));
-            let results_capture = results.clone();
+            let results_capture = Rc::clone(&results);
 
             let (mut input, probe) = worker.dataflow::<u64, _, _>(|scope| {
                 let (input, collection) = scope.new_collection::<Row, Diff>();
@@ -240,7 +240,7 @@ mod tests {
     fn negate_columnar_flips_diffs() {
         timely::execute_directly(|worker| {
             let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> = Rc::new(RefCell::new(Vec::new()));
-            let results_capture = results.clone();
+            let results_capture = Rc::clone(&results);
 
             let (mut input, probe) = worker.dataflow::<u64, _, _>(|scope| {
                 let (input, collection) = scope.new_collection::<Row, Diff>();
@@ -294,7 +294,7 @@ mod tests {
     fn union_columnar_concatenates() {
         timely::execute_directly(|worker| {
             let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> = Rc::new(RefCell::new(Vec::new()));
-            let results_capture = results.clone();
+            let results_capture = Rc::clone(&results);
 
             let (mut input1, mut input2, probe) = worker.dataflow::<u64, _, _>(|scope| {
                 let (input1, collection1) = scope.new_collection::<Row, Diff>();
@@ -354,7 +354,7 @@ mod tests {
 
         timely::execute_directly(|worker| {
             let results: Rc<RefCell<Vec<(Row, u64, Diff)>>> = Rc::new(RefCell::new(Vec::new()));
-            let results_capture = results.clone();
+            let results_capture = Rc::clone(&results);
 
             let probe = worker.dataflow::<u64, _, _>(|scope| {
                 // Simulate the Constant operator: create rows from an iterator,
