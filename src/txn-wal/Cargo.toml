@@ -29,7 +29,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-crossbeam-channel = "0.5.15"
+crossbeam-channel.workspace = true
 rand = { workspace = true, features = ["small_rng"] }
 
 [build-dependencies]

@@ -10,10 +10,10 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-ropey = "1.6.1"
+ropey.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tower-lsp = { version = "0.20.0", features = ["proposed"]}
+tower-lsp.workspace = true
 serde.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-sql-parser = { path = "../sql-parser", default-features = false  }
@@ -23,7 +23,7 @@ regex.workspace = true
 mz-sql-pretty = { path = "../sql-pretty" }
 
 [dev-dependencies]
-httparse = "1.8.0"
+httparse.workspace = true
 
 [features]
 default = []

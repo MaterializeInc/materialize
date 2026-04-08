@@ -14,7 +14,7 @@ workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
-jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+jsonwebtoken.workspace = true
 mz-ore = { path = "../ore", default-features = false }
 reqwest.workspace = true
 openssl.workspace = true

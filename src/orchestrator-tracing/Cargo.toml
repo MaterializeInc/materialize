@@ -14,7 +14,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 clap = { workspace = true, features = ["env"] }
 derivative.workspace = true
-futures-core = "0.3.31"
+futures-core.workspace = true
 http.workspace = true
 humantime.workspace = true
 mz-build-info = { path = "../build-info", default-features = false }
@@ -23,12 +23,12 @@ mz-ore = { path = "../ore", default-features = false, features = ["tracing", "cl
 mz-repr = { path = "../repr", default-features = false, optional = true }
 mz-service = { path = "../service", default-features = false }
 mz-tracing = { path = "../tracing", default-features = false }
-sentry-tracing = { version = "0.46.1" }
+sentry-tracing.workspace = true
 tracing.workspace = true
-tracing-capture = { version = "0.1.0", optional = true }
+tracing-capture = { workspace = true, optional = true }
 tracing-subscriber.workspace = true
-opentelemetry = { version = "0.31.0", features = ["trace"] }
-opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["network", "test"] }

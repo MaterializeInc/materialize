@@ -12,8 +12,8 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 mz-ore = { path = "../ore", features = ["test"] }
-openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
-openssh-mux-client = "0.17.9"
+openssh.workspace = true
+openssh-mux-client.workspace = true
 openssl.workspace = true
 rand.workspace = true
 futures.workspace = true
@@ -21,13 +21,13 @@ itertools.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ssh-key = { version = "0.6.7" }
+ssh-key.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
-zeroize = { version = "1.8.2", features = ["serde"] }
+zeroize.workspace = true
 
 [features]
 default = []

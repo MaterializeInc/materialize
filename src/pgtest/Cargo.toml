@@ -14,7 +14,7 @@ anyhow.workspace = true
 bytes.workspace = true
 clap.workspace = true
 datadriven.workspace = true
-fallible-iterator = "0.2.0"
+fallible-iterator.workspace = true
 mz-ore = { path = "../ore", features = ["cli"] }
 postgres-protocol.workspace = true
 serde.workspace = true

@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 arrow.workspace = true
-async-stream = "0.3.6"
+async-stream.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
@@ -24,14 +24,14 @@ differential-dataflow.workspace = true
 enum-kinds.workspace = true
 fail.workspace = true
 futures.workspace = true
-governor = "0.10.1"
+governor.workspace = true
 hex.workspace = true
-imbl = { version = "7.0.0", features = ["serde"] }
+imbl.workspace = true
 http.workspace = true
 hyper-tls = "0.5.0"
-ipnet = "2.12.0"
+ipnet.workspace = true
 itertools.workspace = true
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
+launchdarkly-server-sdk.workspace = true
 maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
@@ -75,16 +75,16 @@ mz-tracing = { path = "../tracing" }
 mz-transform = { path = "../transform" }
 mz-timestamp-oracle = { path = "../timestamp-oracle", default-features = false }
 openssl.workspace = true
-opentelemetry = { version = "0.31.0", features = ["trace"] }
+opentelemetry.workspace = true
 prometheus.workspace = true
 prost.workspace = true
-qcell = "0.5"
+qcell.workspace = true
 rand.workspace = true
-rand_chacha = "0.9.0"
+rand_chacha.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_plain = "1.0.2"
+serde_plain.workspace = true
 sha2.workspace = true
 smallvec = { workspace = true, features = ["union"] }
 static_assertions.workspace = true
@@ -93,19 +93,19 @@ tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-stream.workspace = true
 tracing.workspace = true
-tracing-core = "0.1.35"
-tracing-opentelemetry = { version = "0.32.1" }
+tracing-core.workspace = true
+tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["async_tokio"] }
+criterion.workspace = true
 datadriven.workspace = true
 mz-persist = { path = "../persist", features = ["turmoil"] }
 mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
-turmoil = "0.7.1"
+turmoil.workspace = true
 
 [[bench]]
 name = "catalog"

@@ -10,22 +10,22 @@ publish = false
 workspace = true
 
 [dependencies]
-askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
+askama.workspace = true
 axum.workspace = true
-axum-extra = { version = "0.12.5", features = ["typed-header"] }
+axum-extra.workspace = true
 bytesize.workspace = true
-cfg-if = "1.0.4"
-headers = "0.4.1"
+cfg-if.workspace = true
+headers.workspace = true
 http.workspace = true
-include_dir = "0.7.4"
-mappings = "0.7.2"
-mime = "0.3.16"
+include_dir.workspace = true
+mappings.workspace = true
+mime.workspace = true
 mz-build-info = { path = "../build-info", default-features = false }
 mz-http-util = { path = "../http-util", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
 mz-prof = { path = "../prof", default-features = false }
-jemalloc_pprof = { version = "0.8.2", optional = true }
-pprof_util = "0.8.2"
+jemalloc_pprof = { workspace = true, optional = true }
+pprof_util.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing = { workspace = true, optional = true }

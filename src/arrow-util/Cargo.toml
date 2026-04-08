@@ -14,12 +14,12 @@ anyhow.workspace = true
 arrow.workspace = true
 chrono.workspace = true
 dec = { workspace = true, features = ["num-traits"] }
-half = "2"
+half.workspace = true
 itertools.workspace = true
 mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore" }
-num-traits = "0.2"
-ordered-float = { version = "5.1.0" }
+num-traits.workspace = true
+ordered-float.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

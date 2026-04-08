@@ -13,11 +13,11 @@ workspace = true
 anyhow.workspace = true
 flate2.workspace = true
 hex.workspace = true
-hex-literal = "1.1.0"
+hex-literal.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
-tar = "0.4.44"
-walkdir = "2.5.0"
+tar.workspace = true
+walkdir.workspace = true
 
 [features]
 default = []

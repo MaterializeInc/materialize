@@ -14,7 +14,7 @@ name = "cdc"
 
 [dependencies]
 anyhow.workspace = true
-async-stream = "0.3.3"
+async-stream.workspace = true
 base64.workspace = true
 chrono.workspace = true
 columnation.workspace = true
@@ -28,7 +28,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-ssh-util = { path = "../ssh-util" }
 mz-cloud-resources = { path = "../cloud-resources" }
-ordered-float = { version = "5.1.0", features = ["serde"] }
+ordered-float.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
@@ -36,7 +36,7 @@ serde.workspace = true
 smallvec = { workspace = true, features = ["union"] }
 static_assertions.workspace = true
 thiserror.workspace = true
-tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
+tiberius.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true

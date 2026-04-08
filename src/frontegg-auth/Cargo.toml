@@ -15,15 +15,15 @@ base64.workspace = true
 clap = { workspace = true, features = ["env", "wrap_help"] }
 derivative.workspace = true
 futures.workspace = true
-jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-lru = "0.16.3"
+jsonwebtoken.workspace = true
+lru.workspace = true
 mz-auth = { path = "../auth", default-features = false }
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
 prometheus.workspace = true
 reqwest.workspace = true
-reqwest-middleware = { version = "0.4.2", features = ["json"] }
-reqwest-retry = "0.8.0"
+reqwest-middleware.workspace = true
+reqwest-retry.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

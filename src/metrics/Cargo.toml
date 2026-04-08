@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-lgalloc = "0.6"
-libc = "0.2.184"
+lgalloc.workspace = true
+libc.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
 paste.workspace = true

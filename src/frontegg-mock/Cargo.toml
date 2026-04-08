@@ -12,12 +12,12 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-axum-extra = { version = "0.12.5", features = ["typed-header"] }
+axum-extra.workspace = true
 base64.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
-hyper = { version = "1.4.1", features = ["http1", "server"] }
-jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
+hyper.workspace = true
+jsonwebtoken.workspace = true
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
 serde.workspace = true

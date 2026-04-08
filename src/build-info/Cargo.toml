@@ -10,8 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
-buildid = "1.0.4"
-compile-time-run = "0.2.12"
+buildid.workspace = true
+compile-time-run.workspace = true
 hex.workspace = true
 semver = { workspace = true, optional = true }
 

@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-stream = "0.3.6"
+async-stream.workspace = true
 bytesize.workspace = true
 columnar.workspace = true
 dec = { workspace = true, features = ["serde"] }
@@ -20,7 +20,7 @@ differential-dogs3.workspace = true
 fail.workspace = true
 futures.workspace = true
 itertools.workspace = true
-lgalloc = "0.6"
+lgalloc.workspace = true
 mz-cluster = { path = "../cluster" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }

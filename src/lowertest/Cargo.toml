@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 mz-lowertest-derive = { path = "../lowertest-derive", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
-proc-macro2 = "1.0.106"
+proc-macro2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 itertools.workspace = true

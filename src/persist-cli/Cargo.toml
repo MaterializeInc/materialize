@@ -37,7 +37,7 @@ mz-repr = { path = "../repr" }
 mz-timestamp-oracle = { path = "../timestamp-oracle" }
 mz-txn-wal = { path = "../txn-wal" }
 num_cpus.workspace = true
-num_enum = "0.7.6"
+num_enum.workspace = true
 prometheus.workspace = true
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true

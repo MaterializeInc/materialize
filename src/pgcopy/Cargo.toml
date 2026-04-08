@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 bytes.workspace = true
-csv = "1.4.0"
+csv.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }

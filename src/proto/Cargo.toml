@@ -13,11 +13,11 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono = { workspace = true, optional = true }
-chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
-globset = "0.4.18"
+chrono-tz = { workspace = true, optional = true }
+globset.workspace = true
 http.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test", "overflowing"] }
-num = "0.4.3"
+num.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true

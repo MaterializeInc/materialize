@@ -16,7 +16,7 @@ harness = false
 
 [dependencies]
 anyhow.workspace = true
-byteorder = "1.4.3"
+byteorder.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
@@ -28,10 +28,10 @@ mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["network", "cli"] }
 mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
-ordered-float = { version = "5.1.0", features = ["serde"] }
+ordered-float.workspace = true
 prost.workspace = true
-prost-reflect = "0.16.3"
-seahash = "4"
+prost-reflect.workspace = true
+seahash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 timely.workspace = true
@@ -40,7 +40,7 @@ tracing.workspace = true
 uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["async_tokio"] }
+criterion.workspace = true
 tokio.workspace = true
 
 [build-dependencies]

@@ -11,14 +11,14 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-byteorder = "1.4.3"
+byteorder.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
 derivative.workspace = true
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
 tokio.workspace = true
-tokio-openssl = "0.6.5"
+tokio-openssl.workspace = true
 tokio-postgres.workspace = true
 tracing.workspace = true
 

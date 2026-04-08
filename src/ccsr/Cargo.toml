@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-native-tls = "0.2.14"
+native-tls.workspace = true
 openssl.workspace = true
 reqwest.workspace = true
 mz-tls-util = { path = "../tls-util" }
@@ -22,8 +22,8 @@ serde_json.workspace = true
 url = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-hyper = { version = "1.4.1", features = ["server"] }
-hyper-util = "0.1.20"
+hyper.workspace = true
+hyper-util.workspace = true
 mz-ore = { path = "../ore", features = ["async", "test"] }
 serde_json.workspace = true
 tokio.workspace = true

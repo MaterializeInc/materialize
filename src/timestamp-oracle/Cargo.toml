@@ -13,9 +13,9 @@ workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 dec.workspace = true
-deadpool-postgres = "0.10.3"
+deadpool-postgres.workspace = true
 futures.workspace = true
-futures-util = "0.3.31"
+futures-util.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }

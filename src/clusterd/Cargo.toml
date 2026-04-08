@@ -15,8 +15,8 @@ axum.workspace = true
 clap = { workspace = true, features = ["env"] }
 fail.workspace = true
 futures.workspace = true
-hyper = "1.4.1"
-hyper-util = "0.1.20"
+hyper.workspace = true
+hyper-util.workspace = true
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
@@ -38,15 +38,15 @@ mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
-nix = { version = "0.30.1", features = ["fs"] }
+nix.workspace = true
 num_cpus.workspace = true
 serde.workspace = true
 tokio.workspace = true
-tower = "0.5.3"
+tower.workspace = true
 tracing.workspace = true
 
 [build-dependencies]
-custom-labels = "0.4.6"
+custom-labels.workspace = true
 
 [features]
 default = ["tokio-console", "mz-alloc-default"]

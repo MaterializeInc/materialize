@@ -13,10 +13,10 @@ workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
-byteorder = "1.4.3"
+byteorder.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
-csv-core = "0.1.13"
+csv-core.workspace = true
 enum-kinds.workspace = true
 futures.workspace = true
 itertools.workspace = true
@@ -33,10 +33,10 @@ mz-repr = { path = "../repr" }
 mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
 openssl.workspace = true
-postgres = { version = "0.19.12" }
+postgres.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
-tokio-openssl = "0.6.5"
+tokio-openssl.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true
 tracing.workspace = true

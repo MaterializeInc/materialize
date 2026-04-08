@@ -29,15 +29,15 @@ harness = false
 
 [dependencies]
 anyhow.workspace = true
-arrayvec = "0.7.6"
+arrayvec.workspace = true
 arrow.workspace = true
-async-stream = "0.3.6"
+async-stream.workspace = true
 async-trait.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["env"] }
 differential-dataflow.workspace = true
 futures.workspace = true
-futures-util = "0.3"
+futures-util.workspace = true
 hex.workspace = true
 itertools.workspace = true
 mz-build-info = { path = "../build-info" }
@@ -61,15 +61,15 @@ timely.workspace = true
 tokio.workspace = true
 tokio-metrics.workspace = true
 tokio-stream = { workspace = true, features = ["sync"] }
-tonic = "0.14.2"
-tonic-prost = "0.14.5"
+tonic.workspace = true
+tonic-prost.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-criterion = { version = "0.8.2", features = ["html_reports"] }
+criterion.workspace = true
 datadriven = { workspace = true, features = ["async"] }
-futures-task = "0.3.31"
+futures-task.workspace = true
 num_cpus.workspace = true
 rand.workspace = true
 tempfile.workspace = true
@@ -77,7 +77,7 @@ tempfile.workspace = true
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build.workspace = true
-tonic-prost-build = "0.14.5"
+tonic-prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]

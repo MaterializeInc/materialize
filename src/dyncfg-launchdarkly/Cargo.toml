@@ -14,7 +14,7 @@ workspace = true
 anyhow.workspace = true
 humantime.workspace = true
 hyper-tls = "0.5.0"
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
+launchdarkly-server-sdk.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
