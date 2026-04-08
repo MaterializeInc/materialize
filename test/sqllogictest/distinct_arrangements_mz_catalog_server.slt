@@ -28,8 +28,14 @@ COMPLETE 0
 statement ok
 SET cluster TO mz_catalog_server
 
+# This sleep used to be 4s, which was enough when we only needed the introspection to catch up with dataflow creation.
+# However, https://github.com/MaterializeInc/materialize/pull/35819 introduced an arrangement on a constant relation,
+# and this arrangement disappears shortly after dataflow creation, which we also need to wait for.
+# If this flakes one more time, we are leaning towards deleting the whole file.
+# Another idea is to make this a `td`, but with a `count(*)`, to make manual rewriting easy. This would have the
+# drawback that the test then wouldn't be able to catch non-deterministic regressions.
 statement ok
-SELECT mz_unsafe.mz_sleep(4)
+SELECT mz_unsafe.mz_sleep(10)
 
 query TI
 SELECT mdod.name, count(*)
