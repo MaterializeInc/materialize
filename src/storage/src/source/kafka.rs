@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use chrono::{DateTime, NaiveDateTime};
 use differential_dataflow::{AsCollection, Hashable};
 use futures::StreamExt;
@@ -62,7 +61,7 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use timely::progress::Timestamp;
 use tokio::sync::{Notify, mpsc};
-use tracing::{error, info, trace};
+use tracing::{error, info, trace, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
@@ -1468,17 +1467,36 @@ fn fetch_partition_info<C: ConsumerContext>(
     let pids = get_partitions(consumer.client(), topic, fetch_timeout)?;
 
     let mut offset_requests = TopicPartitionList::with_capacity(pids.len());
-    for pid in pids {
-        offset_requests.add_partition_offset(topic, pid, Offset::End)?;
+    for pid in &pids {
+        offset_requests.add_partition_offset(topic, *pid, Offset::End)?;
     }
 
-    let offset_responses = consumer.offsets_for_times(offset_requests, fetch_timeout)?;
+    let offset_responses = match consumer.offsets_for_times(offset_requests, fetch_timeout) {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(
+                "offsets_for_times failed ({e}), using watermark 0 for all {} partitions",
+                pids.len()
+            );
+            let mut result = BTreeMap::new();
+            for pid in pids {
+                result.insert(pid, 0);
+            }
+            return Ok(result);
+        }
+    };
 
     let mut result = BTreeMap::new();
     for entry in offset_responses.elements() {
         let offset = match entry.offset() {
             Offset::Offset(offset) => offset,
-            offset => Err(anyhow!("unexpected high watermark offset: {offset:?}"))?,
+            offset => {
+                warn!(
+                    "partition {} has unexpected watermark {offset:?}, using 0",
+                    entry.partition()
+                );
+                0
+            }
         };
 
         let pid = entry.partition();

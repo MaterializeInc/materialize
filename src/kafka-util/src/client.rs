@@ -341,6 +341,19 @@ pub struct ConnectionRulePattern {
     pub suffix_wildcard: bool,
 }
 
+impl std::fmt::Display for ConnectionRulePattern {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.prefix_wildcard {
+            f.write_str("*")?;
+        }
+        f.write_str(&self.literal_match)?;
+        if self.suffix_wildcard {
+            f.write_str("*")?;
+        }
+        Ok(())
+    }
+}
+
 impl ConnectionRulePattern {
     /// Does this "{host}:{port}" address fit the pattern?
     pub fn matches(&self, address: &str) -> bool {
@@ -372,10 +385,19 @@ impl HostMappingRules {
         let address = format!("{}:{}", src.host, src.port);
         for (pattern, dst) in &self.rules {
             if pattern.matches(&address) {
-                return Some(dst.rewrite(src));
+                let result = dst.rewrite(src);
+                info!(
+                    "HostMappingRules: broker {}:{} matched pattern '{}' -> rewriting to {}:{}",
+                    src.host, src.port, pattern, result.host, result.port,
+                );
+                return Some(result);
             }
         }
 
+        warn!(
+            "HostMappingRules: broker {}:{} matched no rules, using original address",
+            src.host, src.port,
+        );
         None
     }
 }
