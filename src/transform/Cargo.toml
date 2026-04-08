@@ -10,19 +10,19 @@ publish = false
 workspace = true
 
 [dependencies]
-differential-dataflow = "0.22.0"
+differential-dataflow.workspace = true
 enum-kinds = "0.5.1"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-compute-types = { path = "../compute-types" }
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["differential-dataflow"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-sql = { path = "../sql" }
 ordered-float = { version = "5.1.0", features = ["serde"] }
-paste = "1.0.11"
+paste.workspace = true
 proptest = { version = "1.10.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0" }
-serde = "1.0.219"
+serde.workspace = true
 tracing = "0.1.44"
 
 [dev-dependencies]

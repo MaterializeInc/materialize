@@ -16,7 +16,7 @@ async-trait = "0.1.89"
 bincode = "1.3.3"
 clap = { version = "4.5.23", features = ["env", "derive"] }
 futures = "0.3.32"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-aws-secrets-controller = { path = "../aws-secrets-controller", default-features = false }
 mz-build-info = { path = "../build-info", default-features = false }
 mz-secrets = { path = "../secrets", default-features = false }
@@ -27,7 +27,7 @@ os_info = "3.11.0"
 pin-project = "1.1.11"
 prometheus = { version = "0.14.0", default-features = false }
 semver = { version = "1.0.27", features = ["serde"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 sysinfo = "0.29.11"
 tokio = "1.49.0"
 tokio-stream = "0.1.18"

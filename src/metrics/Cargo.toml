@@ -14,9 +14,9 @@ lgalloc = "0.6"
 libc = "0.2.184"
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
-paste = "1.0"
+paste.workspace = true
 prometheus = { version = "0.14.0", default-features = false }
-thiserror = "2.0.18"
+thiserror.workspace = true
 tokio = { version = "1.49.0", features = ["sync", "time"] }
 tokio-util = { version = "0.7.18" }
 tracing = "0.1.44"

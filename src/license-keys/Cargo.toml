@@ -17,7 +17,7 @@ required-features = ["signing"]
 [dependencies]
 anyhow = "1.0.102"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 
 aws-sdk-kms = { version = "1.96.0", default-features = false, features = ["rt-tokio"], optional = true }
 base64 = { version = "0.22.1", optional = true }

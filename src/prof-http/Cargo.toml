@@ -13,7 +13,7 @@ workspace = true
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 axum = "0.8.8"
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
-bytesize = "2.1.0"
+bytesize.workspace = true
 cfg-if = "1.0.4"
 headers = "0.4.1"
 http = "1.4.0"
@@ -26,7 +26,7 @@ mz-ore = { path = "../ore", default-features = false }
 mz-prof = { path = "../prof", default-features = false }
 jemalloc_pprof = { version = "0.8.2", optional = true }
 pprof_util = "0.8.2"
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 tokio = { version = "1.49.0", features = ["time"] }
 tracing = { version = "0.1.44", optional = true }
 

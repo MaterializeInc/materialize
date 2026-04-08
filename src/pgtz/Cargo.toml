@@ -12,11 +12,11 @@ workspace = true
 [dependencies]
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-itertools = "0.14.0"
+itertools.workspace = true
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 phf = { version = "0.13.1", default-features = false }
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 uncased = "0.9.7"
 
 [build-dependencies]

@@ -62,17 +62,20 @@ class Crate:
         self.path_build_dependencies: set[str] = set()
         self.path_dev_dependencies: set[str] = set()
         self.path_dependencies: set[str] = set()
+        self.non_workspace_deps: dict[str, list[str]] = {}
         for dep_type, field in [
             ("build-dependencies", self.path_build_dependencies),
             ("dev-dependencies", self.path_dev_dependencies),
             ("dependencies", self.path_dependencies),
         ]:
             if dep_type in config:
-                field.update(
-                    c.get("package", name)
-                    for name, c in config[dep_type].items()
-                    if "path" in c
-                )
+                for name, c in config[dep_type].items():
+                    if isinstance(c, dict) and "path" in c:
+                        field.add(c.get("package", name))
+                    elif isinstance(c, dict) and c.get("workspace"):
+                        pass
+                    else:
+                        self.non_workspace_deps.setdefault(name, []).append(dep_type)
         self.rust_version: str | None = None
         try:
             self.rust_version = str(config["package"]["rust-version"])
@@ -162,6 +165,9 @@ class Workspace:
         self.all_crates = self.crates | self.exclude
 
         self.default_members: list[str] = workspace_config.get("default-members", [])
+        self.workspace_dependencies: dict[str, object] = workspace_config.get(
+            "dependencies", {}
+        )
 
         self.rust_version: str | None = None
         try:

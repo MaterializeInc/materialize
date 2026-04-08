@@ -21,7 +21,7 @@ aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"]
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 arrow = { version = "57", default-features = false }
 bytes = { version = "1.11.1", features = ["serde"] }
-bytesize = "2.1.0"
+bytesize.workspace = true
 bincode = "1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
@@ -29,12 +29,12 @@ columnation = "0.1.2"
 crossbeam-channel = "0.5.15"
 csv-core = { version = "0.1.13" }
 dec = "0.4.8"
-differential-dataflow = "0.22.0"
+differential-dataflow.workspace = true
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.32"
 iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
-itertools = { version = "0.14.0" }
+itertools.workspace = true
 maplit = "1.0.2"
 mysql_async = { version = "0.36.2", default-features = false, features = ["minimal", "binlog"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
@@ -82,18 +82,18 @@ rdkafka = { version = "0.29.0", features = [
 regex = { version = "1.12.3" }
 rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 serde_json = { version = "1.0.149" }
 serde_bytes = { version = "0.11.19" }
 sha2 = "0.10.9"
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
-timely = "0.28.1"
+timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tokio-stream = "0.1.18"
 tokio-util = { version = "0.7.18", features = ["io"] }
 tracing = "0.1.44"
-thiserror = { version = "2.0.18" }
+thiserror.workspace = true
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 arrow-ipc = "57"
 
@@ -104,7 +104,7 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 humantime = "2.3.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
-itertools = "0.14.0"
+itertools.workspace = true
 tempfile = "3.23.0"
 tokio = { version = "1.49.0", features = ["test-util"] }
 

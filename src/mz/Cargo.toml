@@ -29,7 +29,7 @@ hyper = "1.4.1"
 reqwest = { version = "0.12.28", features = ["blocking", "json", "default-tls", "charset", "http2"], default-features = false }
 rpassword = "7.4.0"
 semver = "1.0.27"
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 serde-aux = "4.7.0"
 serde_json = "1.0.149"
 tabled = "0.20.0"
@@ -37,7 +37,7 @@ time = "0.3.17"
 tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.8.22"
 toml_edit = { version = "0.22.26", features = ["serde"] }
-thiserror = "2.0.18"
+thiserror.workspace = true
 uuid = "1.19.0"
 url = "2.5.8"
 

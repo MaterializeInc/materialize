@@ -15,12 +15,12 @@ arrow = { version = "57", default-features = false }
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 dec = { version = "0.4.9", features = ["num-traits"] }
 half = "2"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-repr = { path = "../repr" }
 mz-ore = { path = "../ore" }
 num-traits = "0.2"
 ordered-float = { version = "5.1.0" }
-serde = { version = "1.0.219" }
+serde.workspace = true
 serde_json = "1.0.149"
 uuid = "1.19.0"
 

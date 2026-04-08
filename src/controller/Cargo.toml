@@ -11,10 +11,10 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.102"
-bytesize = "2.1.0"
+bytesize.workspace = true
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 futures = "0.3.32"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-client = { path = "../compute-client" }
@@ -34,15 +34,15 @@ mz-storage-controller = { path = "../storage-controller" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
 regex = "1.12.3"
-serde = { version = "1.0.219", features = ["derive"] }
+serde.workspace = true
 serde_json = "1.0.149"
-timely = "0.28.1"
+timely.workspace = true
 tokio = "1.49.0"
 tracing = "0.1.44"
 uuid = { version = "1.19.0" }
 
 [dev-dependencies]
-bytesize = "2.1.0"
+bytesize.workspace = true
 
 [features]
 default = []

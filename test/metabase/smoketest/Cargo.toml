@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.102"
-itertools = "0.14.0"
+itertools.workspace = true
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["network", "async", "test"] }
 tokio = { version = "1.49.0", features = ["macros"] }
