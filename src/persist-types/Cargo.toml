@@ -15,7 +15,7 @@ workspace = true
 anyhow.workspace = true
 arrow.workspace = true
 bytes = { workspace = true, features = ["serde"] }
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 hex.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }

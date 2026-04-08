@@ -20,7 +20,7 @@ bench = false
 anyhow.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
-axum = "0.8.8"
+axum.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["env"] }
 differential-dataflow.workspace = true

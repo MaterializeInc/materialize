@@ -63,7 +63,7 @@ proptest-derive.workspace = true
 prost.workspace = true
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex.workspace = true
-reqwest = "0.12.28"
+reqwest.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true

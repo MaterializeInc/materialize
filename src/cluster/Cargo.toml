@@ -27,7 +27,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["turmoil"] }
-tracing-subscriber = "0.3.23"
+tracing-subscriber.workspace = true
 turmoil = "0.7.1"
 
 [package.metadata.cargo-udeps.ignore]

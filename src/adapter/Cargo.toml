@@ -17,7 +17,7 @@ async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 dec.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
@@ -95,7 +95,7 @@ tokio-stream.workspace = true
 tracing.workspace = true
 tracing-core = "0.1.35"
 tracing-opentelemetry = { version = "0.32.1" }
-tracing-subscriber = "0.3.23"
+tracing-subscriber.workspace = true
 thiserror.workspace = true
 url.workspace = true
 uuid.workspace = true

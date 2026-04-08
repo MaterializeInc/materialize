@@ -22,7 +22,7 @@ anyhow = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 bytemuck = { version = "1.23.1", optional = true }
 bytes = { workspace = true, optional = true }
-chrono = { version = "0.4.39", default-features = false, features = ["std"], optional = true }
+chrono = { workspace = true, optional = true }
 clap = { workspace = true, optional = true, features = ["env", "string"] }
 columnation = { workspace = true, optional = true }
 columnar = { workspace = true, optional = true }
@@ -63,12 +63,7 @@ tracing-capture = { version = "0.1.0", optional = true }
 # log lines we care about.
 # Note that this feature is distinct from `tracing`'s `log` feature, which has `tracing` macros emit `log` records if
 # there is no global `tracing` subscriber.
-tracing-subscriber = { version = "0.3.23", default-features = false, features = [
-    "env-filter",
-    "fmt",
-    "json",
-    "tracing-log",
-], optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true, features = ["v4", "v7"] }
 url = { workspace = true, features = ["serde"] }
 zeroize = { version = "1.8.2", features = ["derive", "serde"] }
@@ -99,7 +94,7 @@ scopeguard.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tokio-test = "0.4.5"
-tracing-subscriber = "0.3.23"
+tracing-subscriber.workspace = true
 
 [features]
 default = ["tokio-console"]

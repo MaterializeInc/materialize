@@ -16,7 +16,7 @@ aws-sdk-sts = { version = "1.41.0", default-features = false, features = [
     "rt-tokio",
 ] }
 bitflags = "1.3.2"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 clap.workspace = true
 derivative.workspace = true
 dynfmt = { version = "0.1.5", features = ["curly"] }
@@ -80,7 +80,7 @@ rdkafka = { version = "0.29.0", features = [
     "zstd",
 ] }
 regex.workspace = true
-reqwest = "0.12.28"
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 static_assertions.workspace = true
@@ -88,7 +88,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres = { workspace = true, features = ["serde"] }
 tracing.workspace = true
-tracing-subscriber = "0.3.23"
+tracing-subscriber.workspace = true
 uncased.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 

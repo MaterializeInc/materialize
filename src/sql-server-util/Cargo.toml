@@ -16,7 +16,7 @@ name = "cdc"
 anyhow.workspace = true
 async-stream = "0.3.3"
 base64.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 columnation.workspace = true
 dec.workspace = true
 derivative.workspace = true
@@ -45,7 +45,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-tracing-subscriber = "0.3.23"
+tracing-subscriber.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

@@ -12,10 +12,10 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-axum = "0.8.8"
+axum.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
 futures.workspace = true
@@ -50,14 +50,14 @@ tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true
 tower = "0.5.3"
 tracing.workspace = true
-tracing-subscriber = "0.3.23"
+tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
 mz-frontegg-mock = { path = "../frontegg-mock" }
 postgres = "0.19.12"
-reqwest = "0.12.28"
+reqwest.workspace = true
 tempfile.workspace = true
 
 [features]

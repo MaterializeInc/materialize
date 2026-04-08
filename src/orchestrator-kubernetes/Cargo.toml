@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-chrono = { version = "0.4.39", default-features = false }
+chrono.workspace = true
 clap.workspace = true
 fail.workspace = true
 futures.workspace = true
@@ -24,7 +24,7 @@ mz-secrets = { path = "../secrets", default-features = false }
 mz-repr = { path = "../repr", default-features = false }
 k8s-openapi = { version = "0.27.0", features = ["v1_32"] }
 kube = { version = "3.0.1", default-features = false, features = ["client", "runtime", "ws"] }
-reqwest = { version = "0.12.28", features = ["json"] }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

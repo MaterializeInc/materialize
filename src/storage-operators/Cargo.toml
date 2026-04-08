@@ -45,7 +45,7 @@ parquet = { version = "57", default-features = false, features = ["arrow", "asyn
 prometheus.workspace = true
 proptest.workspace = true
 prost.workspace = true
-reqwest = { version = "0.12.28", features = ["stream"] }
+reqwest.workspace = true
 sentry = { version = "0.46.1", default-features = false, features = [] }
 serde.workspace = true
 smallvec = { workspace = true, features = ["union"] }

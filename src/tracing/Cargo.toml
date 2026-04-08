@@ -13,7 +13,7 @@ workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["test", "tracing"] }
 serde.workspace = true
 tracing.workspace = true
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
+tracing-subscriber.workspace = true
 
 [features]
 default = []

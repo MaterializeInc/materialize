@@ -23,7 +23,7 @@ arrow.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 bytesize.workspace = true
 bincode = "1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 columnation.workspace = true
 crossbeam-channel = "0.5.15"
@@ -99,7 +99,7 @@ arrow-ipc = "57"
 
 [dev-dependencies]
 async-trait.workspace = true
-axum = "0.8.8"
+axum.workspace = true
 clap = { workspace = true, features = ["env"] }
 humantime.workspace = true
 mz-http-util = { path = "../http-util" }

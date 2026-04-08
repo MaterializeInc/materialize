@@ -13,7 +13,7 @@ workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 bytesize.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true

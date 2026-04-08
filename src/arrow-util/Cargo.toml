@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 arrow.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 dec = { workspace = true, features = ["num-traits"] }
 half = "2"
 itertools.workspace = true

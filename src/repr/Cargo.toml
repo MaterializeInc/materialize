@@ -34,7 +34,7 @@ bytes.workspace = true
 cfg-if = "1.0.4"
 columnar.workspace = true
 columnation.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+chrono.workspace = true
 compact_bytes = "0.2.1"
 dec = { workspace = true, features = ["serde"] }
 differential-dataflow.workspace = true
@@ -79,7 +79,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 # for the tracing feature
-tracing-subscriber = { version = "0.3.23", default-features = false, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 bincode = "1.3.3"

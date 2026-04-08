@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-axum = "0.8.8"
+axum.workspace = true
 clap.workspace = true
 futures.workspace = true
 http.workspace = true
@@ -33,7 +33,7 @@ mz-prof-http = { path = "../prof-http", default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
 prometheus.workspace = true
 rand.workspace = true
-reqwest = { version = "0.12.28", features = ["cookies", "json"] }
+reqwest.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true

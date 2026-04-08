@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-axum = "0.8.8"
+axum.workspace = true
 clap = { workspace = true, features = ["env"] }
 fail.workspace = true
 futures.workspace = true

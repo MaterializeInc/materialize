@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 bytesize.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 futures.workspace = true
 itertools.workspace = true
 mz-build-info = { path = "../build-info" }
