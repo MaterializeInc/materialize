@@ -6363,7 +6363,7 @@ pub static MZ_DATAFLOWS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     sql: "
 SELECT id, name
 FROM mz_introspection.mz_dataflows_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6381,6 +6381,7 @@ pub static MZ_DATAFLOW_ADDRESSES: LazyLock<BuiltinView> = LazyLock::new(|| Built
             }
             .nullable(false),
         )
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -6395,7 +6396,7 @@ pub static MZ_DATAFLOW_ADDRESSES: LazyLock<BuiltinView> = LazyLock::new(|| Built
     sql: "
 SELECT id, address
 FROM mz_introspection.mz_dataflow_addresses_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6410,6 +6411,7 @@ pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
         .with_column("to_index", SqlScalarType::UInt64.nullable(false))
         .with_column("to_port", SqlScalarType::UInt64.nullable(false))
         .with_column("type", SqlScalarType::String.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the channel."),
@@ -6428,7 +6430,7 @@ pub static MZ_DATAFLOW_CHANNELS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     sql: "
 SELECT id, from_index, from_port, to_index, to_port, type
 FROM mz_introspection.mz_dataflow_channels_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6439,6 +6441,7 @@ pub static MZ_DATAFLOW_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| Built
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::UInt64.nullable(false))
         .with_column("name", SqlScalarType::String.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the operator."),
@@ -6447,7 +6450,7 @@ pub static MZ_DATAFLOW_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(|| Built
     sql: "
 SELECT id, name
 FROM mz_introspection.mz_dataflow_operators_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6458,6 +6461,7 @@ pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::UInt64.nullable(false))
         .with_column("global_id", SqlScalarType::String.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The dataflow ID."),
@@ -6466,7 +6470,7 @@ pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     sql: "
 SELECT id, global_id
 FROM mz_introspection.mz_compute_dataflow_global_ids_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6507,6 +6511,7 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
         .with_column("nesting", SqlScalarType::UInt16.nullable(false))
         .with_column("operator_id_start", SqlScalarType::UInt64.nullable(false))
         .with_column("operator_id_end", SqlScalarType::UInt64.nullable(false))
+        .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("global_id", "The global ID."),
@@ -6532,7 +6537,7 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     sql: "
 SELECT global_id, lir_id, operator, parent_lir_id, nesting, operator_id_start, operator_id_end
 FROM mz_introspection.mz_compute_lir_mapping_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6595,7 +6600,7 @@ pub static MZ_DATAFLOW_OPERATOR_DATAFLOWS: LazyLock<BuiltinView> = LazyLock::new
     sql: "
 SELECT id, name, dataflow_id, dataflow_name
 FROM mz_introspection.mz_dataflow_operator_dataflows_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6641,6 +6646,7 @@ pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     desc: RelationDesc::builder()
         .with_column("export_id", SqlScalarType::String.nullable(false))
         .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -6655,7 +6661,7 @@ pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     sql: "
 SELECT export_id, dataflow_id
 FROM mz_introspection.mz_compute_exports_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -6805,7 +6811,7 @@ pub static MZ_DATAFLOW_CHANNEL_OPERATORS: LazyLock<BuiltinView> = LazyLock::new(
     sql: "
 SELECT id, from_operator_id, from_operator_address, to_operator_id, to_operator_address, type
 FROM mz_introspection.mz_dataflow_channel_operators_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -8812,6 +8818,7 @@ pub static MZ_ACTIVE_PEEKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
         .with_column("object_id", SqlScalarType::String.nullable(false))
         .with_column("type", SqlScalarType::String.nullable(false))
         .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the peek request."),
@@ -8828,7 +8835,7 @@ pub static MZ_ACTIVE_PEEKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     sql: "
 SELECT id, object_id, type, time
 FROM mz_introspection.mz_active_peeks_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -9135,6 +9142,7 @@ pub static MZ_ARRANGEMENT_SHARING: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     desc: RelationDesc::builder()
         .with_column("operator_id", SqlScalarType::UInt64.nullable(false))
         .with_column("count", SqlScalarType::Int64.nullable(false))
+        .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -9149,7 +9157,7 @@ pub static MZ_ARRANGEMENT_SHARING: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     sql: "
 SELECT operator_id, count
 FROM mz_introspection.mz_arrangement_sharing_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -9312,7 +9320,7 @@ pub static MZ_DATAFLOW_OPERATOR_PARENTS: LazyLock<BuiltinView> = LazyLock::new(|
     sql: "
 SELECT id, parent_id
 FROM mz_introspection.mz_dataflow_operator_parents_per_worker
-WHERE worker_id = 0",
+WHERE worker_id = 0::uint8",
     access: vec![PUBLIC_SELECT],
 });
 
