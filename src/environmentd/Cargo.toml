@@ -20,14 +20,14 @@ axum-extra = { version = "0.12.5", features = ["typed-header"] }
 base64.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
-chrono.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { workspace = true, features = ["env", "wrap_help"] }
 derivative.workspace = true
 fail.workspace = true
 futures.workspace = true
 headers = "0.4.1"
 http.workspace = true
-humantime = "2.3.0"
+humantime.workspace = true
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-tls = "0.6.0"
@@ -99,18 +99,18 @@ rand.workspace = true
 regex = { workspace = true, optional = true }
 reqwest = { version = "0.12.28", features = ["json"] }
 rlimit = "0.11.0"
-semver = "1.0.27"
+semver.workspace = true
 sentry-tracing = "0.46.1"
 serde.workspace = true
 serde_json.workspace = true
 shell-words = "1.1.1"
 stacker = "0.1.23"
 sysctl = "0.7.1"
-tempfile = "3.23.0"
+tempfile.workspace = true
 thiserror.workspace = true
 tokio = { version = "1.49.0", features = ["sync"] }
-tokio-postgres = { version = "0.7.15" }
-tokio-stream = { version = "0.1.18", features = ["net"] }
+tokio-postgres.workspace = true
+tokio-stream = { workspace = true, features = ["net"] }
 tokio-metrics.workspace = true
 tower = { version = "0.5.3", features = ["buffer", "limit", "load-shed"] }
 tower-http = { version = "0.6.7", features = [
@@ -133,7 +133,7 @@ uuid.workspace = true
 [dev-dependencies]
 assert_cmd = "2.1.2"
 bytes.workspace = true
-datadriven = "0.9.0"
+datadriven.workspace = true
 fallible-iterator = "0.2.0"
 flate2.workspace = true
 http-body-util = "0.1.3"
@@ -162,7 +162,7 @@ serde_json.workspace = true
 serde_urlencoded = "0.7.1"
 similar-asserts = "1.7"
 timely.workspace = true
-tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-serde_json-1"] }
 
 [build-dependencies]
 anyhow.workspace = true

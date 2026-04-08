@@ -26,12 +26,12 @@ aho-corasick = "1.1.4"
 anyhow.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
-chrono.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 crc32fast = "1.4.2"
 csv = "1.4.0"
 differential-dataflow.workspace = true
-dec = "0.4.8"
+dec.workspace = true
 derivative.workspace = true
 encoding = "0.2.0"
 enum-iterator = "2.1.0"
@@ -63,7 +63,7 @@ seahash = "4.1.0"
 serde.workspace = true
 serde_json.workspace = true
 sha1 = "0.10.6"
-sha2 = "0.10.9"
+sha2.workspace = true
 subtle = "2.6.1"
 tracing.workspace = true
 uncased.workspace = true
@@ -71,11 +71,11 @@ unicode-normalization = "0.1.25"
 uuid = { workspace = true, features = ["v5"] }
 proptest.workspace = true
 proptest-derive.workspace = true
-smallvec = { version = "1.15.1" }
+smallvec.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.8.2" }
-datadriven = "0.9.0"
+datadriven.workspace = true
 insta = "1.45"
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }

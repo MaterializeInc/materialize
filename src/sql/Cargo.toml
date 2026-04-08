@@ -16,7 +16,7 @@ aws-sdk-sts = { version = "1.41.0", default-features = false, features = [
     "rt-tokio",
 ] }
 bitflags = "1.3.2"
-chrono.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap.workspace = true
 derivative.workspace = true
 dynfmt = { version = "0.1.5", features = ["curly"] }
@@ -86,14 +86,14 @@ serde_json.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
 tokio = { version = "1.49.0", features = ["fs"] }
-tokio-postgres = { version = "0.7.15", features = ["serde"] }
+tokio-postgres = { workspace = true, features = ["serde"] }
 tracing.workspace = true
 tracing-subscriber = "0.3.23"
 uncased.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
-datadriven = "0.9.0"
+datadriven.workspace = true
 mz-lowertest = { path = "../lowertest" }
 
 [features]

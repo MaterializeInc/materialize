@@ -30,7 +30,7 @@ harness = false
 [dependencies]
 anyhow.workspace = true
 arrayvec = "0.7.6"
-arrow = { version = "57", default-features = false }
+arrow.workspace = true
 async-stream = "0.3.6"
 async-trait.workspace = true
 bytes = { workspace = true, features = ["serde"] }
@@ -54,13 +54,13 @@ prometheus.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
-semver = { version = "1.0.27", features = ["serde"] }
+semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tokio-metrics.workspace = true
-tokio-stream = { version = "0.1.18", features = ["sync"] }
+tokio-stream = { workspace = true, features = ["sync"] }
 tonic = "0.14.2"
 tonic-prost = "0.14.5"
 tracing.workspace = true
@@ -68,11 +68,11 @@ uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
-datadriven = { version = "0.9.0", features = ["async"] }
+datadriven = { workspace = true, features = ["async"] }
 futures-task = "0.3.31"
 num_cpus.workspace = true
 rand.workspace = true
-tempfile = "3.23.0"
+tempfile.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

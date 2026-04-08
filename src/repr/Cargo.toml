@@ -27,16 +27,16 @@ harness = false
 
 [dependencies]
 anyhow.workspace = true
-arrow = { version = "57", default-features = false }
+arrow.workspace = true
 bitflags = "1.3.2"
 bytemuck = { version = "1.23.1", features = ["latest_stable_rust"] }
 bytes.workspace = true
 cfg-if = "1.0.4"
 columnar.workspace = true
 columnation.workspace = true
-chrono = { workspace = true, features = ["serde"] }
+chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
 compact_bytes = "0.2.1"
-dec = { version = "0.4.8", features = ["serde"] }
+dec = { workspace = true, features = ["serde"] }
 differential-dataflow.workspace = true
 enum-kinds.workspace = true
 hex.workspace = true
@@ -65,11 +65,11 @@ regex.workspace = true
 ryu = "1.0.23"
 serde.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision", "preserve_order"] }
-smallvec = { version = "1.15.1", features = ["serde", "union"] }
+smallvec = { workspace = true, features = ["serde", "union"] }
 static_assertions.workspace = true
 strsim = "0.11.1"
 timely.workspace = true
-tokio-postgres = { version = "0.7.15" }
+tokio-postgres.workspace = true
 tracing-core = "0.1.35"
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }

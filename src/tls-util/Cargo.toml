@@ -17,7 +17,7 @@ openssl-sys = { version = "0.9.108", features = ["vendored"] }
 postgres-openssl = { version = "0.5.2" }
 thiserror.workspace = true
 tokio = { version = "1.49.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
-tokio-postgres = { version = "0.7.15" }
+tokio-postgres.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

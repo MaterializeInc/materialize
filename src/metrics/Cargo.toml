@@ -18,7 +18,7 @@ paste.workspace = true
 prometheus.workspace = true
 thiserror.workspace = true
 tokio = { version = "1.49.0", features = ["sync", "time"] }
-tokio-util = { version = "0.7.18" }
+tokio-util.workspace = true
 tracing.workspace = true
 
 [features]

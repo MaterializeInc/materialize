@@ -31,7 +31,7 @@ prost = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync"] }
-tokio-postgres = { version = "0.7.15" }
+tokio-postgres.workspace = true
 tracing.workspace = true
 
 [features]

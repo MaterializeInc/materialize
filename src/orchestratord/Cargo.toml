@@ -34,13 +34,13 @@ mz-server-core = { path = "../server-core", default-features = false }
 prometheus.workspace = true
 rand.workspace = true
 reqwest = { version = "0.12.28", features = ["cookies", "json"] }
-semver = "1.0.27"
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10.9"
+sha2.workspace = true
 thiserror.workspace = true
 tokio = "1.49.0"
-tokio-postgres = "0.7.15"
+tokio-postgres.workspace = true
 tower-http = "0.6.7"
 tracing.workspace = true
 urlencoding = "2.1.3"

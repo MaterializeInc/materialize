@@ -13,7 +13,7 @@ workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
-chrono.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 derivative.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
@@ -40,8 +40,8 @@ serde.workspace = true
 serde_json.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util", "time"] }
-tokio-postgres = { version = "0.7.15", features = ["serde"] }
-tokio-stream = "0.1.18"
+tokio-postgres = { workspace = true, features = ["serde"] }
+tokio-stream.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 

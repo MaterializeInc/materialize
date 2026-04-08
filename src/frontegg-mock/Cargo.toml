@@ -14,7 +14,7 @@ anyhow.workspace = true
 axum = "0.8.8"
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 base64.workspace = true
-chrono = { workspace = true, default-features = false, features = ["serde"] }
+chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
 clap = { workspace = true, features = ["env"] }
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }

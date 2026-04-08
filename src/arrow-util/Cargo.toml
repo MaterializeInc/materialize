@@ -11,9 +11,9 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-arrow = { version = "57", default-features = false }
-chrono.workspace = true
-dec = { version = "0.4.9", features = ["num-traits"] }
+arrow.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+dec = { workspace = true, features = ["num-traits"] }
 half = "2"
 itertools.workspace = true
 mz-repr = { path = "../repr" }

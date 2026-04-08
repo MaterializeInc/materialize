@@ -16,7 +16,7 @@ pretty = "0.12.5"
 thiserror.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-datadriven = "0.9.0"
+datadriven.workspace = true
 mz-sql-parser = { path = "../sql-parser", features = ["test"] }
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 

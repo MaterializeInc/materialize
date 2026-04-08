@@ -22,7 +22,7 @@ anyhow = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 bytemuck = { version = "1.23.1", optional = true }
 bytes = { workspace = true, optional = true }
-chrono = { workspace = true, optional = true }
+chrono = { version = "0.4.39", default-features = false, features = ["std"], optional = true }
 clap = { workspace = true, optional = true, features = ["env", "string"] }
 columnation = { workspace = true, optional = true }
 columnar = { workspace = true, optional = true }
@@ -48,7 +48,7 @@ prometheus = { workspace = true, optional = true }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
-smallvec = { version = "1.15.1", optional = true }
+smallvec = { workspace = true, optional = true }
 stacker = { version = "0.1.23", optional = true }
 sentry = { version = "0.46.1", optional = true, default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
 sentry-panic = { version = "0.46.1", optional = true }

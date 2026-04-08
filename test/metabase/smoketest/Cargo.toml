@@ -15,5 +15,5 @@ itertools.workspace = true
 mz-metabase = { path = "../../../src/metabase" }
 mz-ore = { path = "../../../src/ore", features = ["network", "async", "test"] }
 tokio = { version = "1.49.0", features = ["macros"] }
-tokio-postgres = { version = "0.7.15" }
+tokio-postgres.workspace = true
 tracing.workspace = true

@@ -12,8 +12,8 @@ workspace = true
 [dependencies]
 byteorder = "1.4.3"
 bytes.workspace = true
-chrono.workspace = true
-dec = "0.4.8"
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+dec.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", default-features = false }
 mz-pgrepr-consts = { path = "../pgrepr-consts", default-features = false }

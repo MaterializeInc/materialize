@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-humantime = "2.3.0"
+humantime.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore" }
 serde_json.workspace = true
@@ -20,7 +20,7 @@ tokio = { version = "1.49.0", features = ["fs"] }
 tracing.workspace = true
 
 [dev-dependencies]
-tempfile = "3.23"
+tempfile.workspace = true
 
 [features]
 default = []

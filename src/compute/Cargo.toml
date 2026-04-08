@@ -14,7 +14,7 @@ anyhow.workspace = true
 async-stream = "0.3.6"
 bytesize.workspace = true
 columnar.workspace = true
-dec = { version = "0.4.8", features = ["serde"] }
+dec = { workspace = true, features = ["serde"] }
 differential-dataflow.workspace = true
 differential-dogs3.workspace = true
 fail.workspace = true
@@ -40,7 +40,7 @@ mz-txn-wal = { path = "../txn-wal" }
 prometheus.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
-smallvec = { version = "1.15.1", features = ["serde", "union"] }
+smallvec = { workspace = true, features = ["serde", "union"] }
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "net"] }
 tracing.workspace = true

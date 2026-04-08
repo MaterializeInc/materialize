@@ -19,16 +19,16 @@ async-stream = "0.3.6"
 async-trait.workspace = true
 aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-arrow = { version = "57", default-features = false }
+arrow.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 bytesize.workspace = true
 bincode = "1"
-chrono.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { workspace = true, features = ["env"] }
 columnation.workspace = true
 crossbeam-channel = "0.5.15"
 csv-core = { version = "0.1.13" }
-dec = "0.4.8"
+dec.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true
 futures.workspace = true
@@ -85,13 +85,13 @@ seahash = "4"
 serde.workspace = true
 serde_json.workspace = true
 serde_bytes = { version = "0.11.19" }
-sha2 = "0.10.9"
+sha2.workspace = true
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { version = "0.7.15", features = ["serde"] }
-tokio-stream = "0.1.18"
-tokio-util = { version = "0.7.18", features = ["io"] }
+tokio-postgres = { workspace = true, features = ["serde"] }
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true
 thiserror.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
@@ -101,11 +101,11 @@ arrow-ipc = "57"
 async-trait.workspace = true
 axum = "0.8.8"
 clap = { workspace = true, features = ["env"] }
-humantime = "2.3.0"
+humantime.workspace = true
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools.workspace = true
-tempfile = "3.23.0"
+tempfile.workspace = true
 tokio = { version = "1.49.0", features = ["test-util"] }
 
 [features]

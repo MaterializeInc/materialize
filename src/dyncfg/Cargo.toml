@@ -11,7 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
-humantime = "2.3.0"
+humantime.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
 serde = { workspace = true, features = ["rc"] }
 serde_json.workspace = true

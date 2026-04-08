@@ -23,7 +23,7 @@ bench = false
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
 anyhow.workspace = true
-arrow = { version = "57", default-features = false }
+arrow.workspace = true
 async-trait.workspace = true
 async-stream = "0.3.6"
 aws-config = { version = "1.8.15", default-features = false }
@@ -64,7 +64,7 @@ serde.workspace = true
 serde_json = { workspace = true, optional = true }
 timely.workspace = true
 tokio = { version = "1.49.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
-tokio-postgres = { version = "0.7.15" }
+tokio-postgres.workspace = true
 tracing.workspace = true
 turmoil = { version = "0.7.1", optional = true }
 url.workspace = true
@@ -75,13 +75,13 @@ uuid = { workspace = true, features = ["v4"] }
 # `asm` feature is enabled since computing SHA256 hashes is taking a
 # significant amount of CPU time when uploading data to S3
 [dependencies.sha2]
-version = "0.10.9"
+workspace = true
 features = ["asm"]
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json.workspace = true
-tempfile = "3.23.0"
+tempfile.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

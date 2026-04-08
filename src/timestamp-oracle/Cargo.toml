@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-dec = "0.4.8"
+dec.workspace = true
 deadpool-postgres = "0.10.3"
 futures.workspace = true
 futures-util = "0.3.31"

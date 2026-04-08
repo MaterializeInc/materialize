@@ -15,11 +15,11 @@ async-trait.workspace = true
 axum = "0.8.8"
 bytes.workspace = true
 bytesize.workspace = true
-chrono.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { workspace = true, features = ["env"] }
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
 futures.workspace = true
-humantime = "2.3.0"
+humantime.workspace = true
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
@@ -42,11 +42,11 @@ num_cpus.workspace = true
 openssl.workspace = true
 prometheus.workspace = true
 proxy-header = "0.1.2"
-semver = "1.0.27"
+semver.workspace = true
 tokio = { version = "1.49.0", default-features = false }
 tokio-openssl = "0.6.5"
-tokio-postgres = { version = "0.7.15" }
-tokio-util = { version = "0.7.18", features = ["codec"] }
+tokio-postgres.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true
 tower = "0.5.3"
 tracing.workspace = true
@@ -58,7 +58,7 @@ mz-environmentd = { path = "../environmentd", default-features = false, features
 mz-frontegg-mock = { path = "../frontegg-mock" }
 postgres = "0.19.12"
 reqwest = "0.12.28"
-tempfile = "3.23.0"
+tempfile.workspace = true
 
 [features]
 default = ["mz-alloc-default"]

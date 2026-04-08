@@ -26,11 +26,11 @@ mz-ore = { path = "../ore", default-features = false }
 os_info = "3.11.0"
 pin-project.workspace = true
 prometheus.workspace = true
-semver = { version = "1.0.27", features = ["serde"] }
+semver = { workspace = true, features = ["serde"] }
 serde.workspace = true
 sysinfo = "0.29.11"
 tokio = "1.49.0"
-tokio-stream = "0.1.18"
+tokio-stream.workspace = true
 tracing.workspace = true
 sentry-tracing = "0.46.1"
 

@@ -15,7 +15,7 @@ harness = false
 
 [dependencies]
 anyhow.workspace = true
-arrow = { version = "57", default-features = false }
+arrow.workspace = true
 async-trait.workspace = true
 aws-config = { version = "1.8.15", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.8", features = ["hardcoded-credentials"] }
@@ -23,7 +23,7 @@ aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-to
 aws-types.workspace = true
 bytes.workspace = true
 columnation.workspace = true
-dec = "0.4.8"
+dec.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
 hex.workspace = true
@@ -70,7 +70,7 @@ thiserror.workspace = true
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util", "time"] }
-tokio-postgres = { version = "0.7.15", features = ["serde"] }
+tokio-postgres = { workspace = true, features = ["serde"] }
 tracing.workspace = true
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde", "v4"] }

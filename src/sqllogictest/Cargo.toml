@@ -12,9 +12,9 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 bytes.workspace = true
-chrono.workspace = true
+chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap.workspace = true
-dec = "0.4.8"
+dec.workspace = true
 fallible-iterator = "0.2.0"
 futures.workspace = true
 itertools.workspace = true
@@ -48,16 +48,16 @@ regex.workspace = true
 reqwest = { version = "0.12.28", features = ["json"] }
 shell-words = "1.1.1"
 serde_json.workspace = true
-tempfile = "3.23.0"
+tempfile.workspace = true
 time = "0.3.17"
 tracing.workspace = true
 tokio = "1.49.0"
-tokio-postgres = { version = "0.7.15", features = [
+tokio-postgres = { workspace = true, features = [
     "with-chrono-0_4",
     "with-uuid-1",
     "with-serde_json-1",
 ] }
-tokio-stream = { version = "0.1.18", features = ["net"] }
+tokio-stream = { workspace = true, features = ["net"] }
 tower-http = { version = "0.6.7", features = ["cors"] }
 uuid.workspace = true
 walkdir = "2.5.0"

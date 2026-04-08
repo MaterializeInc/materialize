@@ -13,7 +13,7 @@ workspace = true
 buildid = "1.0.4"
 compile-time-run = "0.2.12"
 hex.workspace = true
-semver = { version = "1.0.27", optional = true }
+semver = { workspace = true, optional = true }
 
 [features]
 default = ["semver"]

@@ -21,7 +21,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
-datadriven = "0.9.0"
+datadriven.workspace = true
 
 [features]
 default = []

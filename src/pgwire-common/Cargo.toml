@@ -19,7 +19,7 @@ mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
 tokio = "1.49.0"
 tokio-openssl = "0.6.5"
-tokio-postgres = { version = "0.7.15" }
+tokio-postgres.workspace = true
 tracing.workspace = true
 
 [features]

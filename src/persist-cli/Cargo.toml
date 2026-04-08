@@ -18,14 +18,14 @@ bench = false
 
 [dependencies]
 anyhow.workspace = true
-arrow = { version = "57", default-features = false }
+arrow.workspace = true
 async-trait.workspace = true
 axum = "0.8.8"
 bytes = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["env"] }
 differential-dataflow.workspace = true
 futures.workspace = true
-humantime = "2.3.0"
+humantime.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }

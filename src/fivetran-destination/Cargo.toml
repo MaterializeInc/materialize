@@ -26,15 +26,15 @@ prost.workspace = true
 prost-types = { version = "0.14.3" }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10.9"
+sha2.workspace = true
 socket2 = "0.6.0"
 thiserror.workspace = true
 tonic = { version = "0.14.2", features = ["gzip"] }
 tonic-prost = "0.14.5"
 tokio = { version = "1.49.0", features = ["rt"] }
-tokio-postgres = { version = "0.7.15" }
-tokio-stream = { version = "0.1.18", features = ["net"] }
-tokio-util = { version = "0.7.18", features = ["io"] }
+tokio-postgres.workspace = true
+tokio-stream = { workspace = true, features = ["net"] }
+tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true
 tracing-core = "0.1.35"
 tracing-subscriber = "0.3.23"

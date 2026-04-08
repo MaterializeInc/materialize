@@ -16,7 +16,7 @@ clap = { workspace = true, features = ["env"] }
 derivative.workspace = true
 futures-core = "0.3.31"
 http.workspace = true
-humantime = { version = "2.3.0" }
+humantime.workspace = true
 mz-build-info = { path = "../build-info", default-features = false }
 mz-orchestrator = { path = "../orchestrator", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["tracing", "cli", "test"] }
