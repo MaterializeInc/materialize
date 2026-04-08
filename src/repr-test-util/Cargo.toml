@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+chrono.workspace = true
 itertools.workspace = true
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
@@ -18,7 +18,7 @@ mz-repr = { path = "../repr" }
 proc-macro2 = "1.0.106"
 
 [dev-dependencies]
-datadriven = "0.9.0"
+datadriven.workspace = true
 
 [features]
 default = []

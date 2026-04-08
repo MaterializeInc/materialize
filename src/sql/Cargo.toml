@@ -10,26 +10,26 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 array-concat = "0.5.5"
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = [
     "rt-tokio",
 ] }
 bitflags = "1.3.2"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive"] }
-derivative = "2.2.0"
+chrono.workspace = true
+clap.workspace = true
+derivative.workspace = true
 dynfmt = { version = "0.1.5", features = ["curly"] }
-enum-kinds = "0.5.1"
-fail = { version = "0.5.1", features = ["failpoints"] }
+enum-kinds.workspace = true
+fail.workspace = true
 globset = "0.4.18"
-hex = "0.4.3"
-http = "1.4.0"
+hex.workspace = true
+http.workspace = true
 iceberg = "0.7.0"
 imbl = { version = "7.0.0", features = ["serde"] }
 ipnet = "2.12.0"
 itertools.workspace = true
-maplit = "1.0.2"
+maplit.workspace = true
 mysql_async = { version = "0.36.2", default-features = false, features = [
     "minimal",
 ] }
@@ -68,32 +68,32 @@ mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing" }
 mz-txn-wal = { path = "../txn-wal" }
 paste.workspace = true
-prometheus = { version = "0.14.0", default-features = false }
+prometheus.workspace = true
 protobuf-native = "0.3.3"
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+prost.workspace = true
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",
     "libz-static",
     "zstd",
 ] }
-regex = "1.12.3"
-reqwest = "0.12.28"
+regex.workspace = true
+reqwest.workspace = true
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 static_assertions.workspace = true
 thiserror.workspace = true
-tokio = { version = "1.49.0", features = ["fs"] }
-tokio-postgres = { version = "0.7.15", features = ["serde"] }
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
-uncased = "0.9.7"
-uuid = { version = "1.19.0", features = ["serde", "v4"] }
+tokio.workspace = true
+tokio-postgres = { workspace = true, features = ["serde"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uncased.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [dev-dependencies]
-datadriven = "0.9.0"
+datadriven.workspace = true
 mz-lowertest = { path = "../lowertest" }
 
 [features]

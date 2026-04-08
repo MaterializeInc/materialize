@@ -14,28 +14,28 @@ name = "upsert_open_loop"
 bench = false
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 async-stream = "0.3.6"
-async-trait = "0.1.89"
+async-trait.workspace = true
 aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-arrow = { version = "57", default-features = false }
-bytes = { version = "1.11.1", features = ["serde"] }
+arrow.workspace = true
+bytes = { workspace = true, features = ["serde"] }
 bytesize.workspace = true
 bincode = "1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
-columnation = "0.1.2"
+chrono.workspace = true
+clap = { workspace = true, features = ["env"] }
+columnation.workspace = true
 crossbeam-channel = "0.5.15"
 csv-core = { version = "0.1.13" }
-dec = "0.4.8"
+dec.workspace = true
 differential-dataflow.workspace = true
-fail = { version = "0.5.1", features = ["failpoints"] }
-futures = "0.3.32"
+fail.workspace = true
+futures.workspace = true
 iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools.workspace = true
-maplit = "1.0.2"
+maplit.workspace = true
 mysql_async = { version = "0.36.2", default-features = false, features = ["minimal", "binlog"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
 mz-arrow-util = { path = "../arrow-util" }
@@ -66,10 +66,10 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 parquet = { version = "57", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
-pin-project = "1.1.11"
+pin-project.workspace = true
 postgres-replication = { version = "0.6.7" }
-prometheus = { version = "0.14.0", default-features = false }
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+prometheus.workspace = true
+prost.workspace = true
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
 rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
@@ -79,34 +79,34 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-regex = { version = "1.12.3" }
+regex.workspace = true
 rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
 serde.workspace = true
-serde_json = { version = "1.0.149" }
+serde_json.workspace = true
 serde_bytes = { version = "0.11.19" }
-sha2 = "0.10.9"
+sha2.workspace = true
 tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
 timely.workspace = true
-tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { version = "0.7.15", features = ["serde"] }
-tokio-stream = "0.1.18"
-tokio-util = { version = "0.7.18", features = ["io"] }
-tracing = "0.1.44"
+tokio.workspace = true
+tokio-postgres = { workspace = true, features = ["serde"] }
+tokio-stream.workspace = true
+tokio-util = { workspace = true, features = ["io"] }
+tracing.workspace = true
 thiserror.workspace = true
-uuid = { version = "1.19.0", features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 arrow-ipc = "57"
 
 [dev-dependencies]
-async-trait = "0.1.89"
-axum = "0.8.8"
-clap = { version = "4.5.23", features = ["derive", "env"] }
-humantime = "2.3.0"
+async-trait.workspace = true
+axum.workspace = true
+clap = { workspace = true, features = ["env"] }
+humantime.workspace = true
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools.workspace = true
-tempfile = "3.23.0"
-tokio = { version = "1.49.0", features = ["test-util"] }
+tempfile.workspace = true
+tokio.workspace = true
 
 [features]
 default = []

@@ -14,23 +14,23 @@ name = "crd-writer"
 path = "src/bin/crd_writer.rs"
 
 [dependencies]
-anyhow = "1.0.102"
-chrono = { version = "0.4.39", default-features = false }
-futures = "0.3.32"
+anyhow.workspace = true
+chrono.workspace = true
+futures.workspace = true
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
 kube = { version = "3.0.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws", "runtime"] }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-server-core = { path = "../server-core", default-features = false }
-rand = "0.9.2"
+rand.workspace = true
 schemars = { version = "1.2.1", features = ["uuid1"] }
-semver = "1.0.27"
+semver.workspace = true
 serde.workspace = true
-serde_json = "1.0.149"
-tracing = "0.1.44"
-uuid = { version = "1.19", features = ["serde", "v4"] }
+serde_json.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["serde", "v4"] }
 
-async-trait = { version = "0.1.89", optional = true }
+async-trait = { workspace = true, optional = true }
 mz-repr = { path = "../repr", default-features = false, optional = true }
 
 [dev-dependencies]

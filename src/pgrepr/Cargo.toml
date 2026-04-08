@@ -11,9 +11,9 @@ workspace = true
 
 [dependencies]
 byteorder = "1.4.3"
-bytes = "1.11.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-dec = "0.4.8"
+bytes.workspace = true
+chrono.workspace = true
+dec.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", default-features = false }
 mz-pgrepr-consts = { path = "../pgrepr-consts", default-features = false }
@@ -23,7 +23,7 @@ postgres-types = { version = "0.2.11", features = [
     "with-chrono-0_4",
     "with-uuid-1",
 ] }
-uuid = "1.19.0"
+uuid.workspace = true
 
 [features]
 default = []

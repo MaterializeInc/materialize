@@ -28,17 +28,17 @@ name = "benches"
 harness = false
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 arrayvec = "0.7.6"
-arrow = { version = "57", default-features = false }
+arrow.workspace = true
 async-stream = "0.3.6"
-async-trait = "0.1.89"
-bytes = { version = "1.11.1", features = ["serde"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
+async-trait.workspace = true
+bytes = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["env"] }
 differential-dataflow.workspace = true
-futures = "0.3.32"
+futures.workspace = true
 futures-util = "0.3"
-hex = "0.4.3"
+hex.workspace = true
 itertools.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -49,30 +49,30 @@ mz-persist-types = { path = "../persist-types" }
 mz-proto = { path = "../proto" }
 mz-timely-util = { path = "../timely-util" }
 mz-postgres-client = { path = "../postgres-client" }
-num_cpus = "1.17.0"
-prometheus = { version = "0.14.0", default-features = false }
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-semver = { version = "1.0.27", features = ["serde"] }
+num_cpus.workspace = true
+prometheus.workspace = true
+proptest.workspace = true
+proptest-derive.workspace = true
+prost.workspace = true
+semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["rc"] }
-serde_json = "1.0.149"
+serde_json.workspace = true
 timely.workspace = true
-tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
-tokio-metrics = "0.4.9"
-tokio-stream = { version = "0.1.18", features = ["sync"] }
+tokio.workspace = true
+tokio-metrics.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
 tonic = "0.14.2"
 tonic-prost = "0.14.5"
-tracing = "0.1.44"
-uuid = { version = "1.19.0", features = ["v4"] }
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["html_reports"] }
-datadriven = { version = "0.9.0", features = ["async"] }
+datadriven = { workspace = true, features = ["async"] }
 futures-task = "0.3.31"
-num_cpus = "1.17.0"
-rand = "0.9.2"
-tempfile = "3.23.0"
+num_cpus.workspace = true
+rand.workspace = true
+tempfile.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

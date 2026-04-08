@@ -11,21 +11,21 @@ license = "Apache-2.0"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 backtrace = "0.3.76"
-flate2 = "1.1.9"
+flate2.workspace = true
 itertools.workspace = true
 jemalloc_pprof = { version = "0.8.2", optional = true }
 pprof_util = "0.8.2"
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof = "0.15.0"
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+prost.workspace = true
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
-tracing = "0.1.44"
-tokio = { version = "1.49.0", features = ["time"] }
+tracing.workspace = true
+tokio.workspace = true
 
 [build-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build.workspace = true
 

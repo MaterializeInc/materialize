@@ -10,17 +10,17 @@ publish = false
 workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
+async-trait.workspace = true
 byteorder = "1.4.3"
-bytes = "1.11.1"
+bytes.workspace = true
 bytesize.workspace = true
-derivative = "2.2.0"
+derivative.workspace = true
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
-tokio = "1.49.0"
+tokio.workspace = true
 tokio-openssl = "0.6.5"
-tokio-postgres = { version = "0.7.15" }
-tracing = "0.1.44"
+tokio-postgres.workspace = true
+tracing.workspace = true
 
 [features]
 default = []

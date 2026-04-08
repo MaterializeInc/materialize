@@ -10,21 +10,21 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+chrono.workspace = true
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 itertools.workspace = true
 mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 phf = { version = "0.13.1", default-features = false }
 serde.workspace = true
-uncased = "0.9.7"
+uncased.workspace = true
 
 [build-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 mz-ore-build = { path = "../ore-build", default-features = false }
 phf_codegen = "0.13.1"
-uncased = "0.9.7"
+uncased.workspace = true
 
 [features]
 default = []

@@ -19,7 +19,7 @@ quote = { version = "1.0" }
 syn = { version = "2.0", features = ["extra-traits", "full"] }
 
 [dev-dependencies]
-tracing = "0.1.44"
+tracing.workspace = true
 
 [features]
 default = []

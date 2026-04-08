@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 columnar.workspace = true
-columnation = "0.1.2"
+columnation.workspace = true
 differential-dataflow.workspace = true
 itertools.workspace = true
 mz-dyncfg = { path = "../dyncfg" }
@@ -21,7 +21,7 @@ mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
 serde.workspace = true
 timely.workspace = true
-tracing = "0.1.44"
+tracing.workspace = true
 
 [features]
 default = []

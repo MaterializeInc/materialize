@@ -15,16 +15,16 @@ mz-auth = { path = "../auth", default-features = false }
 mz-frontegg-auth = { path = "../frontegg-auth", default-features = false }
 mz-ore = { path = "../ore", features = ["assert"] }
 mz-pgwire-common = { path = "../pgwire-common", default-features = false }
-reqwest = "0.12.24"
-tokio-postgres = { version = "0.7.15" }
+reqwest.workspace = true
+tokio-postgres.workspace = true
 serde.workspace = true
-serde_json = "1.0.149"
-tracing = "0.1.43"
-url = "2.5.7"
+serde_json.workspace = true
+tracing.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
-serde_json = "1.0"
+serde_json.workspace = true
 
 [lints]
 workspace = true

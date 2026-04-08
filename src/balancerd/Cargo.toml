@@ -10,16 +10,16 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
-axum = "0.8.8"
-bytes = "1.11.1"
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes.workspace = true
 bytesize.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
+chrono.workspace = true
+clap = { workspace = true, features = ["env"] }
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
-futures = "0.3.32"
-humantime = "2.3.0"
+futures.workspace = true
+humantime.workspace = true
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
@@ -38,27 +38,27 @@ mz-ore = { path = "../ore", default-features = false, features = ["id_gen"]}
 mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
-num_cpus = "1.17.0"
-openssl = { version = "0.10.76", features = ["vendored"] }
-prometheus = { version = "0.14.0", default-features = false }
+num_cpus.workspace = true
+openssl.workspace = true
+prometheus.workspace = true
 proxy-header = "0.1.2"
-semver = "1.0.27"
-tokio = { version = "1.49.0", default-features = false }
+semver.workspace = true
+tokio.workspace = true
 tokio-openssl = "0.6.5"
-tokio-postgres = { version = "0.7.15" }
-tokio-util = { version = "0.7.18", features = ["codec"] }
-tokio-metrics = "0.4.9"
+tokio-postgres.workspace = true
+tokio-util = { workspace = true, features = ["codec"] }
+tokio-metrics.workspace = true
 tower = "0.5.3"
-tracing = "0.1.44"
-tracing-subscriber = "0.3.23"
-uuid = "1.19.0"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
 mz-frontegg-mock = { path = "../frontegg-mock" }
 postgres = "0.19.12"
-reqwest = "0.12.28"
-tempfile = "3.23.0"
+reqwest.workspace = true
+tempfile.workspace = true
 
 [features]
 default = ["mz-alloc-default"]

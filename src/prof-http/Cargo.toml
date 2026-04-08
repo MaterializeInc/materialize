@@ -11,12 +11,12 @@ workspace = true
 
 [dependencies]
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
-axum = "0.8.8"
+axum.workspace = true
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 bytesize.workspace = true
 cfg-if = "1.0.4"
 headers = "0.4.1"
-http = "1.4.0"
+http.workspace = true
 include_dir = "0.7.4"
 mappings = "0.7.2"
 mime = "0.3.16"
@@ -27,11 +27,11 @@ mz-prof = { path = "../prof", default-features = false }
 jemalloc_pprof = { version = "0.8.2", optional = true }
 pprof_util = "0.8.2"
 serde.workspace = true
-tokio = { version = "1.49.0", features = ["time"] }
-tracing = { version = "0.1.44", optional = true }
+tokio.workspace = true
+tracing = { workspace = true, optional = true }
 
 [build-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 mz-npm = { path = "../npm", default-features = false }
 
 [features]

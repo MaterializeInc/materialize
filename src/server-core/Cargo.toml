@@ -10,24 +10,24 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = { version = "0.1.89" }
-clap = { version = "4.5.23", features = ["derive", "env"] }
-openssl = { version = "0.10.76", features = ["vendored"] }
+anyhow.workspace = true
+async-trait.workspace = true
+clap = { workspace = true, features = ["env"] }
+openssl.workspace = true
 schemars = { version = "1.2.1" }
-scopeguard = "1.2.0"
+scopeguard.workspace = true
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 socket2 = "0.6.0"
-tokio-stream = "0.1.18"
+tokio-stream.workspace = true
 proxy-header = "0.1.2"
-tracing = "0.1.44"
-futures = "0.3.32"
+tracing.workspace = true
+futures.workspace = true
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
-tokio = "1.49.0"
-tokio-metrics = "0.4.9"
-uuid = { version = "1.19.0", features = ["v4"] }
+tokio.workspace = true
+tokio-metrics.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []

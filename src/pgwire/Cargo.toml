@@ -10,15 +10,15 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
-base64 = "0.22.1"
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
 byteorder = "1.4.3"
-bytes = "1.11.1"
+bytes.workspace = true
 bytesize.workspace = true
 csv-core = "0.1.13"
-enum-kinds = "0.5.1"
-futures = "0.3.32"
+enum-kinds.workspace = true
+futures.workspace = true
 itertools.workspace = true
 mz-adapter = { path = "../adapter" }
 mz-adapter-types = { path = "../adapter-types" }
@@ -32,15 +32,15 @@ mz-pgwire-common = { path = "../pgwire-common" }
 mz-repr = { path = "../repr" }
 mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
-openssl = { version = "0.10.76", features = ["vendored"] }
+openssl.workspace = true
 postgres = { version = "0.19.12" }
-tokio = "1.49.0"
-tokio-stream = "0.1.18"
+tokio.workspace = true
+tokio-stream.workspace = true
 tokio-openssl = "0.6.5"
-tokio-util = { version = "0.7.18", features = ["codec"] }
-tokio-metrics = "0.4.9"
-tracing = "0.1.44"
-uuid = { version = "1.19.0", features = ["v4"] }
+tokio-util = { workspace = true, features = ["codec"] }
+tokio-metrics.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []
