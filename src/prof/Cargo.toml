@@ -12,15 +12,15 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-backtrace = "0.3.76"
+backtrace.workspace = true
 flate2.workspace = true
 itertools.workspace = true
-jemalloc_pprof = { version = "0.8.2", optional = true }
-pprof_util = "0.8.2"
+jemalloc_pprof = { workspace = true, optional = true }
+pprof_util.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
-pprof = "0.15.0"
+pprof.workspace = true
 prost.workspace = true
-tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
+tikv-jemalloc-ctl = { workspace = true, optional = true }
 tracing.workspace = true
 tokio.workspace = true
 

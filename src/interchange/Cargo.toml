@@ -30,8 +30,8 @@ mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
 ordered-float.workspace = true
 prost.workspace = true
-prost-reflect = "0.16.3"
-seahash = "4"
+prost-reflect.workspace = true
+seahash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 timely.workspace = true

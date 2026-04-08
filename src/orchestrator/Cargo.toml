@@ -15,7 +15,7 @@ async-trait.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
 derivative.workspace = true
-futures-core = "0.3.31"
+futures-core.workspace = true
 mz-ore = { path = "../ore", default-features = false }
 serde.workspace = true
 

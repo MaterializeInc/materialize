@@ -17,18 +17,18 @@ chrono.workspace = true
 futures.workspace = true
 hex.workspace = true
 itertools.workspace = true
-libc = "0.2.184"
+libc.workspace = true
 maplit.workspace = true
 mz-orchestrator = { path = "../orchestrator", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network"] }
 mz-repr = { path = "../repr", default-features = false }
 mz-secrets = { path = "../secrets", default-features = false }
-nix = { version = "0.30.1", features = ["signal"] }
+nix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 scopeguard.workspace = true
-sha1 = "0.10.6"
-sysinfo = "0.29.11"
+sha1.workspace = true
+sysinfo.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 

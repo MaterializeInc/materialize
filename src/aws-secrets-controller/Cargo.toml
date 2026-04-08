@@ -17,7 +17,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 aws-config.workspace = true
 aws-credential-types.workspace = true
-aws-sdk-secretsmanager = { version = "1.99.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-secretsmanager.workspace = true
 aws-types.workspace = true
 futures.workspace = true
 mz-aws-util = { path = "../aws-util", default-features = false }

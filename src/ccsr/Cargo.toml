@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-native-tls = "0.2.14"
+native-tls.workspace = true
 openssl.workspace = true
 reqwest.workspace = true
 mz-tls-util = { path = "../tls-util" }

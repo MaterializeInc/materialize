@@ -16,7 +16,7 @@ base64.workspace = true
 byteorder.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
-csv-core = "0.1.13"
+csv-core.workspace = true
 enum-kinds.workspace = true
 futures.workspace = true
 itertools.workspace = true
@@ -36,7 +36,7 @@ openssl.workspace = true
 postgres.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
-tokio-openssl = "0.6.5"
+tokio-openssl.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true
 tracing.workspace = true

@@ -16,17 +16,17 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-storage-types = { path = "../storage-types" }
-num_enum = "0.7.6"
+num_enum.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 serde.workspace = true
-serde_repr = "0.1.20"
+serde_repr.workspace = true
 
 [dev-dependencies]
 mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["test"] }
 serde_json.workspace = true
-similar-asserts = "1.7"
+similar-asserts.workspace = true
 
 [build-dependencies]
 anyhow.workspace = true

@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
 serde.workspace = true
-phf = { version = "0.13.1", features = ["uncased"] }
+phf.workspace = true
 uncased.workspace = true
 
 [dev-dependencies]
@@ -22,8 +22,8 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 [build-dependencies]
 anyhow.workspace = true
 mz-ore-build = { path = "../ore-build", default-features = false }
-phf = { version = "0.13.1", features = ["uncased"] }
-phf_codegen = "0.13.1"
+phf.workspace = true
+phf_codegen.workspace = true
 uncased.workspace = true
 
 [features]

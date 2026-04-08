@@ -27,7 +27,7 @@ tracing.workspace = true
 # https://github.com/google/snappy/blob/main/COPYING
 # https://github.com/lz4/lz4/blob/dev/LICENSE
 # https://github.com/facebook/zstd
-rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
+rocksdb.workspace = true
 
 [features]
 default = []

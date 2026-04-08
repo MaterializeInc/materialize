@@ -11,20 +11,20 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
+askama.workspace = true
 axum.workspace = true
-axum-extra = { version = "0.12.5", features = ["typed-header"] }
-headers = "0.4.1"
+axum-extra.workspace = true
+headers.workspace = true
 http.workspace = true
 hyper.workspace = true
-include_dir = "0.7.4"
+include_dir.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing"] }
 prometheus.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
-tower-http = { version = "0.6.7", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tower.workspace = true
+tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

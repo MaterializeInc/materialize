@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-foundationdb = { version = "0.10.0", default-features = false, features = ["embedded-fdb-include", "fdb-7_3"] }
+foundationdb.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["process"]}
 tracing.workspace = true
 

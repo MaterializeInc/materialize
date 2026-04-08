@@ -20,25 +20,25 @@ anyhow = { workspace = true, optional = true }
 # deps, security-critical — must be available unconditionally so that
 # `ore::secure` types are always accessible without feature-flag opt-in).
 async-trait = { workspace = true, optional = true }
-bytemuck = { version = "1.23.1", optional = true }
+bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
 clap = { workspace = true, optional = true, features = ["env", "string"] }
 columnation = { workspace = true, optional = true }
 columnar = { workspace = true, optional = true }
-compact_bytes = { version = "0.2.1", optional = true }
-ctor = { version = "0.6.3", optional = true }
+compact_bytes = { workspace = true, optional = true }
+ctor = { workspace = true, optional = true }
 differential-dataflow = { workspace = true, optional = true }
 derivative.workspace = true
-either = "1.15.0"
+either.workspace = true
 futures = { workspace = true, optional = true }
-hibitset = { version = "0.6.4", optional = true }
+hibitset = { workspace = true, optional = true }
 itertools.workspace = true
 lgalloc = { workspace = true, optional = true }
-libc = { version = "0.2.184", optional = true }
+libc = { workspace = true, optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
-num = "0.4.3"
-num-traits = { version = "0.2", optional = true }
+num.workspace = true
+num-traits = { workspace = true, optional = true }
 # The vendored feature is transitively depended upon by tokio-openssl.
 openssl = { workspace = true, optional = true }
 parquet = { workspace = true, optional = true }
@@ -49,14 +49,14 @@ proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 smallvec = { workspace = true, optional = true }
-stacker = { version = "0.1.23", optional = true }
-sentry = { version = "0.46.1", optional = true, default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
-sentry-panic = { version = "0.46.1", optional = true }
+stacker = { workspace = true, optional = true }
+sentry = { workspace = true, optional = true }
+sentry-panic = { workspace = true, optional = true }
 serde.workspace = true
 tokio = { workspace = true, optional = true }
-tokio-openssl = { version = "0.6.5", optional = true }
+tokio-openssl = { workspace = true, optional = true }
 thiserror.workspace = true
-tracing-capture = { version = "0.1.0", optional = true }
+tracing-capture = { workspace = true, optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
 # The `tracing-log` feature here is load-bearing: While our busiest-logging dependency (`rdkafka`) is now hooked-up
 # to use `tracing`, we cannot remove this feature until we guarantee no dependencies log using the `log` crate, for
@@ -66,24 +66,24 @@ tracing-capture = { version = "0.1.0", optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true, features = ["v4", "v7"] }
 url = { workspace = true, features = ["serde"] }
-zeroize = { version = "1.8.2", features = ["derive", "serde"] }
+zeroize.workspace = true
 
 # For the `tracing` feature
 http = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
-tracing-opentelemetry = { version = "0.32.1", optional = true }
-tonic = { version = "0.14.2", features = ["transport"], optional = true }
-tokio-native-tls = { version = "0.3.1", optional = true }
-native-tls = { version = "0.2.14", features = ["alpn"], optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+tokio-native-tls = { workspace = true, optional = true }
+native-tls = { workspace = true, optional = true }
 hyper-tls = { version = "0.6.0", optional = true }
 hyper-util = { workspace = true, optional = true }
-opentelemetry = { version = "0.31.0", features = ["trace"], optional = true }
-opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"], optional = true }
-opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"], optional = true }
-console-subscriber = { version = "0.5.0", optional = true }
-sentry-tracing = { version = "0.46.1", optional = true }
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+console-subscriber = { workspace = true, optional = true }
+sentry-tracing = { workspace = true, optional = true }
 turmoil = { workspace = true, optional = true }
-yansi = { version = "1.0.1", optional = true }
+yansi = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow.workspace = true
@@ -93,7 +93,7 @@ proptest.workspace = true
 scopeguard.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tokio-test = "0.4.5"
+tokio-test.workspace = true
 tracing-subscriber.workspace = true
 
 [features]

@@ -18,7 +18,7 @@ anyhow.workspace = true
 async-stream.workspace = true
 async-trait.workspace = true
 aws-credential-types.workspace = true
-aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
+aws-sdk-sts.workspace = true
 arrow.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 bytesize.workspace = true
@@ -26,18 +26,18 @@ bincode.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 columnation.workspace = true
-crossbeam-channel = "0.5.15"
-csv-core = { version = "0.1.13" }
+crossbeam-channel.workspace = true
+csv-core.workspace = true
 dec.workspace = true
 differential-dataflow.workspace = true
 fail.workspace = true
 futures.workspace = true
-iceberg = "0.7.0"
-indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
+iceberg.workspace = true
+indexmap.workspace = true
 itertools.workspace = true
 maplit.workspace = true
 mysql_async.workspace = true
-mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
+mysql_common.workspace = true
 mz-arrow-util = { path = "../arrow-util" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
@@ -67,21 +67,21 @@ mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 parquet.workspace = true
 pin-project.workspace = true
-postgres-replication = { version = "0.6.7" }
+postgres-replication.workspace = true
 prometheus.workspace = true
 prost.workspace = true
 # Loadgen sources need reproducible randomness, so we need to continue using
 # the old version of `rand`.
-rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
+rand-8.workspace = true
 rdkafka.workspace = true
 regex.workspace = true
-rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
-seahash = "4"
+rocksdb.workspace = true
+seahash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_bytes = { version = "0.11.19" }
+serde_bytes.workspace = true
 sha2.workspace = true
-tiberius = { version = "0.12", features = ["chrono", "sql-browser-tokio", "tds73", "native-tls"], default-features = false }
+tiberius.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tokio-postgres = { workspace = true, features = ["serde"] }
@@ -90,7 +90,7 @@ tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true
 thiserror.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
-arrow-ipc = "57"
+arrow-ipc.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true

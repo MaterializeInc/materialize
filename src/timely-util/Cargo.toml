@@ -14,18 +14,18 @@ name = "reclock"
 harness = false
 
 [dependencies]
-ahash = { version = "0.8.12", default-features = false }
+ahash.workspace = true
 bincode.workspace = true
-bytemuck = "1.23.1"
+bytemuck.workspace = true
 columnar.workspace = true
 columnation.workspace = true
-custom-labels = "0.4.6"
+custom-labels.workspace = true
 differential-dataflow.workspace = true
-either = "1"
-futures-util = "0.3.31"
+either.workspace = true
+futures-util.workspace = true
 lgalloc.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async", "process", "tracing", "test", "num-traits", "region", "differential-dataflow", "overflowing"] }
-num-traits = "0.2"
+num-traits.workspace = true
 serde.workspace = true
 timely.workspace = true
 tokio.workspace = true
@@ -35,7 +35,7 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 # This crate is used for capturing memory usage in a unit test. It is feature
 # flagged because it replaces the global memory allocator.  Unfortunately,
 # optional dependencies are not allowed in `dev-dependencies`, so it lives here.
-allocation-counter = { version = "0", optional = true }
+allocation-counter = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion.workspace = true

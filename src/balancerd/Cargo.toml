@@ -17,14 +17,14 @@ bytes.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
-domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
+domain.workspace = true
 futures.workspace = true
 humantime.workspace = true
 hyper.workspace = true
-hyper-openssl = "0.10.2"
+hyper-openssl.workspace = true
 hyper-util.workspace = true
 jsonwebtoken.workspace = true
-launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
+launchdarkly-server-sdk.workspace = true
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
@@ -41,14 +41,14 @@ mz-pgwire-common = { path = "../pgwire-common" }
 num_cpus.workspace = true
 openssl.workspace = true
 prometheus.workspace = true
-proxy-header = "0.1.2"
+proxy-header.workspace = true
 semver.workspace = true
 tokio.workspace = true
-tokio-openssl = "0.6.5"
+tokio-openssl.workspace = true
 tokio-postgres.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true
-tower = "0.5.3"
+tower.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true

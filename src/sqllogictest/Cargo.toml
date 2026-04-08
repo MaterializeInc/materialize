@@ -15,10 +15,10 @@ bytes.workspace = true
 chrono.workspace = true
 clap.workspace = true
 dec.workspace = true
-fallible-iterator = "0.2.0"
+fallible-iterator.workspace = true
 futures.workspace = true
 itertools.workspace = true
-junit-report = "0.8.3"
+junit-report.workspace = true
 maplit.workspace = true
 md-5.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
@@ -46,10 +46,10 @@ mz-tracing = { path = "../tracing" }
 postgres-protocol.workspace = true
 regex.workspace = true
 reqwest.workspace = true
-shell-words = "1.1.1"
+shell-words.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
-time = "0.3.17"
+time.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 tokio-postgres = { workspace = true, features = [
@@ -58,9 +58,9 @@ tokio-postgres = { workspace = true, features = [
     "with-serde_json-1",
 ] }
 tokio-stream = { workspace = true, features = ["net"] }
-tower-http = { version = "0.6.7", features = ["cors"] }
+tower-http.workspace = true
 uuid.workspace = true
-walkdir = "2.5.0"
+walkdir.workspace = true
 
 [features]
 default = []

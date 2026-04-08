@@ -22,25 +22,25 @@ name = "window_functions"
 harness = false
 
 [dependencies]
-aho-corasick = "1.1.4"
+aho-corasick.workspace = true
 anyhow.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
-chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-crc32fast = "1.4.2"
-csv = "1.4.0"
+chrono-tz.workspace = true
+crc32fast.workspace = true
+csv.workspace = true
 differential-dataflow.workspace = true
 dec.workspace = true
 derivative.workspace = true
-encoding = "0.2.0"
-enum-iterator = "2.1.0"
-fallible-iterator = "0.2.0"
+encoding.workspace = true
+enum-iterator.workspace = true
+fallible-iterator.workspace = true
 hex.workspace = true
-hmac = "0.12.1"
+hmac.workspace = true
 itertools.workspace = true
 md-5.workspace = true
-murmur2 = "0.1.0"
+murmur2.workspace = true
 mz-expr-derive = { path = "../expr-derive", features = ["test"] }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network", "proptest", "id_gen"] }
@@ -52,22 +52,22 @@ mz-regexp = { path = "../regexp" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
-num = "0.4.3"
-num_enum = "0.7.6"
+num.workspace = true
+num_enum.workspace = true
 ordered-float.workspace = true
 paste.workspace = true
 prost.workspace = true
 regex.workspace = true
-regex-syntax = "0.8.10"
-seahash = "4.1.0"
+regex-syntax.workspace = true
+seahash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha1 = "0.10.6"
+sha1.workspace = true
 sha2.workspace = true
-subtle = "2.6.1"
+subtle.workspace = true
 tracing.workspace = true
 uncased.workspace = true
-unicode-normalization = "0.1.25"
+unicode-normalization.workspace = true
 uuid = { workspace = true, features = ["v5"] }
 proptest.workspace = true
 proptest-derive.workspace = true

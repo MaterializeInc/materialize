@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
-axum-extra = { version = "0.12.5", features = ["typed-header"] }
+axum-extra.workspace = true
 base64.workspace = true
 chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
