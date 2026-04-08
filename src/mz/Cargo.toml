@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 axum = "0.8.8"
-clap = { version = "4.5.23", features = [ "derive" ] }
+clap.workspace = true
 csv = "1.4.0"
 dirs = "6.0.0"
 indicatif = "0.18.4"
@@ -31,15 +31,15 @@ rpassword = "7.4.0"
 semver = "1.0.27"
 serde.workspace = true
 serde-aux = "4.7.0"
-serde_json = "1.0.149"
+serde_json.workspace = true
 tabled = "0.20.0"
 time = "0.3.17"
 tokio = { version = "1.49.0", features = ["full"] }
 toml = "0.8.22"
 toml_edit = { version = "0.22.26", features = ["serde"] }
 thiserror.workspace = true
-uuid = "1.19.0"
-url = "2.5.8"
+uuid.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 assert_cmd = "2.1.2"

@@ -18,12 +18,12 @@ lgalloc = "0.6.0"
 mz-cluster-client = { path = "../cluster-client" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing"] }
 mz-service = { path = "../service" }
-rand = "0.9.2"
+rand.workspace = true
 regex.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "net"] }
 tracing.workspace = true
-uuid = "1.19.0"
+uuid.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["turmoil"] }

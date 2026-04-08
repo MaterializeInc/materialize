@@ -16,8 +16,8 @@ aws-credential-types = { version = "1.2.8" }
 aws-sigv4 = { version = "1.3.6" }
 aws-types.workspace = true
 base64.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive"] }
+chrono.workspace = true
+clap.workspace = true
 crossbeam = "0.8.4"
 fancy-regex = "0.16.2"
 futures.workspace = true
@@ -27,15 +27,15 @@ mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["cli", "network", "async"] }
 mz-ssh-util = { path = "../ssh-util" }
 num_cpus.workspace = true
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-rand = "0.9.2"
+prost.workspace = true
+rand.workspace = true
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 tokio = { version = "1.49.0", features = ["macros", "rt", "sync"] }
 thiserror.workspace = true
 tracing.workspace = true
-url = "2.5.8"
+url.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

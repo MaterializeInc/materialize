@@ -14,7 +14,7 @@ mz-lowertest-derive = { path = "../lowertest-derive", default-features = false }
 mz-ore = { path = "../ore", features = ["test"], default-features = false }
 proc-macro2 = "1.0.106"
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 itertools.workspace = true
 
 [dev-dependencies]

@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-bytes = "1.11.1"
+bytes.workspace = true
 csv = "1.4.0"
 itertools.workspace = true
 mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
+proptest.workspace = true
 serde.workspace = true
 
 [features]

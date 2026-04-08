@@ -13,8 +13,8 @@ workspace = true
 base64.workspace = true
 mz-ore = { path = "../ore", features = ["test"] }
 serde.workspace = true
-proptest-derive = "0.8.0"
-proptest = "1.10.0"
+proptest-derive.workspace = true
+proptest.workspace = true
 static_assertions.workspace = true
 openssl.workspace = true
 itertools.workspace = true

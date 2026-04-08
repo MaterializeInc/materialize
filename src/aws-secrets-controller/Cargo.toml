@@ -24,7 +24,7 @@ mz-aws-util = { path = "../aws-util", default-features = false }
 mz-secrets = { path = "../secrets", default-features = false }
 mz-repr = { path = "../repr", default-features = false }
 tracing.workspace = true
-uuid = "1.19.0"
+uuid.workspace = true
 
 [features]
 default = []

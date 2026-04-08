@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 base64.workspace = true
-clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
+clap = { workspace = true, features = ["env", "wrap_help"] }
 derivative.workspace = true
 futures.workspace = true
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
@@ -25,11 +25,11 @@ reqwest = "0.12.28"
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 thiserror.workspace = true
 tokio = { version = "1.49.0", features = ["macros"] }
 tracing.workspace = true
-uuid = { version = "1.19.0", features = ["serde"] }
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 axum = "0.8.8"

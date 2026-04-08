@@ -14,18 +14,18 @@ anyhow.workspace = true
 axum = "0.8.8"
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 base64.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["serde"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
+chrono = { workspace = true, default-features = false, features = ["serde"] }
+clap = { workspace = true, features = ["env"] }
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 tokio = { version = "1.49.0", default-features = false }
 tracing.workspace = true
 tracing-subscriber = "0.3.23"
-uuid = "1.19.0"
+uuid.workspace = true
 
 [dev-dependencies]
 reqwest = { version = "0.12.28", features = ["json"] }

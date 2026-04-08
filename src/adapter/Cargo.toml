@@ -15,9 +15,9 @@ arrow = { version = "57", default-features = false }
 async-stream = "0.3.6"
 async-trait.workspace = true
 base64.workspace = true
-bytes = "1.11.1"
+bytes.workspace = true
 bytesize.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 dec = "0.4.8"
 derivative.workspace = true
 differential-dataflow.workspace = true
@@ -77,13 +77,13 @@ mz-timestamp-oracle = { path = "../timestamp-oracle", default-features = false }
 openssl.workspace = true
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 prometheus.workspace = true
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+prost.workspace = true
 qcell = "0.5"
-rand = "0.9.2"
+rand.workspace = true
 rand_chacha = "0.9.0"
 semver = "1.0.27"
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 serde_plain = "1.0.2"
 sha2 = "0.10.9"
 smallvec = { version = "1.15.1", features = ["union"] }
@@ -97,8 +97,8 @@ tracing-core = "0.1.35"
 tracing-opentelemetry = { version = "0.32.1" }
 tracing-subscriber = "0.3.23"
 thiserror.workspace = true
-url = "2.5.8"
-uuid = { version = "1.19.0" }
+url.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio"] }

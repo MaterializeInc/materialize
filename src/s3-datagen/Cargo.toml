@@ -14,7 +14,7 @@ anyhow.workspace = true
 aws-config = { version = "1.8.15", default-features = false }
 aws-sdk-s3 = { version = "1.94.0", default-features = false, features = ["rt-tokio"] }
 bytefmt = "0.1.7"
-clap = { version = "4.5.23", features = ["derive"] }
+clap.workspace = true
 futures.workspace = true
 indicatif = "0.18.4"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }

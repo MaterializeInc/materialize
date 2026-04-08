@@ -17,9 +17,9 @@ harness = false
 [dependencies]
 anyhow.workspace = true
 byteorder = "1.4.3"
-bytes = "1.11.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive"] }
+bytes.workspace = true
+chrono.workspace = true
+clap.workspace = true
 differential-dataflow.workspace = true
 itertools.workspace = true
 maplit.workspace = true
@@ -29,15 +29,15 @@ mz-ore = { path = "../ore", features = ["network", "cli"] }
 mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
 ordered-float = { version = "5.1.0", features = ["serde"] }
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+prost.workspace = true
 prost-reflect = "0.16.3"
 seahash = "4"
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
 tracing.workspace = true
-uuid = { version = "1.19.0", features = ["serde"] }
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 criterion = { version = "0.8.2", features = ["async_tokio"] }

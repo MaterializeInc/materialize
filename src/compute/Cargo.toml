@@ -44,7 +44,7 @@ smallvec = { version = "1.15.1", features = ["serde", "union"] }
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["fs", "rt", "sync", "net"] }
 tracing.workspace = true
-uuid = { version = "1.19.0", features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 core_affinity = "0.8.3"

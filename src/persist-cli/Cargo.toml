@@ -21,8 +21,8 @@ anyhow.workspace = true
 arrow = { version = "57", default-features = false }
 async-trait.workspace = true
 axum = "0.8.8"
-bytes = { version = "1.11.1", features = ["serde"] }
-clap = { version = "4.5.23", features = ["derive", "env"] }
+bytes = { workspace = true, features = ["serde"] }
+clap = { workspace = true, features = ["env"] }
 differential-dataflow.workspace = true
 futures.workspace = true
 humantime = "2.3.0"
@@ -40,12 +40,12 @@ num_cpus.workspace = true
 num_enum = "0.7.6"
 prometheus.workspace = true
 serde = { workspace = true, features = ["rc"] }
-serde_json = "1.0.149"
+serde_json.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", default-features = false, features = ["macros", "sync", "rt", "rt-multi-thread", "time"] }
 tracing.workspace = true
-url = "2.5.8"
-uuid = { version = "1.19.0", features = ["v4"] }
+url.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = ["tokio-console"]

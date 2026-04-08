@@ -20,8 +20,8 @@ mz-repr = { path = "../repr", features = ["tracing"] }
 mz-sql = { path = "../sql" }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 paste.workspace = true
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.8.0" }
+proptest.workspace = true
+proptest-derive.workspace = true
 serde.workspace = true
 tracing.workspace = true
 
@@ -33,7 +33,7 @@ mz-expr-test-util = { path = "../expr-test-util" }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["test"] }
 proc-macro2 = "1.0.106"
-serde_json = "1.0.149"
+serde_json.workspace = true
 
 [features]
 default = []

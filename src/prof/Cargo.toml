@@ -19,7 +19,7 @@ jemalloc_pprof = { version = "0.8.2", optional = true }
 pprof_util = "0.8.2"
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof = "0.15.0"
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+prost.workspace = true
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
 tracing.workspace = true
 tokio = { version = "1.49.0", features = ["time"] }

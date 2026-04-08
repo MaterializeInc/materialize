@@ -10,7 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
+chrono = { workspace = true, features = ["serde"] }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
 itertools.workspace = true
 mz-lowertest = { path = "../lowertest", default-features = false }

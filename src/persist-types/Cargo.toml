@@ -14,24 +14,24 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 arrow = { version = "57", default-features = false }
-bytes = { version = "1.11.1", features = ["serde"] }
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+bytes = { workspace = true, features = ["serde"] }
+chrono.workspace = true
 hex.workspace = true
 itertools.workspace = true
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }
 mz-proto = { path = "../proto", default-features = false }
 parquet = { version = "57", default-features = false, features = ["arrow", "flate2", "flate2-zlib-rs"] }
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+prost.workspace = true
 serde.workspace = true
-serde_json = { version = "1.0.149" }
+serde_json.workspace = true
 timely.workspace = true
 tracing.workspace = true
-uuid = { version = "1.19.0", features = ["v4"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
+proptest.workspace = true
 
 [build-dependencies]
 prost-build.workspace = true

@@ -18,13 +18,13 @@ mz-pgwire-common = { path = "../pgwire-common", default-features = false }
 reqwest = "0.12.24"
 tokio-postgres = { version = "0.7.15" }
 serde.workspace = true
-serde_json = "1.0.149"
+serde_json.workspace = true
 tracing.workspace = true
-url = "2.5.7"
+url.workspace = true
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
-serde_json = "1.0"
+serde_json.workspace = true
 
 [lints]
 workspace = true

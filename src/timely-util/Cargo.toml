@@ -30,7 +30,7 @@ serde.workspace = true
 timely.workspace = true
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "time"] }
 tracing.workspace = true
-uuid = { version = "1.19.0", features = ["serde", "v4"] }
+uuid = { workspace = true, features = ["serde", "v4"] }
 
 # This crate is used for capturing memory usage in a unit test. It is feature
 # flagged because it replaces the global memory allocator.  Unfortunately,

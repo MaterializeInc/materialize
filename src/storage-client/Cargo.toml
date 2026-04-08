@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
+chrono.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
 itertools.workspace = true
@@ -37,7 +37,7 @@ rdkafka = { version = "0.29.0", features = [
     "zstd",
 ] }
 serde.workspace = true
-serde_json = { version = "1.0.149" }
+serde_json.workspace = true
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
 timely.workspace = true
 tokio = { version = "1.49.0", features = [
@@ -48,7 +48,7 @@ tokio = { version = "1.49.0", features = [
     "time",
 ] }
 tracing.workspace = true
-uuid = "1.19.0"
+uuid.workspace = true
 
 [dev-dependencies]
 mz-build-info = { path = "../build-info" }
