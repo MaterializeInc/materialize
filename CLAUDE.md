@@ -14,7 +14,18 @@ When tracing how an operation flows through the codebase, read these files first
 * `doc/developer/generated/<crate>/_crate.md` — per-crate overview with module structure, key types, and dependencies.
 * `doc/developer/generated/<crate>/<module>.md` — per-file documentation describing what each module provides.
 
-## Dependency management (Cargo.lock)
+## Dependency management
+
+### Workspace dependencies
+
+All third-party dependency versions are declared in `[workspace.dependencies]` in the root `Cargo.toml`. Member crates reference them with `dep.workspace = true` or `dep = { workspace = true, optional = true }`.
+
+* **Adding a new dependency**: add it to `[workspace.dependencies]` in the root `Cargo.toml` first, then use `dep.workspace = true` in the member crate.
+* **Never inline a version** in a member crate's `Cargo.toml` — `bin/lint-cargo` enforces this.
+* **Updating a version**: change it once in the root `Cargo.toml`.
+* Since Cargo unifies features workspace-wide, the workspace declaration includes the union of all features used across crates. Individual crates just use `dep.workspace = true`.
+
+### Cargo.lock
 
 Never regenerate the entire Cargo.lock. When adding or changing dependencies:
 
