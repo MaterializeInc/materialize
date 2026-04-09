@@ -128,7 +128,7 @@ The Playwright MCP writes screenshots, snapshots, and logs to `.playwright-mcp/`
 
 Once the fix is verified, invoke the `/mz-commit` skill to:
 
-1. Create a branch named after the Linear issue (e.g., `qindeelishtiaq/cns-30-fix-description`)
+1. Create a branch named `<your-username>/<issue-id>-short-description` (e.g., `jcurrey/cns-30-fix-tooltip-overflow`)
 2. Commit with a `console:` prefixed message in imperative mood
 3. **Only stage files related to the papercut fix** (typically under `console/`). Do not include unrelated working tree changes (e.g., `.mcp.json`, skill files, `.gitignore`).
 4. Open a PR linking to the Linear issue
