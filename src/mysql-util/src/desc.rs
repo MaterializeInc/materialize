@@ -94,9 +94,12 @@ impl MySqlTableDesc {
             );
         }
 
-        // `columns` is ordered by the ordinal_position of each column in the table,
-        // so as long as `self.columns` is a compatible prefix of `other.columns`, we can
-        // ignore extra columns from `other.columns`.
+        // In the case that we don't have full binlog row metadata, `columns` is ordered by the
+        // ordinal_position of each column in the table, so as long as `self.columns` is a
+        // compatible prefix of `other.columns`, we can ignore extra columns from `other.columns`.
+        //
+        // If we do have full metadata, then we can match columns by name and just check that all
+        // columns in `self.columns` are present and compatible with columns in `other.columns`.
         let mut other_columns = other.columns.iter();
         for self_column in &self.columns {
             let other_column = if full_metadata {
