@@ -10,16 +10,16 @@ aliases:
   - /sql/m1-cc-mapping/
 ---
 
-The following table provides a general mapping of M.1 to cc cluster sizes:
+The following table provides a general mapping between cc and M.1 cluster sizes:
 
 {{< tabs >}}
-{{< tab "M.1 to cc" >}}
-{{< yaml-table data="m1_cc_mapping" >}}
-{{< /tab >}}
 {{< tab "cc to M.1" >}}
 {{< yaml-table data="cc_m1_mapping" >}}
 {{< /tab >}}
+{{< tab "M.1 to cc" >}}
+{{< yaml-table data="m1_cc_mapping" >}}
+{{< /tab >}}
 {{< /tabs >}}
 
-Some sizes have multiple mappings. When converting between M.1 and cc sizing, we
+Some sizes have multiple mappings. When converting between cc and M.1 sizing, we
 recommend choosing the larger mapping size first.

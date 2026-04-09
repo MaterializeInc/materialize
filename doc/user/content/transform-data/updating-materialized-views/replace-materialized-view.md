@@ -43,19 +43,6 @@ This guide uses a [three-tier cluster architecture](/manage/operational-guidelin
 with separate clusters for ingestion, computation, and serving.
 
 {{< tabs >}}
-{{< tab "M.1 clusters">}}
-Create separate clusters for ingestion, computation, and serving.
-```mzsql
--- Create an ingestion cluster
-CREATE CLUSTER ingest_cluster SIZE = 'M.1-small';
-
--- Create a compute cluster
-CREATE CLUSTER compute_cluster SIZE = 'M.1-small';
-
--- Create a serving cluster
-CREATE CLUSTER serving_cluster SIZE = 'M.1-small';
-```
-{{< /tab >}}
 {{< tab "cc clusters">}}
 Create separate clusters for ingestion, computation, and serving.
 ```mzsql
@@ -67,6 +54,19 @@ CREATE CLUSTER compute_cluster SIZE = '300cc';
 
 -- Create a serving cluster
 CREATE CLUSTER serving_cluster SIZE = '300cc';
+```
+{{< /tab >}}
+{{< tab "M.1 clusters">}}
+Create separate clusters for ingestion, computation, and serving.
+```mzsql
+-- Create an ingestion cluster
+CREATE CLUSTER ingest_cluster SIZE = 'M.1-small';
+
+-- Create a compute cluster
+CREATE CLUSTER compute_cluster SIZE = 'M.1-small';
+
+-- Create a serving cluster
+CREATE CLUSTER serving_cluster SIZE = 'M.1-small';
 ```
 {{< /tab >}}
 {{< /tabs >}}
