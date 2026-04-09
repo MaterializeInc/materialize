@@ -1759,7 +1759,7 @@ class FlipFlagsAction(Action):
             "persist_fast_path_order",
             "enable_mcp_agents",
             "enable_mcp_agents_query_tool",
-            "enable_mcp_observatory",
+            "enable_mcp_developer",
             "mcp_max_response_size",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",

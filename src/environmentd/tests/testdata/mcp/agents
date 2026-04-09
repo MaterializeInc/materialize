@@ -84,7 +84,7 @@ mcp-agents
 {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Tool not found: query tool is not available. Use get_data_products, get_data_product_details, and read_data_product instead.","data":{"error_type":"ToolNotFound"}}}
 
 # =============================================================================
-# Observatory tools on agents endpoint - wrong endpoint
+# Developer tools on agents endpoint - wrong endpoint
 # =============================================================================
 
 # Calling query_system_catalog on agents endpoint should fail.

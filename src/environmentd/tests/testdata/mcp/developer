@@ -11,19 +11,19 @@
 # Initialize
 # =============================================================================
 
-# Standard MCP initialize handshake for observatory endpoint.
-mcp-observatory
+# Standard MCP initialize handshake for developer endpoint.
+mcp-developer
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-observatory","version":"<VERSION>"}}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"materialize-mcp-developer","version":"<VERSION>"}}}
 
 # =============================================================================
 # Tools List
 # =============================================================================
 
-# Observatory should only expose query_system_catalog.
-mcp-observatory
+# Developer should only expose query_system_catalog.
+mcp-developer
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 ----
 200 OK
@@ -34,14 +34,14 @@ mcp-observatory
 # =============================================================================
 
 # Query mz_databases for the default database should work and return predictable result.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
 
 # Query with qualified schema should work.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_catalog.mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
@@ -52,14 +52,14 @@ mcp-observatory
 # =============================================================================
 
 # pg_catalog should be accessible.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT typname FROM pg_catalog.pg_type WHERE typname = 'bool'"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"bool\"\n  ]\n]"}],"isError":false}}
 
 # information_schema should be accessible.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT table_schema FROM information_schema.tables WHERE table_name = 'mz_databases' AND table_schema = 'mz_catalog' LIMIT 1"}}}
 ----
 200 OK
@@ -70,14 +70,14 @@ mcp-observatory
 # =============================================================================
 
 # Querying a non-system table should be rejected.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM user_table"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: user_table. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
 
 # Querying a non-system schema should be rejected.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM public.my_view"}}}
 ----
 200 OK
@@ -88,7 +88,7 @@ mcp-observatory
 # =============================================================================
 
 # DDL on system tables should still be rejected (read-only validation runs first).
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"DROP TABLE mz_tables"}}}
 ----
 200 OK
@@ -98,7 +98,7 @@ mcp-observatory
 # query_system_catalog - multi-statement rejected
 # =============================================================================
 
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1; SELECT * FROM mz_tables"}}}
 ----
 200 OK
@@ -108,7 +108,7 @@ mcp-observatory
 # query_system_catalog - empty query
 # =============================================================================
 
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":""}}}
 ----
 200 OK
@@ -119,46 +119,46 @@ mcp-observatory
 # =============================================================================
 
 # A query with no table reference should be rejected.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT 1"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":25,"error":{"code":-32602,"message":"Query validation failed: Query must reference at least one system catalog table","data":{"error_type":"ValidationError"}}}
 
 # =============================================================================
-# Agents tools on observatory endpoint - wrong endpoint
+# Agents tools on developer endpoint - wrong endpoint
 # =============================================================================
 
-# Calling get_data_products on observatory endpoint should fail.
-mcp-observatory
+# Calling get_data_products on developer endpoint should fail.
+mcp-developer
 {"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":30,"error":{"code":-32602,"message":"Tool not found: get_data_products is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+{"jsonrpc":"2.0","id":30,"error":{"code":-32602,"message":"Tool not found: get_data_products is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
 
-# Calling read_data_product on observatory endpoint should fail.
-mcp-observatory
+# Calling read_data_product on developer endpoint should fail.
+mcp-developer
 {"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"read_data_product","arguments":{"name":"some_product"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":31,"error":{"code":-32602,"message":"Tool not found: read_data_product is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+{"jsonrpc":"2.0","id":31,"error":{"code":-32602,"message":"Tool not found: read_data_product is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
 
-# Calling query on observatory endpoint should fail.
-mcp-observatory
+# Calling query on developer endpoint should fail.
+mcp-developer
 {"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"Tool not found: query is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+{"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"Tool not found: query is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
 
-# Calling get_data_product_details on observatory endpoint should fail.
-mcp-observatory
+# Calling get_data_product_details on developer endpoint should fail.
+mcp-developer
 {"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"get_data_product_details","arguments":{"name":"some_product"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":33,"error":{"code":-32602,"message":"Tool not found: get_data_product_details is not available on observatory endpoint","data":{"error_type":"ToolNotFound"}}}
+{"jsonrpc":"2.0","id":33,"error":{"code":-32602,"message":"Tool not found: get_data_product_details is not available on developer endpoint","data":{"error_type":"ToolNotFound"}}}
 
 # Calling a completely unknown tool fails at deserialization (422).
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"nonexistent_tool","arguments":{}}}
 ----
 422 Unprocessable Entity
@@ -169,27 +169,27 @@ Failed to deserialize the JSON body into the target type: .: unknown variant `no
 # =============================================================================
 
 # Wrong JSON-RPC version should return InvalidRequest error.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"1.0","id":40,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":40,"error":{"code":-32600,"message":"Invalid JSON-RPC version: expected 2.0","data":{"error_type":"InvalidRequest"}}}
 
 # Unknown method should return MethodNotFound error.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":41,"method":"unknown/method"}
 ----
 200 OK
 {"jsonrpc":"2.0","id":41,"error":{"code":-32601,"message":"Method not found: unknown method","data":{"error_type":"MethodNotFound"}}}
 
 # Notification (no id) should return 200 with empty body.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","method":"notifications/initialized"}
 ----
 200 OK
 
 # String id should be echoed back.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":"my-request-42","method":"tools/list"}
 ----
 200 OK
@@ -200,35 +200,35 @@ mcp-observatory
 # =============================================================================
 
 # INSERT should be rejected.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"INSERT INTO mz_tables VALUES (1)"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":50,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # UPDATE should be rejected.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"UPDATE mz_tables SET name = 'hacked'"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":51,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # CREATE should be rejected.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"CREATE TABLE mz_evil (id INT)"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":52,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # Schema-squatting should be rejected (mz_catalogg is not a valid system schema).
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_catalogg.fake_table"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":53,"error":{"code":-32602,"message":"Query validation failed: Query references non-system tables: mz_catalogg.fake_table. Only system catalog tables (mz_*, pg_catalog, information_schema) are allowed.","data":{"error_type":"ValidationError"}}}
 
 # Mixed system and user tables in JOIN should be rejected.
-mcp-observatory
+mcp-developer
 {"jsonrpc":"2.0","id":54,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT * FROM mz_tables t JOIN public.user_data u ON t.id = u.table_id"}}}
 ----
 200 OK

@@ -631,7 +631,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "console_oidc_scopes",
     "enable_mcp_agents",
     "enable_mcp_agents_query_tool",
-    "enable_mcp_observatory",
+    "enable_mcp_developer",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
 ]

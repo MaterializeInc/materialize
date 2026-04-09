@@ -176,11 +176,11 @@ pub const ENABLE_MCP_AGENTS_QUERY_TOOL: Config<bool> = Config::new(
     "Whether the MCP agents query tool is enabled. When false, the query tool is not advertised and calls to it are rejected. Agents can still discover and inspect data products.",
 );
 
-/// Whether the MCP observatory endpoint is enabled.
-pub const ENABLE_MCP_OBSERVATORY: Config<bool> = Config::new(
-    "enable_mcp_observatory",
+/// Whether the MCP developer endpoint is enabled.
+pub const ENABLE_MCP_DEVELOPER: Config<bool> = Config::new(
+    "enable_mcp_developer",
     false,
-    "Whether the MCP observatory HTTP endpoint is enabled. When false, requests to /api/mcp/observatory return 503 Service Unavailable.",
+    "Whether the MCP developer HTTP endpoint is enabled. When false, requests to /api/mcp/developer return 503 Service Unavailable.",
 );
 
 /// Maximum size (in bytes) of MCP tool response content after JSON serialization.
@@ -240,7 +240,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
         .add(&ENABLE_MCP_AGENTS)
         .add(&ENABLE_MCP_AGENTS_QUERY_TOOL)
-        .add(&ENABLE_MCP_OBSERVATORY)
+        .add(&ENABLE_MCP_DEVELOPER)
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&CONSOLE_OIDC_CLIENT_ID)

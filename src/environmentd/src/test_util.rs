@@ -168,7 +168,7 @@ impl Default for TestHarness {
                             metrics: false,
                             profiling: false,
                             mcp_agents: false,
-                            mcp_observatory: false,
+                            mcp_developer: false,
                             console_config: true,
                         },
                     },
@@ -186,7 +186,7 @@ impl Default for TestHarness {
                             metrics: true,
                             profiling: true,
                             mcp_agents: false,
-                            mcp_observatory: false,
+                            mcp_developer: false,
                             console_config: true,
                         },
                     },
@@ -347,7 +347,7 @@ impl TestHarness {
                         metrics: false,
                         profiling: false,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -365,7 +365,7 @@ impl TestHarness {
                         metrics: true,
                         profiling: true,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -411,7 +411,7 @@ impl TestHarness {
                         metrics: false,
                         profiling: false,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -429,7 +429,7 @@ impl TestHarness {
                         metrics: true,
                         profiling: true,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -485,7 +485,7 @@ impl TestHarness {
                         metrics: false,
                         profiling: true,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -503,7 +503,7 @@ impl TestHarness {
                         metrics: true,
                         profiling: false,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -539,7 +539,7 @@ impl TestHarness {
                         metrics: false,
                         profiling: true,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -557,7 +557,7 @@ impl TestHarness {
                         metrics: true,
                         profiling: false,
                         mcp_agents: false,
-                        mcp_observatory: false,
+                        mcp_developer: false,
                         console_config: true,
                     },
                 },
@@ -646,10 +646,10 @@ impl TestHarness {
         self
     }
 
-    pub fn with_mcp_routes(mut self, agents: bool, observatory: bool) -> Self {
+    pub fn with_mcp_routes(mut self, agents: bool, developer: bool) -> Self {
         for config in self.listeners_config.http.values_mut() {
             config.routes.mcp_agents = agents;
-            config.routes.mcp_observatory = observatory;
+            config.routes.mcp_developer = developer;
         }
         self
     }
