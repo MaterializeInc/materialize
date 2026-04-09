@@ -1,12 +1,21 @@
 ---
-title: MCP Server (Python)
+title: "Appendix: MCP Server (Python)"
 description: "Learn how to integrate Materialize with Large Language Models (LLMs) using MCP"
 make_table_row_headers_searchable: true
 menu:
   main:
-    parent: "integrations"
-    weight: 24
+    parent: "mcp-server"
+    weight: 90
+aliases:
+  - /integrations/llm/
 ---
+
+{{< annotation type="Disambiguation">}}
+This page provides information on the locally-run, separate MCP Server.
+For documentation on using the new built-in MCP Server endpoints, see:
+- [MCP Server for Agents](/integrations/mcp-server/mcp-agents/)
+- [MCP Server for Developer](/integrations/mcp-server/mcp-developer/)
+{{< /annotation >}}
 
 The [Model Context Protocol (MCP) Server for Materialize](https://materialize.com/blog/materialize-turns-views-into-tools-for-agents/) lets large language models (LLMs) call your indexed views as real-time tools.
 The MCP Server automatically turns any indexed view with a comment into a callable, typed interface that LLMs can use to fetch structured, up-to-date answers—directly from the database.
