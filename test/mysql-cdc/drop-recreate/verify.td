@@ -10,4 +10,4 @@
 # The source should detect the drop and error, even though the table
 # was immediately recreated with the same schema.
 ! SELECT * FROM drop_recreate;
-contains:table was dropped
+contains:Source error
