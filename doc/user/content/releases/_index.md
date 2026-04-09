@@ -16,8 +16,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.19.0
-*Released to Materialize Cloud: Thursday, April 10, 2026* <br>
-*Released to Materialize Self-Managed: Friday, April 11, 2026* <br>
+*Released to Materialize Cloud: 2026-04-09* <br>
+*Released to Materialize Self-Managed: 2026-04-10* <br>
 
 This release introduces Iceberg Sink append mode and bug fixes.
 
