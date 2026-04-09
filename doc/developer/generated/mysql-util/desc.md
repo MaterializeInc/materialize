@@ -1,6 +1,6 @@
 ---
 source: src/mysql-util/src/desc.rs
-revision: 4267863081
+revision: 011b3b5573
 ---
 
 # mysql-util::desc
