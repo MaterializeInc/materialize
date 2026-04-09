@@ -419,7 +419,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
 
 
 def workflow_mcp_feature_flags(c: Composition) -> None:
-    """Test that enable_mcp_agents and enable_mcp_observatory dyncfg flags
+    """Test that enable_mcp_agents and enable_mcp_developer dyncfg flags
     can disable MCP endpoints without a restart."""
 
     mcp_request = {
@@ -442,11 +442,11 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         http_port = c.port("materialized", 6876)
 
         agents_url = f"http://localhost:{http_port}/api/mcp/agents"
-        observatory_url = f"http://localhost:{http_port}/api/mcp/observatory"
+        developer_url = f"http://localhost:{http_port}/api/mcp/developer"
 
         # Both endpoints should be disabled by default (feature flags default to false).
         assert requests.post(agents_url, json=mcp_request).status_code == 503
-        assert requests.post(observatory_url, json=mcp_request).status_code == 503
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
 
         # Enable the agents endpoint individually.
         c.sql(
@@ -456,19 +456,19 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         )
 
         assert requests.post(agents_url, json=mcp_request).status_code == 200
-        # Observatory should still be disabled.
-        assert requests.post(observatory_url, json=mcp_request).status_code == 503
+        # Developer should still be disabled.
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
 
-        # Enable observatory too.
+        # Enable developer too.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_observatory = true",
+            "ALTER SYSTEM SET enable_mcp_developer = true",
             port=6877,
             user="mz_system",
         )
 
-        assert requests.post(observatory_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
 
-        # Disable agents again — observatory should remain enabled.
+        # Disable agents again — developer should remain enabled.
         c.sql(
             "ALTER SYSTEM SET enable_mcp_agents = false",
             port=6877,
@@ -476,7 +476,7 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         )
 
         assert requests.post(agents_url, json=mcp_request).status_code == 503
-        assert requests.post(observatory_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
 
         # Re-enable agents.
         c.sql(
@@ -486,7 +486,7 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         )
 
         assert requests.post(agents_url, json=mcp_request).status_code == 200
-        assert requests.post(observatory_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 200
 
         c.kill("materialized")
 
