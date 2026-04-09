@@ -47,30 +47,14 @@ Fetch full issue details with `mcp__claude_ai_Linear__get_issue` to get descript
 
 ### Reuse existing patterns — do not invent new ones
 
-Before writing any code, search for how similar problems are already solved in the codebase:
-
-- **Need a UI element?** Check `console/src/components/` for existing components first. Use them as-is or extend them — do not create parallel components.
-- **Need a hook?** Check `console/src/hooks/` for existing hooks. If a custom hook exists for the pattern you need (localStorage sync, SQL fetching, toast deduplication), use it.
-- **Need a utility?** Check `console/src/utils/` and the file you're editing for local helpers. Add to existing utils if the function is genuinely reusable.
-- **Need a query?** Follow the `buildXQuery()` + `InferResult` + `fetchX()` pattern used in `console/src/api/materialize/`. Look at sibling query files for the exact conventions.
-- **Need error handling?** Use existing error classes (`DatabaseError`, `PermissionError`) and parser helpers from `console/src/api/materialize/parseErrors.ts`.
-- **Need a form?** Follow the React Hook Form + `useSqlLazy` + `mode: "onTouched"` pattern from existing modals in `console/src/platform/`.
-- **Need a page layout?** Use `AppErrorBoundary` + `React.Suspense` + `MainContentContainer` like every other page.
-- **Need an overflow menu?** Use `OverflowMenu` with `{ visible, render }` item objects.
-- **Need toast notifications?** Reuse toast IDs to prevent stacking (`toast.isActive(ID)` check).
-
-If you add a new component or utility, make sure it follows the same structure, naming, and export patterns as its neighbors.
+Follow the conventions in `console/CLAUDE.md` exactly. Before writing any code, search `console/src/` for how similar problems are already solved — reuse existing components, hooks, and utilities rather than creating new ones. If you add a new component or utility, match the structure, naming, and export patterns of its neighbors.
 
 ### Minimal diffs only
 
 - Change ONLY what is needed to fix the reported issue.
 - No drive-by refactors, extra comments, docstrings, or type annotations on unchanged code.
 - No new abstractions or helpers for one-off fixes.
-- Follow the existing patterns in the file you are editing — match its style exactly.
-- Use the project's import aliases (`~/`) and restricted imports (see CLAUDE.md).
-- Props interfaces named `$ComponentProps`, arrow functions for components, no `index.tsx` files.
-- Prefer `undefined` over `null`, `parseInt()` over `+`, `useSqlLazy` for mutations.
-- Reference theme tokens (`background.secondary`, `foreground.primary`) — never hardcode colors.
+- Match the style of the file you are editing exactly.
 
 ## Step 4: Validate
 
