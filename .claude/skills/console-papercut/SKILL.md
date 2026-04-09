@@ -96,34 +96,7 @@ If browser MCP tools are available (e.g., `mcp__playwright__browser_navigate`):
 
 ### Without Playwright MCP
 
-Tell the user:
-
-> Browser MCP is not connected. To enable automated verification:
->
-> 1. Add Playwright MCP server to `.mcp.json`:
->    ```json
->    {
->      "mcpServers": {
->        "playwright": {
->          "command": "npx",
->          "args": ["@playwright/mcp@latest"]
->        }
->      }
->    }
->    ```
-> 2. Install Playwright browsers: `npx playwright install chromium`
-> 3. Reconnect via `/mcp` in Claude Code
->
-> For now, please verify manually:
-> 1. Run `yarn --cwd console start`
-> 2. Open http://localhost:3000/<relevant-path>
-> 3. Confirm the fix looks correct
-
-Wait for user confirmation before proceeding.
-
-### Playwright artifacts
-
-The Playwright MCP writes screenshots, snapshots, and logs to `.playwright-mcp/`. Ensure this directory is in `.gitignore` so these files are not committed.
+If Playwright MCP is not available, tell the user to verify manually at `http://localhost:3000/<relevant-path>` and wait for their confirmation before proceeding. Point them to `references/playwright-setup.md` for setup instructions if they want automated verification in the future.
 
 ## Step 6: Commit and PR
 
