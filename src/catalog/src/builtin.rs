@@ -14374,6 +14374,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_CHANNELS),
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
         Builtin::View(&MZ_DATAFLOW_GLOBAL_IDS),
+        Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_MAPPABLE_OBJECTS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
@@ -14384,7 +14385,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_CLUSTER_REPLICA_UTILIZATION_HISTORY),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_PARENTS),
-        Builtin::View(&MZ_COMPUTE_EXPORTS),
         Builtin::View(&MZ_DATAFLOW_ARRANGEMENT_SIZES),
         Builtin::View(&MZ_EXPECTED_GROUP_SIZE_ADVICE),
         Builtin::View(&MZ_COMPUTE_FRONTIERS),
@@ -14747,24 +14747,160 @@ pub static BUILTIN_LOOKUP: LazyLock<
         .collect()
 });
 
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
-fn test_builtin_type_schema() {
-    use mz_pgrepr::oid::FIRST_MATERIALIZE_OID;
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
 
-    for typ in BUILTINS::types() {
-        if typ.oid < FIRST_MATERIALIZE_OID {
-            assert_eq!(
-                typ.schema, PG_CATALOG_SCHEMA,
-                "{typ:?} should be in {PG_CATALOG_SCHEMA} schema"
-            );
-        } else {
-            // `mz_pgrepr::Type` resolution relies on all non-PG types existing in the mz_catalog
-            // schema.
-            assert_eq!(
-                typ.schema, MZ_CATALOG_SCHEMA,
-                "{typ:?} should be in {MZ_CATALOG_SCHEMA} schema"
-            );
+    use mz_pgrepr::oid::FIRST_MATERIALIZE_OID;
+    use mz_sql_parser::ast::visit::{self, Visit};
+    use mz_sql_parser::ast::{Raw, RawItemName, UnresolvedItemName};
+
+    use super::*;
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn test_builtin_type_schema() {
+        for typ in BUILTINS::types() {
+            if typ.oid < FIRST_MATERIALIZE_OID {
+                assert_eq!(
+                    typ.schema, PG_CATALOG_SCHEMA,
+                    "{typ:?} should be in {PG_CATALOG_SCHEMA} schema"
+                );
+            } else {
+                // `mz_pgrepr::Type` resolution relies on all non-PG types existing in the
+                // mz_catalog schema.
+                assert_eq!(
+                    typ.schema, MZ_CATALOG_SCHEMA,
+                    "{typ:?} should be in {MZ_CATALOG_SCHEMA} schema"
+                );
+            }
         }
+    }
+
+    /// Visitor that collects the last component of all referenced
+    /// item names from a SQL AST.
+    struct ItemNameCollector {
+        names: BTreeSet<String>,
+    }
+
+    impl<'ast> Visit<'ast, Raw> for ItemNameCollector {
+        fn visit_item_name(&mut self, name: &'ast <Raw as mz_sql_parser::ast::AstInfo>::ItemName) {
+            let unresolved: &UnresolvedItemName = match name {
+                RawItemName::Name(n) | RawItemName::Id(_, n, _) => n,
+            };
+            let parts = &unresolved.0;
+            if !parts.is_empty() {
+                let obj_name = parts[parts.len() - 1].as_str().to_string();
+                self.names.insert(obj_name);
+            }
+            visit::visit_item_name(self, name);
+        }
+    }
+
+    /// Tests that `BUILTINS_STATIC` is ordered respecting dependencies:
+    /// if builtin A references builtin B in its SQL, then B must appear
+    /// before A in the list. (This ordering is assumed by, e.g.,
+    /// `sort_updates` during catalog migrations.)
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn test_builtins_static_dependency_order() {
+        // Build a map from name -> (schema, index) for all builtins.
+        // We look up by just the name (last component) to catch
+        // unqualified references in SQL.
+        let mut builtin_by_name: BTreeMap<&str, (&str, usize)> = BTreeMap::new();
+        let mut duplicate_names = Vec::new();
+        for (idx, builtin) in BUILTINS_STATIC.iter().enumerate() {
+            if let Some((prev_schema, prev_idx)) =
+                builtin_by_name.insert(builtin.name(), (builtin.schema(), idx))
+            {
+                // Only flag duplicates across different schemas.
+                // Same-schema duplicates (e.g., range types that
+                // appear as both Type and Func) are fine because
+                // they resolve to the same schema.
+                if prev_schema != builtin.schema() {
+                    duplicate_names.push(format!(
+                        "name {:?} appears in both {}.{} (index \
+                         {}) and {}.{} (index {})",
+                        builtin.name(),
+                        prev_schema,
+                        builtin.name(),
+                        prev_idx,
+                        builtin.schema(),
+                        builtin.name(),
+                        idx,
+                    ));
+                }
+            }
+        }
+        assert!(
+            duplicate_names.is_empty(),
+            "BUILTINS_STATIC has duplicate names across different \
+             schemas (this test needs adjustment if such duplicates \
+             are intentional):\n{}",
+            duplicate_names.join("\n"),
+        );
+
+        // Get the `CREATE ...` SQL for builtins that have it.
+        let get_create_sql = |builtin: &Builtin<NameReference>| -> Option<String> {
+            match builtin {
+                Builtin::View(v) => Some(v.create_sql()),
+                Builtin::MaterializedView(mv) => Some(mv.create_sql()),
+                Builtin::Index(idx) => Some(idx.create_sql()),
+                Builtin::ContinualTask(ct) => Some(ct.create_sql()),
+                _ => None,
+            }
+        };
+
+        // For each SQL-bearing builtin, parse its SQL, walk the AST to
+        // find referenced item names, and check that all referenced
+        // builtins appear earlier in BUILTINS_STATIC.
+        let mut violations = Vec::new();
+        for (idx, builtin) in BUILTINS_STATIC.iter().enumerate() {
+            let create_sql = match get_create_sql(builtin) {
+                Some(sql) => sql,
+                None => continue,
+            };
+
+            let stmts = mz_sql_parser::parser::parse_statements(&create_sql).unwrap_or_else(|e| {
+                panic!(
+                    "failed to parse SQL for {}.{}: \
+                         {e}\nSQL: {create_sql}",
+                    builtin.schema(),
+                    builtin.name(),
+                )
+            });
+
+            let mut collector = ItemNameCollector {
+                names: BTreeSet::new(),
+            };
+            for stmt in &stmts {
+                collector.visit_statement(&stmt.ast);
+            }
+
+            for ref_name in &collector.names {
+                if let Some(&(ref_schema, dep_idx)) = builtin_by_name.get(ref_name.as_str()) {
+                    if dep_idx > idx {
+                        violations.push(format!(
+                            "{}.{} (index {}) references \
+                             {}.{} (index {}), but the \
+                             dependency appears later in \
+                             BUILTINS_STATIC",
+                            builtin.schema(),
+                            builtin.name(),
+                            idx,
+                            ref_schema,
+                            ref_name,
+                            dep_idx,
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "BUILTINS_STATIC has dependency ordering violations:\n{}",
+            violations.join("\n"),
+        );
     }
 }
