@@ -656,7 +656,7 @@ async fn purify_create_sink(
             .map_err(|e| CsrPurificationError::ListSubjectsError(Arc::new(e)))?;
     }
 
-    purify_create_sink_avro_doc_on_options(&catalog, *from.item_id(), format)?;
+    purify_create_sink_avro_doc_on_options(&catalog, *from[0].item_id(), format)?;
 
     Ok(PurifiedStatement::PurifiedCreateSink(create_sink_stmt))
 }

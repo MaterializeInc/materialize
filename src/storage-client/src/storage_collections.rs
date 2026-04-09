@@ -911,7 +911,7 @@ where
                     dependencies.push(ingestion.remap_collection_id);
                 }
             }
-            DataSource::Sink { desc } => dependencies.push(desc.sink.from),
+            DataSource::Sink { desc } => dependencies.extend(desc.sink.from.iter().copied()),
         }
 
         Ok(dependencies)
@@ -1924,64 +1924,64 @@ where
                 Self::determine_collection_dependencies(&*self_collections, id, &description)?;
 
             // Determine the initial since of the collection.
-            let initial_since = match storage_dependencies
-                .iter()
-                .at_most_one()
-                .expect("should have at most one dependency")
-            {
-                Some(dep) => {
+            //
+            // If an item has dependencies, its initial since must be
+            // advanced as far as the join of its dependencies' sinces,
+            // i.e. a dependency's since may never be in advance of its
+            // dependents.
+            //
+            // We have to do this every time we initialize the
+            // collection, though––the invariant might have been upheld
+            // correctly in the previous epoch, but the
+            // `data_shard_since` might not have compacted and, on
+            // establishing a new persist connection, still have data we
+            // said _could_ be compacted.
+            let initial_since = if storage_dependencies.is_empty() {
+                data_shard_since
+            } else {
+                let mut dependency_since = Antichain::from_elem(T::minimum());
+                for dep in &storage_dependencies {
                     let dependency_collection = self_collections
                         .get(dep)
                         .ok_or(StorageError::IdentifierMissing(*dep))?;
-                    let dependency_since = dependency_collection.implied_capability.clone();
-
-                    // If an item has a dependency, its initial since must be
-                    // advanced as far as its dependency, i.e. a dependency's
-                    // since may never be in advance of its dependents.
-                    //
-                    // We have to do this every time we initialize the
-                    // collection, though––the invariant might have been upheld
-                    // correctly in the previous epoch, but the
-                    // `data_shard_since` might not have compacted and, on
-                    // establishing a new persist connection, still have data we
-                    // said _could_ be compacted.
-                    if PartialOrder::less_than(&data_shard_since, &dependency_since) {
-                        // The dependency since cannot be beyond the dependent
-                        // (our) upper unless the collection is new. In
-                        // practice, the depdenency is the remap shard of a
-                        // source (export), and if the since is allowed to
-                        // "catch up" to the upper, that is `upper <= since`, a
-                        // restarting ingestion cannot differentiate between
-                        // updates that have already been written out to the
-                        // backing persist shard and updates that have yet to be
-                        // written. We would write duplicate updates.
-                        //
-                        // If this check fails, it means that the read hold
-                        // installed on the dependency was probably not upheld
-                        // –– if it were, the dependency's since could not have
-                        // advanced as far the dependent's upper.
-                        //
-                        // We don't care about the dependency since when the
-                        // write frontier is empty. In that case, no-one can
-                        // write down any more updates.
-                        mz_ore::soft_assert_or_log!(
-                            write_frontier.elements() == &[T::minimum()]
-                                || write_frontier.is_empty()
-                                || PartialOrder::less_than(&dependency_since, write_frontier),
-                            "dependency ({dep}) since has advanced past dependent ({id}) upper \n
-                            dependent ({id}): since {:?}, upper {:?} \n
-                            dependency ({dep}): since {:?}",
-                            data_shard_since,
-                            write_frontier,
-                            dependency_since
-                        );
-
-                        dependency_since
-                    } else {
-                        data_shard_since
-                    }
+                    dependency_since.join_assign(&dependency_collection.implied_capability);
                 }
-                None => data_shard_since,
+
+                if PartialOrder::less_than(&data_shard_since, &dependency_since) {
+                    // The dependency since cannot be beyond the dependent
+                    // (our) upper unless the collection is new. In
+                    // practice, the dependency is the remap shard of a
+                    // source (export), and if the since is allowed to
+                    // "catch up" to the upper, that is `upper <= since`, a
+                    // restarting ingestion cannot differentiate between
+                    // updates that have already been written out to the
+                    // backing persist shard and updates that have yet to be
+                    // written. We would write duplicate updates.
+                    //
+                    // If this check fails, it means that the read hold
+                    // installed on the dependency was probably not upheld
+                    // –– if it were, the dependency's since could not have
+                    // advanced as far the dependent's upper.
+                    //
+                    // We don't care about the dependency since when the
+                    // write frontier is empty. In that case, no-one can
+                    // write down any more updates.
+                    mz_ore::soft_assert_or_log!(
+                        write_frontier.elements() == &[T::minimum()]
+                            || write_frontier.is_empty()
+                            || PartialOrder::less_than(&dependency_since, write_frontier),
+                        "dependency since has advanced past dependent ({id}) upper \n
+                        dependent ({id}): since {:?}, upper {:?} \n
+                        dependencies ({storage_dependencies:?}): since {:?}",
+                        data_shard_since,
+                        write_frontier,
+                        dependency_since
+                    );
+
+                    dependency_since
+                } else {
+                    data_shard_since
+                }
             };
 
             // Determine the time dependence of the collection.

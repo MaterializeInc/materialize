@@ -326,7 +326,7 @@ mod tests {
 
     fn sink_description() -> StorageSinkDesc<CollectionMetadata, u64> {
         StorageSinkDesc {
-            from: GlobalId::System(1),
+            from: vec![GlobalId::System(1)],
             from_desc: RelationDesc::new(
                 SqlRelationType {
                     column_types: Default::default(),
@@ -371,7 +371,7 @@ mod tests {
             version: Default::default(),
             envelope: SinkEnvelope::Upsert,
             as_of: Antichain::from_elem(0),
-            from_storage_metadata: CollectionMetadata {
+            from_storage_metadata: vec![CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                     consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
@@ -385,7 +385,7 @@ mod tests {
                     Vec::<String>::new(),
                 ),
                 txns_shard: Default::default(),
-            },
+            }],
             to_storage_metadata: CollectionMetadata {
                 persist_location: PersistLocation {
                     blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),

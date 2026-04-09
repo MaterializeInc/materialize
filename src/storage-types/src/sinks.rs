@@ -36,14 +36,14 @@ pub mod s3_oneshot_sink;
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
-    pub from: GlobalId,
+    pub from: Vec<GlobalId>,
     pub from_desc: RelationDesc,
     pub connection: StorageSinkConnection,
     pub with_snapshot: bool,
     pub version: u64,
     pub envelope: SinkEnvelope,
     pub as_of: Antichain<T>,
-    pub from_storage_metadata: S,
+    pub from_storage_metadata: Vec<S>,
     pub to_storage_metadata: S,
     /// The interval at which to commit data to the sink.
     /// This isn't universally supported by all sinks

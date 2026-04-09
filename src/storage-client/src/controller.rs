@@ -801,10 +801,12 @@ pub struct ExportState<T: TimelyTimestamp> {
     /// `hold_policy`.
     pub derived_since: Antichain<T>,
 
-    /// The read holds that this export has on its dependencies (its input and itself). When
-    /// the upper of the export changes, we downgrade this, which in turn
-    /// downgrades holds we have on our dependencies' sinces.
-    pub read_holds: [ReadHold<T>; 2],
+    /// Read holds on the export's input collections. When the upper of the export
+    /// changes, we downgrade these, which in turn downgrades holds on dependencies' sinces.
+    pub input_holds: Vec<ReadHold<T>>,
+
+    /// Read hold on the export itself (its own progress collection).
+    pub self_hold: ReadHold<T>,
 
     /// The policy to use to downgrade `self.read_capability`.
     pub read_policy: ReadPolicy<T>,
@@ -816,7 +818,7 @@ pub struct ExportState<T: TimelyTimestamp> {
 impl<T: Timestamp> ExportState<T> {
     pub fn new(
         cluster_id: StorageInstanceId,
-        read_hold: ReadHold<T>,
+        input_holds: Vec<ReadHold<T>>,
         self_hold: ReadHold<T>,
         write_frontier: Antichain<T>,
         read_policy: ReadPolicy<T>,
@@ -825,14 +827,15 @@ impl<T: Timestamp> ExportState<T> {
         T: Lattice,
     {
         let mut dependency_since = Antichain::from_elem(T::minimum());
-        for read_hold in [&read_hold, &self_hold] {
-            dependency_since.join_assign(read_hold.since());
+        for hold in input_holds.iter().chain(std::iter::once(&self_hold)) {
+            dependency_since.join_assign(hold.since());
         }
         Self {
             read_capabilities: MutableAntichain::from(dependency_since.borrow()),
             cluster_id,
             derived_since: dependency_since,
-            read_holds: [read_hold, self_hold],
+            input_holds,
+            self_hold,
             read_policy,
             write_frontier,
         }
@@ -843,14 +846,33 @@ impl<T: Timestamp> ExportState<T> {
         self.cluster_id
     }
 
-    /// Returns the cluster to which the export is bound.
-    pub fn input_hold(&self) -> &ReadHold<T> {
-        &self.read_holds[0]
+    /// Returns the read holds on the export's input collections.
+    pub fn input_holds(&self) -> &[ReadHold<T>] {
+        &self.input_holds
+    }
+
+    /// Returns the since frontier across all input holds (their join).
+    pub fn input_since(&self) -> Antichain<T>
+    where
+        T: Lattice,
+    {
+        let mut since = Antichain::from_elem(T::minimum());
+        for hold in &self.input_holds {
+            since.join_assign(hold.since());
+        }
+        since
     }
 
     /// Returns whether the export was dropped.
     pub fn is_dropped(&self) -> bool {
-        self.read_holds.iter().all(|h| h.since().is_empty())
+        self.self_hold.since().is_empty() && self.input_holds.iter().all(|h| h.since().is_empty())
+    }
+
+    /// Returns mutable references to all read holds (inputs + self).
+    pub fn all_holds_mut(&mut self) -> impl Iterator<Item = &mut ReadHold<T>> {
+        self.input_holds
+            .iter_mut()
+            .chain(std::iter::once(&mut self.self_hold))
     }
 }
 /// A channel that allows you to append a set of updates to a pre-defined [`GlobalId`].

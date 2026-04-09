@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fail::fail_point;
-use maplit::{btreemap, btreeset};
+use maplit::btreemap;
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
@@ -972,17 +972,19 @@ impl Coordinator {
         id: GlobalId,
         sink: &Sink,
     ) -> Result<(), AdapterError> {
-        // Validate `sink.from` is in fact a storage collection
-        self.controller.storage.check_exists(sink.from)?;
+        // Validate all `sink.from` collections are in fact storage collections
+        for from_id in &sink.from {
+            self.controller.storage.check_exists(*from_id)?;
+        }
 
         // The AsOf is used to determine at what time to snapshot reading from
         // the persist collection.  This is primarily relevant when we do _not_
         // want to include the snapshot in the sink.
         //
         // We choose the smallest as_of that is legal, according to the sinked
-        // collection's since.
+        // collections' since.
         let id_bundle = crate::CollectionIdBundle {
-            storage_ids: btreeset! {sink.from},
+            storage_ids: sink.from.iter().copied().collect(),
             compute_ids: btreemap! {},
         };
 
@@ -996,9 +998,10 @@ impl Coordinator {
         let read_holds = self.acquire_read_holds(&id_bundle);
         let as_of = read_holds.least_valid_read();
 
-        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
+        // Use first source's desc (all validated identical at plan time).
+        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from[0]);
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
-            from: sink.from,
+            from: sink.from.clone(),
             from_desc: storage_sink_from_entry
                 .relation_desc()
                 .expect("sinks can only be built on items with descs")
@@ -1011,7 +1014,7 @@ impl Coordinator {
             as_of,
             with_snapshot: sink.with_snapshot,
             version: sink.version,
-            from_storage_metadata: (),
+            from_storage_metadata: vec![(); sink.from.len()],
             to_storage_metadata: (),
             commit_interval: sink.commit_interval,
         };

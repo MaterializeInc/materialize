@@ -17,6 +17,7 @@ use differential_dataflow::trace::implementations::ord_neu::{
     ColValBatcher, ColValBuilder, ColValSpine,
 };
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
+use itertools::Itertools;
 use mz_interchange::avro::DiffPair;
 use mz_interchange::envelopes::combine_at_timestamp;
 use mz_persist_client::operators::shard_source::SnapshotMode;
@@ -26,7 +27,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
-use timely::dataflow::operators::Leave;
+use timely::dataflow::operators::{Concatenate, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
 
@@ -59,22 +60,32 @@ where
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
 
-        let (ok_collection, err_collection, persist_tokens) = persist_source::persist_source(
-            scope,
-            sink.from,
-            Arc::clone(&storage_state.persist_clients),
-            &storage_state.txns_ctx,
-            sink.from_storage_metadata.clone(),
-            None,
-            Some(sink.as_of.clone()),
-            snapshot_mode,
-            timely::progress::Antichain::new(),
-            None,
-            None,
-            async {},
-            error_handler,
-        );
-        tokens.extend(persist_tokens);
+        // Read from each input source and concatenate the streams.
+        let mut all_ok = Vec::new();
+        let mut all_err = Vec::new();
+        for (from_id, from_meta) in sink.from.iter().zip_eq(&sink.from_storage_metadata) {
+            let (ok, err, persist_tokens) = persist_source::persist_source(
+                scope,
+                *from_id,
+                Arc::clone(&storage_state.persist_clients),
+                &storage_state.txns_ctx,
+                from_meta.clone(),
+                None,
+                Some(sink.as_of.clone()),
+                snapshot_mode,
+                timely::progress::Antichain::new(),
+                None,
+                None,
+                async {},
+                error_handler.clone(),
+            );
+            tokens.extend(persist_tokens);
+            all_ok.push(ok);
+            all_err.push(err);
+        }
+
+        let ok_collection = scope.concatenate(all_ok);
+        let err_collection = scope.concatenate(all_err);
 
         let ok_collection =
             zip_into_diff_pairs(sink_id, sink, &*sink_render, ok_collection.as_collection());
@@ -152,7 +163,7 @@ where
 
     collection.flat_map({
         let mut last_warning = Instant::now();
-        let from_id = sink.from;
+        let from_ids = sink.from.clone();
         move |(mut k, vs)| {
             // If the key is not synthetic, emit a warning to internal logs if
             // we discover a primary key violation.
@@ -168,7 +179,7 @@ where
                     last_warning = now;
                     warn!(
                         ?sink_id,
-                        ?from_id,
+                        ?from_ids,
                         "primary key error: expected at most one update per key and timestamp; \
                             this can happen when the configured sink key is not a primary key of \
                             the sinked relation"

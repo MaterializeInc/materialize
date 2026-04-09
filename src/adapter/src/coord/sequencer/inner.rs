@@ -3321,9 +3321,9 @@ impl Coordinator {
         ctx: ExecuteContext,
         plan: plan::AlterSinkPlan,
     ) {
-        // Put a read hold on the new relation
+        // Put a read hold on the new relations
         let id_bundle = crate::CollectionIdBundle {
-            storage_ids: BTreeSet::from_iter([plan.sink.from]),
+            storage_ids: plan.sink.from.iter().copied().collect(),
             compute_ids: BTreeMap::new(),
         };
         let read_hold = self.acquire_read_holds(&id_bundle);
@@ -3334,27 +3334,36 @@ impl Coordinator {
         };
 
         let otel_ctx = OpenTelemetryContext::obtain();
-        let from_item_id = self.catalog().resolve_item_id(&plan.sink.from);
+        let from_item_ids: BTreeSet<_> = plan
+            .sink
+            .from
+            .iter()
+            .map(|id| self.catalog().resolve_item_id(id))
+            .collect();
 
+        let mut validity_ids = from_item_ids;
+        validity_ids.insert(plan.item_id);
         let plan_validity = PlanValidity::new(
             self.catalog().transient_revision(),
-            BTreeSet::from_iter([plan.item_id, from_item_id]),
+            validity_ids,
             Some(plan.in_cluster),
             None,
             ctx.session().role_metadata().clone(),
         );
 
+        let mut frontier_ids: Vec<_> = plan.sink.from.clone();
+        frontier_ids.push(plan.global_id);
         info!(
             "preparing alter sink for {}: frontiers={:?} export={:?}",
             plan.global_id,
             self.controller
                 .storage_collections
-                .collections_frontiers(vec![plan.global_id, plan.sink.from]),
+                .collections_frontiers(frontier_ids),
             self.controller.storage.export(plan.global_id)
         );
 
         // Now we must wait for the sink to make enough progress such that there is overlap between
-        // the new `from` collection's read hold and the sink's write frontier.
+        // the new `from` collections' read hold and the sink's write frontier.
         //
         // TODO(database-issues#9820): If the sink is dropped while we are waiting for progress,
         // the watch set never completes and neither does the `ALTER SINK` command.
@@ -3412,11 +3421,13 @@ impl Coordinator {
             return;
         }
 
+        let mut frontier_ids: Vec<_> = sink_plan.from.clone();
+        frontier_ids.push(global_id);
         info!(
             "finishing alter sink for {global_id}: frontiers={:?} export={:?}",
             self.controller
                 .storage_collections
-                .collections_frontiers(vec![global_id, sink_plan.from]),
+                .collections_frontiers(frontier_ids),
             self.controller.storage.export(global_id),
         );
 
@@ -3461,21 +3472,27 @@ impl Coordinator {
         let (mut stmt, resolved_ids) =
             mz_sql::names::resolve(&conn_catalog, stmt).expect("resolvable create_sql");
 
-        // Update the `from` relation.
-        let from_entry = self.catalog().get_entry_by_global_id(&sink_plan.from);
-        let full_name = self.catalog().resolve_full_name(from_entry.name(), None);
-        stmt.from = ResolvedItemName::Item {
-            id: from_entry.id(),
-            qualifiers: from_entry.name.qualifiers.clone(),
-            full_name,
-            print_id: true,
-            version: from_entry.version,
-        };
+        // Update the `from` relations.
+        stmt.from = sink_plan
+            .from
+            .iter()
+            .map(|from_id| {
+                let from_entry = self.catalog().get_entry_by_global_id(from_id);
+                let full_name = self.catalog().resolve_full_name(from_entry.name(), None);
+                ResolvedItemName::Item {
+                    id: from_entry.id(),
+                    qualifiers: from_entry.name.qualifiers.clone(),
+                    full_name,
+                    print_id: true,
+                    version: from_entry.version,
+                }
+            })
+            .collect();
 
         let new_sink = Sink {
             create_sql: stmt.to_ast_string_stable(),
             global_id,
-            from: sink_plan.from,
+            from: sink_plan.from.clone(),
             connection: sink_plan.connection.clone(),
             envelope: sink_plan.envelope,
             version: sink_plan.version,
@@ -3502,9 +3519,11 @@ impl Coordinator {
             }
         }
 
+        // Use first source's desc (all validated identical at plan time).
+        let first_from_entry = self.catalog().get_entry_by_global_id(&sink_plan.from[0]);
         let storage_sink_desc = StorageSinkDesc {
-            from: sink_plan.from,
-            from_desc: from_entry
+            from: sink_plan.from.clone(),
+            from_desc: first_from_entry
                 .relation_desc()
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
@@ -3516,7 +3535,7 @@ impl Coordinator {
             as_of,
             with_snapshot,
             version: sink_plan.version,
-            from_storage_metadata: (),
+            from_storage_metadata: vec![(); sink_plan.from.len()],
             to_storage_metadata: (),
             commit_interval: sink_plan.commit_interval,
         };

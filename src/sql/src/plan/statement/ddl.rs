@@ -3511,36 +3511,74 @@ fn plan_sink(
         }
     };
 
-    let from_name = &from;
-    let from = scx.get_item_by_resolved_name(&from)?;
+    if from.is_empty() {
+        sql_bail!("at least one FROM item is required");
+    }
 
-    {
+    let from_names = from.clone();
+    let from_items: Vec<_> = from
+        .iter()
+        .map(|f| scx.get_item_by_resolved_name(f))
+        .collect::<Result<_, _>>()?;
+
+    for (_from_name, from_item) in from_names.iter().zip_eq(from_items.iter()) {
         use CatalogItemType::*;
-        match from.item_type() {
+        match from_item.item_type() {
             Table | Source | MaterializedView | ContinualTask => {
-                if from.replacement_target().is_some() {
-                    let name = scx.catalog.minimal_qualification(from.name());
+                if from_item.replacement_target().is_some() {
+                    let name = scx.catalog.minimal_qualification(from_item.name());
                     return Err(PlanError::InvalidSinkFrom {
                         name: name.to_string(),
-                        item_type: format!("replacement {}", from.item_type()),
+                        item_type: format!("replacement {}", from_item.item_type()),
                     });
                 }
             }
             Sink | View | Index | Type | Func | Secret | Connection => {
-                let name = scx.catalog.minimal_qualification(from.name());
+                let name = scx.catalog.minimal_qualification(from_item.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
-                    item_type: from.item_type().to_string(),
+                    item_type: from_item.item_type().to_string(),
                 });
             }
         }
+
+        if from_item.id().is_system() {
+            bail_unsupported!("creating a sink directly on a catalog object");
+        }
     }
 
-    if from.id().is_system() {
-        bail_unsupported!("creating a sink directly on a catalog object");
+    // All FROM items must have identical column names and types. We compare
+    // using iter() which yields (ColumnName, SqlColumnType), ignoring keys
+    // (the union doesn't preserve key uniqueness) and column metadata like
+    // version tracking (which can differ between tables and MVs).
+    let desc = from_items[0]
+        .relation_desc()
+        .expect("item type checked above");
+    for from_item in from_items.iter().skip(1) {
+        let other_desc = from_item.relation_desc().expect("item type checked above");
+        let columns_match = desc.len() == other_desc.len()
+            && desc
+                .iter()
+                .zip_eq(other_desc.iter())
+                .all(|((n1, t1), (n2, t2))| n1 == n2 && t1 == t2);
+        if !columns_match {
+            let name0 = scx.catalog.minimal_qualification(from_items[0].name());
+            let name_i = scx.catalog.minimal_qualification(from_item.name());
+            sql_bail!(
+                "all FROM items must have identical schemas, but {} and {} differ",
+                name0,
+                name_i,
+            );
+        }
     }
 
-    let desc = from.relation_desc().expect("item type checked above");
+    // For multi-source sinks, strip keys from the desc since the union of
+    // multiple collections does not preserve key uniqueness.
+    let desc = if from_items.len() > 1 {
+        desc.into_owned().without_keys()
+    } else {
+        desc.into_owned()
+    };
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
         | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
@@ -3642,7 +3680,7 @@ fn plan_sink(
                         })
                 } else {
                     return Err(PlanError::UpsertSinkWithInvalidKey {
-                        name: from_name.full_name_str(),
+                        name: from_names[0].full_name_str(),
                         desired_key: key_columns.iter().map(|c| c.to_string()).collect(),
                         valid_keys: desc
                             .typ()
@@ -3762,9 +3800,9 @@ fn plan_sink(
             relation_key_indices,
             key_desc_and_indices,
             headers_index,
-            desc.into_owned(),
+            desc.clone(),
             envelope,
-            from.id(),
+            from_items[0].id(),
             commit_interval,
         )?,
         CreateSinkConnection::Iceberg {
@@ -3798,7 +3836,7 @@ fn plan_sink(
         name,
         sink: Sink {
             create_sql,
-            from: from.global_id(),
+            from: from_items.iter().map(|f| f.global_id()).collect(),
             connection: connection_builder,
             envelope,
             version,

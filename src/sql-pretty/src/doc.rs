@@ -366,7 +366,10 @@ impl Pretty {
             docs.push(nest_title("IN CLUSTER", self.doc_display_pass(cluster)));
         }
 
-        docs.push(nest_title("FROM", self.doc_display_pass(&v.from)));
+        docs.push(nest_title(
+            "FROM",
+            comma_separate(|f| self.doc_display_pass(f), &v.from),
+        ));
         docs.push(nest_title("INTO", self.doc_display_pass(&v.connection)));
 
         if let Some(format) = &v.format {
