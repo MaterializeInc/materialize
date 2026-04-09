@@ -24,7 +24,7 @@ hyper.workspace = true
 hyper-openssl.workspace = true
 hyper-util.workspace = true
 jsonwebtoken.workspace = true
-launchdarkly-server-sdk.workspace = true
+launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"] }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }

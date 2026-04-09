@@ -187,6 +187,7 @@ wrappers = [
     "globset",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
+    "launchdarkly-sdk-transport",
     "native-tls",
     "opendal",
     "os_info",
