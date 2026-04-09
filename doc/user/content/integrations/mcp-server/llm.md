@@ -13,7 +13,6 @@ aliases:
 {{< annotation type="Disambiguation">}}
 This page provides information on the locally-run, separate MCP Server.
 For documentation on using the new built-in MCP Server endpoints, see:
-- [MCP Server for Agents](/integrations/mcp-server/mcp-agents/)
 - [MCP Server for Developer](/integrations/mcp-server/mcp-developer/)
 {{< /annotation >}}
 
