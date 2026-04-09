@@ -1,6 +1,6 @@
 ---
-title: "Cluster size mapping"
-description: "General mapping of M.1 to cc cluster sizes."
+title: "M.1 to cc size mapping"
+description: "General mapping between cc and M.1 cluster sizes."
 menu:
   main:
     parent: reference
