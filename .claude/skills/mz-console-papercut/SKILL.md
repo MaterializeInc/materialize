@@ -1,8 +1,8 @@
 ---
-name: console-papercut
+name: mz-console-papercut
 description: >
   Fix a console UI papercut from Linear and create a PR. Trigger when the user says
-  "console papercut", "/console-papercut", "fix papercut", references a CNS-* issue,
+  "console papercut", "/mz-console-papercut", "fix papercut", references a CNS-* issue,
   pastes a Linear URL for a console issue, mentions fixing a UI bug or visual issue
   in the Materialize console, or references Console Papercuts or monthly papercut
   Linear projects (e.g., April Papercuts). Use this even for small CSS fixes,
