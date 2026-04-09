@@ -126,17 +126,12 @@ The Playwright MCP writes screenshots, snapshots, and logs to `.playwright-mcp/`
 
 ## Step 6: Commit and PR
 
-Once the fix is verified, invoke the `/mz-commit` skill to:
+Once the fix is verified, invoke the `/mz-commit` skill to create the branch, commit, and open a PR. Guide it with:
 
-1. Create a branch named `<your-username>/<issue-id>-short-description` (e.g., `jcurrey/cns-30-fix-tooltip-overflow`)
-2. Commit with a `console:` prefixed message in imperative mood
-3. **Only stage files related to the papercut fix** (typically under `console/`). Do not include unrelated working tree changes (e.g., `.mcp.json`, skill files, `.gitignore`).
-4. Open a PR linking to the Linear issue
-
-The PR description should include:
-- **Motivation**: Link to the Linear issue
-- **What changed**: One sentence describing the fix
-- **Verification**: Embed the screenshot from browser verification directly in the PR body using markdown image syntax (`![description](screenshot-url)`). Upload the screenshot file to the PR using `gh` or include it as a GitHub-hosted image. If browser verification was not available, include manual verification steps instead.
+- **Branch**: `<your-username>/<issue-id>-short-description` (e.g., `jcurrey/cns-30-fix-tooltip-overflow`)
+- **Commit message**: use a `console:` prefix in imperative mood
+- **Staging**: only stage files related to the papercut fix (typically under `console/`). Do not include unrelated working tree changes (e.g., `.mcp.json`, skill files, `.gitignore`).
+- **PR description**: include motivation (link to the Linear issue), what changed (one sentence), and verification (embed the screenshot from Step 5, or manual verification steps if browser verification was not available)
 
 ## Step 7: Update Linear
 
