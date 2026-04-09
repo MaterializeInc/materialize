@@ -836,7 +836,7 @@ pub fn plan_explain_schema(
 
     crate::pure::purify_create_sink_avro_doc_on_options(
         scx.catalog,
-        *statement.from.item_id(),
+        *statement.from[0].item_id(),
         &mut statement.format,
     )?;
 
@@ -866,7 +866,7 @@ pub fn plan_explain_schema(
                 };
 
                 Ok(Plan::ExplainSinkSchema(ExplainSinkSchemaPlan {
-                    sink_from: sink.from,
+                    sink_from: sink.from[0],
                     json_schema: schema,
                 }))
             }

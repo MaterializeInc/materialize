@@ -2988,7 +2988,9 @@ impl Coordinator {
                     collections.push((ct.global_id(), collection_desc));
                 }
                 CatalogItem::Sink(sink) => {
-                    let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
+                    // Use first source's desc (all validated identical at plan time).
+                    let storage_sink_from_entry =
+                        self.catalog().get_entry_by_global_id(&sink.from[0]);
                     let from_desc = storage_sink_from_entry
                         .relation_desc()
                         .expect("sinks can only be built on items with descs")
@@ -2999,7 +3001,7 @@ impl Coordinator {
                         data_source: DataSource::Sink {
                             desc: ExportDescription {
                                 sink: StorageSinkDesc {
-                                    from: sink.from,
+                                    from: sink.from.clone(),
                                     from_desc,
                                     connection: sink
                                         .connection
@@ -3009,7 +3011,7 @@ impl Coordinator {
                                     as_of: Antichain::from_elem(Timestamp::minimum()),
                                     with_snapshot: sink.with_snapshot,
                                     version: sink.version,
-                                    from_storage_metadata: (),
+                                    from_storage_metadata: vec![(); sink.from.len()],
                                     to_storage_metadata: (),
                                     commit_interval: sink.commit_interval,
                                 },

@@ -464,11 +464,7 @@ where
         // sources.
         ids.retain(|&id| match self.export(id) {
             Ok(export) => {
-                result.push((
-                    id,
-                    export.input_hold().since().clone(),
-                    export.write_frontier.clone(),
-                ));
+                result.push((id, export.input_since(), export.write_frontier.clone()));
                 false
             }
             Err(_) => true,
@@ -910,7 +906,7 @@ where
             // Determine if this collection has another dependency.
             let storage_dependencies = self.determine_collection_dependencies(id, &description)?;
 
-            let dependency_read_holds = self
+            let mut dependency_read_holds = self
                 .storage_collections
                 .acquire_read_holds(storage_dependencies)
                 .expect("can acquire read holds");
@@ -1111,17 +1107,14 @@ where
                     maybe_instance_id = Some(ingestion_desc.instance_id);
                 }
                 DataSource::Sink { desc } => {
-                    let mut dependency_since = Antichain::from_elem(T::minimum());
-                    for read_hold in dependency_read_holds.iter() {
-                        dependency_since.join_assign(read_hold.since());
-                    }
-
-                    let [self_hold, read_hold] =
-                        dependency_read_holds.try_into().expect("two holds");
+                    // The last dependency hold is the self hold; the rest are
+                    // input holds (one per FROM collection).
+                    let self_hold = dependency_read_holds.pop().expect("at least one hold");
+                    let input_holds = dependency_read_holds;
 
                     let state = ExportState::new(
                         desc.instance_id,
-                        read_hold,
+                        input_holds,
                         self_hold,
                         write_frontier.clone(),
                         ReadPolicy::step_back(),
@@ -1571,35 +1564,47 @@ where
         id: GlobalId,
         new_description: ExportDescription<Self::Timestamp>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        let from_id = new_description.sink.from;
+        let from_ids = &new_description.sink.from;
 
         // Acquire read holds at StorageCollections to ensure that the
-        // sinked collection is not dropped while we're sinking it.
-        let desired_read_holds = vec![from_id.clone(), id.clone()];
-        let [input_hold, self_hold] = self
+        // sinked collections are not dropped while we're sinking them.
+        let mut desired_read_holds: Vec<_> = from_ids.clone();
+        desired_read_holds.push(id);
+        let mut holds = self
             .storage_collections
             .acquire_read_holds(desired_read_holds)
-            .expect("missing dependency")
-            .try_into()
-            .expect("expected number of holds");
-        let from_storage_metadata = self.storage_collections.collection_metadata(from_id)?;
+            .expect("missing dependency");
+        let self_hold = holds.pop().expect("at least one hold");
+        let input_holds = holds;
+        let from_storage_metadata: Vec<_> = from_ids
+            .iter()
+            .map(|fid| self.storage_collections.collection_metadata(*fid))
+            .collect::<Result<_, _>>()?;
         let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
-        // Check whether the sink's write frontier is beyond the read hold we got
+        // Check whether the sink's write frontier is beyond the read holds we got
         let cur_export = self.export_mut(id)?;
+        let input_since = {
+            let mut since = Antichain::from_elem(T::minimum());
+            for hold in &input_holds {
+                since.join_assign(hold.since());
+            }
+            since
+        };
         let input_readable = cur_export
             .write_frontier
             .iter()
-            .all(|t| input_hold.since().less_than(t));
+            .all(|t| input_since.less_than(t));
         if !input_readable {
-            return Err(StorageError::ReadBeforeSince(from_id));
+            return Err(StorageError::ReadBeforeSince(from_ids[0]));
         }
 
         let new_export = ExportState {
             read_capabilities: cur_export.read_capabilities.clone(),
             cluster_id: new_description.instance_id,
             derived_since: cur_export.derived_since.clone(),
-            read_holds: [input_hold, self_hold],
+            input_holds,
+            self_hold,
             read_policy: cur_export.read_policy.clone(),
             write_frontier: cur_export.write_frontier.clone(),
         };
@@ -1617,7 +1622,7 @@ where
         let cmd = RunSinkCommand {
             id,
             description: StorageSinkDesc {
-                from: from_id,
+                from: new_description.sink.from,
                 from_desc: new_description.sink.from_desc,
                 connection: new_description.sink.connection,
                 envelope: new_description.sink.envelope,
@@ -1668,7 +1673,7 @@ where
                     panic!("export exists")
                 };
                 let export_description = desc.clone();
-                let as_of = state.input_hold().since().clone();
+                let as_of = state.input_since();
 
                 (export_description, as_of)
             };
@@ -1679,15 +1684,18 @@ where
             // Ensure compatibility
             current_sink.alter_compatible(id, &new_export_description.sink)?;
 
-            let from_storage_metadata = self
-                .storage_collections
-                .collection_metadata(new_export_description.sink.from)?;
+            let from_storage_metadata: Vec<_> = new_export_description
+                .sink
+                .from
+                .iter()
+                .map(|fid| self.storage_collections.collection_metadata(*fid))
+                .collect::<Result<_, _>>()?;
             let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
             let cmd = RunSinkCommand {
                 id,
                 description: StorageSinkDesc {
-                    from: new_export_description.sink.from,
+                    from: new_export_description.sink.from.clone(),
                     from_desc: new_export_description.sink.from_desc.clone(),
                     connection: new_export_description.sink.connection.clone(),
                     envelope: new_export_description.sink.envelope,
@@ -3050,11 +3058,21 @@ where
                     .get_mut(&key)
                     .expect("missing collection state");
 
-                let read_holds = match &mut collection.extra_state {
+                match &mut collection.extra_state {
                     CollectionStateExtra::Ingestion(ingestion) => {
-                        ingestion.dependency_read_holds.as_mut_slice()
+                        for read_hold in ingestion.dependency_read_holds.iter_mut() {
+                            read_hold
+                                .try_downgrade(frontier.clone())
+                                .expect("we only advance the frontier");
+                        }
                     }
-                    CollectionStateExtra::Export(export) => export.read_holds.as_mut_slice(),
+                    CollectionStateExtra::Export(export) => {
+                        for read_hold in export.all_holds_mut() {
+                            read_hold
+                                .try_downgrade(frontier.clone())
+                                .expect("we only advance the frontier");
+                        }
+                    }
                     CollectionStateExtra::None => {
                         soft_panic_or_log!(
                             "trying to downgrade read holds for collection which is not an \
@@ -3063,12 +3081,6 @@ where
                         continue;
                     }
                 };
-
-                for read_hold in read_holds.iter_mut() {
-                    read_hold
-                        .try_downgrade(frontier.clone())
-                        .expect("we only advance the frontier");
-                }
 
                 // Send AllowCompaction command directly to the instance
                 if let Some(instance) = self.instances.get_mut(&cluster_id) {
@@ -3366,8 +3378,10 @@ where
                 }
             }
             DataSource::Sink { desc } => {
-                // Sinks hold back their own frontier and the frontier of their input.
-                dependencies.extend([self_id, desc.sink.from]);
+                // Sinks hold back the frontier of their inputs and their own frontier.
+                // self_id must be last so the consumer can pop() it off.
+                dependencies.extend(desc.sink.from.iter().copied());
+                dependencies.push(self_id);
             }
         };
 
@@ -3479,9 +3493,12 @@ where
             return Err(StorageError::IdentifierMissing(id));
         };
 
-        let from_storage_metadata = self
-            .storage_collections
-            .collection_metadata(description.sink.from)?;
+        let from_storage_metadata: Vec<_> = description
+            .sink
+            .from
+            .iter()
+            .map(|fid| self.storage_collections.collection_metadata(*fid))
+            .collect::<Result<_, _>>()?;
         let to_storage_metadata = self.storage_collections.collection_metadata(id)?;
 
         // Choose an as-of frontier for this execution of the sink. If the write frontier of the sink
@@ -3495,7 +3512,7 @@ where
 
         info!(
             sink_id = %id,
-            from_id = %description.sink.from,
+            from_ids = ?description.sink.from,
             write_frontier = ?export_state.write_frontier,
             ?as_of,
             ?with_snapshot,
@@ -3505,7 +3522,7 @@ where
         let cmd = RunSinkCommand {
             id,
             description: StorageSinkDesc {
-                from: description.sink.from,
+                from: description.sink.from.clone(),
                 from_desc: description.sink.from_desc.clone(),
                 connection: description.sink.connection.clone(),
                 envelope: description.sink.envelope,

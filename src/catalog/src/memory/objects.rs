@@ -1292,8 +1292,8 @@ pub struct Sink {
     pub create_sql: String,
     /// [`GlobalId`] used to reference this sink from outside the catalog, e.g storage.
     pub global_id: GlobalId,
-    /// Collection we read into this sink.
-    pub from: GlobalId,
+    /// Collections we read into this sink (unioned together).
+    pub from: Vec<GlobalId>,
     /// Connection to the external service we're sinking into, e.g. Kafka.
     pub connection: StorageSinkConnection<ReferencedConnection>,
     /// Envelope we use to sink into the external system.

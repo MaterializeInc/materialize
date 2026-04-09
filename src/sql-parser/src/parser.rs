@@ -3298,7 +3298,7 @@ impl<'a> Parser<'a> {
         &mut self,
         name: Option<UnresolvedItemName>,
         in_cluster: Option<RawClusterName>,
-        from: RawItemName,
+        from: Vec<RawItemName>,
         if_not_exists: bool,
         connection: CreateSinkConnection<Raw>,
     ) -> Result<CreateSinkStatement<Raw>, ParserError> {
@@ -3334,7 +3334,7 @@ impl<'a> Parser<'a> {
         &mut self,
         name: Option<UnresolvedItemName>,
         in_cluster: Option<RawClusterName>,
-        from: RawItemName,
+        from: Vec<RawItemName>,
         if_not_exists: bool,
         connection: CreateSinkConnection<Raw>,
     ) -> Result<CreateSinkStatement<Raw>, ParserError> {
@@ -3401,7 +3401,7 @@ impl<'a> Parser<'a> {
 
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
-        let from = self.parse_raw_name()?;
+        let from = self.parse_comma_separated(Parser::parse_raw_name)?;
         self.expect_keyword(INTO)?;
         let connection = self.parse_create_sink_connection()?;
 
@@ -6217,7 +6217,7 @@ impl<'a> Parser<'a> {
 
                     if self.parse_keyword(FROM) {
                         let from = self
-                            .parse_raw_name()
+                            .parse_comma_separated(Parser::parse_raw_name)
                             .map_parser_err(StatementKind::AlterSink)?;
 
                         Statement::AlterSink(AlterSinkStatement {

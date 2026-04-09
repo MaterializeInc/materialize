@@ -1856,8 +1856,8 @@ pub struct Secret {
 pub struct Sink {
     /// Parse-able SQL that is stored durably and defines this sink.
     pub create_sql: String,
-    /// Collection we read into this sink.
-    pub from: GlobalId,
+    /// Collections we read into this sink (unioned together).
+    pub from: Vec<GlobalId>,
     /// Type of connection to the external service we sink into.
     pub connection: StorageSinkConnection<ReferencedConnection>,
     // TODO(guswynn): this probably should just be in the `connection`.

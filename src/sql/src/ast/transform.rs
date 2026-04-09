@@ -197,7 +197,9 @@ pub fn create_stmt_rename_refs(
             maybe_update_item_name(on_name.name_mut());
         }
         Statement::CreateSink(CreateSinkStatement { from, .. }) => {
-            maybe_update_item_name(from.name_mut());
+            for f in from {
+                maybe_update_item_name(f.name_mut());
+            }
         }
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },

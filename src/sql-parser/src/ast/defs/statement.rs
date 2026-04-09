@@ -1283,7 +1283,7 @@ pub struct CreateSinkStatement<T: AstInfo> {
     pub name: Option<UnresolvedItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub if_not_exists: bool,
-    pub from: T::ItemName,
+    pub from: Vec<T::ItemName>,
     pub connection: CreateSinkConnection<T>,
     pub format: Option<FormatSpecifier<T>>,
     pub envelope: Option<SinkEnvelope>,
@@ -1307,7 +1307,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
             f.write_str(" ");
         }
         f.write_str("FROM ");
-        f.write_node(&self.from);
+        f.write_node(&display::comma_separated(&self.from));
         f.write_str(" INTO ");
         f.write_node(&self.connection);
         if let Some(format) = &self.format {
@@ -2859,7 +2859,7 @@ impl_display_t!(AlterIndexStatement);
 pub enum AlterSinkAction<T: AstInfo> {
     SetOptions(Vec<CreateSinkOption<T>>),
     ResetOptions(Vec<CreateSinkOptionName>),
-    ChangeRelation(T::ItemName),
+    ChangeRelation(Vec<T::ItemName>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2881,7 +2881,7 @@ impl<T: AstInfo> AstDisplay for AlterSinkStatement<T> {
         match &self.action {
             AlterSinkAction::ChangeRelation(from) => {
                 f.write_str("SET FROM ");
-                f.write_node(from);
+                f.write_node(&display::comma_separated(from));
             }
             AlterSinkAction::SetOptions(options) => {
                 f.write_str("SET (");

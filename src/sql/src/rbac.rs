@@ -545,7 +545,7 @@ fn generate_rbac_requirements(
                 AclMode::CREATE,
                 role_id,
             )];
-            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            let items = sink.from.iter().map(|gid| catalog.resolve_item_id(gid));
             privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
@@ -1083,7 +1083,7 @@ fn generate_rbac_requirements(
             with_snapshot: _,
             in_cluster,
         }) => {
-            let items = iter::once(sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            let items = sink.from.iter().map(|gid| catalog.resolve_item_id(gid));
             let mut privileges = generate_read_privileges(catalog, items, role_id);
             privileges.push((
                 SystemObjectId::Object(in_cluster.into()),
