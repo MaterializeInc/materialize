@@ -294,7 +294,6 @@ impl UpsertMetricDefs {
 
 /// Metrics for upsert source shared across workers.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct UpsertSharedMetrics {
     pub(crate) merge_snapshot_latency: DeleteOnDropHistogram<Vec<String>>,
     pub(crate) multi_get_latency: DeleteOnDropHistogram<Vec<String>>,
@@ -356,7 +355,6 @@ impl UpsertBackpressureMetricDefs {
 }
 
 /// Metrics for the `upsert` operator.
-#[allow(dead_code)]
 pub struct UpsertMetrics {
     pub(crate) rehydration_latency: DeleteOnDropGauge<AtomicF64, Vec<String>>,
     pub(crate) rehydration_total: DeleteOnDropGauge<AtomicU64, Vec<String>>,
