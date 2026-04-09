@@ -13,7 +13,7 @@ Fix a single console UI papercut end-to-end: pull issue from Linear, make a mini
 
 ## Prerequisites
 
-- **Linear MCP** must be connected (for pulling issue details).
+- **Linear MCP** must be connected (for pulling issue details and updating status). If not configured, tell the user to add a Linear MCP server to their `.mcp.json` or Claude.ai MCP settings and reconnect via `/mcp`.
 - **Playwright MCP** (optional) for browser-based verification. If unavailable, skip to manual verification instructions.
 - Dev server: `yarn --cwd console start` should be running or startable.
 
@@ -21,20 +21,9 @@ Fix a single console UI papercut end-to-end: pull issue from Linear, make a mini
 
 Parse `$ARGUMENTS` for a Linear issue identifier (e.g., `CNS-30`).
 
-If no identifier is provided, list open issues from papercut projects:
+If no identifier is provided, use the Linear MCP tools to list open issues from papercut projects. Search for issues in the "Console" team with states "backlog", "todo", or "in progress" from either the "Console Papercuts" project or the current monthly project (e.g., "April Papercuts").
 
-```
-mcp__claude_ai_Linear__list_issues(
-  project: "Console Papercuts",
-  team: "Console",
-  state: "backlog" OR "todo" OR "in progress",
-  limit: 10
-)
-```
-
-Also check the current monthly project (e.g., "April Papercuts") if the main project returns few results.
-
-Fetch full issue details with `mcp__claude_ai_Linear__get_issue` to get description, comments, and attachments.
+Once you have an issue identifier, fetch the full issue details (description, comments, and attachments) using the Linear MCP tools.
 
 ## Step 2: Understand the fix
 
@@ -151,20 +140,7 @@ The PR description should include:
 
 ## Step 7: Update Linear
 
-After the PR is created, update the Linear issue:
+After the PR is created, use the Linear MCP tools to:
 
-```
-mcp__claude_ai_Linear__save_issue(
-  id: "<issue-id>",
-  state: "In Progress"
-)
-```
-
-Add a comment with the PR link:
-
-```
-mcp__claude_ai_Linear__save_comment(
-  issueId: "<issue-id>",
-  body: "PR: <github-pr-url>"
-)
-```
+1. Update the issue state to "In Progress".
+2. Add a comment with the PR link (e.g., `PR: <github-pr-url>`).
