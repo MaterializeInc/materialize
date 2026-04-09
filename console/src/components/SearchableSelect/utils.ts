@@ -70,7 +70,7 @@ export const buildSearchableSelectFilterStyles = <
         menu: (base) => ({
           ...base,
           minWidth: menuWidth ?? base.minWidth,
-          width: menuWidth ?? base.width,
+          width: menuWidth ? "max-content" : base.width,
           boxShadow: shadows.level3,
         }),
         menuPortal: (base) => ({
