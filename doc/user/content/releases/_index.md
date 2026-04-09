@@ -15,6 +15,26 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.19.0
+*Released to Materialize Cloud: Thursday, April 10, 2026* <br>
+*Released to Materialize Self-Managed: Friday, April 11, 2026* <br>
+
+This release introduces Iceberg Sink append mode and bug fixes.
+
+### Features {#v26.19-features}
+
+- **Iceberg Sink Append Mode**: Iceberg sinks now support `MODE APPEND`, which
+  outputs data rows with additional `_mz_diff` and `_mz_timestamp` columns to
+  capture the full update stream. Inserted rows get +1 diff, removed rows get
+  -1 diff, and updated rows become two output rows with -1 (before) and +1
+  (after) diffs.
+
+### Bug Fixes {#v26.19-bug-fixes}
+
+- Fixed identifier display in system catalog tables `mz_kafka_source_tables`,
+  `mz_mysql_source_tables`, and `mz_postgres_source_tables` to show raw values
+  without SQL quoting (e.g., `my-kafka-topic` instead of `"my-kafka-topic"`).
+
 ## v26.18.0
 *Released to Materialize Cloud: 2026-04-02* <br>
 *Released to Materialize Self-Managed: 2026-04-03* <br>
