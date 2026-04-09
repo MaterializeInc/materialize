@@ -31,6 +31,7 @@ Once you have an issue identifier, fetch the full issue details (description, co
 2. Identify which files need to change. Start by searching `console/src/` for relevant components, hooks, or queries.
 3. Read the relevant files. **Understand the existing code before making any changes.**
 4. Read `console/CLAUDE.md` for code conventions — every change must follow these.
+5. If the issue is ambiguous or multiple approaches are viable, ask the user which direction to take before writing code. For clear-cut fixes (typos, missing styles, broken alignment), proceed directly.
 
 ## Step 3: Make the fix
 
