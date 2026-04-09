@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/func.rs
-revision: 242ad79720
+revision: 90a38f32be
 ---
 
 # mz-sql::func
