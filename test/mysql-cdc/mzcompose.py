@@ -155,6 +155,68 @@ def workflow_replica_connection(c: Composition, parser: WorkflowArgumentParser) 
         )
 
 
+def workflow_drop_recreate(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """
+    Regression test for database-issues#7683: DROP TABLE followed by immediate
+    CREATE TABLE with the same schema (as happens during mysqldump restore).
+
+    When handling a DROP TABLE binlog event, the replication worker opens a new
+    connection and calls verify_schemas() which queries the CURRENT state of
+    information_schema. If the table has already been recreated by the time this
+    query runs (because DROP+CREATE executed back-to-back on the server without
+    client round-trip delays), verify_schemas sees a matching schema and the
+    drop goes undetected.
+
+    The race requires the worker to fall behind the binlog stream so that by the
+    time verify_schemas runs, the table has been recreated. This happens during
+    mysqldump --all-databases restores because they generate DDL events for many
+    system tables, each of which triggers a verify_schemas call that takes time
+    (new connection + query). While the worker processes these events one by one,
+    MySQL continues executing the restore script, recreating the tracked table.
+
+    This test replicates that scenario: mysqldump + piped restore.
+    """
+
+    mysql_version = get_targeted_mysql_version(parser)
+    with c.override(create_mysql(mysql_version)):
+        c.up("materialized", "mysql")
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "drop-recreate/setup.td",
+        )
+
+        # Create a mysqldump backup (like the backup_restore_mysql test).
+        # mysqldump --all-databases generates DROP TABLE + CREATE TABLE for every
+        # table including system tables, producing a flood of DDL events.
+        c.exec(
+            "mysql",
+            "bash",
+            "-c",
+            f"export MYSQL_PWD={MySql.DEFAULT_ROOT_PASSWORD}"
+            " && mysqldump --all-databases -u root --set-gtid-purged=OFF"
+            " > /tmp/backup.sql",
+        )
+
+        # Restore from the backup via pipe. MySQL processes the entire script
+        # back-to-back, generating many DDL binlog events. The worker falls
+        # behind processing verify_schemas calls for each DROP TABLE, and by
+        # the time it handles the DROP for our tracked table, that table has
+        # already been recreated.
+        c.exec(
+            "mysql",
+            "bash",
+            "-c",
+            f"export MYSQL_PWD={MySql.DEFAULT_ROOT_PASSWORD}"
+            " && mysql -u root < /tmp/backup.sql",
+        )
+
+    with c.override(Testdrive(no_reset=True), create_mysql(mysql_version)):
+        c.run_testdrive_files(
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            "drop-recreate/verify.td",
+        )
+
+
 def workflow_schema_change_restart(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
