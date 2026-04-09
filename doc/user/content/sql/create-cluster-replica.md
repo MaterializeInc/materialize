@@ -22,10 +22,10 @@ clusters.
 
 ## Details
 
-### Size
+### Available sizes
 
 The `SIZE` option for replicas is identical to the [`SIZE` option for
-clusters](/sql/create-cluster/#size) option, except that the size applies only
+clusters](/sql/create-cluster/#available-sizes) option, except that the size applies only
 to the new replica.
 
 {{< tabs >}}

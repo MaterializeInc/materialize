@@ -55,7 +55,7 @@ example, you could place your development workloads in a cluster named
 
 <a name="legacy-sizes"></a>
 
-### Size
+### Available sizes
 
 The `SIZE` option determines the amount of compute resources available to the
 cluster.
@@ -206,7 +206,7 @@ do exactly the same work (i.e., maintain the same dataflows and process the same
 queries) as all the other replicas of the cluster.
 
 To increase a cluster's capacity, you should instead increase the cluster's
-[size](#size).
+[size](#available-sizes).
 {{< /note >}}
 
 ### Credit usage

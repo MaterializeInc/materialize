@@ -1,5 +1,5 @@
 ---
-title: "M.1 to cc size mapping"
+title: "Cluster size mapping"
 description: "General mapping of M.1 to cc cluster sizes."
 menu:
   main:
