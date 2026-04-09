@@ -18,12 +18,12 @@ use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_repr::{GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_tracing::params::TracingParameters;
 use serde::{Deserialize, Serialize};
-use timely::progress::frontier::Antichain;
+use timely::progress::frontier::{Antichain, AntichainRef};
 use uuid::Uuid;
 
 use crate::logging::LoggingConfig;
@@ -226,7 +226,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// A [`Peek`] description that violates any of the above properties can cause the replica to
     /// exhibit undefined behavior.
     ///
-    /// Specifying a [`Peek::timestamp`] that is less than the target index's `since` frontier does
+    /// Specifying a peek with a frontier that is less than the target index's `since` frontier does
     /// not provoke undefined behavior. Instead, the replica must produce a [`PeekResponse::Error`]
     /// in response.
     ///
@@ -404,6 +404,84 @@ impl PeekTarget {
     }
 }
 
+/// A [differential_dataflow::trace::Description], but specialized for our totally-ordered times.
+#[derive(Copy, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PeekDescription<T = mz_repr::Timestamp> {
+    lower: Option<T>,
+    upper: Option<T>,
+    since: T,
+}
+
+impl<T: TimestampManipulation> PeekDescription<T> {
+    /// Peek the data at a specific timestamp.
+    pub fn select(as_of: T) -> Self {
+        Self {
+            lower: Some(T::minimum()),
+            upper: as_of.try_step_forward(),
+            since: as_of,
+        }
+    }
+
+    /// Peek the data covering a given subscribe window.
+    pub fn subscribe(as_of: T, up_to: Option<T>, with_snapshot: bool) -> Self {
+        let lower = if with_snapshot {
+            Some(T::minimum())
+        } else {
+            as_of.try_step_forward()
+        };
+        Self {
+            lower,
+            upper: up_to,
+            since: as_of,
+        }
+    }
+
+    /// Advance the given timestamp by the since.
+    pub fn advance(&self, time: T) -> T {
+        if self.since > time {
+            self.since.clone()
+        } else {
+            time
+        }
+    }
+
+    /// True iff the timestamp lies between the lower and upper.
+    pub fn contains(&self, time: &T) -> bool {
+        self.lower.as_ref().is_some_and(|l| l <= time)
+            && self.upper.as_ref().is_none_or(|u| time < u)
+    }
+
+    /// We can allow our input trace to advance up to this frontier without losing our ability to
+    /// read.
+    pub fn downgrade_to(&self) -> Antichain<T> {
+        let Some(lower) = self.lower.as_ref() else {
+            return Antichain::new();
+        };
+        let before_lower = lower.step_back().unwrap_or_else(T::minimum);
+        Antichain::from_elem(before_lower.max(self.since.clone()))
+    }
+
+    /// Retrieve the lower as a frontier.
+    pub fn lower(&self) -> AntichainRef<'_, T> {
+        AntichainRef::new(self.lower.as_slice())
+    }
+
+    /// Retrieve the upper as a frontier.
+    pub fn upper(&self) -> AntichainRef<'_, T> {
+        AntichainRef::new(self.upper.as_slice())
+    }
+
+    /// Retrieve the since as a frontier.
+    pub fn since(&self) -> AntichainRef<'_, T> {
+        AntichainRef::new(std::slice::from_ref(&self.since))
+    }
+
+    /// Return the since as a bare timestamp, representing the overall read.
+    pub fn timestamp(&self) -> T {
+        self.since.clone()
+    }
+}
+
 /// Peek a collection, either in an arrangement or Persist.
 ///
 /// This request elicits data from the worker, by naming the
@@ -431,8 +509,8 @@ pub struct Peek<T = mz_repr::Timestamp> {
     ///
     /// Used in responses and cancellation requests.
     pub uuid: Uuid,
-    /// The logical timestamp at which the collection is queried.
-    pub timestamp: T,
+    /// The logical timestamps at which the collection is queried.
+    pub timestamps: PeekDescription<T>,
     /// Actions to apply to the result set before returning them.
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.

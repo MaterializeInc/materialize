@@ -40,7 +40,7 @@ use crate::controller::{
 };
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
-use crate::protocol::command::PeekTarget;
+use crate::protocol::command::{PeekDescription, PeekTarget};
 use crate::protocol::response::PeekResponse;
 
 /// Error indicating the instance has shut down.
@@ -229,7 +229,7 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
         peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
-        timestamp: T,
+        timestamps: PeekDescription<T>,
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
@@ -242,7 +242,7 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
                 peek_target,
                 literal_constraints,
                 uuid,
-                timestamp,
+                timestamps,
                 result_desc,
                 finishing,
                 map_filter_project,

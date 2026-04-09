@@ -6,25 +6,22 @@
 //! For eligible peeks, we send the result back via the peek stash (aka persist
 //! blob), instead of inline in `ComputeResponse`.
 
-use std::num::{NonZeroI64, NonZeroU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use differential_dataflow::difference::IsZero;
 use mz_compute_client::protocol::command::Peek;
 use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
-use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::Schemas;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{Diff, RelationDesc, Row, Timestamp, UpdateCollection};
 use mz_storage_types::sources::SourceData;
-use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tracing::debug;
-use uuid::Uuid;
 
 use crate::arrangement::manager::{PaddedTrace, TraceBundle};
 use crate::compute_state::peek_result_iterator;
@@ -45,7 +42,7 @@ pub struct StashingPeek {
     /// We can't give a PeekResultIterator to our async upload task because the
     /// underlying trace reader is not Send/Sync. So we need to use a channel to
     /// send result rows from the worker thread to the async background task.
-    rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, String>>>,
+    rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, Timestamp, Diff)>, String>>>,
     /// The result of the background task, eventually.
     pub result: oneshot::Receiver<(PeekResponse, Duration)>,
     /// The `tracing::Span` tracking this peek's operation
@@ -77,7 +74,7 @@ impl StashingPeek {
         let peek_iterator = peek_result_iterator::PeekResultIterator::new(
             peek.target.id(),
             peek.map_filter_project.clone(),
-            peek.timestamp,
+            peek.timestamps.clone(),
             peek.literal_constraints.as_deref_mut(),
             oks_handle,
         );
@@ -86,28 +83,31 @@ impl StashingPeek {
 
         let task_handle = mz_ore::task::spawn(
             || format!("peek_stash::stash_peek_response({peek_uuid})"),
-            async move {
-                let start = Instant::now();
+            {
+                let peek = peek.clone();
+                async move {
+                    let start = Instant::now();
 
-                let result = Self::do_upload(
-                    &persist_clients,
-                    persist_location,
-                    batch_max_runs,
-                    peek.uuid,
-                    relation_desc,
-                    rows_needed_by_finishing,
-                    rows_rx,
-                )
-                .await;
+                    let result = Self::do_upload(
+                        &persist_clients,
+                        persist_location,
+                        batch_max_runs,
+                        peek,
+                        relation_desc,
+                        rows_needed_by_finishing,
+                        rows_rx,
+                    )
+                    .await;
 
-                let result = match result {
-                    Ok(peek_response) => peek_response,
-                    Err(e) => PeekResponse::Error(e.to_string()),
-                };
-                match result_tx.send((result, start.elapsed())) {
-                    Ok(()) => {}
-                    Err((_result, elapsed)) => {
-                        debug!(duration = ?elapsed, "dropping result for cancelled peek {}", peek_uuid)
+                    let result = match result {
+                        Ok(peek_response) => peek_response,
+                        Err(e) => PeekResponse::Error(e.to_string()),
+                    };
+                    match result_tx.send((result, start.elapsed())) {
+                        Ok(()) => {}
+                        Err((_result, elapsed)) => {
+                            debug!(duration = ?elapsed, "dropping result for cancelled peek {}", peek_uuid)
+                        }
                     }
                 }
             },
@@ -127,27 +127,23 @@ impl StashingPeek {
         persist_clients: &PersistClientCache,
         persist_location: PersistLocation,
         batch_max_runs: usize,
-        peek_uuid: Uuid,
+        peek: Peek,
         relation_desc: RelationDesc,
         max_rows: Option<usize>, // The number of rows needed by the RowSetFinishing's offset + limit
-        mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, String>>,
+        mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, Timestamp, Diff)>, String>>,
     ) -> Result<PeekResponse, String> {
         let client = persist_clients
             .open(persist_location)
             .await
             .map_err(|e| e.to_string())?;
 
-        let shard_id = format!("s{}", peek_uuid);
+        let shard_id = format!("s{}", peek.uuid);
         let shard_id = ShardId::try_from(shard_id).expect("can parse");
         let write_schemas: Schemas<SourceData, ()> = Schemas {
             id: None,
             key: Arc::new(relation_desc.clone()),
             val: Arc::new(UnitSchema),
         };
-
-        let result_ts = Timestamp::default();
-        let lower = Antichain::from_elem(result_ts);
-        let upper = Antichain::from_elem(result_ts.step_forward());
 
         // We have to use SourceData, which is a wrapper around a Result<Row,
         // DataflowError>, because the bare columnar Row encoder doesn't support
@@ -159,30 +155,31 @@ impl StashingPeek {
             .batch_builder::<SourceData, (), Timestamp, i64>(
                 shard_id,
                 write_schemas,
-                lower,
+                peek.timestamps.lower().to_owned(),
                 Some(batch_max_runs),
             )
             .await;
 
-        let mut num_rows: u64 = 0;
+        let mut num_rows: usize = 0;
 
         loop {
             let row = rows_rx.recv().await;
             match row {
                 Some(Ok(rows)) => {
-                    for (row, diff) in rows {
-                        num_rows +=
-                            u64::from(NonZeroU64::try_from(diff).expect("diff fits into u64"));
-                        let diff: i64 = diff.into();
-
+                    for (row, timestamp, diff) in rows {
+                        let diff: i64 = diff.into_inner();
+                        if diff.is_zero() {
+                            continue;
+                        }
                         batch_builder
-                            .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
+                            .add(&SourceData(Ok(row)), &(), &timestamp, &diff)
                             .await
                             .expect("invalid usage");
 
                         // Stop if we have enough rows to satisfy the RowSetFinishing's offset + limit.
                         if let Some(max_rows) = max_rows {
-                            if num_rows >= u64::cast_from(max_rows) {
+                            num_rows += usize::try_from(diff).expect("diff fits into u64");
+                            if num_rows >= max_rows {
                                 break;
                             }
                         }
@@ -195,7 +192,10 @@ impl StashingPeek {
             }
         }
 
-        let batch = batch_builder.finish(upper).await.expect("invalid usage");
+        let batch = batch_builder
+            .finish(peek.timestamps.upper().to_owned())
+            .await
+            .expect("invalid usage");
 
         let stashed_response = StashedPeekResponse {
             num_rows_batches: u64::cast_from(num_rows),
@@ -203,7 +203,7 @@ impl StashingPeek {
             relation_desc,
             shard_id,
             batches: vec![batch.into_transmittable_batch()],
-            inline_rows: vec![RowCollection::new(vec![], &[])],
+            inline_rows: vec![UpdateCollection::default()],
         };
         let result = PeekResponse::Stashed(Box::new(stashed_response));
         Ok(result)

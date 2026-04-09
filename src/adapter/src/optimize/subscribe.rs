@@ -13,10 +13,21 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::CollectionIdBundle;
+use crate::coord::peek::{FastPathPlan, create_fast_path_plan};
+use crate::optimize::dataflows::{
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
+    dataflow_import_id_bundle,
+};
+use crate::optimize::{
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
+    OptimizerConfig, OptimizerError, optimize_mir_local, trace_plan,
+};
 use differential_dataflow::lattice::Lattice;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -26,16 +37,6 @@ use mz_transform::dataflow::{DataflowMetainfo, optimize_dataflow_snapshot};
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
 use timely::progress::Antichain;
-
-use crate::CollectionIdBundle;
-use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
-    dataflow_import_id_bundle,
-};
-use crate::optimize::{
-    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
-    OptimizerConfig, OptimizerError, optimize_mir_local, trace_plan,
-};
 
 pub struct Optimizer {
     /// A representation typechecking context to use throughout the optimizer pipeline.
@@ -132,6 +133,21 @@ impl<T: Clone> GlobalMirPlan<T> {
     /// Computes the [`CollectionIdBundle`] of the wrapped dataflow.
     pub fn id_bundle(&self, compute_instance_id: ComputeInstanceId) -> CollectionIdBundle {
         dataflow_import_id_bundle(&self.df_desc, compute_instance_id)
+    }
+
+    /// Attempt to extract a fast-path plan from the optimized subscribe.
+    pub fn try_create_fast_path_plan(
+        &self,
+        id: GlobalId,
+    ) -> Result<Option<(FastPathPlan, GlobalId, ComputeSinkDesc, DataflowMetainfo)>, OptimizerError>
+    {
+        // Use the standard peek logic for the fast path plan, disabling the persist fast path
+        // and the finishing since those aren't applicable for subscribes.
+        let Some(plan) = create_fast_path_plan(&self.df_desc, id, None, 0, false)? else {
+            return Ok(None);
+        };
+        let (id, sink) = self.df_desc.sink_exports.iter().into_element();
+        Ok(Some((plan, *id, sink.clone(), self.df_meta.clone())))
     }
 }
 

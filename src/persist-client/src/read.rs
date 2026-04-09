@@ -1187,7 +1187,7 @@ where
             self.metrics.read.snapshot.clone(),
             Arc::clone(&self.blob),
             self.shard_id(),
-            as_of,
+            FetchBatchFilter::Snapshot { as_of },
             self.read_schemas.clone(),
             &batches,
             lease,
@@ -1203,17 +1203,14 @@ where
         read_metrics: ReadMetrics,
         blob: Arc<dyn Blob>,
         shard_id: ShardId,
-        as_of: Antichain<T>,
+        filter: FetchBatchFilter<T>,
         schemas: Schemas<K, V>,
         batches: &[HollowBatch<T>],
         lease: L,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
         memory_budget_bytes: usize,
     ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
-        let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
-        let filter = FetchBatchFilter::Snapshot {
-            as_of: as_of.clone(),
-        };
+        let context = format!("{}[filter={:?}]", shard_id, filter);
 
         let mut consolidator = Consolidator::new(
             context,

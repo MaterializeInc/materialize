@@ -24,7 +24,7 @@ use mz_ore::task::JoinHandle;
 use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, RelationDesc, Timestamp};
 use mz_sql::ast::Raw;
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::Params;
@@ -1123,11 +1123,26 @@ impl PeekClient {
                             let local_mir_plan =
                                 global_mir_plan.resolve(Antichain::from_elem(as_of));
 
+                            if let Some(up_to) = plan.up_to
+                                && let Some((fast_path, _id, sink, df_meta)) =
+                                    local_mir_plan.try_create_fast_path_plan(view_id)?
+                            {
+                                return Ok(Execution::SubscribeFastPath {
+                                    subscribe_plan: plan,
+                                    fast_path_plan: fast_path,
+                                    typ: sink.from_desc,
+                                    up_to,
+                                    df_meta,
+                                    optimization_finished_at: now(),
+                                });
+                            };
+
                             let global_lir_plan =
                                 optimizer.catch_unwind_optimize(local_mir_plan)?;
                             let optimization_finished_at = now();
 
                             let (df_desc, df_meta) = global_lir_plan.unapply();
+
                             Ok(Execution::Subscribe {
                                 subscribe_plan: plan,
                                 df_desc,
@@ -1417,6 +1432,62 @@ impl PeekClient {
                     .await?;
                 Ok(Some(response))
             }
+            Execution::SubscribeFastPath {
+                subscribe_plan,
+                fast_path_plan,
+                typ,
+                up_to,
+                df_meta,
+                optimization_finished_at: _finished_at,
+            } => {
+                let row_set_finishing_seconds =
+                    session.metrics().row_set_finishing_seconds().clone();
+
+                let peek_stash_read_batch_size_bytes =
+                    mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
+                        .get(catalog.system_config().dyncfgs());
+                let peek_stash_read_memory_budget_bytes =
+                    mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
+                        .get(catalog.system_config().dyncfgs());
+                let max_result_size = catalog.system_config().max_result_size();
+
+                coord::sequencer::emit_optimizer_notices(
+                    &*catalog,
+                    session,
+                    &df_meta.optimizer_notices,
+                );
+
+                let watch_set = statement_logging_id.map(|logging_id| {
+                    WatchSetCreation::new(
+                        logging_id,
+                        catalog.state(),
+                        &input_id_bundle,
+                        determination.timestamp_context.timestamp_or_default(),
+                    )
+                });
+
+                let response = self
+                    .implement_fast_path_subscribe_plan(
+                        subscribe_plan,
+                        fast_path_plan,
+                        determination.timestamp_context.timestamp_or_default(),
+                        up_to,
+                        target_cluster_id,
+                        target_replica,
+                        typ.typ().clone(),
+                        max_result_size,
+                        max_query_result_size,
+                        row_set_finishing_seconds,
+                        read_holds,
+                        peek_stash_read_batch_size_bytes,
+                        peek_stash_read_memory_budget_bytes,
+                        session.conn_id().clone(),
+                        source_ids,
+                        watch_set,
+                    )
+                    .await?;
+                Ok(Some(response))
+            }
             Execution::CopyToS3 {
                 global_lir_plan,
                 source_ids,
@@ -1651,6 +1722,9 @@ impl PeekClient {
                     "Subscribe",
                 )
             }
+            Execution::SubscribeFastPath { .. } => {
+                return;
+            }
         };
 
         // Assert that we have some read holds for all the imports of the dataflow.
@@ -1725,6 +1799,14 @@ enum Execution {
     Subscribe {
         subscribe_plan: SubscribePlan,
         df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        df_meta: DataflowMetainfo,
+        optimization_finished_at: EpochMillis,
+    },
+    SubscribeFastPath {
+        subscribe_plan: SubscribePlan,
+        fast_path_plan: FastPathPlan,
+        typ: RelationDesc,
+        up_to: Timestamp,
         df_meta: DataflowMetainfo,
         optimization_finished_at: EpochMillis,
     },

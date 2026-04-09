@@ -14,6 +14,7 @@ use std::num::NonZeroUsize;
 use itertools::Itertools;
 use mz_repr::{
     DatumVec, IntoRowIterator, Row, RowIterator, RowRef, Rows, RowsBuilder, SharedSlice,
+    UpdateCollection,
 };
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +61,32 @@ impl RowCollection {
             rows: Rows::builder(byte_len_hint, len_hint),
             diffs: Vec::with_capacity(len_hint),
         }
+    }
+
+    /// Create a new row collection from a update collection. If any update has a non-positive
+    /// multiplicity, this will return an error.
+    pub fn from_updates(updates: UpdateCollection) -> Result<RowCollection, String> {
+        let rows = updates.rows().clone();
+        let mut diffs = Vec::with_capacity(rows.len());
+        for (row, time, diff) in updates.iter() {
+            let Ok(count) = usize::try_from(diff.into_inner()) else {
+                tracing::error!(
+                    ?row,
+                    ?time,
+                    ?diff,
+                    "encountered negative multiplicities in ok trace"
+                );
+                return Err(format!(
+                    "Invalid data in source, saw retractions ({count}) for row that does not exist: {row:?}",
+                    count = -diff,
+                ));
+            };
+            diffs.push(NonZeroUsize::new(count).expect("diffs should be consolidated"));
+        }
+        Ok(Self {
+            rows,
+            diffs: diffs.into(),
+        })
     }
 
     /// Create a new [`RowCollection`] from a collection of [`Row`]s. Sorts data by `order_by`.
