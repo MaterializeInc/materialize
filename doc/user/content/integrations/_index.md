@@ -49,7 +49,7 @@ See also the following integration guides for BI tools:
 ## AI agents
 
 - [MCP Server for Agents](/integrations/mcp-agents/) — built-in endpoint for exposing real-time data products to AI agents
-- [MCP Server for Observability](/integrations/mcp-observatory/) — built-in endpoint for AI-powered troubleshooting via system catalog
+- [MCP Server for Developers](/integrations/mcp-developer/) — built-in endpoint for AI-powered troubleshooting via system catalog
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 
 ## Foreign data wrapper

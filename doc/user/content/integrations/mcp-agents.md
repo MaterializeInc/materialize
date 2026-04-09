@@ -572,7 +572,7 @@ Execute a SQL `SELECT` statement against your data products.
 
 ## Related pages
 
-- [MCP Server for Observability](/integrations/mcp-observatory/)
+- [MCP Server for Developers](/integrations/mcp-developer/)
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 - [CREATE INDEX](/sql/create-index)
 - [COMMENT ON](/sql/comment-on)

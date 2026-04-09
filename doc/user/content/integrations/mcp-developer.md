@@ -1,6 +1,6 @@
 ---
-title: MCP Server for Observability
-description: "Query Materialize system catalog tables for troubleshooting and observability via the built-in MCP endpoint."
+title: MCP Server for Developers
+description: "Query Materialize system catalog tables for troubleshooting and observability via the built-in MCP developer endpoint."
 make_table_row_headers_searchable: true
 menu:
   main:
@@ -16,7 +16,7 @@ access to the system catalog (`mz_*` tables) for troubleshooting and
 observability. The MCP interface is served directly by the database; no sidecar
 process or external server is required.
 
-**Endpoint:** `POST /api/mcp/observatory` (HTTP port, default `6876`)
+**Endpoint:** `POST /api/mcp/developer` (HTTP port, default `6876`)
 
 The endpoint uses [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over
 HTTP POST and supports the MCP `initialize`, `tools/list`, and `tools/call`
@@ -87,7 +87,7 @@ under **Connect**. It looks like:
 Your full MCP endpoint URL is:
 
 ```
-https://<region-id>.materialize.cloud/api/mcp/observatory
+https://<region-id>.materialize.cloud/api/mcp/developer
 ```
 
 {{< /tab >}}
@@ -97,7 +97,7 @@ https://<region-id>.materialize.cloud/api/mcp/observatory
 Your MCP endpoint URL is:
 
 ```
-http://<host>:6876/api/mcp/observatory
+http://<host>:6876/api/mcp/developer
 ```
 
 Where `<host>` is the load balancer address for your Materialize deployment.
@@ -121,7 +121,7 @@ clusters, use port forwarding:
 kubectl port-forward svc/<instance-name>-balancerd 6876:6876 -n materialize-environment
 ```
 
-Then connect to `http://localhost:6876/api/mcp/observatory`.
+Then connect to `http://localhost:6876/api/mcp/developer`.
 
 {{< /tab >}}
 
@@ -138,9 +138,9 @@ Create a `.mcp.json` file in your project directory:
 ```json
 {
   "mcpServers": {
-    "materialize-observatory": {
+    "materialize-developer": {
       "type": "http",
-      "url": "https://<region-id>.materialize.cloud/api/mcp/observatory",
+      "url": "https://<region-id>.materialize.cloud/api/mcp/developer",
       "headers": {
         "Authorization": "Basic <base64-token>"
       }
@@ -158,8 +158,8 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
-    "materialize-observatory": {
-      "url": "https://<region-id>.materialize.cloud/api/mcp/observatory",
+    "materialize-developer": {
+      "url": "https://<region-id>.materialize.cloud/api/mcp/developer",
       "headers": {
         "Authorization": "Basic <base64-token>"
       }
@@ -177,8 +177,8 @@ In Cursor's MCP settings (`.cursor/mcp.json`):
 ```json
 {
   "mcpServers": {
-    "materialize-observatory": {
-      "url": "https://<region-id>.materialize.cloud/api/mcp/observatory",
+    "materialize-developer": {
+      "url": "https://<region-id>.materialize.cloud/api/mcp/developer",
       "headers": {
         "Authorization": "Basic <base64-token>"
       }
@@ -194,7 +194,7 @@ In Cursor's MCP settings (`.cursor/mcp.json`):
 Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests:
 
 ```bash
-curl -X POST https://<region-id>.materialize.cloud/api/mcp/observatory \
+curl -X POST https://<region-id>.materialize.cloud/api/mcp/developer \
   -H "Content-Type: application/json" \
   -H "Authorization: "Basic <base64-token>"" \
   -d '{
@@ -210,19 +210,19 @@ curl -X POST https://<region-id>.materialize.cloud/api/mcp/observatory \
 
 ### Enabling the endpoint
 
-The observatory endpoint is disabled by default.
+The developer endpoint is disabled by default.
 
 {{< tabs >}}
 
 {{< tab "Cloud" >}}
 
 Contact [Materialize support](https://materialize.com/docs/support/) to enable
-the MCP observatory endpoint for your environment. The following parameters
+the MCP developer endpoint for your environment. The following parameters
 control MCP behavior:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `enable_mcp_observatory` | `false` | Enable or disable the `/api/mcp/observatory` endpoint. |
+| `enable_mcp_developer` | `false` | Enable or disable the `/api/mcp/developer` endpoint. |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
 {{< /tab >}}
@@ -238,7 +238,7 @@ Set the parameter in your
 
 ```yaml
 system_parameters:
-  enable_mcp_observatory: "true"
+  enable_mcp_developer: "true"
 ```
 
 **Option 2: Terraform**
@@ -247,7 +247,7 @@ Set the parameter via the [Materialize Terraform module](https://github.com/Mate
 
 ```hcl
 system_parameters = {
-  enable_mcp_observatory = "true"
+  enable_mcp_developer = "true"
 }
 ```
 
@@ -256,7 +256,7 @@ system_parameters = {
 Connect as `mz_system` and run:
 
 ```mzsql
-ALTER SYSTEM SET enable_mcp_observatory = true;
+ALTER SYSTEM SET enable_mcp_developer = true;
 ```
 
 {{< note >}}
@@ -266,7 +266,7 @@ roles. Regular database users cannot view or modify them.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `enable_mcp_observatory` | `false` | Enable or disable the `/api/mcp/observatory` endpoint. |
+| `enable_mcp_developer` | `false` | Enable or disable the `/api/mcp/developer` endpoint. |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
 {{< /tab >}}
@@ -278,7 +278,7 @@ When the endpoint is disabled, requests return HTTP 503 (Service Unavailable).
 ## What you can ask
 
 After connecting an MCP-compatible AI agent (such as Claude Code, Claude
-Desktop, or Cursor) to the observatory endpoint, you can ask natural language
+Desktop, or Cursor) to the developer endpoint, you can ask natural language
 questions like:
 
 - **"Why is my materialized view stale?"** — The agent checks materialization
