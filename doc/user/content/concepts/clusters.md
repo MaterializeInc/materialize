@@ -68,7 +68,7 @@ When provisioning replicas,
 
 ## Cluster sizing
 
-When creating a cluster, you must choose its [size](/sql/create-cluster/#size)
+When creating a cluster, you must choose its [size](/sql/create-cluster/#available-sizes)
 (e.g., `25cc`, `50cc`, `100cc`), which determines its resource allocation
 (CPU, memory, and scratch disk space) and [cost](/administration/billing/#compute).
 The appropriate size for a cluster depends on the resource requirements of your

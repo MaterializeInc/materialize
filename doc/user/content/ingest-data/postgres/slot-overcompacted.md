@@ -124,7 +124,7 @@ Make sure your Materialize source cluster has enough resources to keep up with
 replication:
 
 ```mzsql
-ALTER CLUSTER your_source_cluster SET (SIZE = 'M.1-large');
+ALTER CLUSTER your_source_cluster SET (SIZE = '800cc');
 ```
 
 **3. Monitor replication lag**

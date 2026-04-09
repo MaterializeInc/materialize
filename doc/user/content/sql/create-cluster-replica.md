@@ -22,34 +22,16 @@ clusters.
 
 ## Details
 
-### Size
+### Available sizes
 
 The `SIZE` option for replicas is identical to the [`SIZE` option for
-clusters](/sql/create-cluster/#size) option, except that the size applies only
+clusters](/sql/create-cluster/#available-sizes) option, except that the size applies only
 to the new replica.
 
 {{< tabs >}}
-{{< tab "M.1 Clusters" >}}
+{{< tab "cc Clusters" >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
-
-{{< yaml-table data="m1_cluster_sizing" >}}
-
-{{< /tab >}}
-
-{{< tab "Legacy cc Clusters" >}}
-
-Materialize offers the following legacy cc cluster sizes:
-
-{{< tip >}}
-In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
-offer better performance per credit for nearly all workloads. We recommend using
-M.1 sizes for all new clusters, and recommend migrating existing
-legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
-customers during the transition period as we move to deprecate legacy sizes.
-
-The legacy size information is provided for completeness.
-{{< /tip >}}
+Materialize offers the following cc cluster sizes:
 
 * `25cc`
 * `50cc`
@@ -80,11 +62,26 @@ time. You should not rely on them for any kind of capacity planning.
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
 {{< /tab >}}
+{{< tab "M.1 Clusters" >}}
+
+{{< note >}}
+M.1 sizes provide access to additional disk capacity compared to
+equivalently-priced cc sizes, which can be beneficial for disk-intensive
+workloads. However, cc sizes offer better compute performance per credit for
+most workloads. We recommend using cc sizes unless your workload specifically
+requires the additional disk capacity that M.1 sizes provide.
+{{< /note >}}
+
+{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+
+{{< yaml-table data="m1_cluster_sizing" >}}
+
+{{< /tab >}}
 {{< /tabs >}}
 
 See also:
 
-- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
+- [cc to M.1 size mapping](/sql/m1-cc-mapping/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
@@ -111,7 +108,7 @@ machines had computed.
 ## Example
 
 ```mzsql
-CREATE CLUSTER REPLICA c1.r1 (SIZE = 'M.1-large');
+CREATE CLUSTER REPLICA c1.r1 (SIZE = '800cc');
 ```
 
 ## Privileges
