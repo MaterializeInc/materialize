@@ -199,7 +199,7 @@ where
             Ok(ok) => Ok(ok),
             Err(DataflowError::EnvelopeError(err)) => match *err {
                 EnvelopeError::Upsert(err) => Err(Box::new(err)),
-                _ => return None,
+                EnvelopeError::Flat(_) => return None,
             },
             Err(_) => return None,
         };

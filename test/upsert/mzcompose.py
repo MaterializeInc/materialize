@@ -33,6 +33,12 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.zookeeper import Zookeeper
 
 materialized_environment_extra = ["MZ_PERSIST_COMPACTION_DISABLED=false"]
+additional_system_parameter_defaults = {
+    "storage_dataflow_delay_sources_past_rehydration": "true",
+    "unsafe_enable_unorchestrated_cluster_replicas": "true",
+    "memory_limiter_interval": "0",
+    "enable_upsert_v2": "false",
+}
 
 SERVICES = [
     Zookeeper(),
@@ -43,11 +49,7 @@ SERVICES = [
         options=[
             "--orchestrator-process-scratch-directory=/scratch",
         ],
-        additional_system_parameter_defaults={
-            "unsafe_enable_unorchestrated_cluster_replicas": "true",
-            "storage_dataflow_delay_sources_past_rehydration": "true",
-            "memory_limiter_interval": "0",
-        },
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
         environment_extra=materialized_environment_extra,
         default_replication_factor=2,
         support_external_clusterd=True,
@@ -258,6 +260,34 @@ def workflow_rehydration(c: Composition) -> None:
                 workers=4,
             ),
         ),
+        # Can't be enabled until metrics are added for upsert v2 rehydration.
+        # (
+        #     "using upsert v2",
+        #     Materialized(
+        #         options=[
+        #             "--orchestrator-process-scratch-directory=/scratch",
+        #         ],
+        #         additional_system_parameter_defaults={
+        #             "storage_statistics_collection_interval": "1000",
+        #             "storage_statistics_interval": "2000",
+        #             "unsafe_enable_unorchestrated_cluster_replicas": "true",
+        #             # Force backpressure to be enabled.
+        #             "storage_dataflow_max_inflight_bytes": "1",
+        #             "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+        #             "storage_dataflow_max_inflight_bytes_disk_only": "false",
+        #             "storage_dataflow_delay_sources_past_rehydration": "true",
+        #             # Enable upsert v2
+        #             "enable_upsert_v2": "true",
+        #         },
+        #         environment_extra=materialized_environment_extra,
+        #         default_replication_factor=2,
+        #         support_external_clusterd=True,
+        #     ),
+        #     Clusterd(
+        #         name="clusterd1",
+        #         workers=4,
+        #     ),
+        # ),
     ]:
         with c.override(
             mz,
