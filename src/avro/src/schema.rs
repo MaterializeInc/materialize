@@ -32,7 +32,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::LazyLock;
 
-use digest::Digest;
+use aws_lc_rs::digest;
 use itertools::Itertools;
 use mz_ore::assert_none;
 use regex::Regex;
@@ -1495,11 +1495,10 @@ impl Schema {
     ///
     /// [Parsing Canonical Form]:
     /// https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas
-    pub fn fingerprint<D: Digest>(&self) -> SchemaFingerprint {
-        let mut d = D::new();
-        d.update(self.canonical_form());
+    pub fn fingerprint(&self, algorithm: &'static digest::Algorithm) -> SchemaFingerprint {
+        let hash = digest::digest(algorithm, self.canonical_form().as_bytes());
         SchemaFingerprint {
-            bytes: d.finalize().to_vec(),
+            bytes: hash.as_ref().to_vec(),
         }
     }
 
@@ -3076,8 +3075,6 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_schema_fingerprint() {
-        use sha2::Sha256;
-
         let raw_schema = r#"
         {
             "type": "record",
@@ -3091,9 +3088,13 @@ mod tests {
         let expected_canonical = r#"{"name":"test","type":"record","fields":[{"name":"a","type":"long"},{"name":"b","type":"string"}]}"#;
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(&schema.canonical_form(), expected_canonical);
-        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
+        let expected_fingerprint = digest::digest(&digest::SHA256, expected_canonical.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
-            format!("{}", schema.fingerprint::<Sha256>()),
+            format!("{}", schema.fingerprint(&digest::SHA256)),
             expected_fingerprint
         );
 
@@ -3117,9 +3118,13 @@ mod tests {
         let expected_canonical = r#"{"name":"ns.r1","type":"record","fields":[{"name":"f1","type":{"name":"ns.r2","type":"fixed","size":1}}]}"#;
         let schema = Schema::from_str(raw_schema).unwrap();
         assert_eq!(&schema.canonical_form(), expected_canonical);
-        let expected_fingerprint = format!("{:02x}", Sha256::digest(expected_canonical));
+        let expected_fingerprint = digest::digest(&digest::SHA256, expected_canonical.as_bytes())
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
         assert_eq!(
-            format!("{}", schema.fingerprint::<Sha256>()),
+            format!("{}", schema.fingerprint(&digest::SHA256)),
             expected_fingerprint
         );
     }
