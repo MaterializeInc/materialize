@@ -41,6 +41,7 @@ class Clusterd(Service):
             "CLUSTERD_USE_CTP=true",
             "MZ_SOFT_ASSERTIONS=1",
             "MZ_EAT_MY_DATA=1",
+            "LD_PRELOAD=libeatmydata.so",
             # Defaults that were previously set by the clusterd entrypoint.sh.
             "CLUSTERD_STORAGE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2100",
             "CLUSTERD_COMPUTE_CONTROLLER_LISTEN_ADDR=0.0.0.0:2101",
