@@ -273,6 +273,10 @@ pub enum Expr {
         /// A list of arrangement keys, and possibly a raw collection, that will be added to those
         /// of the input. Does not include any other existing arrangements.
         forms: AvailableCollections,
+        /// Whether the input collection may contain updates with future timestamps,
+        /// e.g., from a temporal MFP using `mz_now()`. When true, the renderer
+        /// inserts temporal bucketing before forming arrangements.
+        input_has_future_updates: bool,
     },
 }
 
@@ -498,12 +502,14 @@ impl TryFrom<Plan> for LetFreePlan {
                     input,
                     input_mfp,
                     forms,
+                    input_has_future_updates,
                 } => {
                     let expr = ArrangeBy {
                         input_key,
                         input: input.lir_id,
                         input_mfp,
                         forms,
+                        input_has_future_updates,
                     };
                     insert_node(lir_id, parent, expr, nesting);
 
@@ -975,6 +981,7 @@ impl<'a> std::fmt::Display for RenderPlanExprHumanizer<'a> {
                 input: _,
                 input_mfp: _,
                 forms,
+                input_has_future_updates: _,
             } => {
                 if forms.arranged.is_empty() {
                     soft_assert_or_log!(forms.raw, "raw stream with no arrangements");

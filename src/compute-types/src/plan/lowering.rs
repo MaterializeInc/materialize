@@ -346,6 +346,7 @@ impl Context {
                                             input: body,
                                             input_mfp,
                                             forms,
+                                            input_has_future_updates: false,
                                         }
                                         .as_plan(inner_lir_id),
                                     ),
@@ -359,6 +360,7 @@ impl Context {
                                     input: Box::new(lir_value),
                                     input_mfp,
                                     forms,
+                                    input_has_future_updates: false,
                                 }
                                 .as_plan(lir_id)
                             }
@@ -876,6 +878,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                             input: Box::new(input),
                             input_mfp,
                             forms,
+                            input_has_future_updates: false,
                         }
                         .as_plan(lir_id),
                         input_keys,
@@ -1058,6 +1061,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                     input,
                     input_mfp,
                     mut forms,
+                    input_has_future_updates,
                 },
             lir_id,
         } = plan
@@ -1071,6 +1075,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 input,
                 input_mfp,
                 forms,
+                input_has_future_updates,
             }
             .as_plan(lir_id)
         } else {
@@ -1090,6 +1095,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 input: Box::new(plan),
                 input_mfp,
                 forms: collections,
+                input_has_future_updates: false,
             }
             .as_plan(lir_id)
         }

@@ -1324,6 +1324,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 input,
                 input_mfp,
                 forms: keys,
+                input_has_future_updates: _input_has_future_updates,
             } => {
                 let input = expect_input(input);
                 input.ensure_collections(
