@@ -42,6 +42,7 @@ export function buildObjectIndexesQuery(params: ObjectIndexesParameters) {
         .onRef("showIndexes.name", "=", "indexNames.name")
         .onRef("showIndexes.schema_id", "=", "indexNames.schema_id"),
     )
+    .innerJoin("mz_clusters as clusters", "clusters.id", "indexes.cluster_id")
     .select([
       "indexNames.id",
       "indexNames.name",
@@ -50,6 +51,8 @@ export function buildObjectIndexesQuery(params: ObjectIndexesParameters) {
       "roles.name as owner",
       "lifetimes.occurred_at as createdAt",
       "showIndexes.key as indexedColumns",
+      "clusters.id as clusterId",
+      "clusters.name as clusterName",
     ])
     .where("objectNames.name", "=", params.name)
     .where("objectNames.schema_name", "=", params.schemaName);

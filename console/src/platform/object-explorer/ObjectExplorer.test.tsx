@@ -84,6 +84,7 @@ const ordersTable: DatabaseObject = {
   objectType: "table",
   sourceType: null,
   isWebhookTable: null,
+  owner: "materialize",
   clusterId: "u1",
   clusterName: "quickstart",
 };
@@ -98,6 +99,7 @@ const itemsTable: DatabaseObject = {
   objectType: "table",
   sourceType: null,
   isWebhookTable: null,
+  owner: "materialize",
   clusterId: "u1",
   clusterName: "default",
 };
@@ -112,6 +114,7 @@ const kafkaSource: DatabaseObject = {
   objectType: "source",
   sourceType: null,
   isWebhookTable: null,
+  owner: "materialize",
   clusterId: "u1",
   clusterName: "default",
 };

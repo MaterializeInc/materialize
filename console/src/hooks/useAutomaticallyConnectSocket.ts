@@ -21,13 +21,12 @@ import {
 } from "~/api/materialize/WebsocketConnectionManager";
 import { currentEnvironmentState } from "~/store/environments";
 
-// Atom for reconnection state - can be shared across components if needed
-export const reconnectionStateAtom = atom<ReconnectionState>({
+const DEFAULT_RECONNECTION_STATE: ReconnectionState = {
   status: "disconnected",
   attempt: 0,
   maxAttempts: 5,
   nextRetryMs: null,
-});
+};
 
 /**
  * Connects the socket on mount once the environment is healthy.
@@ -53,6 +52,12 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
   reconnectionState: ReconnectionState;
 } => {
   const store = useStore();
+  // Each hook invocation gets its own atom so multiple WebsocketConnectionManagers
+  // don't overwrite each other's reconnection state.
+  const reconnectionStateAtom = React.useMemo(
+    () => atom<ReconnectionState>(DEFAULT_RECONNECTION_STATE),
+    [],
+  );
   const reconnectionState = useAtomValue(reconnectionStateAtom);
   const managerRef = useRef<WebsocketConnectionManager | null>(null);
   const getSessionVariablesRef = useLatestRef(getSessionVariables);
@@ -72,7 +77,7 @@ export const useAutomaticallyConnectSocket = <T extends object, R>({
       managerRef.current?.destroy();
       managerRef.current = null;
     };
-  }, [target, store, getSessionVariablesRef]);
+  }, [target, store, reconnectionStateAtom, getSessionVariablesRef]);
 
   // Handle request changes for subscribe queries
   const currentEnvironment = useAtomValue(currentEnvironmentState);

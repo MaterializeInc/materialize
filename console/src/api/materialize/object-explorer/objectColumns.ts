@@ -41,6 +41,7 @@ export function buildObjectColumnsQuery(params: {
         .on("tbl_comments.object_sub_id", "is", null),
     )
     .select([
+      "c.position",
       "c.name",
       "c.type",
       "c.nullable",

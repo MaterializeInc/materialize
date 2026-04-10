@@ -64,8 +64,40 @@ type ResolvedOptions = Required<
 type JotaiStore = ReturnType<typeof createStore>;
 
 /**
- * Manages automatic reconnection for WebSocket connections with exponential backoff.
- * Subscribes directly to Jotai store for environment health state.
+ * Manages automatic reconnection for a {@link Connectable} (typically a
+ * {@link SubscribeManager}) with exponential backoff and jitter.
+ *
+ * ## What it does
+ *
+ * Watches the Materialize environment health state via Jotai atoms. When the
+ * environment is healthy, it keeps the connection alive. If the connection
+ * drops (network blip, server restart), it automatically retries with
+ * exponential backoff: 1s → 2s → 4s → 8s → 16s (capped at 30s), each with
+ * ±25% random jitter to prevent thundering herd.
+ *
+ * ## Retry behavior
+ *
+ * - **Max 5 attempts** by default. After exhausting retries, status becomes
+ *   `"failed"` and retries stop.
+ * - If the environment health changes (e.g., becomes healthy again after being
+ *   unhealthy), the retry counter **resets to 0** and connection resumes.
+ * - On successful reconnect, the `SubscribeManager.onOpen` handler resets all
+ *   state, and the server replays the full snapshot — so data is always
+ *   consistent after a reconnect.
+ *
+ * ## Lifecycle
+ *
+ * Created by `useAutomaticallyConnectSocket` on component mount (for
+ * per-component subscribes) or in `AppInitializer` (for global subscribes).
+ * Destroyed on unmount via `destroy()`, which clears timers, unsubscribes
+ * listeners, and disconnects the socket.
+ *
+ * ## Status states
+ *
+ * - `"disconnected"` — not connected, no retry pending
+ * - `"connected"` — WebSocket is open and streaming
+ * - `"reconnecting"` — retry timer is pending
+ * - `"failed"` — max retries exhausted (waits for environment health change)
  */
 export class WebsocketConnectionManager {
   private target: Connectable;
