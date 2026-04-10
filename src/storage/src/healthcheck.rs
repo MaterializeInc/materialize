@@ -967,7 +967,6 @@ mod tests {
     use mz_ore::assert_err;
     use timely::container::CapacityContainerBuilder;
     use timely::dataflow::Scope;
-    use timely::dataflow::operators::Enter;
     use timely::dataflow::operators::exchange::Exchange;
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -1090,25 +1089,21 @@ mod tests {
                 let (out_tx, mut out_rx) = unbounded_channel();
 
                 worker.dataflow::<(), _, _>(|root_scope| {
-                    root_scope
-                        .clone()
-                        .scoped::<mz_repr::Timestamp, _, _>("gus", |scope| {
-                            let input = producer(root_scope.clone(), in_rx).enter(scope);
-                            Box::leak(Box::new(health_operator(
-                                scope,
-                                mz_ore::now::SYSTEM_TIME.clone(),
-                                inputs.keys().copied().collect(),
-                                *inputs.first_key_value().unwrap().0,
-                                "source_test",
-                                input,
-                                TestWriter {
-                                    sender: out_tx,
-                                    input_mapping: inputs,
-                                },
-                                write_namespaced_map,
-                                Duration::from_secs(5),
-                            )));
-                        });
+                    let input = producer(root_scope.clone(), in_rx);
+                    Box::leak(Box::new(health_operator(
+                        root_scope,
+                        mz_ore::now::SYSTEM_TIME.clone(),
+                        inputs.keys().copied().collect(),
+                        *inputs.first_key_value().unwrap().0,
+                        "source_test",
+                        input,
+                        TestWriter {
+                            sender: out_tx,
+                            input_mapping: inputs,
+                        },
+                        write_namespaced_map,
+                        Duration::from_secs(5),
+                    )));
                 });
 
                 // We arbitrarily do all the testing on the first worker.
@@ -1162,9 +1157,9 @@ mod tests {
     /// Also ensures that updates are routed to the correct worker based on the `TestUpdate`
     /// using an exchange.
     fn producer(
-        scope: G,
+        scope: Scope<()>,
         mut input: UnboundedReceiver<TestUpdate>,
-    ) -> StreamVec<G, HealthStatusMessage> {
+    ) -> StreamVec<(), HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
