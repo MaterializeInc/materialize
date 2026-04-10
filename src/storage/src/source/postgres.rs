@@ -391,8 +391,8 @@ async fn pg_source_task(
     match result {
         Ok(()) => tracing::info!(%id, "pg_source_task completed"),
         Err(err) => {
-            tracing::warn!(%id, "pg_source_task error: {err:?}");
-            let err_string = err.to_string();
+            let err_string = err.display_with_causes().to_string();
+            tracing::warn!(%id, "pg_source_task error: {err_string}");
             let _ = health_tx.send(HealthStatusMessage {
                 id: None,
                 namespace: StatusNamespace::Postgres,
@@ -638,9 +638,8 @@ async fn export_snapshot_for_copy(
 
     let tmp_slot = format!("mzsnapshot_{}", uuid::Uuid::new_v4()).replace('-', "");
     let slot_name = Ident::new_unchecked(&tmp_slot).to_ast_string_simple();
-    let query = format!(
-        "CREATE_REPLICATION_SLOT {slot_name} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT"
-    );
+    let query =
+        format!("CREATE_REPLICATION_SLOT {slot_name} TEMPORARY LOGICAL \"pgoutput\" USE_SNAPSHOT");
     let row = match simple_query_opt(replication_client, &query).await {
         Ok(row) => row.unwrap(),
         Err(err) => {
@@ -681,8 +680,7 @@ async fn snapshot_table(
 
     let namespace =
         mz_sql_parser::ast::Ident::new_unchecked(&info.desc.namespace).to_ast_string_stable();
-    let table =
-        mz_sql_parser::ast::Ident::new_unchecked(&info.desc.name).to_ast_string_stable();
+    let table = mz_sql_parser::ast::Ident::new_unchecked(&info.desc.name).to_ast_string_stable();
     let column_list = info
         .desc
         .columns
@@ -897,7 +895,15 @@ async fn process_transaction(
                     for (&out_idx, info) in outputs {
                         let export_id = output_to_export_id[out_idx];
                         let msg = unpack_and_cast(body.tuple().tuple_data(), info);
-                        emit_row(batch_updates, rewinds, export_id, out_idx, commit_lsn, msg, Diff::ONE);
+                        emit_row(
+                            batch_updates,
+                            rewinds,
+                            export_id,
+                            out_idx,
+                            commit_lsn,
+                            msg,
+                            Diff::ONE,
+                        );
                     }
                 }
             }
@@ -908,7 +914,15 @@ async fn process_transaction(
                         for (&out_idx, info) in outputs {
                             let export_id = output_to_export_id[out_idx];
                             let msg = unpack_and_cast(old.tuple_data(), info);
-                            emit_row(batch_updates, rewinds, export_id, out_idx, commit_lsn, msg, Diff::MINUS_ONE);
+                            emit_row(
+                                batch_updates,
+                                rewinds,
+                                export_id,
+                                out_idx,
+                                commit_lsn,
+                                msg,
+                                Diff::MINUS_ONE,
+                            );
                         }
                     }
                 }
@@ -921,8 +935,24 @@ async fn process_transaction(
                             let export_id = output_to_export_id[out_idx];
                             let old_msg = unpack_and_cast(old.tuple_data(), info);
                             let new_msg = unpack_and_cast(body.new_tuple().tuple_data(), info);
-                            emit_row(batch_updates, rewinds, export_id, out_idx, commit_lsn, old_msg, Diff::MINUS_ONE);
-                            emit_row(batch_updates, rewinds, export_id, out_idx, commit_lsn, new_msg, Diff::ONE);
+                            emit_row(
+                                batch_updates,
+                                rewinds,
+                                export_id,
+                                out_idx,
+                                commit_lsn,
+                                old_msg,
+                                Diff::MINUS_ONE,
+                            );
+                            emit_row(
+                                batch_updates,
+                                rewinds,
+                                export_id,
+                                out_idx,
+                                commit_lsn,
+                                new_msg,
+                                Diff::ONE,
+                            );
                         }
                     }
                 }
@@ -1113,7 +1143,7 @@ pub enum TransientError {
     NestedTransaction,
     #[error("recoverable errors should crash the process during snapshots")]
     SyntheticError,
-    #[error("sql client error")]
+    #[error("sql client error: {0}")]
     SQLClient(#[from] tokio_postgres::Error),
     #[error(transparent)]
     PostgresError(#[from] PostgresError),
@@ -1216,10 +1246,10 @@ async fn fetch_slot_metadata(
     slot: &str,
     interval: Duration,
 ) -> Result<SlotMetadata, TransientError> {
-    let slot = Ident::new_unchecked(slot).to_ast_string_simple();
+    let slot_literal = mz_sql_parser::ast::display::escaped_string_literal(slot);
     loop {
         let query = format!(
-            "SELECT active_pid, confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = {slot}"
+            "SELECT active_pid, confirmed_flush_lsn FROM pg_replication_slots WHERE slot_name = {slot_literal}"
         );
         let row = simple_query_opt(client, &query).await?;
         match row {
@@ -1243,11 +1273,7 @@ async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
     let row = simple_query_opt(client, "SELECT pg_current_wal_lsn()")
         .await?
         .unwrap();
-    let lsn: PgLsn = row
-        .get("pg_current_wal_lsn")
-        .unwrap()
-        .parse()
-        .unwrap();
+    let lsn: PgLsn = row.get("pg_current_wal_lsn").unwrap().parse().unwrap();
     Ok(MzOffset::from(u64::from(lsn)))
 }
 
