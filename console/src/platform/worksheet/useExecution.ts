@@ -18,11 +18,25 @@ import { useCurrentEnvironmentHttpAddress } from "~/store/environments";
 
 import {
   type QueryResult,
+  worksheetExecuteAtom,
   worksheetExecutionAtom,
   worksheetInlineResultsAtom,
   worksheetResultAtom,
   worksheetSessionAtom,
 } from "./store";
+
+/** SHOW CREATE kinds that display formatted SQL in the results panel. */
+export const SHOW_CREATE_KINDS = new Set([
+  "show_create_view",
+  "show_create_materialized_view",
+  "show_create_source",
+  "show_create_table",
+  "show_create_sink",
+  "show_create_index",
+  "show_create_connection",
+  "show_create_cluster",
+  "show_create_type",
+]);
 
 /** Statement kinds whose results appear in the results panel rather than inline. */
 export const ROW_RETURNING_KINDS = new Set([
@@ -41,7 +55,7 @@ export const ROW_RETURNING_KINDS = new Set([
   "explain_analyze_cluster",
   "fetch",
   "copy_to",
-  "show_sql",
+  ...SHOW_CREATE_KINDS,
   "subscribe",
   "tail",
 ]);
@@ -169,7 +183,8 @@ export function useExecution() {
             const query = currentQueryRef.current;
             if (query) {
               const durationMs = Date.now() - query.startTime;
-              if (query.kind === "show_sql") {
+              if (SHOW_CREATE_KINDS.has(query.kind)) {
+                const objectName = String(query.rows[0]?.[0] ?? "");
                 const rawSql = String(query.rows[0]?.[1] ?? "");
                 let formattedSql: string;
                 try {
@@ -190,6 +205,8 @@ export function useExecution() {
                   commandComplete: result.payload,
                   durationMs,
                   displayMode: "sql",
+                  kind: query.kind,
+                  objectName,
                 };
                 setters.setResult(queryResult);
               } else if (TEXT_EXPLAIN_KINDS.has(query.kind)) {
@@ -328,6 +345,13 @@ export function useExecution() {
     },
     [setExecution, setInlineResults],
   );
+
+  // Expose execute to global components (e.g. FloatingResultPanel) via atom.
+  const setExecute = useSetAtom(worksheetExecuteAtom);
+  useEffect(() => {
+    setExecute(() => execute);
+    return () => setExecute(null);
+  }, [execute, setExecute]);
 
   return {
     execute,

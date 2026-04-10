@@ -68,6 +68,22 @@ export const shellPath = (regionSlug: string) => {
 
 export { shellPath as homePagePath };
 
+/** URL for the connector monitor overlay (source/sink stats + errors). */
+export const monitorPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/monitor/${objectId}`;
+
+/** URL for the connector monitor errors tab. */
+export const monitorErrorsPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/monitor/${objectId}/errors`;
+
+/** URL for the workflow graph overlay (dependency DAG). */
+export const workflowPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/workflow/${objectId}`;
+
+/** URL for the dataflow visualizer overlay (internal execution graph). */
+export const dataflowPath = (regionSlug: string, objectId: string) =>
+  `${shellPath(regionSlug)}/dataflow/${objectId}`;
+
 export interface ObjectPathParams {
   databaseName: string | null;
   schemaName: string;

@@ -20,6 +20,7 @@ import {
 import React from "react";
 
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
+import { CommentText } from "~/components/CommentText";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { truncateMaxWidth } from "~/theme/components/Table";
@@ -56,7 +57,7 @@ export const ObjectColumnsContent = () => {
           {columns.length} {pluralize(columns.length, "Column", "Columns")}
         </Text>
         {relationComment && (
-          <Text textStyle="text-small">{columns[0]?.relationComment}</Text>
+          <CommentText textStyle="text-small">{relationComment}</CommentText>
         )}
         <Table variant="linkable" borderRadius="xl">
           <Thead>
@@ -80,7 +81,9 @@ export const ObjectColumnsContent = () => {
                   <Text noOfLines={1}>{column.type}</Text>
                 </Td>
                 <Td {...truncateMaxWidth} py="2">
-                  <Text noOfLines={1}>{column.columnComment}</Text>
+                  <CommentText noOfLines={1}>
+                    {column.columnComment ?? ""}
+                  </CommentText>
                 </Td>
               </Tr>
             ))}

@@ -53,7 +53,7 @@
     "@rehookify/datepicker": "^6.6.7",
     "@segment/analytics-next": "^1.82.0",
     "@sentry/react": "^10.45.0",
-    "@sjwiesman/sql-parser": "0.0.0-sjwiesman.1",
+    "@sjwiesman/sql-parser": "0.0.0-sjwiesman.2",
     "@stripe/react-stripe-js": "^5.6.1",
     "@stripe/stripe-js": "^7.1.0",
     "@tanstack/react-query": "^5.95.0",

@@ -11,33 +11,16 @@
  * @module
  * Global live cache of all user-visible indexes in the Materialize catalog.
  *
- * ## What
  * Maintains a Jotai atom containing every index via a single long-lived
  * SUBSCRIBE to `mz_indexes` joined with `mz_show_indexes`, `mz_roles`,
  * `mz_clusters`, and `mz_object_fully_qualified_names`.
- *
- * ## Why
- * Previously, each catalog detail view opened its own per-object WebSocket
- * SUBSCRIBE for indexes on mount, causing a visible delay. By subscribing
- * once at app startup, any component can read index data synchronously.
- *
- * ## How
- * Follows the three-part pattern (atom → initializer → consumer hooks).
- * See `catalogColumns.ts` module doc for details.
- *
- * ## When
- * Started in `AppInitializer.tsx`. Data available after initial snapshot.
  */
 
-import { atom, useAtomValue } from "jotai";
+import { useAtomValue } from "jotai";
 import { sql } from "kysely";
 import React from "react";
 
-import { SubscribeState } from "~/api/materialize/SubscribeManager";
-import {
-  buildSubscribeQuery,
-  useGlobalUpsertSubscribe,
-} from "~/api/materialize/useSubscribe";
+import { createCatalogStore } from "~/store/createCatalogStore";
 
 export interface CatalogIndex {
   id: string;
@@ -73,37 +56,20 @@ function buildAllIndexesQuery() {
   `;
 }
 
-export const catalogIndexes = atom<SubscribeState<CatalogIndex>>({
-  data: [],
-  error: undefined,
-  snapshotComplete: false,
+const store = createCatalogStore<CatalogIndex>({
+  query: buildAllIndexesQuery,
+  upsertKey: "id",
 });
 
-/** Call once in AppInitializer to start the global indexes SUBSCRIBE. */
-export function useSubscribeToCatalogIndexes() {
-  const subscribe = React.useMemo(
-    () => buildSubscribeQuery(buildAllIndexesQuery(), { upsertKey: "id" }),
-    [],
-  );
+export const catalogIndexes = store.atom;
 
-  return useGlobalUpsertSubscribe({
-    atom: catalogIndexes,
-    subscribe,
-    select: (row) => row.data,
-    upsertKey: (row) => row.data.id,
-  });
-}
+/** Call once in AppInitializer to start the global indexes SUBSCRIBE. */
+export const useSubscribeToCatalogIndexes = store.useSubscribe;
 
 /**
  * Returns all indexes on the given object.
  * Data is live (updated via SUBSCRIBE) and available synchronously
  * after the initial snapshot completes.
- *
- * @example
- * ```tsx
- * const indexes = useObjectIndexes("u123");
- * // indexes: CatalogIndex[] for the relation with id "u123"
- * ```
  */
 export function useObjectIndexes(objectId: string): CatalogIndex[] {
   const { data } = useAtomValue(catalogIndexes);

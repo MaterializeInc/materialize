@@ -22,7 +22,7 @@ import {
   useTheme,
 } from "@chakra-ui/react";
 import React from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { Replica } from "~/api/materialize/cluster/clusterList";
@@ -53,6 +53,7 @@ import {
 import docUrls from "~/mz-doc-urls.json";
 import { useBuildMaterializedViewPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
+import { useOpenCatalogDetail } from "~/store/catalog";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { assert } from "~/util";
@@ -219,9 +220,9 @@ interface MaterializedViewTableProps {
 }
 
 const MaterializedViewTable = (props: MaterializedViewTableProps) => {
-  const navigate = useNavigate();
   const flags = useFlags();
   const materializedViewPath = useBuildMaterializedViewPath();
+  const openCatalogDetail = useOpenCatalogDetail();
   const dataflowVisualizerEnabled = flags["visualization-features"];
 
   const { colors } = useTheme<MaterializeTheme>();
@@ -253,7 +254,13 @@ const MaterializedViewTable = (props: MaterializedViewTableProps) => {
               <Tr
                 key={v.name}
                 onClick={() => {
-                  navigate(materializedViewPath(v));
+                  openCatalogDetail({
+                    id: v.id,
+                    databaseName: v.databaseName,
+                    schemaName: v.schemaName,
+                    objectName: v.name,
+                    objectType: "materialized-view",
+                  });
                 }}
                 cursor="pointer"
               >

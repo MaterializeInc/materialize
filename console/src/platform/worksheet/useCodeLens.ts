@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 
 import type { StatementInfo } from "./store";
 import { worksheetSessionAtom, worksheetStatementsAtom } from "./store";
-import { TEXT_EXPLAIN_KINDS } from "./useExecution";
+import { SHOW_CREATE_KINDS, TEXT_EXPLAIN_KINDS } from "./useExecution";
 
 /** Create statement kinds that target a cluster. */
 const CLUSTER_CREATE_KINDS = new Set([
@@ -25,7 +25,7 @@ const EXECUTE_ON_CLUSTER_KINDS = new Set([
 ]);
 
 function codeLensTitle(stmt: StatementInfo, sessionCluster: string): string {
-  if (stmt.kind === "show_sql") return "\u25B6 Show SQL";
+  if (SHOW_CREATE_KINDS.has(stmt.kind)) return "\u25B6 Show SQL";
   if (TEXT_EXPLAIN_KINDS.has(stmt.kind)) return "\u25B6 Explain";
   if (CLUSTER_CREATE_KINDS.has(stmt.kind))
     return `\u25B6 Create in ${stmt.inCluster ?? sessionCluster}`;

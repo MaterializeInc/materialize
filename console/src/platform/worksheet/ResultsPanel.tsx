@@ -8,8 +8,15 @@
 // by the Apache License, Version 2.0.
 
 import { CloseIcon, DownloadIcon } from "@chakra-ui/icons";
-import { Box, HStack, IconButton, Text, useTheme } from "@chakra-ui/react";
-import { useAtomValue } from "jotai";
+import {
+  Box,
+  Button,
+  HStack,
+  IconButton,
+  Text,
+  useTheme,
+} from "@chakra-ui/react";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import React, { useCallback, useMemo, useState } from "react";
 
 import ReadOnlyCommandBlock from "~/components/CommandBlock/ReadOnlyCommandBlock";
@@ -24,6 +31,7 @@ import {
   type QueryResult,
   worksheetExecutionAtom,
   worksheetResultAtom,
+  worksheetStashedSqlResultAtom,
 } from "./store";
 import SubscribeView from "./SubscribeView";
 
@@ -38,6 +46,8 @@ export interface ResultsPanelProps {
   onStopSubscribe: () => void;
   /** Closes the results panel entirely. */
   onDismiss: () => void;
+  /** Executes a SQL statement through the worksheet WebSocket. */
+  onExecute: (sql: string, kind: string, offset: number) => void;
 }
 
 /**
@@ -49,6 +59,7 @@ const ResultsPanel = ({
   subscribeState,
   onStopSubscribe,
   onDismiss,
+  onExecute,
 }: ResultsPanelProps) => {
   const result = useAtomValue(worksheetResultAtom);
   const execution = useAtomValue(worksheetExecutionAtom);
@@ -74,7 +85,7 @@ const ResultsPanel = ({
   }
 
   if (result.displayMode === "sql") {
-    return <SqlView result={result} onDismiss={onDismiss} />;
+    return <SqlView result={result} onDismiss={onDismiss} onExecute={onExecute} />;
   }
 
   if (result.displayMode === "text") {
@@ -84,16 +95,41 @@ const ResultsPanel = ({
   return <ResultTable result={result} onDismiss={onDismiss} />;
 };
 
-/** Renders a SHOW CREATE result as a syntax-highlighted code block with copy/download actions. */
+/** Maps SHOW CREATE kinds to their EXPLAIN prefix for objects that support it. */
+const EXPLAINABLE_KINDS: Record<string, string> = {
+  show_create_materialized_view: "EXPLAIN MATERIALIZED VIEW",
+  show_create_index: "EXPLAIN INDEX",
+};
+
+/** Renders a SHOW CREATE result with an optional Explain button for MVs and indexes. */
 const SqlView = ({
   result,
   onDismiss,
+  onExecute,
 }: {
   result: QueryResult;
   onDismiss: () => void;
+  onExecute: (sql: string, kind: string, offset: number) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
+  const setStashedSqlResult = useSetAtom(worksheetStashedSqlResultAtom);
   const sqlText = String(result.rows[0]?.[0] ?? "");
+
+  const explainPrefix = result.kind ? EXPLAINABLE_KINDS[result.kind] : null;
+  const explainQuery = useMemo(
+    () =>
+      explainPrefix && result.objectName
+        ? `${explainPrefix} ${result.objectName}`
+        : null,
+    [explainPrefix, result.objectName],
+  );
+
+  const handleExplainClick = useCallback(() => {
+    if (explainQuery) {
+      setStashedSqlResult(result);
+      onExecute(explainQuery, "explain_plan", 0);
+    }
+  }, [explainQuery, onExecute, result, setStashedSqlResult]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([sqlText], { type: "text/sql" });
@@ -114,9 +150,16 @@ const SqlView = ({
         borderColor={colors.border.secondary}
         justifyContent="space-between"
       >
-        <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
-          {result.commandComplete}
-        </Text>
+        <HStack spacing="2">
+          {explainQuery && (
+            <Button size="xs" variant="ghost" onClick={handleExplainClick}>
+              Explain
+            </Button>
+          )}
+          <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
+            {result.commandComplete}
+          </Text>
+        </HStack>
         <HStack spacing="1">
           <CopyButton contents={sqlText} size="xs" />
           <IconButton
@@ -152,6 +195,17 @@ const TextView = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const text = String(result.rows[0]?.[0] ?? "");
+  const [stashedSqlResult, setStashedSqlResult] = useAtom(
+    worksheetStashedSqlResultAtom,
+  );
+  const setResult = useSetAtom(worksheetResultAtom);
+
+  const handleBackToSql = useCallback(() => {
+    if (stashedSqlResult) {
+      setResult(stashedSqlResult);
+      setStashedSqlResult(null);
+    }
+  }, [stashedSqlResult, setResult, setStashedSqlResult]);
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([text], { type: "text/plain" });
@@ -172,9 +226,16 @@ const TextView = ({
         borderColor={colors.border.secondary}
         justifyContent="space-between"
       >
-        <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
-          {result.commandComplete}
-        </Text>
+        <HStack spacing="2">
+          {stashedSqlResult && (
+            <Button size="xs" variant="ghost" onClick={handleBackToSql}>
+              SQL
+            </Button>
+          )}
+          <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
+            {result.commandComplete}
+          </Text>
+        </HStack>
         <HStack spacing="1">
           <CopyButton contents={text} size="xs" />
           <IconButton
