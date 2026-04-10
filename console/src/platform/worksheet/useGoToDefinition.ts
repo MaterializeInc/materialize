@@ -24,7 +24,7 @@ import React from "react";
 
 import { parseSearchPath } from "~/api/materialize";
 import type { DatabaseObject } from "~/api/materialize/objects";
-import type { SupportedObjectType } from "~/platform/object-explorer/ObjectExplorerNode";
+import type { SupportedObjectType } from "~/api/materialize/types";
 import { allObjects } from "~/store/allObjects";
 import { catalogDetailAtom, catalogVisibleAtom } from "~/store/catalog";
 

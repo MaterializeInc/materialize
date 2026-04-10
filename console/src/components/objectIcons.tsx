@@ -19,9 +19,10 @@ import SinkIcon from "~/svg/SinkIcon";
 import TableIcon from "~/svg/TableIcon";
 import ViewIcon from "~/svg/ViewIcon";
 
-import { ObjectExplorerNodeType } from "./ObjectExplorerNode";
-
-export function objectIcon(type: ObjectExplorerNodeType, sourceType?: string) {
+export function objectIcon(
+  type: string,
+  sourceType?: string,
+) {
   switch (type) {
     case "connection":
       return <ConnectionIcon />;

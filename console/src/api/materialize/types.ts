@@ -254,3 +254,17 @@ export function getMzDataTypeOid(
     return MzDataType[type as keyof typeof MzDataType];
   }
 }
+
+/** Display labels for each supported catalog object type. */
+export const OBJECT_TYPE_TO_LABEL = {
+  connection: "Connections",
+  index: "Indexes",
+  "materialized-view": "Materialized Views",
+  secret: "Secrets",
+  sink: "Sinks",
+  source: "Sources",
+  table: "Tables",
+  view: "Views",
+} as const;
+
+export type SupportedObjectType = keyof typeof OBJECT_TYPE_TO_LABEL;

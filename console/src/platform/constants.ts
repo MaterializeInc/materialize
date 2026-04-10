@@ -7,4 +7,5 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+/** Placeholder for objects with no database (e.g. system catalog objects). */
 export const NULL_DATABASE_NAME = "-";

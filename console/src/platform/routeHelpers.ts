@@ -8,10 +8,48 @@
 // by the Apache License, Version 2.0.
 
 import { SchemaObject } from "~/api/materialize";
-import {
-  relativeDatabasePath,
-  relativeObjectPath,
-} from "~/platform/object-explorer/routerHelpers";
+import { NULL_DATABASE_NAME } from "~/platform/constants";
+
+const OBJECT_TYPE_TO_SLUG: Record<string, string> = {
+  view: "views",
+  index: "indexes",
+  table: "tables",
+  secret: "secrets",
+  source: "sources",
+  sink: "sinks",
+  connection: "connections",
+  "materialized-view": "materialized-views",
+};
+
+function relativeDatabasePath(params: { databaseName: string | null }) {
+  return `${encodeURIComponent(params.databaseName ?? NULL_DATABASE_NAME)}`;
+}
+
+function relativeSchemaPath(params: {
+  databaseName: string | null;
+  schemaName: string;
+}) {
+  return `${relativeDatabasePath(params)}/schemas/${encodeURIComponent(params.schemaName)}`;
+}
+
+function relativeObjectTypePath(params: {
+  databaseName: string | null;
+  schemaName: string;
+  objectType: string;
+}) {
+  const objectLabel = OBJECT_TYPE_TO_SLUG[params.objectType] ?? "unknown";
+  return `${relativeSchemaPath(params)}/${objectLabel}`;
+}
+
+function relativeObjectPath(params: {
+  databaseName: string | null;
+  schemaName: string;
+  objectType: string;
+  objectName: string;
+  id: string;
+}) {
+  return `${relativeObjectTypePath(params)}/${encodeURIComponent(params.objectName)}/${params.id}`;
+}
 import { useRegionSlug } from "~/store/environments";
 
 export type RoutableObjectType =
