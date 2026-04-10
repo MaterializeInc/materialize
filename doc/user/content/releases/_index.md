@@ -43,8 +43,8 @@ CREATE SINK events_log_iceberg
 ```
 
 For more information, refer to:
-- [CREATE SINK: Iceberg](/sql/create-sink/iceberg/)
-- [Iceberg sink guide](/serve-results/sink/iceberg/)
+- [Guide: Apache Iceberg sink](/serve-results/sink/iceberg/)
+- [Reference: `CREATE SINK ICEBERG`](/sql/create-sink/iceberg/)
 
 ### Bug Fixes {#v26.19-bug-fixes}
 
