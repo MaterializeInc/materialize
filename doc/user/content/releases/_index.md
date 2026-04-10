@@ -24,10 +24,10 @@ and bug fixes.
 
 ### Iceberg sink append mode
 
-[Iceberg sinks](/sql/create-sink/iceberg/) now support `MODE APPEND`. In append
+[Iceberg sinks](/sql/create-sink/iceberg/) now support append mode. In append
 mode, all changes are written as data rows — no Iceberg delete files are
 produced. This is especially useful if you're sinking data from a materialized
-view with temporal filters.
+view with temporal filters, and you don't want data to be deleted from your Iceberg table as it ages out.
 
 ```mzsql
 CREATE SINK events_log_iceberg
