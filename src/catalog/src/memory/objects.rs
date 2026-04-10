@@ -3705,6 +3705,7 @@ pub enum StateUpdateKind {
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
     NetworkPolicy(durable::objects::NetworkPolicy),
+    ClusterReplicaSize(durable::objects::ClusterReplicaSize),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
     SourceReferences(durable::objects::SourceReferences),
@@ -3801,6 +3802,7 @@ pub enum BootstrapStateUpdateKind {
     SystemConfiguration(durable::objects::SystemConfiguration),
     Cluster(durable::objects::Cluster),
     NetworkPolicy(durable::objects::NetworkPolicy),
+    ClusterReplicaSize(durable::objects::ClusterReplicaSize),
     IntrospectionSourceIndex(durable::objects::IntrospectionSourceIndex),
     ClusterReplica(durable::objects::ClusterReplica),
     SourceReferences(durable::objects::SourceReferences),
@@ -3834,6 +3836,9 @@ impl From<BootstrapStateUpdateKind> for StateUpdateKind {
             }
             BootstrapStateUpdateKind::Cluster(kind) => StateUpdateKind::Cluster(kind),
             BootstrapStateUpdateKind::NetworkPolicy(kind) => StateUpdateKind::NetworkPolicy(kind),
+            BootstrapStateUpdateKind::ClusterReplicaSize(kind) => {
+                StateUpdateKind::ClusterReplicaSize(kind)
+            }
             BootstrapStateUpdateKind::IntrospectionSourceIndex(kind) => {
                 StateUpdateKind::IntrospectionSourceIndex(kind)
             }
@@ -3875,6 +3880,9 @@ impl TryFrom<StateUpdateKind> for BootstrapStateUpdateKind {
             StateUpdateKind::Cluster(kind) => Ok(BootstrapStateUpdateKind::Cluster(kind)),
             StateUpdateKind::NetworkPolicy(kind) => {
                 Ok(BootstrapStateUpdateKind::NetworkPolicy(kind))
+            }
+            StateUpdateKind::ClusterReplicaSize(kind) => {
+                Ok(BootstrapStateUpdateKind::ClusterReplicaSize(kind))
             }
             StateUpdateKind::IntrospectionSourceIndex(kind) => {
                 Ok(BootstrapStateUpdateKind::IntrospectionSourceIndex(kind))

@@ -778,6 +778,20 @@ Trace {
             (
                 (
                     IdAllocKey {
+                        name: "system_cluster_replica_size",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+            (
+                (
+                    IdAllocKey {
                         name: "system_compute",
                     },
                     IdAllocValue {
@@ -807,6 +821,20 @@ Trace {
                 (
                     IdAllocKey {
                         name: "user",
+                    },
+                    IdAllocValue {
+                        next_id: 1,
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+            (
+                (
+                    IdAllocKey {
+                        name: "user_cluster_replica_size",
                     },
                     IdAllocValue {
                         next_id: 1,

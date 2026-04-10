@@ -2446,6 +2446,20 @@ impl CatalogState {
         }
     }
 
+    /// Returns true if the given cluster replica size name is in use by any
+    /// existing cluster replica.
+    pub fn is_cluster_replica_size_in_use(&self, size_name: &str) -> bool {
+        use mz_controller::clusters::ReplicaLocation;
+        self.clusters_by_id.values().any(|cluster| {
+            cluster.replicas().any(|replica| {
+                matches!(
+                    &replica.config.location,
+                    ReplicaLocation::Managed(loc) if loc.size == size_name
+                )
+            })
+        })
+    }
+
     pub fn ensure_not_reserved_role(&self, role_id: &RoleId) -> Result<(), Error> {
         if role_id.is_builtin() {
             let role = self.get_role(role_id);

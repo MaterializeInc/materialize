@@ -1407,6 +1407,8 @@ pub enum CatalogError {
     UnknownClusterReplica(String),
     /// Unknown cluster replica size.
     UnknownClusterReplicaSize(String),
+    /// Cluster replica size already exists.
+    ClusterReplicaSizeAlreadyExists(String),
     /// Duplicate Replica. #[error("cannot create multiple replicas named '{0}' on cluster '{1}'")]
     DuplicateReplica(String, String),
     /// Unknown item.
@@ -1483,6 +1485,9 @@ impl fmt::Display for CatalogError {
             }
             Self::UnknownClusterReplicaSize(name) => {
                 write!(f, "unknown cluster replica size '{}'", name)
+            }
+            Self::ClusterReplicaSizeAlreadyExists(name) => {
+                write!(f, "cluster replica size '{}' already exists", name)
             }
             Self::DuplicateReplica(replica_name, cluster_name) => write!(
                 f,
