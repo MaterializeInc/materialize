@@ -126,6 +126,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
         wrong_ssl_context = retrieve_invalid_ssl_context_for_mysql(c)
 
         c.sources_and_sinks_ignored_from_validation.add("drop_table")
+        c.sources_and_sinks_ignored_from_validation.add("drop_recreate")
 
         c.test_parts(
             sharded_files,
