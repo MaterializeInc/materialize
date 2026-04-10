@@ -50,6 +50,11 @@ const BUILD_INFO: BuildInfo = build_info!();
 /// Resolves a short hostname to its FQDN using `getaddrinfo` with
 /// `AI_CANONNAME`, equivalent to `hostname --fqdn`. Falls back to the
 /// short hostname if DNS resolution fails.
+///
+/// Note: `getaddrinfo` is a blocking call with no timeout. If DNS is
+/// unavailable at pod startup (e.g., CoreDNS restart), this will block
+/// the main thread indefinitely. In practice this is rare since CoreDNS
+/// runs as a DaemonSet and is available before user pods start.
 fn resolve_fqdn(short_hostname: &str) -> String {
     use std::ffi::{CStr, CString};
     use std::ptr;
@@ -212,7 +217,57 @@ struct Args {
     worker_core_affinity: bool,
 }
 
+/// Install signal handlers so that termination signals are not ignored.
+///
+/// On Linux, PID 1 has special signal semantics: the kernel will not
+/// deliver signals whose disposition is SIG_DFL (the default). Since
+/// distroless containers run the binary directly as PID 1 (no tini),
+/// signals like SIGTERM from Kubernetes pod termination would be silently
+/// ignored without explicit handlers. This function registers a handler
+/// that restores the default disposition and re-raises, producing the
+/// expected termination behavior.
+fn install_termination_signal_handlers() {
+    use nix::sys::signal;
+
+    extern "C" fn handle_signal(signum: i32) {
+        // Restore default handler and re-raise so the process terminates
+        // with the correct signal and exit code.
+        let action = signal::SigAction::new(
+            signal::SigHandler::SigDfl,
+            signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+            signal::SigSet::empty(),
+        );
+        unsafe { signal::sigaction(signum.try_into().unwrap(), &action) }
+            .unwrap_or_else(|_| panic!("failed to uninstall handler for {}", signum));
+        let ret = unsafe { libc::raise(signum) };
+        if ret == -1 {
+            panic!("failed to re-raise signal {}", signum);
+        }
+    }
+
+    let action = signal::SigAction::new(
+        signal::SigHandler::Handler(handle_signal),
+        signal::SaFlags::SA_NODEFER | signal::SaFlags::SA_ONSTACK,
+        signal::SigSet::empty(),
+    );
+    for signum in &[
+        signal::SIGHUP,
+        signal::SIGINT,
+        signal::SIGALRM,
+        signal::SIGTERM,
+    ] {
+        unsafe { signal::sigaction(*signum, &action) }
+            .unwrap_or_else(|e| panic!("failed to install handler for {}: {}", signum, e));
+    }
+}
+
 pub fn main() {
+    // Install signal handlers before anything else. As PID 1 in a
+    // distroless container, the kernel ignores signals without explicit
+    // handlers — without this, SIGTERM from Kubernetes would be ignored
+    // and the pod would hang until SIGKILL.
+    install_termination_signal_handlers();
+
     mz_ore::panic::install_enhanced_handler();
 
     // When running in Kubernetes, auto-detect the GRPC host from the pod's FQDN

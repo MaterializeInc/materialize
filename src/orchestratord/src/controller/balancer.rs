@@ -626,3 +626,28 @@ impl k8s_controller::Context for Context {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_pod_uid_gid() {
+        // Boundary: v26.19.0 is the first distroless version
+        assert_eq!(Context::pod_uid_gid("materialize/balancerd:v26.18.0"), 999);
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd:v26.19.0"),
+            65534
+        );
+        // Pre-release below threshold gets Ubuntu
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd:v26.19.0-dev"),
+            999
+        );
+        // Unparseable refs assume distroless
+        assert_eq!(
+            Context::pod_uid_gid("materialize/balancerd@sha256:abc"),
+            65534
+        );
+    }
+}
