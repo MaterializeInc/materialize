@@ -19,7 +19,10 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION, ENABLE_TEMPORAL_BUCKETING,
+    TEMPORAL_BUCKETING_SUMMARY,
+};
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -738,6 +741,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         input_mfp: MapFilterProject,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
+        input_has_future_updates: bool,
+        as_of: Antichain<mz_repr::Timestamp>,
     ) -> Self {
         if collections == Default::default() {
             return self;
@@ -764,12 +769,27 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .iter()
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
         if form_raw_collection && self.collection.is_none() {
-            self.collection = Some(self.as_collection_core(
+            let (oks, errs) = self.as_collection_core(
                 input_mfp,
                 input_key.map(|k| (k, None)),
                 until,
                 config_set,
-            ));
+            );
+            // Apply temporal bucketing if the input may contain future updates.
+            let oks = if input_has_future_updates && ENABLE_TEMPORAL_BUCKETING.get(config_set) {
+                let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                    .get(config_set)
+                    .try_into()
+                    .expect("must fit");
+                <S::Timestamp as RenderTimestamp>::maybe_apply_temporal_bucketing(
+                    oks.inner,
+                    as_of,
+                    summary,
+                )
+            } else {
+                oks
+            };
+            self.collection = Some((oks, errs));
         }
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
