@@ -13,7 +13,7 @@ workspace = true
 jsonwebtoken.workspace = true
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", features = ["network"] }
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots-no-provider"], default-features = false }
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

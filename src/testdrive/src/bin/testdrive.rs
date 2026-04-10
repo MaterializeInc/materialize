@@ -298,6 +298,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    // Install CryptoProvider before any TLS usage. Required when both
+    // aws-lc-rs and ring features are active (e.g., foundationdb builds).
+    let _ = mz_ore::crypto::fips_crypto_provider();
     let args: Args = cli::parse_args(CliConfig::default());
 
     tracing_subscriber::fmt()

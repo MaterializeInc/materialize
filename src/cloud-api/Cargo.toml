@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots-no-provider"], default-features = false }
 serde.workspace = true
 url.workspace = true
 thiserror.workspace = true

@@ -36,8 +36,8 @@ iceberg.workspace = true
 indexmap.workspace = true
 itertools.workspace = true
 maplit.workspace = true
-mysql_async.workspace = true
-mysql_common.workspace = true
+mysql_async = { workspace = true, features = ["minimal", "binlog"], default-features = false }
+mysql_common = { workspace = true, features = ["chrono"], default-features = false }
 mz-arrow-util = { path = "../arrow-util" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
@@ -81,7 +81,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_bytes.workspace = true
 sha2.workspace = true
-tiberius.workspace = true
+tiberius = { workspace = true, features = ["chrono", "sql-browser-tokio", "tds73", "rustls"], default-features = false }
 timely.workspace = true
 tokio.workspace = true
 tokio-postgres = { workspace = true, features = ["serde"] }

@@ -26,7 +26,7 @@ mz-sql-parser = { path = "../sql-parser" }
 open.workspace = true
 openssl-probe.workspace = true
 hyper.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls-webpki-roots-no-provider", "charset", "http2"], default-features = false }
 rpassword.workspace = true
 semver.workspace = true
 serde.workspace = true

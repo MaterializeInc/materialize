@@ -19,7 +19,7 @@ chrono.workspace = true
 futures.workspace = true
 indexmap.workspace = true
 k8s-openapi.workspace = true
-kube.workspace = true
+kube = { workspace = true, features = ["client", "derive", "rustls-tls", "aws-lc-rs", "ws", "runtime"], default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-server-core = { path = "../server-core", default-features = false }
 rand.workspace = true

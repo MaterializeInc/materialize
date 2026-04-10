@@ -961,6 +961,8 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_postgres_timestamp_oracle() -> Result<(), anyhow::Error> {
+        // Install CryptoProvider for --all-features builds where both ring and aws-lc-rs are active.
+        let _ = mz_ore::crypto::fips_crypto_provider();
         let config = match PostgresTimestampOracleConfig::new_for_test() {
             Some(config) => config,
             None => {

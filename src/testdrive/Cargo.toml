@@ -32,7 +32,7 @@ itertools.workspace = true
 junit-report.workspace = true
 maplit.workspace = true
 md-5.workspace = true
-mysql_async.workspace = true
+mysql_async = { workspace = true, features = ["minimal"], default-features = false }
 mz-avro = { path = "../avro", features = ["snappy"] }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-build-info = { path = "../build-info" }
@@ -44,7 +44,7 @@ mz-expr = { path = "../expr" }
 mz-interchange = { path = "../interchange" }
 mz-kafka-util = { path = "../kafka-util" }
 mz-license-keys = { path = "../license-keys" }
-mz-ore = { path = "../ore", features = ["async"] }
+mz-ore = { path = "../ore", features = ["async", "crypto"] }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
@@ -63,14 +63,14 @@ prost-types.workspace = true
 rand.workspace = true
 rdkafka.workspace = true
 regex.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
 semver.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["raw_value"] }
 similar.workspace = true
 tempfile.workspace = true
 termcolor.workspace = true
-tiberius.workspace = true
+tiberius = { workspace = true, features = ["sql-browser-tokio", "tds73"], default-features = false }
 time.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

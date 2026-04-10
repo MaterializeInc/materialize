@@ -29,7 +29,7 @@ differential-dataflow.workspace = true
 hex.workspace = true
 http.workspace = true
 itertools.workspace = true
-mysql_async.workspace = true
+mysql_async = { workspace = true, features = ["minimal", "rustls-tls"], default-features = false }
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-resources = { path = "../cloud-resources" }
@@ -53,18 +53,16 @@ mz-sql-server-util = { path = "../sql-server-util" }
 mz-timely-util = { path = "../timely-util" }
 mz-tls-util = { path = "../tls-util" }
 mz-tracing = { path = "../tracing" }
-native-tls.workspace = true
-openssl.workspace = true
 proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
 rdkafka.workspace = true
 regex.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
-tiberius.workspace = true
+tiberius = { workspace = true, features = ["sql-browser-tokio", "tds73", "rustls"], default-features = false }
 timely.workspace = true
 tokio.workspace = true
 tokio-postgres = { workspace = true, features = ["serde"] }

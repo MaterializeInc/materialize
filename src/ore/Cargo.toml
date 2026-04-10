@@ -44,8 +44,7 @@ libc = { workspace = true, optional = true }
 mz-ore-proc = { path = "../ore-proc", default-features = false }
 num.workspace = true
 num-traits = { workspace = true, optional = true }
-# The vendored feature is transitively depended upon by tokio-openssl.
-openssl = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true, default-features = false }
 parquet = { workspace = true, optional = true }
 paste.workspace = true
 pin-project.workspace = true
@@ -60,6 +59,8 @@ sentry-panic = { workspace = true, optional = true }
 serde.workspace = true
 tokio = { workspace = true, optional = true }
 tokio-openssl = { workspace = true, optional = true }
+# The vendored feature is transitively depended upon by tokio-openssl.
+openssl = { workspace = true, optional = true }
 thiserror.workspace = true
 tracing-capture = { workspace = true, optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
@@ -78,9 +79,7 @@ http = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-opentelemetry = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
-tokio-native-tls = { workspace = true, optional = true }
-native-tls = { workspace = true, optional = true }
-hyper-tls = { version = "0.6.0", optional = true }
+hyper-rustls = { workspace = true, features = ["aws-lc-rs", "http1", "http2", "native-tokio", "tls12"], optional = true, default-features = false }
 hyper-util = { workspace = true, optional = true }
 opentelemetry = { workspace = true, optional = true }
 opentelemetry-otlp = { workspace = true, optional = true }
@@ -110,6 +109,7 @@ async = [
     "openssl",
     "tokio/tracing",
     "tokio-openssl",
+    "tokio-rustls",
     "tokio",
     "dep:tracing",
 ]
@@ -124,15 +124,14 @@ tracing = [
     "tracing-subscriber",
     "tracing-subscriber/ansi",
     "tracing-opentelemetry",
-    "tokio-native-tls",
-    "native-tls",
     "http",
-    "hyper-tls",
+    "hyper-rustls",
     "hyper-util",
     "metrics",
     "opentelemetry",
     "opentelemetry-otlp",
     "opentelemetry_sdk",
+    "rustls",
     "tonic",
     "sentry",
     "sentry-tracing",
