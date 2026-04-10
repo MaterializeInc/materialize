@@ -136,7 +136,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
-use timely::dataflow::{Scope, StreamVec};
+use timely::dataflow::StreamVec;
 use timely::progress::{Antichain, Timestamp as _};
 use tracing::debug;
 

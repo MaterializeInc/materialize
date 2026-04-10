@@ -213,7 +213,6 @@ where
     B::Time: Lattice,
     L: FnMut(&B) -> (usize, usize, usize) + 'static,
 {
-    use timely::scheduling::Scheduler;
     use timely::worker::AsWorker;
     let scope = arranged.stream.scope();
     let Some(logger) = scope.logger_for::<ComputeEventBuilder>("materialize/compute") else {

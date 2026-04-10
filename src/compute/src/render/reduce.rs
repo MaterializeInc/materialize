@@ -41,7 +41,6 @@ use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 use tracing::warn;
 

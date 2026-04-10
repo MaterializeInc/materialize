@@ -50,7 +50,7 @@ pub(crate) fn render_sink(
 
     let name = format!("{sink_id}-sinks");
 
-    let mut outer_scope = scope.clone();
+    let outer_scope = scope.clone();
     scope.scoped::<mz_repr::Timestamp, _, _>(&name, |scope| {
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);

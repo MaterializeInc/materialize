@@ -21,11 +21,9 @@ use mz_repr::{Datum, Diff, Row, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::scheduling::Scheduler;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
@@ -46,7 +44,7 @@ pub(super) struct Return {
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
 pub(super) fn construct(
-    mut scope: timely::dataflow::Scope<Timestamp>,
+    scope: timely::dataflow::Scope<Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
 ) -> Return {

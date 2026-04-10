@@ -23,7 +23,6 @@ use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use prometheus::proto::MetricType;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::ExchangeCore;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;

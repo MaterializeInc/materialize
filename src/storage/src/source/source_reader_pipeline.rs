@@ -214,7 +214,7 @@ where
     let mut reclocked_exports = BTreeMap::new();
 
     let reclocked_exports2 = &mut reclocked_exports;
-    let mut parent_for_leave = parent.clone();
+    let parent_for_leave = parent.clone();
     let (health, source_tokens) =
         parent.scoped::<C::Time, _, _>("SourceTimeDomain", move |scope| {
             let (exports, health_stream, source_tokens) = source_render_operator(

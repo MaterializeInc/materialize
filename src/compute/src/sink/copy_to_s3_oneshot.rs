@@ -23,7 +23,6 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::consolidate_pact;
 use mz_timely_util::probe::{Handle, ProbeNotify};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;

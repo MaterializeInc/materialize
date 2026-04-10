@@ -1263,6 +1263,7 @@ mod tests {
             ) =
                 // Set up the top-level non-granular scope.
                 worker.dataflow::<u64, _, _>(|scope| {
+                    let outer_scope = scope.clone();
                     let (non_granular_feedback_handle, non_granular_feedback) =
                         if non_granular_consumer {
                             let (h, f) = scope.feedback(Default::default());
@@ -1333,7 +1334,7 @@ mod tests {
                             tx,
                             backpressure_status_rx,
                             token,
-                            backpressured.leave(),
+                            backpressured.leave(&outer_scope),
                             finalizer_tx,
                         )
                     });

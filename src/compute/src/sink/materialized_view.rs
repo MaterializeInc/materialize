@@ -149,7 +149,6 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{Capability, CapabilitySet, probe};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
-use timely::scheduling::Scheduler;
 use timely::worker::AsWorker;
 use tokio::sync::watch;
 use tracing::trace;

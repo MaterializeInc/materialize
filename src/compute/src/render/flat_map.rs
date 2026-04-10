@@ -16,13 +16,11 @@ use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 use timely::scheduling::Scheduler;
-use timely::worker::AsWorker;
 
 use crate::render::DataflowError;
 use crate::render::context::{CollectionBundle, Context};

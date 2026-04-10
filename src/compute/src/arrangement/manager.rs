@@ -21,7 +21,6 @@ use differential_dataflow::trace::implementations::WithLayout;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::{Diff, GlobalId, Timestamp};
 use timely::PartialOrder;
-use timely::dataflow::Scope;
 use timely::dataflow::operators::CapabilitySet;
 use timely::progress::Timestamp as _;
 use timely::progress::frontier::{Antichain, AntichainRef};

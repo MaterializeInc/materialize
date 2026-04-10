@@ -28,7 +28,7 @@ use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::operators::generic::{OutputBuilder, Session};
-use timely::dataflow::{Scope, StreamVec};
+use timely::dataflow::StreamVec;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::compute::{ArrangementHeapSizeOperatorDrop, ComputeEvent};
@@ -53,7 +53,7 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read log events from.
 /// * `shared_state`: Shared state across all logging dataflow fragments.
 pub(super) fn construct(
-    mut scope: timely::dataflow::Scope<Timestamp>,
+    scope: timely::dataflow::Scope<Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,

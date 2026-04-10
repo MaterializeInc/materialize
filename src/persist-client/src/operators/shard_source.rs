@@ -743,6 +743,7 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let outer = scope.clone();
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
@@ -765,7 +766,7 @@ mod tests {
                         async {},
                         ErrorHandler::Halt("test"),
                     );
-                    (stream.leave(), tokens)
+                    (stream.leave(&outer), tokens)
                 });
 
                 let probe = ProbeHandle::new();
@@ -813,6 +814,7 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
+                let outer = scope.clone();
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
@@ -835,7 +837,7 @@ mod tests {
                         async {},
                         ErrorHandler::Halt("test"),
                     );
-                    (stream.leave(), tokens)
+                    (stream.leave(&outer), tokens)
                 });
 
                 let probe = ProbeHandle::new();

@@ -35,7 +35,7 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
 use timely::scheduling::{Scheduler, SyncActivator};
-use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
 
 /// A sender pushing commands onto the command channel.

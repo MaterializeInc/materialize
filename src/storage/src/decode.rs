@@ -35,7 +35,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::vec::Map;
-use timely::dataflow::{Scope, StreamVec};
+use timely::dataflow::StreamVec;
 use timely::progress::Timestamp;
 use timely::scheduling::SyncActivator;
 use tracing::error;

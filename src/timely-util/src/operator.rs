@@ -38,7 +38,7 @@ use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::progress::operate::FrontierInterest;
 use timely::progress::{Antichain, Timestamp};
 use timely::worker::AsWorker;
-use timely::{Container, ContainerBuilder, PartialOrder};
+use timely::{Container, ContainerBuilder};
 
 use crate::columnation::ColumnationStack;
 

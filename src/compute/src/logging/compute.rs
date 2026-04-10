@@ -30,7 +30,7 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::{Scope, StreamVec};
+use timely::dataflow::StreamVec;
 use timely::scheduling::Scheduler;
 use tracing::error;
 use uuid::Uuid;
@@ -301,7 +301,7 @@ pub(super) struct Return {
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
 pub(super) fn construct<S: Scheduler + 'static>(
-    mut scope: timely::dataflow::Scope<Timestamp>,
+    scope: timely::dataflow::Scope<Timestamp>,
     scheduler: S,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,

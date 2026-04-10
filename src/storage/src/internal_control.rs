@@ -27,7 +27,7 @@ use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::vec::Broadcast;
 use timely::progress::Antichain;
 use timely::scheduling::{Activator, Scheduler};
-use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::worker::Worker as TimelyWorker;
 
 use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
 

@@ -44,10 +44,9 @@ use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::operators::{Capability, Operator};
-use timely::dataflow::{Scope, Stream};
+use timely::dataflow::Stream;
 use timely::progress::timestamp::Timestamp;
 use timely::scheduling::Scheduler;
-use timely::worker::AsWorker;
 use timely::{Container, PartialOrder};
 use tracing::trace;
 

@@ -26,7 +26,6 @@ use mz_timely_util::scope_label::scoped_labelled;
 use timely::ContainerBuilder;
 
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
