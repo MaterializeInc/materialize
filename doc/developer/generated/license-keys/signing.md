@@ -1,6 +1,6 @@
 ---
 source: src/license-keys/src/signing.rs
-revision: e757b4d11b
+revision: ed294863cf
 ---
 
 # mz-license-keys::signing
