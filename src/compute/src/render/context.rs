@@ -769,12 +769,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .iter()
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
         if form_raw_collection && self.collection.is_none() {
-            let (oks, errs) = self.as_collection_core(
-                input_mfp,
-                input_key.map(|k| (k, None)),
-                until,
-                config_set,
-            );
+            let (oks, errs) =
+                self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
             // Apply temporal bucketing if the input may contain future updates.
             let oks = if input_has_future_updates && ENABLE_TEMPORAL_BUCKETING.get(config_set) {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
@@ -782,9 +778,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 <S::Timestamp as RenderTimestamp>::maybe_apply_temporal_bucketing(
-                    oks.inner,
-                    as_of,
-                    summary,
+                    oks.inner, as_of, summary,
                 )
             } else {
                 oks
