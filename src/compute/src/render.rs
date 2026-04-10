@@ -1324,7 +1324,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 input,
                 input_mfp,
                 forms: keys,
-                input_has_future_updates: _input_has_future_updates,
+                input_has_future_updates,
             } => {
                 let input = expect_input(input);
                 input.ensure_collections(
@@ -1333,6 +1333,8 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     input_mfp,
                     self.until.clone(),
                     &self.config_set,
+                    input_has_future_updates,
+                    self.as_of_frontier.clone(),
                 )
             }
         }
