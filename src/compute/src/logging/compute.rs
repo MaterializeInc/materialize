@@ -25,13 +25,14 @@ use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
-use timely::dataflow::StreamVec;
-use timely::scheduling::Scheduler;
+use timely::scheduling::Activator;
+use timely::scheduling::activate::Activations;
 use tracing::error;
 use uuid::Uuid;
 
@@ -295,14 +296,13 @@ pub(super) struct Return {
 ///
 /// Params
 /// * `scope`: The Timely scope hosting the log analysis dataflow.
-/// * `scheduler`: The timely scheduler to obtainer activators.
+/// * `activations`: Shared activations handle for constructing activators.
 /// * `config`: Logging configuration.
 /// * `event_queue`: The source to read compute log events from.
-/// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
-pub(super) fn construct<S: Scheduler + 'static>(
+pub(super) fn construct(
     scope: timely::dataflow::Scope<Timestamp>,
-    scheduler: S,
+    activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -355,7 +355,7 @@ pub(super) fn construct<S: Scheduler + 'static>(
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
         let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
 
-        let mut demux_state = DemuxState::new(scheduler, scope.index());
+        let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -467,9 +467,9 @@ where
 }
 
 /// State maintained by the demux operator.
-struct DemuxState<A> {
-    /// The timely scheduler.
-    scheduler: A,
+struct DemuxState {
+    /// Shared activations handle for constructing activators.
+    activations: Rc<RefCell<Activations>>,
     /// The index of this worker.
     worker_id: usize,
     /// A reusable scratch string for formatting IDs.
@@ -514,10 +514,10 @@ struct DemuxState<A> {
     hydration_time_packer: PermutedRowPacker,
 }
 
-impl<A: Scheduler> DemuxState<A> {
-    fn new(scheduler: A, worker_id: usize) -> Self {
+impl DemuxState {
+    fn new(activations: Rc<RefCell<Activations>>, worker_id: usize) -> Self {
         Self {
-            scheduler,
+            activations,
             worker_id,
             scratch_string_a: String::new(),
             scratch_string_b: String::new(),
@@ -774,9 +774,9 @@ struct DemuxOutput<'a, 'b> {
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
+struct DemuxHandler<'a, 'b, 'c> {
     /// State kept by the demux operator.
-    state: &'a mut DemuxState<A>,
+    state: &'a mut DemuxState,
     /// State shared across log receivers.
     shared_state: &'a mut SharedLoggingState,
     /// Demux output sessions.
@@ -787,7 +787,7 @@ struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
     time: Duration,
 }
 
-impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
+impl DemuxHandler<'_, '_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -1186,10 +1186,10 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
             address,
         }: Ref<'_, ArrangementHeapSizeOperator>,
     ) {
-        let activator = self
-            .state
-            .scheduler
-            .activator_for(address.into_iter().collect());
+        let activator = Activator::new(
+            address.into_iter().collect(),
+            Rc::clone(&self.state.activations),
+        );
         let existing = self
             .state
             .arrangement_size
