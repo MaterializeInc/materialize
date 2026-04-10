@@ -11,6 +11,7 @@ mod crypto;
 mod destination;
 mod error;
 mod fivetran_sdk;
+mod tls;
 
 pub mod logging;
 pub mod utils;
