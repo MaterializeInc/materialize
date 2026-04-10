@@ -11,40 +11,16 @@
  * @module
  * Global live cache of all user-visible columns in the Materialize catalog.
  *
- * ## What
  * Maintains a Jotai atom containing every column for every user object
  * (tables, views, materialized views, sources) via a single long-lived
  * SUBSCRIBE to `mz_columns` joined with `mz_comments`.
- *
- * ## Why
- * Previously, each component that needed column data (catalog tree preview,
- * catalog detail view) opened its own per-object WebSocket SUBSCRIBE on mount,
- * causing a ~1s spinner every time. By subscribing to all columns once at app
- * startup, any component can read column data synchronously from the atom.
- *
- * ## How
- * Follows the three-part pattern used by `allObjects.ts`, `allClusters.ts`, etc.:
- * 1. **Atom** (`catalogColumns`) — holds the current `SubscribeState<CatalogColumn>[]`
- * 2. **Initializer** (`useSubscribeToCatalogColumns`) — called once in `AppInitializer`
- *    to start the SUBSCRIBE WebSocket
- * 3. **Consumer hooks** (`useObjectColumns`, `useObjectDescription`) — filter the
- *    global data by object ID for use in any component
- *
- * ## When
- * The subscribe is started in `AppInitializer.tsx` alongside the other global
- * subscribes. Data becomes available after the initial snapshot completes
- * (typically < 500ms). Consumer hooks return empty arrays until then.
  */
 
-import { atom, useAtomValue } from "jotai";
+import { useAtomValue } from "jotai";
 import { sql } from "kysely";
 import React from "react";
 
-import { SubscribeState } from "~/api/materialize/SubscribeManager";
-import {
-  buildSubscribeQuery,
-  useGlobalUpsertSubscribe,
-} from "~/api/materialize/useSubscribe";
+import { createCatalogStore } from "~/store/createCatalogStore";
 
 export interface CatalogColumn {
   objectId: string;
@@ -77,40 +53,20 @@ function buildAllColumnsQuery() {
   `;
 }
 
-export const catalogColumns = atom<SubscribeState<CatalogColumn>>({
-  data: [],
-  error: undefined,
-  snapshotComplete: false,
+const store = createCatalogStore<CatalogColumn>({
+  query: buildAllColumnsQuery,
+  upsertKey: ["objectId", "name"],
 });
 
-/** Call once in AppInitializer to start the global columns SUBSCRIBE. */
-export function useSubscribeToCatalogColumns() {
-  const subscribe = React.useMemo(
-    () =>
-      buildSubscribeQuery(buildAllColumnsQuery(), {
-        upsertKey: ["objectId", "name"],
-      }),
-    [],
-  );
+export const catalogColumns = store.atom;
 
-  return useGlobalUpsertSubscribe({
-    atom: catalogColumns,
-    subscribe,
-    select: (row) => row.data,
-    upsertKey: (row) => `${row.data.objectId}:${row.data.name}`,
-  });
-}
+/** Call once in AppInitializer to start the global columns SUBSCRIBE. */
+export const useSubscribeToCatalogColumns = store.useSubscribe;
 
 /**
  * Returns all columns for the given object, sorted by position.
  * Data is live (updated via SUBSCRIBE) and available synchronously
  * after the initial snapshot completes.
- *
- * @example
- * ```tsx
- * const columns = useObjectColumns("u123");
- * // columns: CatalogColumn[] sorted by position
- * ```
  */
 export function useObjectColumns(objectId: string): CatalogColumn[] {
   const { data } = useAtomValue(catalogColumns);
@@ -126,12 +82,6 @@ export function useObjectColumns(objectId: string): CatalogColumn[] {
 /**
  * Returns the relation-level comment (description) for the given object,
  * or null if none exists. Reads from the global columns cache.
- *
- * @example
- * ```tsx
- * const description = useObjectDescription("u123");
- * // description: string | null
- * ```
  */
 export function useObjectDescription(objectId: string): string | null {
   const columns = useObjectColumns(objectId);

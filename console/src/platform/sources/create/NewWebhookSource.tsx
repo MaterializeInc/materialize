@@ -36,12 +36,12 @@ import {
 import { Modal } from "~/components/Modal";
 import { ObjectToastDescription } from "~/components/Toast";
 import { useToast } from "~/hooks/useToast";
-import { useBuildSourcePath } from "~/platform/routeHelpers";
 import {
   sourceQueryKeys,
   useCreateWebhookSource,
   useCreateWebhookSourceView,
 } from "~/platform/sources/queries";
+import { useOpenCatalogMonitor } from "~/store/catalog";
 import { assert } from "~/util";
 
 import useNormalizedSteps from "./shared/useNormalizedSteps";
@@ -70,7 +70,7 @@ export const NewWebhookSourceContent = ({
   const navigate = useNavigate();
   const { track } = useSegment();
   const toast = useToast();
-  const sourcePath = useBuildSourcePath();
+  const openCatalogMonitor = useOpenCatalogMonitor();
   const {
     isOpen: isDropAlertOpen,
     onOpen: onDropAlertOpen,
@@ -241,7 +241,15 @@ export const NewWebhookSourceContent = ({
       track("Finished creating webhook source", {
         createdView: viewName !== null && sampleObject !== null,
       });
-      navigate(sourcePath(createdSource));
+      openCatalogMonitor({
+        id: createdSource.id,
+        databaseName: createdSource.databaseName ?? "",
+        schemaName: createdSource.schemaName,
+        objectName: createdSource.name,
+        objectType: "source",
+        clusterId: createdSource.clusterId,
+        clusterName: createdSource.clusterName,
+      });
     } else {
       wizardSteps.goToNext();
     }

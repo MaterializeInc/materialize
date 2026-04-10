@@ -13,6 +13,7 @@ import React from "react";
 
 import { Column } from "~/api/materialize/object-explorer/objectColumns";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
+import { CommentText } from "~/components/CommentText";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { UniversalTable } from "~/components/Table/UniversalTable";
 import { useUniversalTable } from "~/components/Table/useUniversalTable";
@@ -49,9 +50,9 @@ const tableColumns = [
       return (
         <Tooltip label={comment} lineHeight={1.2} openDelay={200}>
           <Box>
-            <Text whiteSpace="normal" noOfLines={3}>
+            <CommentText whiteSpace="normal" noOfLines={3}>
               {comment}
-            </Text>
+            </CommentText>
           </Box>
         </Tooltip>
       );
@@ -97,7 +98,9 @@ const ObjectColumnsContent = ({
       <Text textStyle="heading-sm">
         {rows.length} {pluralize(rows.length, "Column", "Columns")}
       </Text>
-      {relationComment && <Text textStyle="text-small">{relationComment}</Text>}
+      {relationComment && (
+        <CommentText textStyle="text-small">{relationComment}</CommentText>
+      )}
       <UniversalTable table={table} variant="linkable" />
     </VStack>
   );

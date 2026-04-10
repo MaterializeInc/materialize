@@ -82,10 +82,22 @@ export interface QueryResult {
   durationMs: number;
   /** How to render this result. When omitted, the results panel renders as a table. */
   displayMode?: "table" | "sql" | "text";
+  /** The parser statement kind that produced this result (e.g. "show_create_materialized_view"). */
+  kind?: string;
+  /** For SHOW CREATE results: the qualified object name returned by the server. */
+  objectName?: string;
 }
 
 /** The most recent row-returning query result, shown in the results panel. */
 export const worksheetResultAtom = atom<QueryResult | null>(null);
+
+/** Stashed SQL result to return to after viewing an EXPLAIN plan. */
+export const worksheetStashedSqlResultAtom = atom<QueryResult | null>(null);
+
+/** Execute function exposed by useExecution, used by FloatingResultPanel to run queries like EXPLAIN. */
+export const worksheetExecuteAtom = atom<
+  ((sql: string, kind: string, offset: number) => void) | null
+>(null);
 
 /**
  * An inline annotation displayed below a statement in the editor.

@@ -19,9 +19,12 @@ import {
   resultsPanelPathAtom,
   stopSubscribeAtom,
   subscribeStateAtom,
+  worksheetExecuteAtom,
   worksheetResultAtom,
 } from "~/platform/worksheet/store";
 import type { MaterializeTheme } from "~/theme";
+
+const noop = () => {};
 
 /** Default height of the results panel in pixels. */
 const DEFAULT_HEIGHT = 300;
@@ -43,6 +46,7 @@ const FloatingResultPanel = () => {
   const subscribeState = useAtomValue(subscribeStateAtom);
   const stopSubscribe = useAtomValue(stopSubscribeAtom);
   const [panelOpen, setPanelOpen] = useAtom(resultsPanelOpenAtom);
+  const executeFromWorksheet = useAtomValue(worksheetExecuteAtom);
   const setResultsPanelPath = useSetAtom(resultsPanelPathAtom);
   const setResultsPanelHeight = useSetAtom(resultsPanelHeightAtom);
   const { colors } = useTheme<MaterializeTheme>();
@@ -162,6 +166,7 @@ const FloatingResultPanel = () => {
           subscribeState={subscribeState}
           onStopSubscribe={handleStopSubscribe}
           onDismiss={handleDismiss}
+          onExecute={executeFromWorksheet ?? noop}
         />
       </Box>
     </Flex>

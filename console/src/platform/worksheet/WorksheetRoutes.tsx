@@ -12,12 +12,19 @@ import { Route } from "react-router-dom";
 
 import { SentryRoutes } from "~/sentry";
 
+import ConnectorMonitorPage from "./ConnectorMonitorPage";
+import DataflowVisualizerPage from "./DataflowVisualizerPage";
+import WorkflowGraphPage from "./WorkflowGraphPage";
 import WorksheetPage from "./WorksheetPage";
 
 const WorksheetRoutes = () => (
   <SentryRoutes>
     <Route path="/" element={<WorksheetPage />}>
       <Route index element={null} />
+      <Route path="monitor/:id" element={<ConnectorMonitorPage />} />
+      <Route path="monitor/:id/errors" element={<ConnectorMonitorPage />} />
+      <Route path="workflow/:id" element={<WorkflowGraphPage />} />
+      <Route path="dataflow/:id" element={<DataflowVisualizerPage />} />
     </Route>
   </SentryRoutes>
 );

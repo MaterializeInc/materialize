@@ -21,7 +21,6 @@ import {
   useTheme,
 } from "@chakra-ui/react";
 import React from "react";
-import { useNavigate } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { Sink } from "~/api/materialize/sink/sinkList";
@@ -66,7 +65,7 @@ import {
   useConnectorListSortOptions,
 } from "~/platform/connectors/useConnectorListSortOptions";
 import { connectorHealthStatus } from "~/platform/connectors/utils";
-import { useBuildSinkPath } from "~/platform/routeHelpers";
+import { useOpenCatalogMonitor } from "~/store/catalog";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { kebabToTitleCase } from "~/util";
@@ -225,8 +224,7 @@ const SinksListContent = ({
 };
 
 export const SinkTable = (props: SinkTableProps) => {
-  const sinkPath = useBuildSinkPath();
-  const navigate = useNavigate();
+  const openCatalogMonitor = useOpenCatalogMonitor();
   const { colors } = useTheme<MaterializeTheme>();
 
   return (
@@ -259,7 +257,21 @@ export const SinkTable = (props: SinkTableProps) => {
       </Thead>
       <Tbody>
         {props.sinks.map((s) => (
-          <Tr key={s.id} onClick={() => navigate(sinkPath(s))} cursor="pointer">
+          <Tr
+            key={s.id}
+            onClick={() =>
+              openCatalogMonitor({
+                id: s.id,
+                databaseName: s.databaseName ?? "",
+                schemaName: s.schemaName,
+                objectName: s.name,
+                objectType: "sink",
+                clusterId: s.clusterId,
+                clusterName: s.clusterName,
+              })
+            }
+            cursor="pointer"
+          >
             <Td py="2" {...truncateMaxWidth}>
               <Text
                 textStyle="text-small"
