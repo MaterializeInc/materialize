@@ -39,7 +39,7 @@ CREATE SINK events_log_iceberg
   )
   USING AWS CONNECTION aws_connection
   MODE APPEND
-  WITH (COMMIT INTERVAL = '1m');
+  WITH (COMMIT INTERVAL = '5m');
 ```
 
 For more information, refer to:
