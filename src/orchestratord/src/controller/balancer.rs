@@ -41,6 +41,7 @@ use mz_cloud_resources::crd::{
     ManagedResource,
     balancer::v1alpha1::{Balancer, Routing},
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
+    materialize::parse_image_ref,
 };
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_ore::{cli::KeyValueArg, instrument};
@@ -157,6 +158,28 @@ impl Context {
             CertificatePrivateKeyAlgorithm::Ecdsa,
             Some(256),
         )
+    }
+
+    fn pod_uid_gid(image_ref: &str) -> i64 {
+        // Distroless images (v26.19+) run as the `nonroot` user (uid/gid 65534).
+        // Older Ubuntu-based images use the `materialize` user (uid/gid 999).
+        static V26_19_0: std::sync::LazyLock<semver::Version> =
+            std::sync::LazyLock::new(|| semver::Version {
+                major: 26,
+                minor: 19,
+                patch: 0,
+                pre: semver::Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+                build: semver::BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+            });
+        let is_distroless = parse_image_ref(image_ref)
+            .map(|v| v.cmp_precedence(&V26_19_0).is_ge())
+            // Unparseable image refs are assumed to be recent dev builds.
+            .unwrap_or(true);
+        if is_distroless {
+            65534
+        } else {
+            999
+        }
     }
 
     fn create_deployment_object(&self, balancer: &Balancer) -> anyhow::Result<Deployment> {
@@ -388,12 +411,15 @@ impl Context {
                     ),
                     affinity: self.config.balancerd_affinity.clone(),
                     tolerations: self.config.balancerd_tolerations.clone(),
-                    security_context: Some(PodSecurityContext {
-                        fs_group: Some(999),
-                        run_as_user: Some(999),
-                        run_as_group: Some(999),
-                        ..Default::default()
-                    }),
+                    security_context: {
+                        let uid_gid = Self::pod_uid_gid(&balancer.spec.balancerd_image_ref);
+                        Some(PodSecurityContext {
+                            fs_group: Some(uid_gid),
+                            run_as_user: Some(uid_gid),
+                            run_as_group: Some(uid_gid),
+                            ..Default::default()
+                        })
+                    },
                     scheduler_name: self.config.scheduler_name.clone(),
                     volumes: Some(volumes),
                     ..Default::default()
