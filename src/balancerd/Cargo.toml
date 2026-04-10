@@ -24,11 +24,15 @@ hyper.workspace = true
 hyper-openssl.workspace = true
 hyper-util.workspace = true
 jsonwebtoken.workspace = true
+<<<<<<< HEAD
 launchdarkly-server-sdk.workspace = true
+=======
+launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"], optional = true }
+>>>>>>> c3505bce8b (crypto: feature-gate telemetry SDKs (LaunchDarkly, Segment, Sentry))
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
-mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly" }
+mz-dyncfg-launchdarkly = { path = "../dyncfg-launchdarkly", optional = true }
 mz-dyncfg-file= { path = "../dyncfg-file" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
@@ -61,7 +65,9 @@ reqwest.workspace = true
 tempfile.workspace = true
 
 [features]
-default = ["mz-alloc-default"]
+default = ["mz-alloc-default", "telemetry"]
+# Third-party telemetry SDKs. Disabled in FIPS builds.
+telemetry = ["dep:launchdarkly-server-sdk", "dep:mz-dyncfg-launchdarkly"]
 jemalloc = ["mz-alloc/jemalloc"]
 
 [package.metadata.cargo-udeps.ignore]

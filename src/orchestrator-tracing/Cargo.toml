@@ -23,7 +23,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["tracing", "cl
 mz-repr = { path = "../repr", default-features = false, optional = true }
 mz-service = { path = "../service", default-features = false }
 mz-tracing = { path = "../tracing", default-features = false }
-sentry-tracing.workspace = true
+sentry-tracing = { workspace = true, optional = true }
 tracing.workspace = true
 tracing-capture = { workspace = true, optional = true }
 tracing-subscriber.workspace = true
@@ -34,6 +34,8 @@ opentelemetry_sdk.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["network", "test"] }
 
 [features]
-default = ["tokio-console"]
+default = ["tokio-console", "sentry"]
+# Sentry error reporting. Disabled in FIPS builds.
+sentry = ["dep:sentry-tracing", "mz-ore/sentry", "mz-service/sentry"]
 tokio-console = ["mz-ore/tokio-console", "mz-repr"]
 capture = ["tracing-capture", "mz-ore/capture"]
