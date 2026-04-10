@@ -163,6 +163,8 @@ impl Context {
     fn pod_uid_gid(image_ref: &str) -> i64 {
         // Distroless images (v26.19+) run as the `nonroot` user (uid/gid 65534).
         // Older Ubuntu-based images use the `materialize` user (uid/gid 999).
+        // Note: balancerd transitioned to distroless one release earlier than
+        // environmentd/clusterd (which use V26_20_0 in generation.rs).
         static V26_19_0: std::sync::LazyLock<semver::Version> =
             std::sync::LazyLock::new(|| semver::Version {
                 major: 26,
@@ -171,15 +173,17 @@ impl Context {
                 pre: semver::Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
                 build: semver::BuildMetadata::new("").expect("empty string is valid buildmetadata"),
             });
-        let is_distroless = parse_image_ref(image_ref)
-            .map(|v| v.cmp_precedence(&V26_19_0).is_ge())
-            // Unparseable image refs are assumed to be recent dev builds.
-            .unwrap_or(true);
-        if is_distroless {
-            65534
-        } else {
-            999
-        }
+        let is_distroless = match parse_image_ref(image_ref) {
+            Some(v) => v.cmp_precedence(&V26_19_0).is_ge(),
+            None => {
+                tracing::warn!(
+                    image_ref,
+                    "failed to parse balancerd image ref; assuming distroless"
+                );
+                true
+            }
+        };
+        if is_distroless { 65534 } else { 999 }
     }
 
     fn create_deployment_object(&self, balancer: &Balancer) -> anyhow::Result<Deployment> {

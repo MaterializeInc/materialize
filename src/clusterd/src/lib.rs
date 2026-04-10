@@ -67,6 +67,11 @@ fn resolve_fqdn(short_hostname: &str) -> String {
     let rc = unsafe { libc::getaddrinfo(c_host.as_ptr(), ptr::null(), &hints, &mut result) };
 
     if rc != 0 || result.is_null() {
+        eprintln!(
+            "warning: getaddrinfo failed for {:?} (rc={}); falling back to short hostname. \
+             GRPC host validation may not work correctly.",
+            short_hostname, rc
+        );
         return short_hostname.to_string();
     }
 
@@ -215,8 +220,10 @@ pub fn main() {
     // vars so that clap picks them up as defaults (they can still be overridden
     // via explicit env vars or CLI args).
     //
-    // SAFETY: Called before any threads are spawned (main entry point, single
-    // threaded), so modifying env vars is safe.
+    // SAFETY: Called before any threads are spawned.
+    // `install_enhanced_handler` above only registers a panic hook; it does
+    // not spawn threads. The hook spawns a thread only if a panic fires,
+    // which cannot happen between here and the first `unsafe` call below.
     if std::env::var("KUBERNETES_SERVICE_HOST").is_ok() {
         if std::env::var("CLUSTERD_GRPC_HOST").is_err() {
             // Resolve the pod's FQDN via DNS, equivalent to `hostname --fqdn`.

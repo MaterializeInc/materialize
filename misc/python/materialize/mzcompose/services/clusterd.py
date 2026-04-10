@@ -79,6 +79,9 @@ class Clusterd(Service):
         # Override the materialized entrypoint so that `clusterd` is invoked
         # via the command rather than via the entrypoint. This keeps
         # `c.exec()` working (it prepends the entrypoint to exec commands).
+        # Note: mzcompose uses the Ubuntu-based `materialized` image (with
+        # tini/bash), while production uses the distroless `clusterd` image.
+        # Keep this in mind when debugging CI-vs-prod discrepancies.
         config["entrypoint"] = ["tini", "--"]
 
         # Depending on the Docker Compose version, this may either work or be

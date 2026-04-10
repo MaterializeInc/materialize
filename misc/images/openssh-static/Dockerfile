@@ -76,7 +76,10 @@ RUN git clone --depth 1 --branch ${OPENSSH_VERSION} https://github.com/openssh/o
         --with-ldflags=-static \
         --without-pam \
         --without-libedit \
-        --with-privsep-user=nobody \
+    # AWS-LC does not define the legacy OpenSSL BN_FLG_CONSTTIME flag.
+    # Setting it to 0 satisfies #ifdef checks in OpenSSH source code.
+    # This is safe: AWS-LC handles constant-time bignum operations
+    # internally and does not rely on this flag.
     && make -j"$(nproc)" ssh CFLAGS="-DBN_FLG_CONSTTIME=0" \
     && strip ssh
 
