@@ -13,8 +13,8 @@
 
 use differential_dataflow::Data;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
+use differential_dataflow::trace::implementations::{BatchContainer, LayoutExt};
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
@@ -30,7 +30,7 @@ use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
 
 /// Owned key type of a [`TraceReader`]; replaces the old `Tr::KeyOwn` associated type.
-type KeyOwn<Tr> = <<Tr as differential_dataflow::trace::implementations::LayoutExt>::KeyContainer as BatchContainer>::Owned;
+type KeyOwn<Tr> = <<Tr as LayoutExt>::KeyContainer as BatchContainer>::Owned;
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<S, T1, Bu2, T2, L>(

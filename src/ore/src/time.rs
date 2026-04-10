@@ -82,9 +82,11 @@ impl DurationExt for Duration {
 
 #[cfg(test)]
 mod tests {
-    use super::DurationExt;
-    use proptest::prelude::*;
     use std::time::Duration;
+
+    use proptest::prelude::*;
+
+    use super::DurationExt;
 
     const ONE: Duration = Duration::from_secs(1);
 

@@ -9,8 +9,9 @@
 
 //! Provides access to tools required in build scripts.
 
-use cfg_if::cfg_if;
 use std::path::PathBuf;
+
+use cfg_if::cfg_if;
 
 /// Returns the path to `protoc`.
 ///

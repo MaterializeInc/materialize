@@ -22,6 +22,7 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
@@ -1118,7 +1119,7 @@ where
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
                         target.push((
-                            err(<Tr::KeyContainer as differential_dataflow::trace::implementations::BatchContainer>::into_owned(key)),
+                            err(<Tr::KeyContainer as BatchContainer>::into_owned(key)),
                             Diff::ONE,
                         ));
                         return;

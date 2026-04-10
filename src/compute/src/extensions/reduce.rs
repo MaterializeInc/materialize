@@ -17,8 +17,8 @@ use differential_dataflow::Data;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
-use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
+use differential_dataflow::trace::implementations::{BatchContainer, LayoutExt};
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use timely::Container;
 use timely::container::PushInto;
@@ -27,7 +27,7 @@ use timely::progress::Timestamp;
 use crate::extensions::arrange::ArrangementSize;
 
 /// Owned key type of a [`TraceReader`]; replaces the old `Tr::KeyOwn` associated type.
-type KeyOwn<Tr> = <<Tr as differential_dataflow::trace::implementations::LayoutExt>::KeyContainer as BatchContainer>::Owned;
+type KeyOwn<Tr> = <<Tr as LayoutExt>::KeyContainer as BatchContainer>::Owned;
 
 /// Extension trait for the `reduce_abelian` differential dataflow method.
 pub(crate) trait MzReduce<T, T1>

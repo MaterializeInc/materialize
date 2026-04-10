@@ -10,8 +10,9 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
-use mz_dyncfg::{Config, ConfigSet};
 use std::time::Duration;
+
+use mz_dyncfg::{Config, ConfigSet};
 
 /// When dataflows observe an invariant violation it is either due to a bug or due to the cluster
 /// being shut down. This configuration defines the amount of time to wait before panicking the

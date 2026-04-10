@@ -7,13 +7,15 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use crate::server::Context;
+use std::sync::Arc;
+
 use axum::{
     extract::{Request, State},
     middleware::Next,
     response::IntoResponse,
 };
-use std::sync::Arc;
+
+use crate::server::Context;
 
 pub async fn latency_middleware(
     State(context): State<Arc<Context>>,

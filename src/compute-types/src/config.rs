@@ -9,8 +9,9 @@
 
 //! Compute configuration types.
 
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
 
 /// Replica configuration
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{RelationDesc, SqlScalarType};
 use std::sync::LazyLock;
+
+use mz_repr::{RelationDesc, SqlScalarType};
 
 pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
