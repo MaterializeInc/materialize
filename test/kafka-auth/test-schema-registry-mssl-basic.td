@@ -40,14 +40,14 @@ $ kafka-ingest topic=avro-data format=avro schema=${schema}
 # ==> Test invalid configurations. <==
 
 # This is a bad error message to indicate "disallowed client certificate" but
-# it's not under our control.
+# it's not under our control. With rustls, the alert text is CertificateUnknown.
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl-basic.schema-registry.local:8082',
     SSL CERTIFICATE = '${kafka-crt}',
     SSL KEY = SECRET kafka_key,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:alert certificate unknown
+contains:CertificateUnknown
 
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://mssl-basic.schema-registry.local:8082',

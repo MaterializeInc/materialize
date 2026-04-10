@@ -33,7 +33,7 @@ banana
     SASL PASSWORD SECRET password,
     SSL CERTIFICATE AUTHORITY = '${ca-crt}'
   )
-contains:ssl/tls alert bad certificate
+contains:SSLV3_ALERT_BAD_CERTIFICATE
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9097',
@@ -44,7 +44,7 @@ contains:ssl/tls alert bad certificate
     SSL KEY SECRET kafka1_key,
     SSL CERTIFICATE AUTHORITY '${ca-crt}'
   )
-contains:ssl/tls alert certificate unknown
+contains:SSLV3_ALERT_CERTIFICATE_UNKNOWN
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9097',

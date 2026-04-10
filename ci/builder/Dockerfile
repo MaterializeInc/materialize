@@ -138,6 +138,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gdb \
     git \
     gnupg2 \
+    golang \
     jq \
     lcov \
     libc6-dbg \
@@ -149,6 +150,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     lld \
     llvm \
     make \
+    ninja-build \
     npm \
     openssh-client \
     pkg-config \
@@ -180,6 +182,12 @@ RUN gpg --dearmor < nodesource.asc > /etc/apt/keyrings/nodesource.gpg \
     && rm -rf /usr/share/doc/nodejs \
     && npm install -g corepack \
     && corepack enable
+
+# Install Go, required by aws-lc-fips-sys to build the FIPS-validated
+# BoringSSL module. Activated when cargo builds with --all-features (which
+# enables the mz-ore `fips` feature). Go 1.18+ is required.
+RUN curl -fsSL https://go.dev/dl/go1.24.2.linux-$ARCH_GO.tar.gz | tar -C /usr/local -xzf -
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 RUN curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.$ARCH_GCC.tar.xz > shellcheck.tar.xz \
     && tar -xJf shellcheck.tar.xz -C /usr/local/bin --strip-components 1 shellcheck-v0.11.0/shellcheck \
@@ -249,6 +257,22 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.4.0" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack \
     && rm -rf /cargo/registry /cargo/git
+
+# Build AWS-LC as a static library for FIPS-compliant Kafka TLS.
+# librdkafka links against this instead of vendored OpenSSL when the
+# ssl-awslc feature is enabled.
+ARG AWS_LC_VERSION=v1.71.0
+RUN git clone --depth 1 --branch ${AWS_LC_VERSION} https://github.com/aws/aws-lc.git /tmp/aws-lc \
+    && cmake -GNinja -S /tmp/aws-lc -B /tmp/aws-lc/build \
+        -DBUILD_SHARED_LIBS=0 \
+        -DBUILD_TESTING=OFF \
+        -DBUILD_TOOL=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_INSTALL_PREFIX=/opt/aws-lc \
+        -DCMAKE_INSTALL_LIBDIR=lib \
+    && ninja -C /tmp/aws-lc/build \
+    && ninja -C /tmp/aws-lc/build install \
+    && rm -rf /tmp/aws-lc
 
 # Shims for sanitizers
 COPY sanshim/$ARCH_GCC /sanshim

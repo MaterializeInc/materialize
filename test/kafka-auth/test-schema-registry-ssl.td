@@ -37,7 +37,7 @@ contains:invalid HTTP version parsed
 ! CREATE CONNECTION schema_registry_invalid TO CONFLUENT SCHEMA REGISTRY (
     URL 'https://ssl.schema-registry.local:8082'
   )
-contains:certificate verify failed
+contains:UnknownIssuer
 
 # ==> Test without an SSH tunnel. <==
 

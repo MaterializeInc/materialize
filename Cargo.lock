@@ -10315,7 +10315,7 @@ dependencies = [
 [[package]]
 name = "rdkafka"
 version = "0.29.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#642daa6e293065ec653c04f2d1147a7675ce2430"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?branch=jasonhernandez%2Fssl-awslc#a69cac460b423a272d31a85b4273d51ee77c2b46"
 dependencies = [
  "futures-channel",
  "futures-util",
@@ -10332,13 +10332,12 @@ dependencies = [
 [[package]]
 name = "rdkafka-sys"
 version = "4.3.0+2.5.0"
-source = "git+https://github.com/MaterializeInc/rust-rdkafka.git#642daa6e293065ec653c04f2d1147a7675ce2430"
+source = "git+https://github.com/MaterializeInc/rust-rdkafka.git?branch=jasonhernandez%2Fssl-awslc#a69cac460b423a272d31a85b4273d51ee77c2b46"
 dependencies = [
  "cmake",
  "libc",
  "libz-sys",
  "num_enum 0.5.11",
- "openssl-sys",
  "pkg-config",
  "zstd-sys",
 ]

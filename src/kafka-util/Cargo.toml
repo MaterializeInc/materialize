@@ -29,7 +29,7 @@ mz-ssh-util = { path = "../ssh-util" }
 num_cpus.workspace = true
 prost.workspace = true
 rand.workspace = true
-rdkafka.workspace = true
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-awslc", "libz-static", "zstd"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

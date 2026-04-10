@@ -339,7 +339,12 @@ def run_sanitizer(
 def run_cargo_nextest(
     c: Composition, args: Namespace, env: dict[str, str], metadata: Any
 ) -> None:
-    # Common args for all nextest runs
+    # The `fips` and `crypto` features on mz-ore are mutually exclusive at
+    # link time (aws-lc-fips-sys vs aws-lc-sys have duplicate symbols).
+    # We can't use --all-features because it activates both.
+    # Instead: run all packages with --all-features but exclude mz-ore,
+    # then separately test mz-ore twice — once with all non-fips features,
+    # once with fips. This ensures every feature is tested.
     nextest_common_args = [
         "--all-features",
         "--cargo-profile=ci",
