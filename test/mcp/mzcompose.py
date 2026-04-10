@@ -55,7 +55,7 @@ def workflow_default(c: Composition) -> None:
         print_statement=False,
     )
     c.sql(
-        "ALTER SYSTEM SET enable_mcp_observatory = true",
+        "ALTER SYSTEM SET enable_mcp_developer = true",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -128,10 +128,10 @@ def workflow_default(c: Composition) -> None:
         body = r.json()
         assert "error" in body
 
-    with c.test_case("observatory_initialize"):
+    with c.test_case("developer_initialize"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "initialize",
                 {
@@ -145,20 +145,20 @@ def workflow_default(c: Composition) -> None:
         body = r.json()
         result = body["result"]
         assert result["protocolVersion"] == "2025-11-25"
-        assert result["serverInfo"]["name"] == "materialize-mcp-observatory"
+        assert result["serverInfo"]["name"] == "materialize-mcp-developer"
 
-    with c.test_case("observatory_tools_list"):
-        r = post_mcp(c, "observatory", jsonrpc("tools/list"))
+    with c.test_case("developer_tools_list"):
+        r = post_mcp(c, "developer", jsonrpc("tools/list"))
         assert r.status_code == 200
         body = r.json()
         tools = body["result"]["tools"]
         tool_names = {t["name"] for t in tools}
         assert "query_system_catalog" in tool_names
 
-    with c.test_case("observatory_query"):
+    with c.test_case("developer_query"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -174,10 +174,10 @@ def workflow_default(c: Composition) -> None:
         assert content[0]["type"] == "text"
         assert "quickstart" in content[0]["text"]
 
-    with c.test_case("observatory_reject_non_select"):
+    with c.test_case("developer_reject_non_select"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -190,12 +190,12 @@ def workflow_default(c: Composition) -> None:
         body = r.json()
         assert "error" in body
 
-    # -- observatory: pg_catalog and information_schema -------------------------
+    # -- developer: pg_catalog and information_schema -------------------------
 
-    with c.test_case("observatory_pg_catalog"):
+    with c.test_case("developer_pg_catalog"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -211,10 +211,10 @@ def workflow_default(c: Composition) -> None:
         assert "result" in body, f"expected result: {body}"
         assert "bool" in body["result"]["content"][0]["text"]
 
-    with c.test_case("observatory_information_schema"):
+    with c.test_case("developer_information_schema"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -230,12 +230,12 @@ def workflow_default(c: Composition) -> None:
         assert "result" in body, f"expected result: {body}"
         assert "mz_catalog" in body["result"]["content"][0]["text"]
 
-    # -- observatory: rejection cases ------------------------------------------
+    # -- developer: rejection cases ------------------------------------------
 
-    with c.test_case("observatory_reject_user_table"):
+    with c.test_case("developer_reject_user_table"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -249,10 +249,10 @@ def workflow_default(c: Composition) -> None:
         assert "error" in body
         assert "non-system tables" in body["error"]["message"]
 
-    with c.test_case("observatory_reject_multi_statement"):
+    with c.test_case("developer_reject_multi_statement"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -266,10 +266,10 @@ def workflow_default(c: Composition) -> None:
         assert "error" in body
         assert "Only one query" in body["error"]["message"]
 
-    with c.test_case("observatory_reject_schema_squatting"):
+    with c.test_case("developer_reject_schema_squatting"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -283,10 +283,10 @@ def workflow_default(c: Composition) -> None:
         assert "error" in body
         assert "non-system tables" in body["error"]["message"]
 
-    with c.test_case("observatory_reject_mixed_tables"):
+    with c.test_case("developer_reject_mixed_tables"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -302,10 +302,10 @@ def workflow_default(c: Composition) -> None:
         assert "error" in body
         assert "non-system tables" in body["error"]["message"]
 
-    with c.test_case("observatory_reject_empty_query"):
+    with c.test_case("developer_reject_empty_query"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {
@@ -319,12 +319,12 @@ def workflow_default(c: Composition) -> None:
         assert "error" in body
         assert "Empty query" in body["error"]["message"]
 
-    # -- observatory: wrong endpoint -------------------------------------------
+    # -- developer: wrong endpoint -------------------------------------------
 
-    with c.test_case("observatory_reject_agents_tool"):
+    with c.test_case("developer_reject_agents_tool"):
         r = post_mcp(
             c,
-            "observatory",
+            "developer",
             jsonrpc(
                 "tools/call",
                 {"name": "get_data_products", "arguments": {}},
@@ -333,35 +333,35 @@ def workflow_default(c: Composition) -> None:
         assert r.status_code == 200
         body = r.json()
         assert "error" in body
-        assert "not available on observatory" in body["error"]["message"]
+        assert "not available on developer" in body["error"]["message"]
 
-    # -- observatory: disable/enable via flag ----------------------------------
+    # -- developer: disable/enable via flag ----------------------------------
 
-    with c.test_case("observatory_disable_via_flag"):
+    with c.test_case("developer_disable_via_flag"):
         # Confirm it works first.
-        r = post_mcp(c, "observatory", jsonrpc("tools/list"))
+        r = post_mcp(c, "developer", jsonrpc("tools/list"))
         assert r.status_code == 200
 
         # Disable via system parameter.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_observatory = false",
+            "ALTER SYSTEM SET enable_mcp_developer = false",
             user="mz_system",
             port=6877,
             print_statement=False,
         )
 
-        r = post_mcp(c, "observatory", jsonrpc("tools/list"))
+        r = post_mcp(c, "developer", jsonrpc("tools/list"))
         assert r.status_code == 503
 
         # Re-enable.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_observatory = true",
+            "ALTER SYSTEM SET enable_mcp_developer = true",
             user="mz_system",
             port=6877,
             print_statement=False,
         )
 
-        r = post_mcp(c, "observatory", jsonrpc("tools/list"))
+        r = post_mcp(c, "developer", jsonrpc("tools/list"))
         assert r.status_code == 200
 
     # -- agents: disable/enable via flag ---------------------------------------

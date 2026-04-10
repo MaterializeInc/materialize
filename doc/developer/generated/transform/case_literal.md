@@ -1,11 +1,11 @@
 ---
 source: src/transform/src/case_literal.rs
-revision: 5e380b79fc
+revision: 1c2d0f12f2
 ---
 
 # mz-transform::case_literal
 
-Rewrites chains of `If(Eq(expr, literal), result, If(...))` into `CallVariadic { func: CaseLiteral { lookup, return_type }, exprs }` for O(log n) evaluation via `BTreeMap` lookup.
+Rewrites chains of `If(Eq(expr, literal), result, If(...))` into `CallVariadic { func: CaseLiteral { lookup, return_type }, exprs }` for O(log n) evaluation via sorted `Vec` + binary-search lookup.
 
 `CaseLiteralTransform` implements `Transform` and operates in two phases:
 1. Pre-computes column types for all nodes in a single pass using the `ReprRelationType` analysis.

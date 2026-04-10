@@ -14,12 +14,12 @@
 //! ## Endpoints
 //!
 //! - `/api/mcp/agents` - User data products for customer AI agents
-//! - `/api/mcp/observatory` - System catalog (`mz_*`) for troubleshooting
+//! - `/api/mcp/developer` - System catalog (`mz_*`) for troubleshooting
 //!
 //! ## Tools
 //!
 //! **Agents:** `get_data_products`, `get_data_product_details`, `query`
-//! **Observatory:** `query_system_catalog`
+//! **Developer:** `query_system_catalog`
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
@@ -30,7 +30,7 @@ use axum::Json;
 use axum::response::IntoResponse;
 use http::{HeaderMap, StatusCode};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_OBSERVATORY, MCP_MAX_RESPONSE_SIZE,
+    ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_DEVELOPER, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
@@ -185,7 +185,7 @@ enum ToolsCallParams {
     GetDataProductDetails(GetDataProductDetailsParams),
     ReadDataProduct(ReadDataProductParams),
     Query(QueryParams),
-    // Observatory endpoint tools
+    // Developer endpoint tools
     QuerySystemCatalog(QuerySystemCatalogParams),
 }
 
@@ -357,14 +357,14 @@ impl From<McpRequestError> for McpError {
 #[derive(Debug, Clone, Copy)]
 enum McpEndpointType {
     Agents,
-    Observatory,
+    Developer,
 }
 
 impl std::fmt::Display for McpEndpointType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             McpEndpointType::Agents => write!(f, "agents"),
-            McpEndpointType::Observatory => write!(f, "observatory"),
+            McpEndpointType::Developer => write!(f, "developer"),
         }
     }
 }
@@ -389,8 +389,8 @@ pub async fn handle_mcp_agents(
         .into_response()
 }
 
-/// Observatory endpoint: exposes system catalog (mz_*) only.
-pub async fn handle_mcp_observatory(
+/// Developer endpoint: exposes system catalog (mz_*) only.
+pub async fn handle_mcp_developer(
     headers: HeaderMap,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
@@ -398,7 +398,7 @@ pub async fn handle_mcp_observatory(
     if let Some(resp) = validate_origin(&headers) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Observatory)
+    handle_mcp_request(client, body, McpEndpointType::Developer)
         .await
         .into_response()
 }
@@ -447,7 +447,7 @@ async fn handle_mcp_request(
     let dyncfgs = catalog.system_config().dyncfgs();
     let enabled = match endpoint_type {
         McpEndpointType::Agents => ENABLE_MCP_AGENTS.get(dyncfgs),
-        McpEndpointType::Observatory => ENABLE_MCP_OBSERVATORY.get(dyncfgs),
+        McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
@@ -700,7 +700,7 @@ async fn handle_tools_list(
             }
             tools
         }
-        McpEndpointType::Observatory => {
+        McpEndpointType::Developer => {
             vec![ToolDefinition {
                 name: "query_system_catalog".to_string(),
                 title: Some("Query System Catalog".to_string()),
@@ -765,7 +765,7 @@ async fn handle_tools_call(
         (McpEndpointType::Agents, ToolsCallParams::Query(p)) => {
             execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
         }
-        (McpEndpointType::Observatory, ToolsCallParams::QuerySystemCatalog(p)) => {
+        (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
         }
         // Tool called on wrong endpoint
@@ -1090,7 +1090,7 @@ impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
 /// For SELECT statements, all table references must be in system schemas
 /// (from `SYSTEM_SCHEMAS`, excluding `mz_unsafe`), and at least one system
 /// table must be referenced (constant queries like `SELECT 1` are rejected
-/// to prevent misuse of the observatory endpoint for arbitrary computation).
+/// to prevent misuse of the developer endpoint for arbitrary computation).
 /// SHOW and EXPLAIN statements are allowed without table references.
 fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
     // Parse the SQL to validate it
@@ -1489,7 +1489,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_rejects_constant_queries() {
-        // SELECT without any table reference should be rejected — the observatory
+        // SELECT without any table reference should be rejected — the developer
         // endpoint is for system catalog queries, not arbitrary computation.
         assert!(
             validate_system_catalog_query("SELECT 1").is_err(),
@@ -1609,10 +1609,10 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_observatory_unaffected_by_query_flag() {
-        // Observatory endpoint should not be affected by the query tool flag
+    async fn test_tools_list_developer_unaffected_by_query_flag() {
+        // Developer endpoint should not be affected by the query tool flag
         for flag in [true, false] {
-            let result = handle_tools_list(McpEndpointType::Observatory, flag, 1_000_000)
+            let result = handle_tools_list(McpEndpointType::Developer, flag, 1_000_000)
                 .await
                 .unwrap();
             let McpResult::ToolsList(list) = result else {
@@ -1621,11 +1621,11 @@ mod tests {
             let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
             assert!(
                 tool_names.contains(&"query_system_catalog"),
-                "query_system_catalog should always be present on observatory"
+                "query_system_catalog should always be present on developer"
             );
             assert!(
                 !tool_names.contains(&"query"),
-                "query tool should never appear on observatory"
+                "query tool should never appear on developer"
             );
         }
     }

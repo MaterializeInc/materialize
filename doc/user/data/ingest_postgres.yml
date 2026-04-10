@@ -27,7 +27,7 @@
         SET CLUSTER = ingest_postgres;
         ```
 
-        A cluster of [size](/sql/create-cluster/#size) `50cc` should be enough to
+        A cluster of [size](/sql/create-cluster/#available-sizes) `50cc` should be enough to
         accommodate multiple PostgreSQL sources, depending on the source
         characteristics (e.g., sources with [`ENVELOPE UPSERT`](/sql/create-source/kafka/#upsert-envelope)
         or [`ENVELOPE DEBEZIUM`](/sql/create-source/kafka/#debezium-envelope) will be more

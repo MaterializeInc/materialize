@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http.rs
-revision: 2c1cdc28b4
+revision: 7f9d297c17
 ---
 
 # environmentd::http

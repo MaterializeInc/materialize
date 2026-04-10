@@ -44,9 +44,7 @@ export function buildUsersListQuery() {
     )
     .select(["u.id", "u.name as user_name", "roles.roles_granted"])
     .where("u.name", "not like", "mz_%")
-    .where(
-      sql<boolean>`(COALESCE(u.rolcanlogin, false) = true OR u.name LIKE '%@%')`,
-    )
+    .where(sql<boolean>`COALESCE(u.rolcanlogin, false) = true`)
     .orderBy("user_name");
 }
 

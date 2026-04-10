@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -36,7 +36,6 @@ include_dir.workspace = true
 ipnet.workspace = true
 itertools.workspace = true
 jsonwebtoken.workspace = true
-libc.workspace = true
 maplit.workspace = true
 mime.workspace = true
 mz-alloc = { path = "../alloc" }

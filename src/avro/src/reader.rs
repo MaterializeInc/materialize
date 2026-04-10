@@ -26,8 +26,8 @@
 use std::collections::BTreeMap;
 use std::str::{FromStr, from_utf8};
 
+use aws_lc_rs::digest;
 use serde_json::from_slice;
-use sha2::Sha256;
 
 use crate::decode::{AvroRead, decode};
 use crate::error::{DecodeError, Error as AvroError};
@@ -195,8 +195,8 @@ impl<R: AvroRead> Reader<R> {
         let header = Header::from_reader(&mut inner)?;
 
         let writer_schema = &header.writer_schema;
-        let resolved_schema = if reader_schema.fingerprint::<Sha256>().bytes
-            != writer_schema.fingerprint::<Sha256>().bytes
+        let resolved_schema = if reader_schema.fingerprint(&digest::SHA256).bytes
+            != writer_schema.fingerprint(&digest::SHA256).bytes
         {
             Some(resolve_schemas(writer_schema, reader_schema)?)
         } else {

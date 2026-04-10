@@ -13,6 +13,10 @@
 use std::fmt::Display;
 use std::num::NonZeroU32;
 
+use aws_lc_rs::constant_time::verify_slices_are_equal;
+use aws_lc_rs::digest;
+use aws_lc_rs::hmac;
+use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use base64::prelude::*;
 use itertools::Itertools;
 use mz_ore::secure::{Zeroize, Zeroizing};
@@ -67,13 +71,13 @@ pub enum VerifyError {
 
 #[derive(Debug)]
 pub enum HashError {
-    Openssl(openssl::error::ErrorStack),
+    Crypto(aws_lc_rs::error::Unspecified),
 }
 
 impl Display for HashError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HashError::Openssl(e) => write!(f, "OpenSSL error: {}", e),
+            HashError::Crypto(e) => write!(f, "crypto error: {}", e),
         }
     }
 }
@@ -84,8 +88,9 @@ pub fn hash_password(
     password: &Password,
     iterations: &NonZeroU32,
 ) -> Result<PasswordHash, HashError> {
+    let rng = SystemRandom::new();
     let mut salt = Zeroizing::new([0u8; DEFAULT_SALT_SIZE]);
-    openssl::rand::rand_bytes(&mut *salt).map_err(HashError::Openssl)?;
+    rng.fill(&mut *salt).map_err(HashError::Crypto)?;
 
     let hash = hash_password_inner(
         &HashOpts {
@@ -103,8 +108,9 @@ pub fn hash_password(
 }
 
 pub fn generate_nonce(client_nonce: &str) -> Result<String, HashError> {
+    let rng = SystemRandom::new();
     let mut nonce = Zeroizing::new([0u8; 24]);
-    openssl::rand::rand_bytes(&mut *nonce).map_err(HashError::Openssl)?;
+    rng.fill(&mut *nonce).map_err(HashError::Crypto)?;
     let nonce = BASE64_STANDARD.encode(&*nonce);
     let new_nonce = format!("{}{}", client_nonce, nonce);
     Ok(new_nonce)
@@ -134,10 +140,7 @@ pub fn scram256_hash(password: &Password, iterations: &NonZeroU32) -> Result<Str
 }
 
 fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    openssl::memcmp::eq(a, b)
+    verify_slices_are_equal(a, b).is_ok()
 }
 
 /// Verifies a password against a SCRAM-SHA-256 hash.
@@ -205,7 +208,8 @@ pub fn sasl_verify(
             .collect(),
     );
 
-    if !constant_time_compare(&openssl::sha::sha256(&client_key), &stored_key) {
+    let computed_stored_key = digest::digest(&digest::SHA256, &client_key);
+    if !constant_time_compare(computed_stored_key.as_ref(), &stored_key) {
         return Err(VerifyError::InvalidPassword);
     }
 
@@ -215,18 +219,9 @@ pub fn sasl_verify(
 }
 
 fn generate_signature(key: &[u8], message: &str) -> Result<Zeroizing<Vec<u8>>, VerifyError> {
-    let signing_key =
-        openssl::pkey::PKey::hmac(key).map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
-    let mut signer =
-        openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
-            .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
-    signer
-        .update(message.as_bytes())
-        .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
-    let signature = signer
-        .sign_to_vec()
-        .map_err(|e| VerifyError::Hash(HashError::Openssl(e)))?;
-    Ok(Zeroizing::new(signature))
+    let signing_key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    let tag = hmac::sign(&signing_key, message.as_bytes());
+    Ok(Zeroizing::new(tag.as_ref().to_vec()))
 }
 
 // Generate a mock challenge based on the username and client nonce
@@ -236,11 +231,13 @@ pub fn mock_sasl_challenge(username: &str, mock_nonce: &str, iterations: &NonZer
     let mut buf = Vec::with_capacity(username.len() + mock_nonce.len());
     buf.extend_from_slice(username.as_bytes());
     buf.extend_from_slice(mock_nonce.as_bytes());
-    let digest = openssl::sha::sha256(&buf);
+    let hash = digest::digest(&digest::SHA256, &buf);
+    let mut salt = [0u8; DEFAULT_SALT_SIZE];
+    salt.copy_from_slice(hash.as_ref());
 
     HashOpts {
         iterations: iterations.to_owned(),
-        salt: digest,
+        salt,
     }
 }
 
@@ -313,17 +310,16 @@ impl Display for ScramSha256Hash {
 }
 
 fn scram256_hash_inner(hashed_password: PasswordHash) -> ScramSha256Hash {
-    let signing_key = openssl::pkey::PKey::hmac(&hashed_password.hash).unwrap();
-    let mut signer =
-        openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
-    signer.update(b"Client Key").unwrap();
-    let client_key = Zeroizing::new(signer.sign_to_vec().unwrap());
-    let stored_key = openssl::sha::sha256(&client_key);
-    let mut signer =
-        openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
-    signer.update(b"Server Key").unwrap();
+    let signing_key = hmac::Key::new(hmac::HMAC_SHA256, &hashed_password.hash);
+    let client_key_tag = hmac::sign(&signing_key, b"Client Key");
+    let client_key = Zeroizing::new(client_key_tag.as_ref().to_vec());
+    let stored_key_digest = digest::digest(&digest::SHA256, &client_key);
+    let mut stored_key = [0u8; SHA256_OUTPUT_LEN];
+    stored_key.copy_from_slice(stored_key_digest.as_ref());
+
+    let server_key_tag = hmac::sign(&signing_key, b"Server Key");
     let mut server_key = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
-    signer.sign(server_key.as_mut()).unwrap();
+    server_key.copy_from_slice(server_key_tag.as_ref());
 
     ScramSha256Hash {
         iterations: hashed_password.iterations,
@@ -338,14 +334,13 @@ fn hash_password_inner(
     password: &[u8],
 ) -> Result<[u8; SHA256_OUTPUT_LEN], HashError> {
     let mut salted_password = Zeroizing::new([0u8; SHA256_OUTPUT_LEN]);
-    openssl::pkcs5::pbkdf2_hmac(
-        password,
+    aws_lc_rs::pbkdf2::derive(
+        aws_lc_rs::pbkdf2::PBKDF2_HMAC_SHA256,
+        opts.iterations,
         &opts.salt,
-        opts.iterations.get().try_into().unwrap(),
-        openssl::hash::MessageDigest::sha256(),
+        password,
         &mut *salted_password,
-    )
-    .map_err(HashError::Openssl)?;
+    );
     Ok(*salted_password)
 }
 
@@ -358,7 +353,7 @@ mod tests {
     const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(60).expect("Trust me on this");
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
     fn test_hash_password() {
         let password = "password".to_string();
         let iterations = NonZeroU32::new(100).expect("Trust me on this");
@@ -370,7 +365,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
     fn test_scram256_hash() {
         let password = "password".into();
         let scram_hash =
@@ -436,12 +431,9 @@ mod tests {
             let salted_password = hash_password_with_opts(&opts, &password)
                 .expect("hash password")
                 .hash;
-            let signing_key = openssl::pkey::PKey::hmac(&salted_password).expect("signing key");
-            let mut signer =
-                openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
-                    .expect("signer");
-            signer.update(b"Client Key").expect("update");
-            let client_key = signer.sign_to_vec().expect("client key");
+            let signing_key = hmac::Key::new(hmac::HMAC_SHA256, &salted_password);
+            let client_key = hmac::sign(&signing_key, b"Client Key");
+            let client_key = client_key.as_ref();
             // client_proof = client_key XOR client_signature
             let client_signature =
                 generate_signature(&stored_key, auth_message).expect("client signature");

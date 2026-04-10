@@ -5718,10 +5718,10 @@ dependencies = [
 name = "mz-auth"
 version = "0.0.0"
 dependencies = [
+ "aws-lc-rs",
  "base64 0.22.1",
  "itertools 0.14.0",
  "mz-ore",
- "openssl",
  "proptest",
  "proptest-derive",
  "serde",
@@ -5752,10 +5752,10 @@ name = "mz-avro"
 version = "0.7.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "byteorder",
  "chrono",
  "crc32fast",
- "digest",
  "enum-kinds",
  "flate2",
  "itertools 0.14.0",
@@ -5764,7 +5764,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "sha2",
  "snap",
  "tracing",
  "uuid",
@@ -5813,7 +5812,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5950,7 +5949,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6101,7 +6100,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6392,7 +6391,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -6425,7 +6424,6 @@ dependencies = [
  "ipnet",
  "itertools 0.14.0",
  "jsonwebtoken",
- "libc",
  "maplit",
  "mime",
  "mz-adapter",
@@ -6527,6 +6525,7 @@ version = "0.0.0"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "aws-lc-rs",
  "bytes",
  "bytesize",
  "chrono",
@@ -6576,10 +6575,7 @@ dependencies = [
  "seahash",
  "serde",
  "serde_json",
- "sha1",
- "sha2",
  "smallvec",
- "subtle",
  "tracing",
  "uncased",
  "unicode-normalization",
@@ -6844,6 +6840,7 @@ name = "mz-license-keys"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "aws-sdk-kms",
  "base64 0.22.1",
  "clap",
@@ -6852,7 +6849,6 @@ dependencies = [
  "pem",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "utoipa",
  "uuid",
@@ -6901,7 +6897,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "custom-labels",
  "mz-clusterd",
@@ -7064,7 +7060,6 @@ dependencies = [
  "futures",
  "hex",
  "itertools 0.14.0",
- "libc",
  "maplit",
  "mz-orchestrator",
  "mz-ore",
@@ -7107,7 +7102,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -7288,7 +7283,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -8041,12 +8036,12 @@ name = "mz-ssh-util"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "futures",
  "itertools 0.14.0",
  "mz-ore",
  "openssh",
  "openssh-mux-client",
- "openssl",
  "rand 0.9.2",
  "scopeguard",
  "serde",
@@ -8364,7 +8359,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.20.0-dev.0"
+version = "26.21.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",

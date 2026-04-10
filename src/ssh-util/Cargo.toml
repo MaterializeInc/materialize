@@ -14,7 +14,7 @@ anyhow.workspace = true
 mz-ore = { path = "../ore", features = ["test"] }
 openssh.workspace = true
 openssh-mux-client.workspace = true
-openssl.workspace = true
+aws-lc-rs.workspace = true
 rand.workspace = true
 futures.workspace = true
 itertools.workspace = true

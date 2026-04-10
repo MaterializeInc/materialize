@@ -61,7 +61,7 @@ one.
 Other options to consider:
 
 * If you've gone through the dataflow troubleshooting and do not want to make
-  any changes to your query, consider [sizing up your cluster](/sql/create-cluster/#size).
+  any changes to your query, consider [sizing up your cluster](/sql/create-cluster/#available-sizes).
 * You can also consider changing your [isolation level](/get-started/isolation-level/),
   depending on the consistency guarantees that you need. With a lower isolation
   level, you may be able to query stale results out of lagging indexes and
@@ -257,7 +257,7 @@ If your query was the root cause, you’ll need to kill it for the cluster repli
 
 If your query was not the root cause, you can wait for the other activity on the cluster to stop and Memory Utilization/CPU to go down, or switch to a different cluster.
 
-If you’ve gone through the dataflow troubleshooting and do not want to make any changes to your query, consider [sizing up your cluster](https://materialize.com/docs/sql/create-cluster/#size). A larger size cluster will provision more resources.
+If you’ve gone through the dataflow troubleshooting and do not want to make any changes to your query, consider [sizing up your cluster](https://materialize.com/docs/sql/create-cluster/#available-sizes). A larger size cluster will provision more resources.
 
 
 ## Which part of my query runs slowly or uses a lot of memory?

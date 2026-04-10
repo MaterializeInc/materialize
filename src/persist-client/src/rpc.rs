@@ -135,6 +135,12 @@ pub(crate) const PUBSUB_RECONNECT_BACKOFF: Config<Duration> = Config::new(
     "Backoff after an established connection to Persist PubSub service fails.",
 );
 
+/// Max message size, used to configure gRPC servers and clients.
+///
+/// While `max_encoding_message_size` defaults to `usize::MAX`, `max_decoding_message_size` only
+/// defaults to 4MB, so we bump it to avoid protocol errors.
+const MAX_GRPC_MESSAGE_SIZE: usize = usize::MAX;
+
 /// Top-level Trait to create a PubSubClient.
 ///
 /// Returns a [PubSubClientConnection] with a [PubSubSender] for issuing RPCs to the PubSub
@@ -324,7 +330,7 @@ impl GrpcPubSubClient {
                 .await;
 
             let mut client = match client {
-                Ok(client) => client,
+                Ok(client) => client.max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
                 Err(err) => {
                     error!("fatal error connecting to persist pubsub: {:?}", err);
                     return;
@@ -1064,7 +1070,10 @@ impl PersistGrpcPubSubServer {
     pub async fn serve(self, listen_addr: SocketAddr) -> Result<(), anyhow::Error> {
         // Increase the default message decoding limit to avoid unnecessary panics
         tonic::transport::Server::builder()
-            .add_service(ProtoPersistPubSubServer::new(self).max_decoding_message_size(usize::MAX))
+            .add_service(
+                ProtoPersistPubSubServer::new(self)
+                    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+            )
             .serve(listen_addr)
             .await?;
         Ok(())
@@ -1077,7 +1086,10 @@ impl PersistGrpcPubSubServer {
         listener: tokio_stream::wrappers::TcpListenerStream,
     ) -> Result<(), anyhow::Error> {
         tonic::transport::Server::builder()
-            .add_service(ProtoPersistPubSubServer::new(self))
+            .add_service(
+                ProtoPersistPubSubServer::new(self)
+                    .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
+            )
             .serve_with_incoming(listener)
             .await?;
         Ok(())

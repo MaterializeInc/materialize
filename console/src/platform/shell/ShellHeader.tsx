@@ -100,7 +100,7 @@ const ShellHeader = ({
         name: c.name,
       }));
 
-    allClusters.sort();
+    allClusters.sort((a, b) => a.name.localeCompare(b.name));
     return allClusters;
   }, [clusters]);
 
@@ -119,10 +119,17 @@ const ShellHeader = ({
       databaseName,
     }));
 
-    newSchemaOptions.sort((a, b) => a.id.localeCompare(b.id));
+    // Sort schemas so the current database's schemas appear first,
+    // then alphabetically by database.schema within each group.
+    newSchemaOptions.sort((a, b) => {
+      const aIsCurrent = a.databaseName === database;
+      const bIsCurrent = b.databaseName === database;
+      if (aIsCurrent !== bIsCurrent) return aIsCurrent ? -1 : 1;
+      return a.id.localeCompare(b.id);
+    });
 
     return newSchemaOptions;
-  }, [schemas]);
+  }, [schemas, database]);
 
   const handleSchemaSelect = (newSchemaOption: SchemaOption | null) => {
     if (!newSchemaOption) {
@@ -181,7 +188,7 @@ const ShellHeader = ({
               isLoading={!isSchemasSnapshotComplete}
               placeholder="Select a schema"
               containerWidth="280px"
-              menuWidth="280px"
+              menuWidth="400px"
             />
           </HStack>
           <Button

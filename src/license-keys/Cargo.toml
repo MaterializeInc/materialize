@@ -23,7 +23,7 @@ aws-sdk-kms = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 pem = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
-sha2 = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
 utoipa = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true, features = ["v4"] }
 
@@ -34,7 +34,7 @@ tokio.workspace = true
 
 [features]
 default = []
-signing = ["aws-sdk-kms", "base64", "pem", "serde_json", "sha2", "uuid"]
+signing = ["aws-sdk-kms", "aws-lc-rs", "base64", "pem", "serde_json", "uuid"]
 utoipa = ["dep:utoipa"]
 
 [package.metadata.cargo-udeps.ignore]

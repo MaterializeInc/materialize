@@ -104,6 +104,17 @@ SCENARIOS_CLUSTERD = [
     SCENARIO_TPCH_STRONG,
     SCENARIO_SOURCE_INGESTION_STRONG,
 ]
+SCENARIOS_CLUSTERD_COMPUTE = [
+    SCENARIO_AUCTION_STRONG,
+    SCENARIO_AUCTION_WEAK,
+    SCENARIO_TPCH_MV_STRONG,
+    SCENARIO_TPCH_QUERIES_STRONG,
+    SCENARIO_TPCH_QUERIES_WEAK,
+    SCENARIO_TPCH_STRONG,
+]
+SCENARIOS_SOURCE_INGESTION = [
+    SCENARIO_SOURCE_INGESTION_STRONG,
+]
 SCENARIOS_ENVIRONMENTD = [
     SCENARIO_QPS_ENVD_STRONG_SCALING,
     SCENARIO_COPY_FROM_STDIN_ENVD_STRONG_SCALING,
@@ -112,11 +123,13 @@ ALL_SCENARIOS = SCENARIOS_CLUSTERD + SCENARIOS_ENVIRONMENTD
 
 SCENARIO_GROUPS = {
     "cluster": SCENARIOS_CLUSTERD,
+    "cluster_compute": SCENARIOS_CLUSTERD_COMPUTE,
+    "source_ingestion": SCENARIOS_SOURCE_INGESTION,
     "environmentd": SCENARIOS_ENVIRONMENTD,
     "all": ALL_SCENARIOS,
 }
 
-REPLICA_SCALES = [1, 2, 4, 8, 12]
+REPLICA_SCALES = [1, 2, 4, 8, 16, 32]
 
 
 class ConnectionHandler:
@@ -2707,20 +2720,9 @@ class CloudTarget(BenchTarget):
 
     def replica_size_for_scale(self, scale: int) -> str:
         """
-        Returns the replica size for a given scale
+        Returns the replica size for a given scale.
         """
-        return {
-            1: "M.1-micro",
-            2: "M.1-xsmall",
-            4: "M.1-small",
-            6: "M.1-medium",
-            8: "M.1-large",
-            12: "M.1-1.5xlarge",
-            16: "M.1-2xlarge",
-            24: "M.1-3xlarge",
-            32: "M.1-4xlarge",
-            64: "M.1-8xlarge",
-        }[scale]
+        return f"{scale}00cc"
 
 
 class DockerTarget(BenchTarget):
@@ -2755,7 +2757,8 @@ class DockerTarget(BenchTarget):
         self.composition.stop("materialized")
 
     def replica_size_for_scale(self, scale: int) -> str:
-        return f"scale=1,workers={scale}"
+        # 100cc == 2 workers
+        return f"scale=1,workers={2*scale}"
 
     def max_scale(self) -> int | None:
         return 16
@@ -3028,20 +3031,19 @@ def analyze_cluster_results_file(file: str) -> None:
     print(f"--- Analyzing cluster results file {file} ...")
 
     def extract_cluster_size(s: str) -> float:
-        if s.startswith("scale=1,workers="):
-            return int(s.removeprefix("scale=1,workers="))
-        return {
-            "M.1-micro": 1,
-            "M.1-xsmall": 2,
-            "M.1-small": 4,
-            "M.1-medium": 6,
-            "M.1-large": 8,
-            "M.1-1.5xlarge": 12,
-            "M.1-2xlarge": 16,
-            "M.1-3xlarge": 24,
-            "M.1-4xlarge": 32,
-            "M.1-8xlarge": 64,
-        }[s]
+        match = re.search(r"(\d+)(?:(cc)|(C))", s)
+        if match:
+            if match.group(2):  # 'cc' match
+                return float(match.group(1)) / 100.0
+            elif match.group(3):  # 'C' matches
+                return float(match.group(1))
+        match = re.search(r"(?:scale=)(\d+)(?:,workers=)(\d+)", s)
+        if match:
+            # We don't have credits in docker, so approximate it
+            # 100cc == 2 workers
+            if match.group(1) and match.group(2):
+                return float(match.group(1)) * float(match.group(2)) / 2
+        raise ValueError(f"Invalid cluster size format: {s}")
 
     df = pd.read_csv(file)
     if df.empty:

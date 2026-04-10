@@ -33,7 +33,7 @@ const ClusterDropdown = (props: ClusterDropdownProps) => {
       value={{ name: props.value }}
       isLoading={props.isLoading}
       containerWidth="280px"
-      menuWidth="280px"
+      menuWidth="400px"
     />
   );
 };
