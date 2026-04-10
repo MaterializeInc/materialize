@@ -7,10 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use openssl::ssl::{SslConnector, SslMethod};
-use openssl::x509::X509;
-use openssl::x509::store::X509StoreBuilder;
-use postgres_openssl::MakeTlsConnector;
+use crate::tls::MakeRustlsConnect;
+use rustls_pki_types::CertificateDer;
+use rustls_pki_types::pem::PemObject;
 use std::collections::BTreeMap;
 
 use crate::error::{Context, OpError, OpErrorKind};
@@ -179,13 +178,19 @@ pub async fn connect(
     // TODO: depend on the system's certificate bundle instead, once Fivetran
     // supports running destinations in a containerized environment.
     let ca_bundle = include_bytes!(concat!(env!("OUT_DIR"), "/ca-certificate.crt"));
-    let ca_certs = X509::stack_from_pem(ca_bundle)?;
-    let mut cert_store = X509StoreBuilder::new()?;
+    let ca_certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(ca_bundle)
+        .collect::<Result<_, _>>()
+        .map_err(|e| OpErrorKind::InvariantViolated(format!("failed to parse CA bundle: {e}")))?;
+
+    let mut root_store = rustls::RootCertStore::empty();
     for cert in ca_certs {
-        cert_store.add_cert(cert)?;
+        root_store
+            .add(cert)
+            .map_err(|e| OpErrorKind::InvariantViolated(format!("invalid CA cert: {e}")))?;
     }
-    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-    builder.set_verify_cert_store(cert_store.build())?;
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
 
     let options = if let Some(cluster) = cluster.as_ref() {
         format!("--cluster={}", utils::escape_options(cluster))
@@ -193,7 +198,7 @@ pub async fn connect(
         String::new()
     };
 
-    let tls_connector = MakeTlsConnector::new(builder.build());
+    let tls_connector = MakeRustlsConnect::new(tls_config);
     let (client, conn) = tokio_postgres::Config::new()
         .host(&host)
         .user(&user)

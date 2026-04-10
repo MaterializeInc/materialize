@@ -15,6 +15,7 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aws_lc_rs::digest;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::{AsCollection, VecCollection};
 use futures::StreamExt;
@@ -34,7 +35,6 @@ use mz_timely_util::builder_async::{
     PressOnDropButton,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
 use timely::dataflow::{Scope, StreamVec};
@@ -102,7 +102,7 @@ impl From<&[u8]> for UpsertKey {
 /// hash so that there is no risk of collisions. Collisions on SHA256 have a probability of 2^128
 /// which is many orders of magnitude smaller than many other events that we don't even think about
 /// (e.g bit flips). In short, we can safely assume that sha256(a) == sha256(b) iff a == b.
-type KeyHash = Sha256;
+const KEY_HASH_ALGORITHM: &digest::Algorithm = &digest::SHA256;
 
 impl UpsertKey {
     pub fn from_key(key: Result<&Row, &UpsertError>) -> Self {
@@ -151,16 +151,23 @@ impl UpsertKey {
                 Err(UpsertError::KeyDecode(err)) => Err(Datum::Bytes(&err.raw)),
                 Err(UpsertError::NullKey(_)) => Err(Datum::Null),
             };
-            let mut hasher = DigestHasher(KeyHash::new());
+            let mut hasher = DigestHasher(digest::Context::new(KEY_HASH_ALGORITHM));
             key.hash(&mut hasher);
-            Self(hasher.0.finalize().into())
+            Self(
+                hasher
+                    .0
+                    .finish()
+                    .as_ref()
+                    .try_into()
+                    .expect("SHA256 output is 32 bytes"),
+            )
         })
     }
 }
 
-struct DigestHasher<H: Digest>(H);
+struct DigestHasher(digest::Context);
 
-impl<H: Digest> Hasher for DigestHasher<H> {
+impl Hasher for DigestHasher {
     fn write(&mut self, bytes: &[u8]) {
         self.0.update(bytes);
     }
