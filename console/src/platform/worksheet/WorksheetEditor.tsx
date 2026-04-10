@@ -30,6 +30,7 @@ import {
 } from "./store";
 import { useCodeLens } from "./useCodeLens";
 import { useDiagnostics } from "./useDiagnostics";
+import { useGoToDefinition } from "./useGoToDefinition";
 import { useObjectCompletions } from "./useObjectCompletions";
 import { useStatements } from "./useStatements";
 
@@ -153,11 +154,13 @@ const WorksheetEditor = React.forwardRef<
       padding: { bottom: resultsPanelHeight, top: 0 },
     });
   }, [resultsPanelHeight]);
+  const goToDefinitionRef = useGoToDefinition();
 
   const handleMount: OnMount = useCallback(
     (editor) => {
       editorRef.current = editor;
       registerSqlLanguage();
+      goToDefinitionRef.current(editor);
 
       const model = editor.getModel();
       if (model) {
@@ -189,7 +192,9 @@ const WorksheetEditor = React.forwardRef<
         },
       });
     },
-    [parseContent, onExecute],
+    // goToDefinitionRef is a useRef return — its identity is stable and will
+    // never cause this callback to be recreated.
+    [parseContent, onExecute, goToDefinitionRef],
   );
 
   const handleChange = useCallback(
