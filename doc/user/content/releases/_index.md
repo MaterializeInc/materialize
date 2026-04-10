@@ -15,6 +15,43 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.19.0
+*Released to Materialize Cloud: 2026-04-09* <br>
+*Released to Materialize Self-Managed: 2026-04-10* <br>
+
+This release introduces append mode for [Iceberg sinks](/sql/create-sink/iceberg/),
+and bug fixes.
+
+### Iceberg sink append mode
+
+When an [Iceberg sink](/sql/create-sink/iceberg/) is created in append
+mode, all changes are written as data rows — no Iceberg delete files are
+produced. This is especially useful if you're sinking data from a materialized
+view with temporal filters, and you don't want data to be deleted from your Iceberg table as it ages out.
+
+```mzsql
+CREATE SINK events_log_iceberg
+  IN CLUSTER analytics_cluster
+  FROM user_events
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = 'events',
+    TABLE = 'user_events_log'
+  )
+  USING AWS CONNECTION aws_connection
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '5m');
+```
+
+For more information, refer to:
+- [Guide: Apache Iceberg sink](/serve-results/sink/iceberg/)
+- [Reference: `CREATE SINK ICEBERG`](/sql/create-sink/iceberg/)
+
+### Bug Fixes {#v26.19-bug-fixes}
+
+- Fixed identifier display in system catalog tables `mz_kafka_source_tables`,
+  `mz_mysql_source_tables`, and `mz_postgres_source_tables` to show raw values
+  without SQL quoting (e.g., `my-kafka-topic` instead of `"my-kafka-topic"`).
+
 ## v26.18.0
 *Released to Materialize Cloud: 2026-04-02* <br>
 *Released to Materialize Self-Managed: 2026-04-03* <br>
