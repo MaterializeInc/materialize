@@ -690,7 +690,6 @@ mod tests {
     use std::sync::Arc;
 
     use mz_persist::location::SeqNo;
-    use timely::dataflow::Scope;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
     use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -743,10 +742,11 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let outer = scope.clone();
+                let mut outer = scope.clone();
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
-                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, i64, _, _>(
+                        &mut outer,
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
@@ -814,10 +814,11 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|scope| {
-                let outer = scope.clone();
+                let mut outer = scope.clone();
                 let (stream, token) = scope.scoped::<u64, _, _>("hybrid", |scope| {
                     let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
-                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, i64, _, _>(
+                        &mut outer,
                         scope,
                         "test_source",
                         move || std::future::ready(persist_client.clone()),
