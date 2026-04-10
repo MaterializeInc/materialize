@@ -34,16 +34,22 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
+import { useAtom, useSetAtom } from "jotai";
 import React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { NavLink, NavLinkProps } from "react-router-dom";
 
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import ImpersonationAlert from "~/components/ImpersonationAlert";
 import { MfaAlert } from "~/components/MfaAlert";
 import WelcomeDialog from "~/components/WelcomeDialog/WelcomeDialog";
+import FloatingResultPanel from "~/layouts/FloatingResultPanel";
 import { NavBar } from "~/layouts/NavBar";
 import PageFooter from "~/layouts/PageFooter";
+import {
+  resultsPanelOpenAtom,
+  resultsPanelPathAtom,
+} from "~/platform/worksheet/store";
 import { useTrackPageHeaderHeight } from "~/store/stickyHeader";
 import SlashIcon from "~/svg/SlashIcon";
 import { MaterializeTheme } from "~/theme";
@@ -91,6 +97,23 @@ export const MAIN_CONTENT_MARGIN = 10;
  */
 export const BaseLayout = (props: BaseLayoutProps) => {
   const NavigationBar = props.navBarOverride ? props.navBarOverride : NavBar;
+  const setResultsPanelOpen = useSetAtom(resultsPanelOpenAtom);
+  const [resultsPanelPath, setResultsPanelPath] = useAtom(resultsPanelPathAtom);
+  const location = useLocation();
+
+  // Dismiss the results panel when navigating to a different page
+  React.useEffect(() => {
+    if (resultsPanelPath !== null && location.pathname !== resultsPanelPath) {
+      setResultsPanelOpen(false);
+      setResultsPanelPath(null);
+    }
+  }, [
+    location.pathname,
+    resultsPanelPath,
+    setResultsPanelOpen,
+    setResultsPanelPath,
+  ]);
+
   return (
     <Flex
       direction="column"
@@ -122,6 +145,7 @@ export const BaseLayout = (props: BaseLayoutProps) => {
             minWidth="0"
             spacing="0"
             zIndex={MAIN_CONTENT_Z_INDEX}
+            position="relative"
           >
             <Flex
               as="main"
@@ -143,6 +167,7 @@ export const BaseLayout = (props: BaseLayoutProps) => {
                 </React.Suspense>
               </AppErrorBoundary>
             </Flex>
+            <FloatingResultPanel />
             <PageFooter>
               <OrgTag />
             </PageFooter>
