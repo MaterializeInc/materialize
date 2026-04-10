@@ -85,7 +85,7 @@ export function useCodeLens(
     emitterRef.current = emitter;
 
     disposableRef.current = monaco.languages.registerCodeLensProvider("sql", {
-      onDidChangeCodeLenses: emitter.event,
+      onDidChange: emitter.event,
       provideCodeLenses() {
         return {
           lenses: statementsRef.current.map((stmt) => ({

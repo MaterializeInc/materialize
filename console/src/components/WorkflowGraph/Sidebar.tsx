@@ -31,7 +31,7 @@ import {
   formatLagInfoDetailed,
   formatObjectType,
 } from "~/platform/clusters/format";
-import type { SupportedObjectType } from "~/platform/object-explorer/ObjectExplorerNode";
+import type { SupportedObjectType } from "~/api/materialize/types";
 import { relativeClusterPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { useOpenCatalogDetail } from "~/store/catalog";

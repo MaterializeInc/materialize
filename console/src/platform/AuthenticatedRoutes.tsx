@@ -33,8 +33,6 @@ import BlockedState from "~/platform/environment-not-ready/BlockedState";
 import { EnvironmentNotReadyRoutes } from "~/platform/environment-not-ready/EnvironmentNotReadyRoutes";
 import { EnvironmentOverviewRoutes } from "~/platform/environment-overview/EnvironmentOverviewRoutes";
 import IntegrationsRoutes from "~/platform/integrations/IntegrationsRoutes";
-import { ObjectExplorerDetailRoutes } from "~/platform/object-explorer/ObjectExplorerDetailRoutes";
-import { ObjectExplorerRoutes } from "~/platform/object-explorer/ObjectExplorerRoutes";
 import QueryHistoryRoutes from "~/platform/query-history/QueryHistoryRoutes";
 import RolesRoutes from "~/platform/roles/RolesRoutes";
 import {
@@ -274,17 +272,6 @@ const EnvironmentRoutes = () => {
           </BaseLayout>
         }
       />
-      <Route path="objects">
-        <Route
-          index
-          path="*"
-          element={
-            <BaseLayout sectionNav={<ObjectExplorerRoutes />}>
-              <ObjectExplorerDetailRoutes />
-            </BaseLayout>
-          }
-        />
-      </Route>
       <Route path="clusters">
         <Route
           index

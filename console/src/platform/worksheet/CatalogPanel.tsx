@@ -22,8 +22,8 @@ import {
 import { useAtom } from "jotai";
 import React, { useCallback, useState } from "react";
 
-import { NULL_DATABASE_NAME } from "~/platform/object-explorer/constants";
-import type { SupportedObjectType } from "~/platform/object-explorer/ObjectExplorerNode";
+import { NULL_DATABASE_NAME } from "~/platform/constants";
+import type { SupportedObjectType } from "~/api/materialize/types";
 import { catalogDetailAtom } from "~/store/catalog";
 import type { MaterializeTheme } from "~/theme";
 
