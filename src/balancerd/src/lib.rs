@@ -38,6 +38,7 @@ use futures::TryFutureExt;
 use futures::stream::BoxStream;
 use hyper::StatusCode;
 use hyper_util::rt::TokioIo;
+#[cfg(feature = "telemetry")]
 use launchdarkly_server_sdk as ld;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
@@ -205,6 +206,7 @@ impl BalancerService {
             cfg.launchdarkly_sdk_key.as_deref(),
             cfg.config_sync_file_path.as_deref(),
         ) {
+            #[cfg(feature = "telemetry")]
             (Some(key), None) => {
                 let _ = mz_dyncfg_launchdarkly::sync_launchdarkly_to_configset(
                     configs.clone(),
@@ -258,6 +260,10 @@ impl BalancerService {
                 )
                 .await
                 .inspect_err(|e| warn!("LaunchDarkly sync error: {e}"));
+            }
+            #[cfg(not(feature = "telemetry"))]
+            (Some(_), None) => {
+                warn!("LaunchDarkly SDK key provided but telemetry feature is disabled; ignoring");
             }
             (None, Some(path)) => {
                 let _ = mz_dyncfg_file::sync_file_to_configset(

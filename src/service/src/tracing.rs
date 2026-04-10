@@ -7,8 +7,10 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+#[cfg(feature = "sentry")]
 use sentry_tracing::EventFilter;
 
+#[cfg(feature = "sentry")]
 pub fn mz_sentry_event_filter(meta: &tracing::Metadata<'_>) -> EventFilter {
     // special cases
     if meta.target() == "librdkafka" {
