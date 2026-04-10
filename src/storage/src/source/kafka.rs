@@ -175,16 +175,16 @@ impl SourceRender for KafkaSourceConnection {
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Kafka;
 
-    fn render<G: Scope<Timestamp = KafkaTimestamp>>(
+    fn render(
         self,
-        scope: &mut G,
+        scope: &mut Scope<Self::Time>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<KafkaTimestamp>>,
+        BTreeMap<GlobalId, StackedCollection<Self::Time, Result<SourceMessage, DataflowError>>>,
+        StreamVec<Self::Time, HealthStatusMessage>,
+        StreamVec<Self::Time, Probe<KafkaTimestamp>>,
         Vec<PressOnDropButton>,
     ) {
         let (metadata, probes, metadata_token) =
@@ -224,16 +224,16 @@ impl SourceRender for KafkaSourceConnection {
 ///
 /// The reader is responsible for polling the Kafka topic partitions for new messages, and
 /// transforming them into a `SourceMessage` collection.
-fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
-    scope: &G,
+fn render_reader(
+    scope: &Scope<KafkaTimestamp>,
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
     resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
-    metadata_stream: StreamVec<G, (mz_repr::Timestamp, MetadataUpdate)>,
+    metadata_stream: StreamVec<KafkaTimestamp, (mz_repr::Timestamp, MetadataUpdate)>,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    StreamVec<G, HealthStatusMessage>,
+    StackedCollection<KafkaTimestamp, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<KafkaTimestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let name = format!("KafkaReader({})", config.id);
@@ -1547,13 +1547,13 @@ pub enum KafkaHeaderParseError {
 /// The metadata fetcher is a single-worker operator that is responsible for periodically fetching
 /// the Kafka topic metadata (partition IDs and high watermarks) and making it available as a
 /// Timely stream.
-fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
-    scope: &G,
+fn render_metadata_fetcher(
+    scope: &Scope<KafkaTimestamp>,
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
 ) -> (
-    StreamVec<G, (mz_repr::Timestamp, MetadataUpdate)>,
-    StreamVec<G, Probe<KafkaTimestamp>>,
+    StreamVec<KafkaTimestamp, (mz_repr::Timestamp, MetadataUpdate)>,
+    StreamVec<KafkaTimestamp, Probe<KafkaTimestamp>>,
     PressOnDropButton,
 ) {
     let active_worker_id = usize::cast_from(config.id.hashed());

@@ -103,7 +103,7 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::Allocate;
+
 use timely::order::PartialOrder;
 use timely::progress::Timestamp as _;
 use timely::progress::frontier::Antichain;
@@ -131,11 +131,11 @@ type ResponseSender = mpsc::UnboundedSender<StorageResponse>;
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-pub struct Worker<'w, A: Allocate> {
+pub struct Worker<'w> {
     /// The underlying Timely worker.
     ///
     /// NOTE: This is `pub` for testing.
-    pub timely_worker: &'w mut TimelyWorker<A>,
+    pub timely_worker: &'w mut TimelyWorker,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
     pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
@@ -143,10 +143,10 @@ pub struct Worker<'w, A: Allocate> {
     pub storage_state: StorageState,
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
-        timely_worker: &'w mut TimelyWorker<A>,
+        timely_worker: &'w mut TimelyWorker,
         client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
         metrics: StorageMetrics,
         now: NowFn,
@@ -413,7 +413,7 @@ impl StorageInstanceContext {
     }
 }
 
-impl<'w, A: Allocate> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Waits for client connections and runs them to completion.
     pub fn run(&mut self) {
         while let Some((_nonce, rx, tx)) = self.client_rx.blocking_recv() {

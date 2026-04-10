@@ -21,14 +21,17 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
+use timely::scheduling::Scheduler;
+use timely::worker::AsWorker;
 
 use crate::render::DataflowError;
 use crate::render::context::{CollectionBundle, Context};
 
 impl<G> Context<G>
 where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
+    G: crate::typedefs::MzTimestamp
+        + timely::progress::timestamp::Refines<mz_repr::Timestamp>
+        + crate::render::RenderTimestamp,
 {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(

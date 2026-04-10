@@ -51,16 +51,16 @@ use crate::source::{RawSourceCreationConfig, probe};
 /// handling progress.
 static PROGRESS_WORKER: &str = "progress";
 
-pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
-    scope: G,
+pub(crate) fn render(
+    scope: Scope<Lsn>,
     config: RawSourceCreationConfig,
     connection: SqlServerConnectionDetails,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     committed_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
     extras: SqlServerSourceExtras,
 ) -> (
-    StreamVec<G, ReplicationError>,
-    StreamVec<G, Probe<Lsn>>,
+    StreamVec<Lsn, ReplicationError>,
+    StreamVec<Lsn, Probe<Lsn>>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerProgress({})", config.id);

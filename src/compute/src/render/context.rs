@@ -36,11 +36,11 @@ use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::operate::FrontierInterest;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::Scheduler;
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
@@ -58,19 +58,24 @@ use crate::typedefs::{
 /// These assets include dataflow-local collections and arrangements, as well as imported
 /// arrangements from outside the dataflow.
 ///
-/// Context has two timestamp types, one from `S::Timestamp` and one from `T`, where the
-/// former must refine the latter. The former is the timestamp used by the scope in question,
-/// and the latter is the timestamp of imported traces. The two may be different in the case
-/// of regions or iteration.
-pub struct Context<S: Scope, T = mz_repr::Timestamp>
+/// Context has two timestamp types, `S` and `T`, where the former must refine the latter.
+/// The former is the timestamp used by the scope in question, and the latter is the timestamp
+/// of imported traces. The two may be different in the case of regions or iteration.
+pub struct Context<S, T = mz_repr::Timestamp>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// The scope within which all managed collections exist.
     ///
     /// It is an error to add any collections not contained in this scope.
-    pub(crate) scope: S,
+    pub(crate) scope: Scope<S>,
+    /// The parent scope at the imported-trace timestamp `T`. This is the
+    /// outermost dataflow scope and is held so that nested contexts can still
+    /// import traces and emit data into the dataflow's outer level after we
+    /// removed the `Child::parent` field. For top-level contexts, this is just
+    /// a clone of `scope` reinterpreted at timestamp `T`.
+    pub(crate) parent_scope: Scope<T>,
     /// The debug name of the dataflow associated with this context.
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
@@ -98,14 +103,19 @@ where
     pub config_set: Rc<ConfigSet>,
 }
 
-impl<S: Scope> Context<S>
+impl<S> Context<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Creates a new empty Context.
+    ///
+    /// `parent_scope` must be the outermost dataflow scope at `mz_repr::Timestamp`.
+    /// `scope` may be `parent_scope` itself (for top-level contexts) or a child
+    /// scope reached via `iterative` / `region` etc.
     pub fn for_dataflow_in<Plan>(
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
-        scope: S,
+        scope: Scope<S>,
+        parent_scope: Scope<mz_repr::Timestamp>,
         compute_state: &ComputeState,
         until: Antichain<mz_repr::Timestamp>,
         dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -130,6 +140,7 @@ where
 
         Self {
             scope,
+            parent_scope,
             debug_name: dataflow.debug_name.clone(),
             dataflow_id,
             export_ids,
@@ -144,10 +155,10 @@ where
     }
 }
 
-impl<S: Scope, T> Context<S, T>
+impl<S, T> Context<S, T>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -193,17 +204,17 @@ where
     }
 }
 
-impl<S: Scope, T> Context<S, T>
+impl<S, T> Context<S, T>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Brings the underlying arrangements and collections into a region.
-    pub fn enter_region<'a>(
+    pub fn enter_region(
         &self,
-        region: &Child<'a, S, S::Timestamp>,
+        region: &Scope<S>,
         bindings: Option<&std::collections::BTreeSet<Id>>,
-    ) -> Context<Child<'a, S, S::Timestamp>, T> {
+    ) -> Context<S, T> {
         let bindings = self
             .bindings
             .iter()
@@ -213,6 +224,7 @@ where
 
         Context {
             scope: region.clone(),
+            parent_scope: self.parent_scope.clone(),
             debug_name: self.debug_name.clone(),
             dataflow_id: self.dataflow_id.clone(),
             export_ids: self.export_ids.clone(),
@@ -229,31 +241,28 @@ where
 
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
+pub enum ArrangementFlavor<S, T = mz_repr::Timestamp>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// A dataflow-local arrangement.
-    Local(
-        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        Arranged<S, ErrAgent<S::Timestamp, Diff>>,
-    ),
+    Local(Arranged<RowRowAgent<S, Diff>>, Arranged<ErrAgent<S, Diff>>),
     /// An imported trace from outside the dataflow.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<S, RowRowEnter<T, Diff, S::Timestamp>>,
-        Arranged<S, ErrEnter<T, S::Timestamp>>,
+        Arranged<RowRowEnter<T, Diff, S>>,
+        Arranged<ErrEnter<T, S>>,
     ),
 }
 
-impl<S: Scope, T> ArrangementFlavor<S, T>
+impl<S, T> ArrangementFlavor<S, T>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -291,7 +300,7 @@ where
     /// Constructs and applies logic to elements of `self` and returns the results.
     ///
     /// The `logic` receives a vector of datums, a timestamp, and a diff, and produces
-    /// an iterator of `(D, S::Timestamp, Diff)` updates.
+    /// an iterator of `(D, S, Diff)` updates.
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
@@ -307,9 +316,9 @@ where
         mut logic: L,
     ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        I: IntoIterator<Item = (D, S, Diff)>,
         D: Data,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, S::Timestamp, Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, S, Diff) -> I + 'static,
     {
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
@@ -339,13 +348,13 @@ where
         }
     }
 }
-impl<S: Scope, T> ArrangementFlavor<S, T>
+impl<S, T> ArrangementFlavor<S, T>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
+    pub fn scope(&self) -> Scope<S> {
         match self {
             ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
             ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
@@ -353,10 +362,7 @@ where
     }
 
     /// Brings the arrangement flavor into a region.
-    pub fn enter_region<'a>(
-        &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, T> {
+    pub fn enter_region(&self, region: &Scope<S>) -> ArrangementFlavor<S, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
                 oks.clone().enter_region(region),
@@ -369,22 +375,18 @@ where
             ),
         }
     }
-}
-impl<'a, S: Scope, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
+
     /// Extracts the arrangement flavor from a region.
-    pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
+    pub fn leave_region(&self, outer: &Scope<S>) -> ArrangementFlavor<S, T> {
         match self {
-            ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.clone().leave_region(), errs.clone().leave_region())
-            }
+            ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
+            ),
             ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
                 *gid,
-                oks.clone().leave_region(),
-                errs.clone().leave_region(),
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
             ),
         }
     }
@@ -395,10 +397,10 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<S: Scope, T = mz_repr::Timestamp>
+pub struct CollectionBundle<S, T = mz_repr::Timestamp>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     pub collection: Option<(
         VecCollection<S, Row, Diff>,
@@ -407,10 +409,10 @@ where
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
 
-impl<S: Scope, T> CollectionBundle<S, T>
+impl<S, T> CollectionBundle<S, T>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
@@ -449,7 +451,7 @@ where
     }
 
     /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
+    pub fn scope(&self) -> Scope<S> {
         if let Some((oks, _errs)) = &self.collection {
             oks.inner.scope()
         } else {
@@ -462,10 +464,7 @@ where
     }
 
     /// Brings the collection bundle into a region.
-    pub fn enter_region<'a>(
-        &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
+    pub fn enter_region(&self, region: &Scope<S>) -> CollectionBundle<S, T> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
                 (
@@ -480,33 +479,29 @@ where
                 .collect(),
         }
     }
-}
 
-impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>
-where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
-{
     /// Extracts the collection bundle from a region.
-    pub fn leave_region(&self) -> CollectionBundle<S, T> {
+    pub fn leave_region(&self, outer: &Scope<S>) -> CollectionBundle<S, T> {
         CollectionBundle {
-            collection: self
-                .collection
-                .as_ref()
-                .map(|(oks, errs)| (oks.clone().leave_region(), errs.clone().leave_region())),
+            collection: self.collection.as_ref().map(|(oks, errs)| {
+                (
+                    oks.clone().leave_region(outer),
+                    errs.clone().leave_region(outer),
+                )
+            }),
             arranged: self
                 .arranged
                 .iter()
-                .map(|(key, bundle)| (key.clone(), bundle.leave_region()))
+                .map(|(key, bundle)| (key.clone(), bundle.leave_region(outer)))
                 .collect(),
         }
     }
 }
 
-impl<S: Scope, T> CollectionBundle<S, T>
+impl<S, T> CollectionBundle<S, T>
 where
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
@@ -578,9 +573,9 @@ where
         mut logic: L,
     ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        I: IntoIterator<Item = (D, S, Diff)>,
         D: Data,
-        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, S::Timestamp, Diff) -> I + 'static,
+        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, S, Diff) -> I + 'static,
     {
         // If `key_val` is set, we should have to use the corresponding arrangement.
         // If there isn't one, that implies an error in the contract between
@@ -611,23 +606,23 @@ where
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
     fn flat_map_core<Tr, D, I, L>(
-        trace: Arranged<S, Tr>,
-        key: Option<&Tr::KeyOwn>,
+        trace: Arranged<Tr>,
+        key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
         mut logic: L,
         refuel: usize,
     ) -> StreamVec<S, I::Item>
     where
         Tr: for<'a> TraceReader<
                 Key<'a>: ToDatumIter,
-                KeyOwn: PartialEq,
                 Val<'a>: ToDatumIter,
-                Time = S::Timestamp,
+                Time = S,
                 Diff = mz_repr::Diff,
             > + Clone
             + 'static,
+        <Tr::KeyContainer as BatchContainer>::Owned: PartialEq,
         I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
-        L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
+        L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S, mz_repr::Diff) -> I + 'static,
     {
         use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
         let scope = trace.stream.scope();
@@ -694,8 +689,7 @@ where
 impl<S, T> CollectionBundle<S, T>
 where
     T: MzTimestamp,
-    S: Scope,
-    S::Timestamp: Refines<T> + RenderTimestamp,
+    S: MzTimestamp + Refines<T> + RenderTimestamp,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -764,13 +758,13 @@ where
                 .map(move |x| match x {
                     Ok((row, event_time, diff)) => {
                         // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
+                        let mut time: S = time.clone();
                         *time.event_time_mut() = event_time;
                         (Ok(row), time, diff)
                     }
                     Err((e, event_time, diff)) => {
                         // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
+                        let mut time: S = time.clone();
                         *time.event_time_mut() = event_time;
                         (Err(e), time, diff)
                     }
@@ -867,7 +861,7 @@ where
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
-        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
+        Arranged<RowRowAgent<S, Diff>>,
         VecCollection<S, DataflowError, Diff>,
         VecCollection<S, Row, Diff>,
     ) {
@@ -878,7 +872,7 @@ where
         let mut builder = OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output =
-            OutputBuilder::<_, ColumnBuilder<((Row, Row), S::Timestamp, Diff)>>::from(ok_output);
+            OutputBuilder::<_, ColumnBuilder<((Row, Row), S, Diff)>>::from(ok_output);
         let (err_output, err_stream) = builder.new_output();
         let mut err_output = OutputBuilder::from(err_output);
         let (passthrough_output, passthrough_stream) = builder.new_output();
@@ -925,7 +919,7 @@ where
                 RowRowSpine<_, _>,
             >(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                    columnar_exchange::<Row, Row, S::Timestamp, Diff>,
+                    columnar_exchange::<Row, Row, S, Diff>,
                 ),
                 name
             );
@@ -948,7 +942,8 @@ where
 
 impl<C> PendingWork<C>
 where
-    C: Cursor<KeyOwn: PartialEq + Sized>,
+    C: Cursor,
+    <C::KeyContainer as BatchContainer>::Owned: PartialEq + Sized,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
     fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {

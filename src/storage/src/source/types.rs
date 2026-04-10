@@ -27,7 +27,7 @@ use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::columnation::ColumnationStack;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::{Scope, ScopeParent, StreamVec};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::Semaphore;
 use tokio_util::sync::PollSemaphore;
@@ -53,8 +53,7 @@ pub enum ProgressStatisticsUpdate {
     },
 }
 
-pub type StackedCollection<G, T> =
-    Collection<G, ColumnationStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
+pub type StackedCollection<TS, T> = Collection<TS, ColumnationStack<(T, TS, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
@@ -84,16 +83,16 @@ pub trait SourceRender {
     /// source to immediately drop all capabilities and advance its frontier to the empty antichain.
     ///
     /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md#describing-definite-data>
-    fn render<G: Scope<Timestamp = Self::Time>>(
+    fn render(
         self,
-        scope: &mut G,
+        scope: &mut Scope<Self::Time>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<Self::Time>>,
+        BTreeMap<GlobalId, StackedCollection<Self::Time, Result<SourceMessage, DataflowError>>>,
+        StreamVec<Self::Time, HealthStatusMessage>,
+        StreamVec<Self::Time, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     );
 }

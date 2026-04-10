@@ -32,10 +32,7 @@ use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
 use crate::typedefs::KeyBatcher;
 
-impl<G> SinkRender<G> for CopyToS3OneshotSinkConnection
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+impl SinkRender for CopyToS3OneshotSinkConnection {
     fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
@@ -43,9 +40,9 @@ where
         sink_id: GlobalId,
         _as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: VecCollection<G, Row, Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
-        _ct_times: Option<VecCollection<G, (), Diff>>,
+        sinked_collection: VecCollection<mz_repr::Timestamp, Row, Diff>,
+        err_collection: VecCollection<mz_repr::Timestamp, DataflowError, Diff>,
+        _ct_times: Option<VecCollection<mz_repr::Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Set up a callback to communicate the result of the copy-to operation to the controller.

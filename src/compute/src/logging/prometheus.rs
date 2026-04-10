@@ -27,6 +27,7 @@ use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::ExchangeCore;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::scheduling::Scheduler;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
@@ -45,8 +46,8 @@ type SnapshotKey = (String, Vec<(String, String)>);
 type SnapshotValue = (f64, &'static str, String);
 
 /// Constructs the logging dataflow fragment for Prometheus metrics.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    scope: G,
+pub(super) fn construct(
+    scope: timely::dataflow::Scope<Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     metrics_registry: MetricsRegistry,
     now: Instant,

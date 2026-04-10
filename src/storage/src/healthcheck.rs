@@ -335,8 +335,8 @@ pub struct HealthStatusMessage {
 ///
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
 /// `configs`'s keys.
-pub(crate) fn health_operator<G, P>(
-    scope: &G,
+pub(crate) fn health_operator<P>(
+    scope: &Scope<()>,
     now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
@@ -346,7 +346,7 @@ pub(crate) fn health_operator<G, P>(
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: StreamVec<G, HealthStatusMessage>,
+    health_stream: StreamVec<(), HealthStatusMessage>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
@@ -356,7 +356,6 @@ pub(crate) fn health_operator<G, P>(
     suspend_and_restart_delay: Duration,
 ) -> PressOnDropButton
 where
-    G: Scope,
     P: HealthOperator + 'static,
 {
     // Derived config options
@@ -1162,7 +1161,7 @@ mod tests {
     /// After the channel is empty on the first worker, then the frontier will go to [].
     /// Also ensures that updates are routed to the correct worker based on the `TestUpdate`
     /// using an exchange.
-    fn producer<G: Scope<Timestamp = ()>>(
+    fn producer(
         scope: G,
         mut input: UnboundedReceiver<TestUpdate>,
     ) -> StreamVec<G, HealthStatusMessage> {

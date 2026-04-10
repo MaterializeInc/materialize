@@ -32,10 +32,7 @@ use timely::progress::timestamp::Timestamp as TimelyTimestamp;
 use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
 
-impl<G> SinkRender<G> for SubscribeSinkConnection
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+impl SinkRender for SubscribeSinkConnection {
     fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
@@ -43,9 +40,9 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: VecCollection<G, Row, Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
-        _ct_times: Option<VecCollection<G, (), Diff>>,
+        sinked_collection: VecCollection<mz_repr::Timestamp, Row, Diff>,
+        err_collection: VecCollection<mz_repr::Timestamp, DataflowError, Diff>,
+        _ct_times: Option<VecCollection<mz_repr::Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.
@@ -85,17 +82,15 @@ where
     }
 }
 
-fn subscribe<G>(
-    sinked_collection: VecCollection<G, Row, Diff>,
-    err_collection: VecCollection<G, DataflowError, Diff>,
+fn subscribe(
+    sinked_collection: VecCollection<mz_repr::Timestamp, Row, Diff>,
+    err_collection: VecCollection<mz_repr::Timestamp, DataflowError, Diff>,
     sink_id: GlobalId,
     with_snapshot: bool,
-    as_of: Antichain<G::Timestamp>,
-    up_to: Antichain<G::Timestamp>,
+    as_of: Antichain<Timestamp>,
+    up_to: Antichain<Timestamp>,
     subscribe_protocol_handle: Rc<RefCell<Option<SubscribeProtocol>>>,
-) where
-    G: Scope<Timestamp = Timestamp>,
-{
+) {
     let name = format!("subscribe-{}", sink_id);
     let mut op = OperatorBuilder::new(name, sinked_collection.scope());
     let mut ok_input = op.new_input(sinked_collection.inner, Pipeline);

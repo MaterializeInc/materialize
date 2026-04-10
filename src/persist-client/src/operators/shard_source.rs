@@ -38,7 +38,6 @@ use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
@@ -139,40 +138,40 @@ impl ErrorHandler {
 /// usages for details.
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn shard_source<'g, K, V, T, D, DT, G, C>(
-    scope: &mut Child<'g, G, T>,
+pub fn shard_source<K, V, P, T, D, DT, C>(
+    parent: &mut Scope<P>,
+    scope: &mut Scope<T>,
     name: &str,
     client: impl Fn() -> C,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: Option<Antichain<P>>,
     snapshot_mode: SnapshotMode,
-    until: Antichain<G::Timestamp>,
+    until: Antichain<P>,
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
+    filter_fn: impl FnMut(&PartStats, AntichainRef<P>) -> FilterResult + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
+    StreamVec<T, FetchedBlob<K, V, P, D>>,
     Vec<PressOnDropButton>,
 )
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
-    T: Refines<G::Timestamp>,
+    P: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+    T: Timestamp + Refines<P>,
     DT: FnOnce(
-        Child<'g, G, T>,
-        StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        Scope<T>,
+        StreamVec<T, (usize, ExchangeableBatchPart<P>)>,
         usize,
     ) -> (
-        StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        StreamVec<T, (usize, ExchangeableBatchPart<P>)>,
         Vec<PressOnDropButton>,
     ),
     C: Future<Output = PersistClient> + Send + 'static,
@@ -206,15 +205,15 @@ where
     // metrics.
     let is_transient = !until.is_empty();
 
-    let (descs, descs_token) = shard_source_descs::<K, V, D, G>(
-        &scope.parent,
+    let (descs, descs_token) = shard_source_descs::<K, V, D, P>(
+        parent,
         name,
         client(),
         shard_id.clone(),
         as_of,
         snapshot_mode,
         until,
-        completed_fetches_feedback_stream.leave(),
+        completed_fetches_feedback_stream.leave(parent),
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
@@ -292,34 +291,33 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
     }
 }
 
-pub(crate) fn shard_source_descs<K, V, D, G>(
-    scope: &G,
+pub(crate) fn shard_source_descs<K, V, D, P>(
+    scope: &Scope<P>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: Option<Antichain<P>>,
     snapshot_mode: SnapshotMode,
-    until: Antichain<G::Timestamp>,
-    completed_fetches_stream: StreamVec<G, Infallible>,
+    until: Antichain<P>,
+    completed_fetches_stream: StreamVec<P, Infallible>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
+    mut filter_fn: impl FnMut(&PartStats, AntichainRef<P>) -> FilterResult + 'static,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<G, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+    StreamVec<P, (usize, ExchangeableBatchPart<P>)>,
     PressOnDropButton,
 )
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+    P: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
 {
     let worker_index = scope.index();
     let num_workers = scope.peers();
@@ -333,7 +331,7 @@ where
     let return_listen_handle = Rc::clone(&listen_handle);
 
     // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
-    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<G::Timestamp>>>>();
+    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<P>>>>();
     let mut builder = AsyncOperatorBuilder::new(
         format!("shard_source_descs_return({})", name),
         scope.clone(),
@@ -391,7 +389,7 @@ where
             async move {
                 let client = client.await;
                 client
-                    .open_leased_reader::<K, V, G::Timestamp, D>(
+                    .open_leased_reader::<K, V, P, D>(
                         shard_id,
                         key_schema,
                         val_schema,
@@ -583,8 +581,8 @@ where
     (descs_stream, shutdown_button.press_on_drop())
 }
 
-pub(crate) fn shard_source_fetch<K, V, T, D, G>(
-    descs: StreamVec<G, (usize, ExchangeableBatchPart<T>)>,
+pub(crate) fn shard_source_fetch<K, V, T, U, D>(
+    descs: StreamVec<U, (usize, ExchangeableBatchPart<T>)>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
@@ -593,8 +591,8 @@ pub(crate) fn shard_source_fetch<K, V, T, D, G>(
     is_transient: bool,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<G, FetchedBlob<K, V, T, D>>,
-    StreamVec<G, Infallible>,
+    StreamVec<U, FetchedBlob<K, V, T, D>>,
+    StreamVec<U, Infallible>,
     PressOnDropButton,
 )
 where
@@ -602,8 +600,7 @@ where
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
-    G::Timestamp: Refines<T>,
+    U: Timestamp + Refines<T>,
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());

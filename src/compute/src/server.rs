@@ -31,7 +31,7 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::Allocate;
+
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
@@ -202,9 +202,9 @@ impl ResponseSender {
 ///
 /// Much of this state can be viewed as local variables for the worker thread,
 /// holding state that persists across function calls.
-struct Worker<'w, A: Allocate> {
+struct Worker<'w> {
     /// The underlying Timely worker.
-    timely_worker: &'w mut TimelyWorker<A>,
+    timely_worker: &'w mut TimelyWorker,
     /// The channel over which commands are received.
     command_rx: CommandReceiver,
     /// The channel over which responses are sent.
@@ -232,9 +232,9 @@ impl ClusterSpec for Config {
 
     const NAME: &str = "compute";
 
-    fn run_worker<A: Allocate + 'static>(
+    fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<A>,
+        timely_worker: &mut TimelyWorker,
         client_rx: mpsc::UnboundedReceiver<(
             Uuid,
             mpsc::UnboundedReceiver<ComputeCommand>,
@@ -318,7 +318,7 @@ fn set_core_affinity(_worker_id: usize) {
     info!("setting core affinity is not supported on macOS");
 }
 
-impl<'w, A: Allocate + 'static> Worker<'w, A> {
+impl<'w> Worker<'w> {
     /// Runs a compute worker.
     pub fn run(&mut self) {
         // The command receiver is initialized without an nonce, so receiving the first command
@@ -414,7 +414,7 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
         self.activate_compute().unwrap().handle_compute_command(cmd);
     }
 
-    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_, A>> {
+    fn activate_compute(&mut self) -> Option<ActiveComputeState<'_>> {
         if let Some(compute_state) = &mut self.compute_state {
             Some(ActiveComputeState {
                 timely_worker: &mut *self.timely_worker,

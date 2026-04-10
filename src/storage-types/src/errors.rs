@@ -493,8 +493,8 @@ impl Error for DataflowError {}
 
 mod boxed_str {
 
-    use differential_dataflow::containers::Region;
-    use differential_dataflow::containers::StableRegion;
+    use ::columnation::Region;
+    use ::columnation::StableRegion;
 
     /// Region allocation for `String` data.
     ///
@@ -546,7 +546,7 @@ mod boxed_str {
 mod columnation {
     use std::iter::once;
 
-    use differential_dataflow::containers::{Columnation, Region, StableRegion};
+    use ::columnation::{Columnation, Region, StableRegion};
     use mz_expr::EvalError;
     use mz_repr::Row;
     use mz_repr::adt::range::InvalidRangeError;

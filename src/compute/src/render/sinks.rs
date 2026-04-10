@@ -26,7 +26,6 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe::Handle;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
@@ -34,10 +33,11 @@ use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
 use crate::render::{RenderTimestamp, StartSignal};
 
-impl<'g, G, T> Context<Child<'g, G, T>>
+impl<T> Context<T>
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-    T: RenderTimestamp,
+    T: crate::typedefs::MzTimestamp
+        + timely::progress::timestamp::Refines<mz_repr::Timestamp>
+        + RenderTimestamp,
 {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
@@ -48,7 +48,7 @@ where
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
-        ct_times: Option<VecCollection<G, (), Diff>>,
+        ct_times: Option<VecCollection<mz_repr::Timestamp, (), Diff>>,
         output_probe: &Handle<mz_repr::Timestamp>,
     ) {
         soft_assert_or_log!(
@@ -96,8 +96,9 @@ where
             err_collection = err_collection.log_dataflow_errors(logger, sink_id);
         }
 
-        let mut ok_collection = ok_collection.leave();
-        let mut err_collection = err_collection.leave();
+        let parent = self.parent_scope.clone();
+        let mut ok_collection = ok_collection.leave(&parent);
+        let mut err_collection = err_collection.leave(&parent);
 
         // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
         // we might write down incorrect data.
@@ -147,11 +148,10 @@ where
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
         };
-        self.scope
-            .parent
+        self.parent_scope
             .clone()
             .region_named(&region_name, |inner| {
-                let sink_render = get_sink_render_for::<_>(&sink.connection);
+                let sink_render = get_sink_render_for(&sink.connection);
 
                 let sink_token = sink_render.render_sink(
                     compute_state,
@@ -176,10 +176,7 @@ where
 }
 
 /// A type that can be rendered as a dataflow sink.
-pub(crate) trait SinkRender<G>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+pub(crate) trait SinkRender {
     fn render_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
@@ -187,21 +184,18 @@ where
         sink_id: GlobalId,
         as_of: Antichain<mz_repr::Timestamp>,
         start_signal: StartSignal,
-        sinked_collection: VecCollection<G, Row, Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
+        sinked_collection: VecCollection<mz_repr::Timestamp, Row, Diff>,
+        err_collection: VecCollection<mz_repr::Timestamp, DataflowError, Diff>,
         // TODO(ct2): Figure out a better way to smuggle this in, potentially by
         // removing the `SinkRender` trait entirely.
-        ct_times: Option<VecCollection<G, (), Diff>>,
+        ct_times: Option<VecCollection<mz_repr::Timestamp, (), Diff>>,
         output_probe: &Handle<mz_repr::Timestamp>,
     ) -> Option<Rc<dyn Any>>;
 }
 
-fn get_sink_render_for<G>(
+fn get_sink_render_for(
     connection: &ComputeSinkConnection<CollectionMetadata>,
-) -> Box<dyn SinkRender<G>>
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) -> Box<dyn SinkRender> {
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),

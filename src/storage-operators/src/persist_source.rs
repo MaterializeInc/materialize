@@ -49,19 +49,17 @@ use mz_txn_wal::operator::{TxnsContext, txns_progress};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::ScopeParent;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::Antichain;
 use timely::progress::Timestamp as TimelyTimestamp;
 use timely::progress::timestamp::PathSummary;
-use timely::scheduling::Activator;
+use timely::scheduling::{Activator, Scheduler};
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::{error, trace};
 
@@ -144,8 +142,8 @@ impl Subtime {
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<G>(
-    scope: &mut G,
+pub fn persist_source(
+    scope: &mut Scope<mz_repr::Timestamp>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: &TxnsContext,
@@ -159,87 +157,89 @@ pub fn persist_source<G>(
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<G, (Row, Timestamp, Diff)>,
-    StreamVec<G, (DataflowError, Timestamp, Diff)>,
+    StreamVec<mz_repr::Timestamp, (Row, Timestamp, Diff)>,
+    StreamVec<mz_repr::Timestamp, (DataflowError, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
 
     let mut tokens = vec![];
 
-    let stream = scope.scoped(&format!("granular_backpressure({})", source_id), |scope| {
-        let (flow_control, flow_control_probe) = match max_inflight_bytes {
-            Some(max_inflight_bytes) => {
-                let backpressure_metrics = BackpressureMetrics {
-                    emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
-                    last_backpressured_bytes: Arc::clone(
-                        &shard_metrics.backpressure_last_backpressured_bytes,
-                    ),
-                    retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
-                };
+    let mut outer_scope = scope.clone();
+    let stream = scope.scoped(
+        &format!("granular_backpressure({})", source_id),
+        |inner_scope| {
+            let (flow_control, flow_control_probe) = match max_inflight_bytes {
+                Some(max_inflight_bytes) => {
+                    let backpressure_metrics = BackpressureMetrics {
+                        emitted_bytes: Arc::clone(&shard_metrics.backpressure_emitted_bytes),
+                        last_backpressured_bytes: Arc::clone(
+                            &shard_metrics.backpressure_last_backpressured_bytes,
+                        ),
+                        retired_bytes: Arc::clone(&shard_metrics.backpressure_retired_bytes),
+                    };
 
-                let probe = mz_timely_util::probe::Handle::default();
-                let progress_stream = mz_timely_util::probe::source(
-                    scope.clone(),
-                    format!("decode_backpressure_probe({source_id})"),
-                    probe.clone(),
-                );
-                let flow_control = FlowControl {
-                    progress_stream,
-                    max_inflight_bytes,
-                    summary: (Default::default(), Subtime::least_summary()),
-                    metrics: Some(backpressure_metrics),
-                };
-                (Some(flow_control), Some(probe))
-            }
-            None => (None, None),
-        };
+                    let probe = mz_timely_util::probe::Handle::default();
+                    let progress_stream = mz_timely_util::probe::source(
+                        inner_scope.clone(),
+                        format!("decode_backpressure_probe({source_id})"),
+                        probe.clone(),
+                    );
+                    let flow_control = FlowControl {
+                        progress_stream,
+                        max_inflight_bytes,
+                        summary: (Default::default(), Subtime::least_summary()),
+                        metrics: Some(backpressure_metrics),
+                    };
+                    (Some(flow_control), Some(probe))
+                }
+                None => (None, None),
+            };
 
-        // Our default listen sleeps are tuned for the case of a shard that is
-        // written once a second, but txn-wal allows these to be lazy.
-        // Override the tuning to reduce crdb load. The pubsub fallback
-        // responsibility is then replaced by manual "one state" wakeups in the
-        // txns_progress operator.
-        let cfg = Arc::clone(&persist_clients.cfg().configs);
-        let subscribe_sleep = match metadata.txns_shard {
-            Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
-            None => None,
-        };
+            // Our default listen sleeps are tuned for the case of a shard that is
+            // written once a second, but txn-wal allows these to be lazy.
+            // Override the tuning to reduce crdb load. The pubsub fallback
+            // responsibility is then replaced by manual "one state" wakeups in the
+            // txns_progress operator.
+            let cfg = Arc::clone(&persist_clients.cfg().configs);
+            let subscribe_sleep = match metadata.txns_shard {
+                Some(_) => Some(move || mz_txn_wal::operator::txns_data_shard_retry_params(&cfg)),
+                None => None,
+            };
 
-        let (stream, source_tokens) = persist_source_core(
-            scope,
-            source_id,
-            Arc::clone(&persist_clients),
-            metadata.clone(),
-            read_schema,
-            as_of.clone(),
-            snapshot_mode,
-            until.clone(),
-            map_filter_project,
-            flow_control,
-            subscribe_sleep,
-            start_signal,
-            error_handler,
-        );
-        tokens.extend(source_tokens);
+            let (stream, source_tokens) = persist_source_core(
+                &mut outer_scope,
+                inner_scope,
+                source_id,
+                Arc::clone(&persist_clients),
+                metadata.clone(),
+                read_schema,
+                as_of.clone(),
+                snapshot_mode,
+                until.clone(),
+                map_filter_project,
+                flow_control,
+                subscribe_sleep,
+                start_signal,
+                error_handler,
+            );
+            tokens.extend(source_tokens);
 
-        let stream = match flow_control_probe {
-            Some(probe) => stream.probe_notify_with(vec![probe]),
-            None => stream,
-        };
+            let stream = match flow_control_probe {
+                Some(probe) => stream.probe_notify_with(vec![probe]),
+                None => stream,
+            };
 
-        stream.leave()
-    });
+            stream.leave(&outer_scope)
+        },
+    );
 
     // If a txns_shard was provided, then this shard is in the txn-wal
     // system. This means the "logical" upper may be ahead of the "physical"
     // upper. Render a dataflow operator that passes through the input and
     // translates the progress frontiers as necessary.
     let (stream, txns_tokens) = match metadata.txns_shard {
-        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _, _>(
+        Some(txns_shard) => txns_progress::<SourceData, (), Timestamp, i64, _, TxnsCodecRow, _>(
             stream,
             &source_id.to_string(),
             txns_ctx,
@@ -270,7 +270,9 @@ where
     (ok_stream, err_stream, tokens)
 }
 
-type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)>;
+/// The refined scope used by `persist_source_core`: a subscope of a
+/// `Scope<mz_repr::Timestamp>` whose timestamp is `(mz_repr::Timestamp, Subtime)`.
+type RefinedScope = Scope<(mz_repr::Timestamp, Subtime)>;
 
 /// Creates a new source that reads from a persist shard, distributing the work
 /// of reading data to all timely workers.
@@ -279,8 +281,9 @@ type RefinedScope<'g, G> = Child<'g, G, (<G as ScopeParent>::Timestamp, Subtime)
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<'g, G>(
-    scope: &RefinedScope<'g, G>,
+pub fn persist_source_core(
+    parent: &mut Scope<mz_repr::Timestamp>,
+    scope: &mut RefinedScope,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     metadata: CollectionMetadata,
@@ -289,14 +292,14 @@ pub fn persist_source_core<'g, G>(
     snapshot_mode: SnapshotMode,
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
-    flow_control: Option<FlowControl<RefinedScope<'g, G>>>,
+    flow_control: Option<FlowControl<(mz_repr::Timestamp, Subtime)>>,
     // If Some, an override for the default listen sleep retry parameters.
     listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
     start_signal: impl Future<Output = ()> + 'static,
     error_handler: ErrorHandler,
 ) -> (
     Stream<
-        RefinedScope<'g, G>,
+        (mz_repr::Timestamp, Subtime),
         Vec<(
             Result<Row, DataflowError>,
             (mz_repr::Timestamp, Subtime),
@@ -304,10 +307,7 @@ pub fn persist_source_core<'g, G>(
         )>,
     >,
     Vec<PressOnDropButton>,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
@@ -340,7 +340,8 @@ where
     // `until ` is the empty antichain.
     let upper = until.as_option().cloned().unwrap_or(Timestamp::MAX);
     let (fetched, token) = shard_source(
-        &mut scope.clone(),
+        parent,
+        scope,
         &name,
         move || {
             let (c, l) = (
@@ -433,16 +434,23 @@ fn filter_result(
     }
 }
 
-pub fn decode_and_mfp<G>(
+pub fn decode_and_mfp(
     cfg: PersistConfig,
-    fetched: StreamVec<G, FetchedBlob<SourceData, (), Timestamp, StorageDiff>>,
+    fetched: StreamVec<
+        (mz_repr::Timestamp, Subtime),
+        FetchedBlob<SourceData, (), Timestamp, StorageDiff>,
+    >,
     name: &str,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
-) -> StreamVec<G, (Result<Row, DataflowError>, G::Timestamp, Diff)>
-where
-    G: Scope<Timestamp = (mz_repr::Timestamp, Subtime)>,
-{
+) -> StreamVec<
+    (mz_repr::Timestamp, Subtime),
+    (
+        Result<Row, DataflowError>,
+        (mz_repr::Timestamp, Subtime),
+        Diff,
+    ),
+> {
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
         format!("persist_source::decode_and_mfp({})", name),
@@ -702,18 +710,18 @@ impl<T: Clone + 'static> Backpressureable for (usize, ExchangeableBatchPart<T>) 
 
 /// Flow control configuration.
 #[derive(Debug)]
-pub struct FlowControl<G: Scope> {
+pub struct FlowControl<T: TimelyTimestamp> {
     /// Stream providing in-flight frontier updates.
     ///
     /// As implied by its type, this stream never emits data, only progress updates.
     ///
     /// TODO: Replace `Infallible` with `!` once the latter is stabilized.
-    pub progress_stream: StreamVec<G, Infallible>,
+    pub progress_stream: StreamVec<T, Infallible>,
     /// Maximum number of in-flight bytes.
     pub max_inflight_bytes: usize,
     /// The minimum range of timestamps (be they granular or not) that must be emitted,
     /// ignoring `max_inflight_bytes` to ensure forward progress is made.
-    pub summary: <G::Timestamp as TimelyTimestamp>::Summary,
+    pub summary: T::Summary,
 
     /// Optional metrics for the `backpressure` operator to keep up-to-date.
     pub metrics: Option<BackpressureMetrics>,
@@ -731,18 +739,17 @@ pub struct FlowControl<G: Scope> {
 /// `max_inflight_bytes`.
 ///
 /// The implementation of this operator is very subtle. Many inline comments have been added.
-pub fn backpressure<T, G, O>(
-    scope: &mut G,
+pub fn backpressure<T, O>(
+    scope: &mut Scope<(T, Subtime)>,
     name: &str,
-    data: StreamVec<G, O>,
-    flow_control: FlowControl<G>,
+    data: StreamVec<(T, Subtime), O>,
+    flow_control: FlowControl<(T, Subtime)>,
     chosen_worker: usize,
     // A probe used to inspect this operator during unit-testing
     probe: Option<UnboundedSender<(Antichain<(T, Subtime)>, usize, usize)>>,
-) -> (StreamVec<G, O>, PressOnDropButton)
+) -> (StreamVec<(T, Subtime), O>, PressOnDropButton)
 where
     T: TimelyTimestamp + Lattice + Codec64 + TotalOrder,
-    G: Scope<Timestamp = (T, Subtime)>,
     O: Backpressureable + std::fmt::Debug,
 {
     let worker_index = scope.index();
@@ -1404,13 +1411,10 @@ mod tests {
 
     /// An operator that emits `Part`'s at the specified timestamps. Does not
     /// drop its capability until it gets a signal from the `Sender` it returns.
-    fn iterator_operator<
-        G: Scope<Timestamp = (u64, Subtime)>,
-        I: Iterator<Item = (u64, Part)> + 'static,
-    >(
-        scope: G,
+    fn iterator_operator<I: Iterator<Item = (u64, Part)> + 'static>(
+        scope: Scope<(u64, Subtime)>,
         mut input: I,
-    ) -> (StreamVec<G, Part>, oneshot::Sender<()>) {
+    ) -> (StreamVec<(u64, Subtime), Part>, oneshot::Sender<()>) {
         let (finalizer_tx, finalizer_rx) = oneshot::channel();
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope);
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<Part>>>();
@@ -1441,10 +1445,10 @@ mod tests {
     /// An operator that consumes its input ONLY when given a signal to do from
     /// the `UnboundedSender` it returns. Each `send` corresponds with 1 `Data` event
     /// being processed. Also connects the `feedback` handle to its output.
-    fn consumer_operator<G: Scope, O: Backpressureable + std::fmt::Debug>(
-        scope: G,
-        input: StreamVec<G, O>,
-        feedback: timely::dataflow::operators::feedback::Handle<G, Vec<std::convert::Infallible>>,
+    fn consumer_operator<T: TimelyTimestamp, O: Backpressureable + std::fmt::Debug>(
+        scope: Scope<T>,
+        input: StreamVec<T, O>,
+        feedback: timely::dataflow::operators::feedback::Handle<T, Vec<std::convert::Infallible>>,
     ) -> UnboundedSender<()> {
         let (tx, mut rx) = unbounded_channel::<()>();
         let mut consumer = AsyncOperatorBuilder::new("consumer".to_string(), scope);

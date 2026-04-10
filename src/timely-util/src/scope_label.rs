@@ -13,207 +13,44 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Scopes with profiling labels set at schedule time.
+//! Build a nested subscope whose operators execute under a profiling label.
+//!
+//! Wrapping a subgraph in a [`LabelledOperator`] sets a `custom-labels`
+//! thread-local for the duration of the subgraph's `schedule()` call. Because a
+//! subgraph's `schedule()` transitively calls each child's `schedule()`, every
+//! operator nested inside the subgraph sees the label through the thread-local,
+//! so profilers can attribute CPU samples back to the originating scope without
+//! wrapping each leaf operator individually.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use timely::dataflow::Scope;
-use timely::dataflow::scopes::Child;
-use timely::dataflow::scopes::ScopeParent;
 use timely::progress::operate::{Connectivity, FrontierInterest, SharedProgress};
-use timely::progress::timestamp::Refines;
-use timely::progress::{Operate, SubgraphBuilder, Timestamp};
+use timely::progress::{Operate, Timestamp};
 use timely::scheduling::Schedule;
-use timely::scheduling::Scheduler;
-use timely::worker::AsWorker;
 
-/// A wrapper around a timely [`Scope`] that that sets its name as a profiling label before
-/// scheduling its child operators.
-#[derive(Clone)]
-pub struct LabelledScope<G> {
-    /// Label value to set when an operator is scheduled.
-    label: String,
-    /// The inner scope.
-    inner: G,
-}
-
-impl<'a, G, T> LabelledScope<Child<'a, G, T>>
+/// Builds a nested subscope whose operators execute under `label` in the
+/// `timely-scope` profiling slot.
+///
+/// The subgraph built from `func` is wrapped in a [`LabelledOperator`] before
+/// being installed in the parent scope, so every `schedule()` call that runs
+/// inside it observes the label via the `custom-labels` thread-local.
+pub fn scoped_labelled<T, R, F>(scope: &mut Scope<T>, label: &str, func: F) -> R
 where
-    G: ScopeParent,
-    T: Timestamp + Refines<G::Timestamp>,
+    T: Timestamp,
+    F: FnOnce(&mut Scope<T>) -> R,
 {
-    /// A reference of the child’s parent scope.
-    pub fn parent(&self) -> &G {
-        &self.inner.parent
-    }
+    let (mut child, mut slot) = scope.new_subscope::<T>(label);
+    let result = func(&mut child);
+    let subgraph = child.build(slot.scope_mut());
+    let labelled = LabelledOperator::new(label, subgraph);
+    slot.install(Box::new(labelled));
+    result
 }
 
-impl<G: Scheduler> Scheduler for LabelledScope<G> {
-    fn activations(&self) -> Rc<RefCell<timely::scheduling::Activations>> {
-        self.inner.activations()
-    }
-
-    fn activator_for(&self, path: Rc<[usize]>) -> timely::scheduling::Activator {
-        self.inner.activator_for(path)
-    }
-
-    fn sync_activator_for(&self, path: Vec<usize>) -> timely::scheduling::SyncActivator {
-        self.inner.sync_activator_for(path)
-    }
-}
-
-impl<G: AsWorker> AsWorker for LabelledScope<G> {
-    fn config(&self) -> &timely::WorkerConfig {
-        self.inner.config()
-    }
-
-    fn index(&self) -> usize {
-        self.inner.index()
-    }
-
-    fn peers(&self) -> usize {
-        self.inner.peers()
-    }
-
-    fn allocate<T: timely::communication::Exchangeable>(
-        &mut self,
-        identifier: usize,
-        address: Rc<[usize]>,
-    ) -> (
-        Vec<Box<dyn timely::communication::Push<T>>>,
-        Box<dyn timely::communication::Pull<T>>,
-    ) {
-        self.inner.allocate(identifier, address)
-    }
-
-    fn pipeline<T: 'static>(
-        &mut self,
-        identifier: usize,
-        address: Rc<[usize]>,
-    ) -> (
-        timely::communication::allocator::thread::ThreadPusher<T>,
-        timely::communication::allocator::thread::ThreadPuller<T>,
-    ) {
-        self.inner.pipeline(identifier, address)
-    }
-
-    fn broadcast<T: timely::communication::Exchangeable + Clone>(
-        &mut self,
-        identifier: usize,
-        address: Rc<[usize]>,
-    ) -> (
-        Box<dyn timely::communication::Push<T>>,
-        Box<dyn timely::communication::Pull<T>>,
-    ) {
-        self.inner.broadcast(identifier, address)
-    }
-
-    fn new_identifier(&mut self) -> usize {
-        self.inner.new_identifier()
-    }
-
-    fn peek_identifier(&self) -> usize {
-        self.inner.peek_identifier()
-    }
-
-    fn log_register(&self) -> Option<std::cell::RefMut<'_, timely::logging_core::Registry>> {
-        self.inner.log_register()
-    }
-
-    fn logger_for<CB: timely::ContainerBuilder>(
-        &self,
-        name: &str,
-    ) -> Option<timely::logging_core::Logger<CB>> {
-        self.inner.logger_for(name)
-    }
-
-    fn logging(&self) -> Option<timely::logging::TimelyLogger> {
-        self.inner.logging()
-    }
-}
-
-impl<G: ScopeParent> ScopeParent for LabelledScope<G> {
-    type Timestamp = G::Timestamp;
-}
-
-impl<'a, G, T> Scope for LabelledScope<Child<'a, G, T>>
-where
-    G: ScopeParent,
-    T: Timestamp + Refines<G::Timestamp>,
-{
-    fn name(&self) -> String {
-        self.inner.name()
-    }
-
-    fn addr(&self) -> Rc<[usize]> {
-        self.inner.addr()
-    }
-
-    fn addr_for_child(&self, index: usize) -> Rc<[usize]> {
-        self.inner.addr_for_child(index)
-    }
-
-    fn add_edge(&self, source: timely::progress::Source, target: timely::progress::Target) {
-        self.inner.add_edge(source, target)
-    }
-
-    fn allocate_operator_index(&mut self) -> usize {
-        self.inner.allocate_operator_index()
-    }
-
-    fn add_operator_with_indices(
-        &mut self,
-        operator: Box<dyn Operate<Self::Timestamp>>,
-        local: usize,
-        global: usize,
-    ) {
-        let operator = LabelledOperator::new(&self.label, BoxedOperator(operator));
-        self.inner
-            .add_operator_with_indices(Box::new(operator), local, global)
-    }
-
-    fn scoped<T2, R, F>(&mut self, name: &str, func: F) -> R
-    where
-        T2: Timestamp + Refines<<Self as ScopeParent>::Timestamp>,
-        F: FnOnce(&mut Child<Self, T2>) -> R,
-    {
-        let index = self.inner.subgraph.borrow_mut().allocate_child_id();
-        let identifier = self.new_identifier();
-        let path = self.addr_for_child(index);
-
-        let type_name = std::any::type_name::<T2>();
-        let progress_logging = self.logger_for(&format!("timely/progress/{type_name}"));
-        let summary_logging = self.logger_for(&format!("timely/summary/{type_name}"));
-
-        let subscope = RefCell::new(SubgraphBuilder::new_from(
-            path,
-            identifier,
-            self.logging(),
-            summary_logging,
-            name,
-        ));
-        let result = {
-            let mut builder = Child {
-                subgraph: &subscope,
-                parent: self.clone(),
-                logging: self.inner.logging.clone(),
-                progress_logging,
-            };
-            func(&mut builder)
-        };
-        let subscope = subscope.into_inner().build(self);
-        let subscope = LabelledOperator::new(&self.label, subscope);
-
-        self.inner
-            .add_operator_with_indices(Box::new(subscope), index, identifier);
-
-        result
-    }
-}
-
-/// A wrapper around a type implementing `Operate` that sets a profiling label every time the
-/// operator is scheduled.
+/// A wrapper around a type implementing [`Operate`] that sets a profiling label
+/// every time the operator is scheduled.
 pub struct LabelledOperator<O> {
     /// Label value to set when the operator is scheduled.
     label: String,
@@ -222,7 +59,9 @@ pub struct LabelledOperator<O> {
 }
 
 impl<O> LabelledOperator<O> {
-    fn new(label: &str, operator: O) -> Self {
+    /// Wraps `operator` so that its `schedule()` runs inside a `timely-scope`
+    /// label guard set to `label`.
+    pub fn new(label: &str, operator: O) -> Self {
         LabelledOperator {
             label: label.to_owned(),
             inner: operator,
@@ -285,53 +124,5 @@ impl Schedule for LabelledSchedule {
     #[inline(always)]
     fn schedule(&mut self) -> bool {
         custom_labels::with_label("timely-scope", &self.label, || self.inner.schedule())
-    }
-}
-
-struct BoxedOperator<T>(Box<dyn Operate<T>>);
-
-impl<T: Timestamp> Operate<T> for BoxedOperator<T> {
-    fn inputs(&self) -> usize {
-        self.0.inputs()
-    }
-
-    fn outputs(&self) -> usize {
-        self.0.outputs()
-    }
-
-    fn initialize(
-        self: Box<Self>,
-    ) -> (
-        Connectivity<T::Summary>,
-        Rc<RefCell<SharedProgress<T>>>,
-        Box<dyn Schedule>,
-    ) {
-        self.0.initialize()
-    }
-
-    fn local(&self) -> bool {
-        self.0.local()
-    }
-
-    fn notify_me(&self) -> &[FrontierInterest] {
-        self.0.notify_me()
-    }
-}
-
-/// Extension trait for timely [`Scope`] that allows one to convert a scope into one that sets its
-/// name as a profiling label before scheduling its child operators.
-pub trait ScopeExt: Sized {
-    fn with_label(&mut self) -> LabelledScope<Self>;
-}
-
-impl<S> ScopeExt for S
-where
-    S: Scope + ScopeParent,
-{
-    fn with_label(&mut self) -> LabelledScope<Self> {
-        LabelledScope {
-            label: self.name(),
-            inner: self.clone(),
-        }
     }
 }

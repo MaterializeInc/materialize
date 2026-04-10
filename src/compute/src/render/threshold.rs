@@ -13,6 +13,7 @@
 
 use differential_dataflow::Data;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
@@ -20,7 +21,6 @@ use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
 use timely::Container;
 use timely::container::PushInto;
-use timely::dataflow::Scope;
 use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
@@ -29,40 +29,42 @@ use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
 
+/// Owned key type of a [`TraceReader`]; replaces the old `Tr::KeyOwn` associated type.
+type KeyOwn<Tr> = <<Tr as differential_dataflow::trace::implementations::LayoutExt>::KeyContainer as BatchContainer>::Owned;
+
 /// Shared function to compute an arrangement of values matching `logic`.
-fn threshold_arrangement<G, T1, Bu2, T2, L>(
-    arrangement: Arranged<G, T1>,
+fn threshold_arrangement<S, T1, Bu2, T2, L>(
+    arrangement: Arranged<T1>,
     name: &str,
     logic: L,
-) -> Arranged<G, TraceAgent<T2>>
+) -> Arranged<TraceAgent<T2>>
 where
-    G: Scope,
-    G::Timestamp: MzTimestamp,
-    T1: TraceReader<KeyOwn: MzData + Data, ValOwn: MzData + Data, Time = G::Timestamp, Diff = Diff>
-        + Clone
-        + 'static,
+    S: MzTimestamp,
+    T1: TraceReader<ValOwn: MzData + Data, Time = S, Diff = Diff> + Clone + 'static,
+    KeyOwn<T1>: MzData + Data + Ord,
     Bu2: Builder<
-            Time = G::Timestamp,
-            Input: Container
-                       + InternalMerge
-                       + PushInto<((T1::KeyOwn, T1::ValOwn), G::Timestamp, Diff)>,
+            Time = S,
+            Input: Container + InternalMerge + PushInto<((KeyOwn<T1>, T1::ValOwn), S, Diff)>,
             Output = T2::Batch,
         >,
     T2: for<'a> Trace<
             Key<'a> = T1::Key<'a>,
             Val<'a> = T1::Val<'a>,
-            KeyOwn = T1::KeyOwn,
             ValOwn = T1::ValOwn,
-            Time = G::Timestamp,
+            Time = S,
             Diff = Diff,
         > + 'static,
+    KeyOwn<T2>: From<KeyOwn<T1>>,
     L: Fn(&Diff) -> bool + 'static,
-    Arranged<G, TraceAgent<T2>>: ArrangementSize,
+    Arranged<TraceAgent<T2>>: ArrangementSize,
 {
     arrangement.mz_reduce_abelian::<_, Bu2, T2>(name, move |_key, s, t| {
         for (record, count) in s.iter() {
             if logic(count) {
-                t.push((T1::owned_val(*record), *count));
+                t.push((
+                    <T1::ValContainer as BatchContainer>::into_owned(*record),
+                    *count,
+                ));
             }
         }
     })
@@ -72,13 +74,12 @@ where
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
-pub fn build_threshold_basic<G, T>(
-    input: CollectionBundle<G, T>,
+pub fn build_threshold_basic<S, T>(
+    input: CollectionBundle<S, T>,
     key: Vec<MirScalarExpr>,
-) -> CollectionBundle<G, T>
+) -> CollectionBundle<S, T>
 where
-    G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
 {
     let arrangement = input
@@ -107,17 +108,16 @@ where
     }
 }
 
-impl<G, T> Context<G, T>
+impl<S, T> Context<S, T>
 where
-    G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
+    S: MzTimestamp + Refines<T>,
     T: MzTimestamp,
 {
     pub(crate) fn render_threshold(
         &self,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<S, T>,
         threshold_plan: ThresholdPlan,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<S, T> {
         match threshold_plan {
             ThresholdPlan::Basic(BasicThresholdPlan {
                 ensure_arrangement: (key, _, _),

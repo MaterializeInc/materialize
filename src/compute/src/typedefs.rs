@@ -14,66 +14,18 @@
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
-use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::wrappers::enter::TraceEnter;
 use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
-use timely::dataflow::ScopeParent;
 
 use crate::row_spine::RowValBuilder;
-use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
-pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
-
-pub(crate) mod spines {
-    use std::rc::Rc;
-
-    use columnation::Columnation;
-    use differential_dataflow::trace::implementations::ord_neu::{
-        OrdKeyBatch, OrdKeyBuilder, OrdValBatch, OrdValBuilder,
-    };
-    use differential_dataflow::trace::implementations::spine_fueled::Spine;
-    use differential_dataflow::trace::implementations::{Layout, Update};
-    use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
-    use mz_timely_util::columnation::ColumnationStack;
-
-    use crate::row_spine::OffsetOptimized;
-    use crate::typedefs::{KeyBatcher, KeyValBatcher};
-
-    /// A spine for generic keys and values.
-    pub type ColValSpine<K, V, T, R> = Spine<Rc<OrdValBatch<MzStack<((K, V), T, R)>>>>;
-    pub type ColValBatcher<K, V, T, R> = KeyValBatcher<K, V, T, R>;
-    pub type ColValBuilder<K, V, T, R> =
-        RcBuilder<OrdValBuilder<MzStack<((K, V), T, R)>, ColumnationStack<((K, V), T, R)>>>;
-
-    /// A spine for generic keys
-    pub type ColKeySpine<K, T, R> = Spine<Rc<OrdKeyBatch<MzStack<((K, ()), T, R)>>>>;
-    pub type ColKeyBatcher<K, T, R> = KeyBatcher<K, T, R>;
-    pub type ColKeyBuilder<K, T, R> =
-        RcBuilder<OrdKeyBuilder<MzStack<((K, ()), T, R)>, ColumnationStack<((K, ()), T, R)>>>;
-
-    /// A layout based on chunked timely stacks
-    pub struct MzStack<U: Update> {
-        phantom: std::marker::PhantomData<U>,
-    }
-
-    impl<U: Update> Layout for MzStack<U>
-    where
-        U::Key: Columnation + 'static,
-        U::Val: Columnation + 'static,
-        U::Time: Columnation,
-        U::Diff: Columnation,
-    {
-        type KeyContainer = ColumnationStack<U::Key>;
-        type ValContainer = ColumnationStack<U::Val>;
-        type TimeContainer = ColumnationStack<U::Time>;
-        type DiffContainer = ColumnationStack<U::Diff>;
-        type OffsetContainer = OffsetOptimized;
-    }
-}
+pub use mz_timely_util::spines::{
+    ColKeyBatcher, ColKeyBuilder, ColKeySpine, ColValBatcher, ColValBuilder, ColValSpine,
+    KeyBatcher, KeyValBatcher,
+};
 
 // Spines are data structures that collect and maintain updates.
 // Agents are wrappers around spines that allow shared read access.
@@ -91,15 +43,15 @@ pub type KeyEnter<K, T, R, TEnter> = TraceEnter<TraceFrontier<KeyAgent<K, T, R>>
 
 // Row specialized spines and agents.
 pub type RowValAgent<V, T, R> = TraceAgent<RowValSpine<V, T, R>>;
-pub type RowValArrangement<S, V> = Arranged<S, RowValAgent<V, <S as ScopeParent>::Timestamp, Diff>>;
+pub type RowValArrangement<T, V> = Arranged<RowValAgent<V, T, Diff>>;
 pub type RowValEnter<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, T, R>>, TEnter>;
 // Row specialized spines and agents.
 pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
-pub type RowRowArrangement<S> = Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>;
+pub type RowRowArrangement<T> = Arranged<RowRowAgent<T, Diff>>;
 pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
 // Row specialized spines and agents.
 pub type RowAgent<T, R> = TraceAgent<RowSpine<T, R>>;
-pub type RowArrangement<S> = Arranged<S, RowAgent<<S as ScopeParent>::Timestamp, Diff>>;
+pub type RowArrangement<T> = Arranged<RowAgent<T, Diff>>;
 pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
 
 // Error specialized spines and agents.
@@ -117,14 +69,6 @@ pub type KeyErrBuilder<K, T, R> = ColValBuilder<K, DataflowError, T, R>;
 pub type RowErrSpine<T, R> = RowValSpine<DataflowError, T, R>;
 pub type RowErrBatcher<T, R> = RowValBatcher<DataflowError, T, R>;
 pub type RowErrBuilder<T, R> = RowValBuilder<DataflowError, T, R>;
-
-// Batchers for consolidation
-pub type KeyBatcher<K, T, D> = KeyValBatcher<K, (), T, D>;
-pub type KeyValBatcher<K, V, T, D> = MergeBatcher<
-    Vec<((K, V), T, D)>,
-    ColumnationChunker<((K, V), T, D)>,
-    ColInternalMerger<(K, V), T, D>,
->;
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
 pub trait MzTimestamp:

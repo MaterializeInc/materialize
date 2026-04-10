@@ -32,15 +32,15 @@ use super::{ReplicationError, TransientError};
 static STATISTICS: &str = "statistics";
 
 /// Renders the statistics dataflow.
-pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
-    scope: G,
+pub(crate) fn render(
+    scope: Scope<GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
-    replication_errors: StreamVec<G, ReplicationError>,
+    replication_errors: StreamVec<GtidPartition, ReplicationError>,
 ) -> (
-    StreamVec<G, ReplicationError>,
-    StreamVec<G, Probe<GtidPartition>>,
+    StreamVec<GtidPartition, ReplicationError>,
+    StreamVec<GtidPartition, Probe<GtidPartition>>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlStatistics({})", config.id);

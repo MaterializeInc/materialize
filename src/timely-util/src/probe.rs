@@ -29,17 +29,17 @@ use tokio::sync::Notify;
 use crate::builder_async::OperatorBuilder as AsyncOperatorBuilder;
 
 /// Monitors progress at a `Stream`.
-pub trait ProbeNotify<G: Scope> {
+pub trait ProbeNotify<T: Timestamp> {
     /// Inserts a collection of progress probe in a stream.
-    fn probe_notify_with(self, handles: Vec<Handle<G::Timestamp>>) -> Self;
+    fn probe_notify_with(self, handles: Vec<Handle<T>>) -> Self;
 }
 
-impl<G, C> ProbeNotify<G> for Stream<G, C>
+impl<T, C> ProbeNotify<T> for Stream<T, C>
 where
-    G: Scope,
+    T: Timestamp,
     C: Container + Clone + 'static,
 {
-    fn probe_notify_with(self, mut handles: Vec<Handle<G::Timestamp>>) -> Self {
+    fn probe_notify_with(self, mut handles: Vec<Handle<T>>) -> Self {
         if handles.is_empty() {
             return self.clone();
         }
@@ -175,9 +175,8 @@ impl<T: Timestamp> Clone for Handle<T> {
 ///
 /// The returned stream is guaranteed to never yield any data updates, as is reflected by its type.
 // TODO: Replace `Infallible` with `!` once the latter stabilizes.
-pub fn source<G, T>(scope: G, name: String, handle: Handle<T>) -> StreamVec<G, Infallible>
+pub fn source<T>(scope: Scope<T>, name: String, handle: Handle<T>) -> StreamVec<T, Infallible>
 where
-    G: Scope<Timestamp = T>,
     T: Timestamp,
 {
     let mut builder = AsyncOperatorBuilder::new(name, scope);

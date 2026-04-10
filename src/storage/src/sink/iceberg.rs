@@ -1018,23 +1018,22 @@ fn build_schema_with_append_columns(schema: &ArrowSchema) -> ArrowSchema {
 /// Batches are minted with configurable windows to balance write efficiency with latency.
 /// We maintain a sliding window of future batch descriptions so writers can start
 /// processing data even while earlier batches are still being written.
-fn mint_batch_descriptions<G, D>(
+fn mint_batch_descriptions<D>(
     name: String,
     sink_id: GlobalId,
-    input: VecCollection<G, D, Diff>,
+    input: VecCollection<Timestamp, D, Diff>,
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     initial_schema: SchemaRef,
 ) -> (
-    VecCollection<G, D, Diff>,
-    StreamVec<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    StreamVec<G, Infallible>,
-    StreamVec<G, HealthStatusMessage>,
+    VecCollection<Timestamp, D, Diff>,
+    StreamVec<Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    StreamVec<Timestamp, Infallible>,
+    StreamVec<Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
     D: Clone + 'static,
 {
     let scope = input.scope();
@@ -1058,7 +1057,7 @@ where
         .expect("the planner should have enforced this")
         .clone();
 
-    let (button, errors): (_, StreamVec<G, Rc<anyhow::Error>>) =
+    let (button, errors): (_, StreamVec<Timestamp, Rc<anyhow::Error>>) =
         builder.build_fallible(move |caps| {
         Box::pin(async move {
             let [table_ready_capset, data_capset, capset]: &mut [_; 3] = caps.try_into().unwrap();
@@ -1443,11 +1442,11 @@ struct BoundedDataFileSet {
 /// Write rows into Parquet data files bounded by batch descriptions.
 /// Rows are matched to batches by timestamp; if a batch description hasn't arrived yet,
 /// rows are stashed until it does. This allows batches to be minted ahead of data arrival.
-fn write_data_files<G, H: EnvelopeHandler + 'static>(
+fn write_data_files<H: EnvelopeHandler + 'static>(
     name: String,
-    input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
-    batch_desc_input: StreamVec<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: StreamVec<G, Infallible>,
+    input: VecCollection<Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+    batch_desc_input: StreamVec<Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: StreamVec<Timestamp, Infallible>,
     as_of: Antichain<Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1455,12 +1454,11 @@ fn write_data_files<G, H: EnvelopeHandler + 'static>(
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
 ) -> (
-    StreamVec<G, BoundedDataFile>,
-    StreamVec<G, HealthStatusMessage>,
+    StreamVec<Timestamp, BoundedDataFile>,
+    StreamVec<Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 )
 where
-    G: Scope<Timestamp = Timestamp>,
 {
     let scope = input.scope();
     let name_for_logging = name.clone();
@@ -1949,13 +1947,13 @@ mod tests {
 /// Commit completed batches to Iceberg as snapshots.
 /// Batches are committed in timestamp order to ensure strong consistency guarantees downstream.
 /// Each snapshot includes the Materialize frontier in its metadata for resume support.
-fn commit_to_iceberg<G>(
+fn commit_to_iceberg(
     name: String,
     sink_id: GlobalId,
     sink_version: u64,
-    batch_input: StreamVec<G, BoundedDataFile>,
-    batch_desc_input: StreamVec<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
-    table_ready_stream: StreamVec<G, Infallible>,
+    batch_input: StreamVec<Timestamp, BoundedDataFile>,
+    batch_desc_input: StreamVec<Timestamp, (Antichain<Timestamp>, Antichain<Timestamp>)>,
+    table_ready_stream: StreamVec<Timestamp, Infallible>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1964,9 +1962,8 @@ fn commit_to_iceberg<G>(
     > + 'static,
     metrics: Arc<IcebergSinkMetrics>,
     statistics: SinkStatistics,
-) -> (StreamVec<G, HealthStatusMessage>, PressOnDropButton)
+) -> (StreamVec<Timestamp, HealthStatusMessage>, PressOnDropButton)
 where
-    G: Scope<Timestamp = Timestamp>,
 {
     let scope = batch_input.scope();
     let mut builder = OperatorBuilder::new(name, scope.clone());
@@ -2228,7 +2225,7 @@ where
     (statuses, button.press_on_drop())
 }
 
-impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
+impl SinkRender for IcebergSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()
@@ -2244,9 +2241,12 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
-        _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (StreamVec<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
+        input: VecCollection<Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+        _err_collection: VecCollection<Timestamp, DataflowError, Diff>,
+    ) -> (
+        StreamVec<Timestamp, HealthStatusMessage>,
+        Vec<PressOnDropButton>,
+    ) {
         let mut scope = input.scope();
 
         let write_handle = {
@@ -2332,7 +2332,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
 
         let connection_for_writer = self.clone();
         let (datafiles, write_status, write_button) = match sink.envelope {
-            SinkEnvelope::Upsert => write_data_files::<_, UpsertEnvelopeHandler>(
+            SinkEnvelope::Upsert => write_data_files::<UpsertEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
                 minted_input,
                 batch_descriptions.clone(),
@@ -2344,7 +2344,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
                 Arc::clone(&metrics),
                 statistics.clone(),
             ),
-            SinkEnvelope::Append => write_data_files::<_, AppendEnvelopeHandler>(
+            SinkEnvelope::Append => write_data_files::<AppendEnvelopeHandler>(
                 format!("{sink_id}-write-data-files"),
                 minted_input,
                 batch_descriptions.clone(),

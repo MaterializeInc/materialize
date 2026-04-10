@@ -143,7 +143,7 @@ use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
-impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
+impl SinkRender for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()
@@ -159,11 +159,14 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+        input: VecCollection<Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
-        _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (StreamVec<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
+        _err_collection: VecCollection<Timestamp, DataflowError, Diff>,
+    ) -> (
+        StreamVec<Timestamp, HealthStatusMessage>,
+        Vec<PressOnDropButton>,
+    ) {
         let mut scope = input.scope();
 
         let write_handle = {
@@ -626,9 +629,9 @@ struct KafkaHeader {
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
 ///
 /// Updates are sent in ascending timestamp order.
-fn sink_collection<G: Scope<Timestamp = Timestamp>>(
+fn sink_collection(
     name: String,
-    input: VecCollection<G, KafkaMessage, Diff>,
+    input: VecCollection<Timestamp, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -639,7 +642,7 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> (StreamVec<G, HealthStatusMessage>, PressOnDropButton) {
+) -> (StreamVec<Timestamp, HealthStatusMessage>, PressOnDropButton) {
     let scope = input.scope();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.inner.scope());
 
@@ -1356,15 +1359,15 @@ async fn fetch_partition_count_loop<F>(
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
 ///
 /// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
-fn encode_collection<G: Scope>(
+fn encode_collection(
     name: String,
-    input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    input: VecCollection<Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
 ) -> (
-    VecCollection<G, KafkaMessage, Diff>,
-    StreamVec<G, HealthStatusMessage>,
+    VecCollection<Timestamp, KafkaMessage, Diff>,
+    StreamVec<Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());

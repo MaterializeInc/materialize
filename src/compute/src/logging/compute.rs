@@ -300,8 +300,8 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read compute log events from.
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
-pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct<S: Scheduler + 'static>(
+    mut scope: timely::dataflow::Scope<Timestamp>,
     scheduler: S,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
@@ -1429,7 +1429,7 @@ pub(crate) trait LogDataflowErrors {
 
 impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
 where
-    G: Scope,
+    G: timely::progress::Timestamp,
     D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
@@ -1450,7 +1450,7 @@ where
 
 impl<G, B> LogDataflowErrors for StreamVec<G, B>
 where
-    G: Scope,
+    G: timely::progress::Timestamp,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {

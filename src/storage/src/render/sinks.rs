@@ -13,9 +13,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::operators::arrange::Arrange;
-use differential_dataflow::trace::implementations::ord_neu::{
-    ColValBatcher, ColValBuilder, ColValSpine,
-};
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use mz_interchange::avro::DiffPair;
 use mz_interchange::envelopes::combine_at_timestamp;
@@ -26,6 +23,7 @@ use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sinks::{StorageSinkConnection, StorageSinkDesc};
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::spines::{ColValBatcher, ColValBuilder, ColValSpine};
 use timely::dataflow::operators::Leave;
 use timely::dataflow::{Scope, StreamVec};
 use tracing::warn;
@@ -36,15 +34,12 @@ use crate::storage_state::StorageState;
 /// _Renders_ complete _differential_ collections
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
-pub(crate) fn render_sink<G>(
-    scope: &mut G,
+pub(crate) fn render_sink(
+    scope: &mut Scope<()>,
     storage_state: &mut StorageState,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
-) -> (StreamVec<G, HealthStatusMessage>, Vec<PressOnDropButton>)
-where
-    G: Scope<Timestamp = ()>,
-{
+) -> (StreamVec<(), HealthStatusMessage>, Vec<PressOnDropButton>) {
     let snapshot_mode = if sink.with_snapshot {
         SnapshotMode::Include
     } else {
@@ -55,7 +50,8 @@ where
 
     let name = format!("{sink_id}-sinks");
 
-    scope.scoped(&name, |scope| {
+    let mut outer_scope = scope.clone();
+    scope.scoped::<mz_repr::Timestamp, _, _>(&name, |scope| {
         let mut tokens = vec![];
         let sink_render = get_sink_render_for(&sink.connection);
 
@@ -87,21 +83,18 @@ where
             err_collection.as_collection(),
         );
         tokens.extend(sink_tokens);
-        (health.leave(), tokens)
+        (health.leave(&outer_scope), tokens)
     })
 }
 
 /// Zip the input to a sink so that updates to the same key appear as
 /// `DiffPair`s.
-fn zip_into_diff_pairs<G>(
+fn zip_into_diff_pairs(
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
-    sink_render: &dyn SinkRender<G>,
-    collection: VecCollection<G, Row, Diff>,
-) -> VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+    sink_render: &dyn SinkRender,
+    collection: VecCollection<Timestamp, Row, Diff>,
+) -> VecCollection<Timestamp, (Option<Row>, DiffPair<Row>), Diff> {
     // We need to consolidate the collection and group records by their key.
     // We'll first attempt to use the explicitly declared key when the sink was
     // created. If no such key exists, we'll use a key of the sink's underlying
@@ -140,7 +133,7 @@ where
     // from here. TODO(database-issues#5046): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
     let mut collection =
-        combine_at_timestamp(collection.arrange_named::<ColValBatcher<_,_,_,_>, ColValBuilder<_,_,_,_>, ColValSpine<_, _, _, _>>("Arrange Sink"));
+        combine_at_timestamp(collection.arrange_named::<ColValBatcher<_, _, _, _>, ColValBuilder<_, _, _, _>, ColValSpine<_, _, _, _>>("Arrange Sink"));
 
     // If there is no user-specified key, remove the synthetic key.
     //
@@ -186,10 +179,7 @@ where
 }
 
 /// A type that can be rendered as a dataflow sink.
-pub(crate) trait SinkRender<G>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+pub(crate) trait SinkRender {
     /// Gets the indexes of the columns that form the key that the user
     /// specified when creating the sink, if any.
     fn get_key_indices(&self) -> Option<&[usize]>;
@@ -204,15 +194,15 @@ where
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        sinked_collection: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
-        err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (StreamVec<G, HealthStatusMessage>, Vec<PressOnDropButton>);
+        sinked_collection: VecCollection<Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+        err_collection: VecCollection<Timestamp, DataflowError, Diff>,
+    ) -> (
+        StreamVec<Timestamp, HealthStatusMessage>,
+        Vec<PressOnDropButton>,
+    );
 }
 
-fn get_sink_render_for<G>(connection: &StorageSinkConnection) -> Box<dyn SinkRender<G>>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+fn get_sink_render_for(connection: &StorageSinkConnection) -> Box<dyn SinkRender> {
     match connection {
         StorageSinkConnection::Kafka(connection) => Box::new(connection.clone()),
         StorageSinkConnection::Iceberg(connection) => Box::new(connection.clone()),

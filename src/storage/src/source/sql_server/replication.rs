@@ -56,15 +56,15 @@ use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 /// replicate different tables, if we're using SQL Server's CDC features.
 static REPL_READER: &str = "reader";
 
-pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
-    scope: G,
+pub(crate) fn render(
+    scope: Scope<Lsn>,
     config: RawSourceCreationConfig,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     source: SqlServerSourceConnection,
     metrics: SqlServerSourceMetrics,
 ) -> (
-    StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
-    StreamVec<G, ReplicationError>,
+    StackedCollection<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
+    StreamVec<Lsn, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);

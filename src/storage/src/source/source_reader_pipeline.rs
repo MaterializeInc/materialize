@@ -56,7 +56,6 @@ use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{CapabilitySet, Inspect, Leave};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -163,23 +162,20 @@ impl RawSourceCreationConfig {
 ///
 /// The `resume_stream` parameter will contain frontier updates whenever times are durably
 /// recorded which allows the ingestion to release upstream resources.
-pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
-    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+pub fn create_raw_source<C>(
+    parent: &mut Scope<()>,
+    scope: &mut Scope<mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
-    committed_upper: StreamVec<Child<'g, G, mz_repr::Timestamp>, ()>,
+    committed_upper: StreamVec<mz_repr::Timestamp, ()>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
     BTreeMap<
         GlobalId,
-        VecCollection<
-            Child<'g, G, mz_repr::Timestamp>,
-            Result<SourceOutput<C::Time>, DataflowError>,
-            Diff,
-        >,
+        VecCollection<mz_repr::Timestamp, Result<SourceOutput<C::Time>, DataflowError>, Diff>,
     >,
-    StreamVec<G, HealthStatusMessage>,
+    StreamVec<(), HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
@@ -218,39 +214,41 @@ where
     let mut reclocked_exports = BTreeMap::new();
 
     let reclocked_exports2 = &mut reclocked_exports;
-    let (health, source_tokens) = scope.parent.scoped("SourceTimeDomain", move |scope| {
-        let (exports, health_stream, source_tokens) = source_render_operator(
-            scope,
-            config,
-            source_connection,
-            probed_upper_tx,
-            committed_upper,
-            start_signal,
-        );
+    let mut parent_for_leave = parent.clone();
+    let (health, source_tokens) =
+        parent.scoped::<C::Time, _, _>("SourceTimeDomain", move |scope| {
+            let (exports, health_stream, source_tokens) = source_render_operator(
+                scope,
+                config,
+                source_connection,
+                probed_upper_tx,
+                committed_upper,
+                start_signal,
+            );
 
-        for (id, export) in exports {
-            let (reclock_pusher, reclocked) =
-                reclock(remap_collection.clone(), config.as_of.clone());
-            export
-                .inner
-                .map(move |(result, from_time, diff)| {
-                    let result = match result {
-                        Ok(msg) => Ok(SourceOutput {
-                            key: msg.key.clone(),
-                            value: msg.value.clone(),
-                            metadata: msg.metadata.clone(),
-                            from_time: from_time.clone(),
-                        }),
-                        Err(err) => Err(err.clone()),
-                    };
-                    (result, from_time.clone(), *diff)
-                })
-                .capture_into(PusherCapture(reclock_pusher));
-            reclocked_exports2.insert(id, reclocked);
-        }
+            for (id, export) in exports {
+                let (reclock_pusher, reclocked) =
+                    reclock(remap_collection.clone(), config.as_of.clone());
+                export
+                    .inner
+                    .map(move |(result, from_time, diff)| {
+                        let result = match result {
+                            Ok(msg) => Ok(SourceOutput {
+                                key: msg.key.clone(),
+                                value: msg.value.clone(),
+                                metadata: msg.metadata.clone(),
+                                from_time: from_time.clone(),
+                            }),
+                            Err(err) => Err(err.clone()),
+                        };
+                        (result, from_time.clone(), *diff)
+                    })
+                    .capture_into(PusherCapture(reclock_pusher));
+                reclocked_exports2.insert(id, reclocked);
+            }
 
-        (health_stream.leave(), source_tokens)
-    });
+            (health_stream.leave(&parent_for_leave), source_tokens)
+        });
 
     tokens.extend(source_tokens);
 
@@ -259,20 +257,19 @@ where
 
 /// Renders the source dataflow fragment from the given [SourceConnection]. This returns a
 /// collection timestamped with the source specific timestamp type.
-fn source_render_operator<G, C>(
-    scope: &mut G,
+fn source_render_operator<C>(
+    scope: &mut Scope<C::Time>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     probed_upper_tx: watch::Sender<Option<Probe<C::Time>>>,
     resume_uppers: impl futures::Stream<Item = Antichain<C::Time>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
-    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    StreamVec<G, HealthStatusMessage>,
+    BTreeMap<GlobalId, StackedCollection<C::Time, Result<SourceMessage, DataflowError>>>,
+    StreamVec<C::Time, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 )
 where
-    G: Scope<Timestamp = C::Time>,
     C: SourceRender + 'static,
 {
     let source_id = config.id;
@@ -398,15 +395,17 @@ where
 ///
 /// Only one worker will be active and write to the remap shard. All source
 /// upper summaries will be exchanged to it.
-fn remap_operator<G, FromTime>(
-    scope: &G,
+fn remap_operator<FromTime>(
+    scope: &Scope<mz_repr::Timestamp>,
     storage_state: &crate::storage_state::StorageState,
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     remap_relation_desc: RelationDesc,
-) -> (VecCollection<G, FromTime, Diff>, PressOnDropButton)
+) -> (
+    VecCollection<mz_repr::Timestamp, FromTime, Diff>,
+    PressOnDropButton,
+)
 where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
 {
     let RawSourceCreationConfig {
@@ -543,16 +542,15 @@ where
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
 /// virtual (through persist) feedback edge so that we convert the `IntoTime` resumption frontier
 /// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
-fn reclock_committed_upper<G, FromTime>(
-    bindings: VecCollection<G, FromTime, Diff>,
-    as_of: Antichain<G::Timestamp>,
-    committed_upper: StreamVec<G, ()>,
+fn reclock_committed_upper<T, FromTime>(
+    bindings: VecCollection<T, FromTime, Diff>,
+    as_of: Antichain<T>,
+    committed_upper: StreamVec<T, ()>,
     id: GlobalId,
     metrics: Arc<SourceMetrics>,
 ) -> impl futures::stream::Stream<Item = Antichain<FromTime>> + 'static
 where
-    G: Scope,
-    G::Timestamp: Lattice + TotalOrder,
+    T: Timestamp + Lattice + TotalOrder,
     FromTime: SourceTimestamp,
 {
     let (tx, rx) = watch::channel(Antichain::from_elem(FromTime::minimum()));
@@ -567,7 +565,7 @@ where
     builder.build(move |_| {
         // Remap bindings beyond the upper
         use timely::progress::ChangeBatch;
-        let mut accepted_times: ChangeBatch<(G::Timestamp, FromTime)> = ChangeBatch::new();
+        let mut accepted_times: ChangeBatch<(T, FromTime)> = ChangeBatch::new();
         // The upper frontier of the bindings
         let mut upper = Antichain::from_elem(Timestamp::minimum());
         // Remap bindings not beyond upper

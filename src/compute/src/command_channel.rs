@@ -29,8 +29,8 @@ use itertools::Itertools;
 use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
-use mz_timely_util::scope_label::ScopeExt;
-use timely::communication::Allocate;
+use mz_timely_util::scope_label::scoped_labelled;
+
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
@@ -81,7 +81,7 @@ impl Receiver {
 }
 
 /// Render the command channel dataflow.
-pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Receiver) {
+pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
     let activator = Arc::new(Mutex::new(None));
@@ -92,53 +92,54 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
     timely_worker.dataflow_named::<u64, _, _>("command_channel", {
         let activator = Arc::clone(&activator);
         move |scope| {
-            let scope = &mut scope.with_label();
+            let label = scope.name();
+            scoped_labelled(scope, &label, |scope| {
+                source(scope, "command_channel::source", |cap, info| {
+                    let sync_activator = scope.sync_activator_for(info.address.to_vec());
+                    *activator.lock().expect("poisoned") = Some(sync_activator);
 
-            source(scope, "command_channel::source", |cap, info| {
-                let sync_activator = scope.sync_activator_for(info.address.to_vec());
-                *activator.lock().expect("poisoned") = Some(sync_activator);
+                    let worker_id = scope.index();
+                    let peers = scope.peers();
 
-                let worker_id = scope.index();
-                let peers = scope.peers();
+                    // Only worker 0 broadcasts commands, other workers must drop their capability to
+                    // avoid holding up dataflow progress.
+                    let mut capability = (worker_id == 0).then_some(cap);
 
-                // Only worker 0 broadcasts commands, other workers must drop their capability to
-                // avoid holding up dataflow progress.
-                let mut capability = (worker_id == 0).then_some(cap);
+                    move |output| {
+                        let Some(cap) = &mut capability else {
+                            // Non-leader workers will still receive `UpdateConfiguration` commands and
+                            // we must drain those to not leak memory.
+                            while let Ok((cmd, _nonce)) = input_rx.try_recv() {
+                                assert_ne!(worker_id, 0);
+                                assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                            }
+                            return;
+                        };
 
-                move |output| {
-                    let Some(cap) = &mut capability else {
-                        // Non-leader workers will still receive `UpdateConfiguration` commands and
-                        // we must drain those to not leak memory.
-                        while let Ok((cmd, _nonce)) = input_rx.try_recv() {
-                            assert_ne!(worker_id, 0);
-                            assert!(matches!(cmd, ComputeCommand::UpdateConfiguration(_)));
+                        assert_eq!(worker_id, 0);
+
+                        let input: Vec<_> = input_rx.try_iter().collect();
+                        for (cmd, nonce) in input {
+                            let worker_cmds =
+                                split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, nonce));
+                            output.session(&cap).give_iterator(worker_cmds);
+
+                            cap.downgrade(&(cap.time() + 1));
                         }
-                        return;
-                    };
-
-                    assert_eq!(worker_id, 0);
-
-                    let input: Vec<_> = input_rx.try_iter().collect();
-                    for (cmd, nonce) in input {
-                        let worker_cmds =
-                            split_command(cmd, peers).map(|(idx, cmd)| (idx, cmd, nonce));
-                        output.session(&cap).give_iterator(worker_cmds);
-
-                        cap.downgrade(&(cap.time() + 1));
                     }
-                }
+                })
+                .sink(
+                    Exchange::new(|(idx, _, _)| u64::cast_from(*idx)),
+                    "command_channel::sink",
+                    move |(input, _)| {
+                        input.for_each(|_time, data| {
+                            for (_idx, cmd, nonce) in data.drain(..) {
+                                let _ = output_tx.send((cmd, nonce));
+                            }
+                        });
+                    },
+                );
             })
-            .sink(
-                Exchange::new(|(idx, _, _)| u64::cast_from(*idx)),
-                "command_channel::sink",
-                move |(input, _)| {
-                    input.for_each(|_time, data| {
-                        for (_idx, cmd, nonce) in data.drain(..) {
-                            let _ = output_tx.send((cmd, nonce));
-                        }
-                    });
-                },
-            );
         }
     });
 

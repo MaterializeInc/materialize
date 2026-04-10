@@ -274,22 +274,19 @@ struct FinishedBatch {
 /// `desired_collection`, and passes the data through to `write_batches`.
 /// This is done to avoid a clone of the underlying data so that both
 /// operators can have the collection as input.
-pub(crate) fn render<G>(
-    scope: &G,
+pub(crate) fn render(
+    scope: &Scope<mz_repr::Timestamp>,
     collection_id: GlobalId,
     target: CollectionMetadata,
-    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    StreamVec<G, ()>,
-    StreamVec<G, Rc<anyhow::Error>>,
+    StreamVec<mz_repr::Timestamp, ()>,
+    StreamVec<mz_repr::Timestamp, Rc<anyhow::Error>>,
     Vec<PressOnDropButton>,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let persist_clients = Arc::clone(&storage_state.persist_clients);
 
     let operator_name = format!("persist_sink({})", collection_id);
@@ -343,21 +340,18 @@ where
 /// description in the stream, even in case of multiple timely workers. Use
 /// `broadcast()` to, ahem, broadcast, the one description to all downstream
 /// write operators/workers.
-fn mint_batch_descriptions<G>(
-    scope: &G,
+fn mint_batch_descriptions(
+    scope: &Scope<mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
-    StreamVec<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    StreamVec<G, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
+    StreamVec<mz_repr::Timestamp, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
+    StreamVec<mz_repr::Timestamp, (Result<Row, DataflowError>, mz_repr::Timestamp, Diff)>,
     PressOnDropButton,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
@@ -526,26 +520,23 @@ where
 /// This operator assumes that the `desired_collection` comes pre-sharded.
 ///
 /// This also and updates various metrics.
-fn write_batches<G>(
-    scope: &G,
+fn write_batches(
+    scope: &Scope<mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
     batch_descriptions: Stream<
-        G,
+        mz_repr::Timestamp,
         Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     >,
-    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    StreamVec<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
+    StreamVec<mz_repr::Timestamp, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     PressOnDropButton,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let worker_index = scope.index();
 
     let persist_location = target.persist_location.clone();
@@ -869,28 +860,25 @@ where
 /// This also keeps the shared frontier that is stored in `compute_state` in
 /// sync with the upper of the persist shard, and updates various metrics
 /// and statistics objects.
-fn append_batches<G>(
-    scope: &G,
+fn append_batches(
+    scope: &Scope<mz_repr::Timestamp>,
     collection_id: GlobalId,
     operator_name: String,
     target: &CollectionMetadata,
     batch_descriptions: Stream<
-        G,
+        mz_repr::Timestamp,
         Vec<(Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
     >,
-    batches: StreamVec<G, HollowBatchAndMetadata<mz_repr::Timestamp>>,
+    batches: StreamVec<mz_repr::Timestamp, HollowBatchAndMetadata<mz_repr::Timestamp>>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
 ) -> (
-    StreamVec<G, ()>,
-    StreamVec<G, Rc<anyhow::Error>>,
+    StreamVec<mz_repr::Timestamp, ()>,
+    StreamVec<mz_repr::Timestamp, Rc<anyhow::Error>>,
     PressOnDropButton,
-)
-where
-    G: Scope<Timestamp = mz_repr::Timestamp>,
-{
+) {
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();

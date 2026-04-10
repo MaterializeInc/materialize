@@ -13,6 +13,7 @@ use std::sync::LazyLock;
 
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use itertools::{EitherOrBoth, Itertools};
@@ -21,9 +22,9 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{
     CatalogItemId, ColumnName, Datum, Diff, Row, RowPacker, SqlColumnType, SqlScalarType,
 };
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
+use timely::progress::Timestamp;
 
 use crate::avro::DiffPair;
 
@@ -33,13 +34,20 @@ use crate::avro::DiffPair;
 // This is useful for some sink envelopes (e.g., Debezium and Upsert), which
 // need to do specific logic based on the _entire_ set of before/after diffs for
 // a given key at each timestamp.
-pub fn combine_at_timestamp<G: Scope, Tr>(
-    arranged: Arranged<G, Tr>,
-) -> VecCollection<G, (Tr::KeyOwn, Vec<DiffPair<Tr::ValOwn>>), Diff>
+pub fn combine_at_timestamp<T, Tr>(
+    arranged: Arranged<Tr>,
+) -> VecCollection<
+    T,
+    (
+        <Tr::KeyContainer as BatchContainer>::Owned,
+        Vec<DiffPair<Tr::ValOwn>>,
+    ),
+    Diff,
+>
 where
-    G::Timestamp: Lattice + Copy,
-    Tr: Clone
-        + TraceReader<Diff = Diff, Time = G::Timestamp, KeyOwn: Clone + 'static, ValOwn: 'static>,
+    T: Timestamp + Lattice + Copy,
+    Tr: Clone + TraceReader<Diff = Diff, Time = T, ValOwn: 'static>,
+    <Tr::KeyContainer as BatchContainer>::Owned: 'static,
 {
     arranged
         .stream
@@ -109,7 +117,11 @@ where
                                 let group = group
                                     .map(|(_t, before, after)| DiffPair { before, after })
                                     .collect();
-                                session.give(((Tr::owned_key(k), group), t, Diff::ONE));
+                                session.give((
+                                    (<Tr::KeyContainer as BatchContainer>::into_owned(k), group),
+                                    t,
+                                    Diff::ONE,
+                                ));
                             }
 
                             cursor.step_key(batch);

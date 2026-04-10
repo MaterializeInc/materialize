@@ -225,14 +225,13 @@ struct LogCollection {
 /// the updates into `(Row, Row)` pairs using the provided logic function. It is crucial that the
 /// data is not exchanged between workers, as the consolidation would not function as desired
 /// otherwise.
-pub(super) fn consolidate_and_pack<G, B, CB, L, F>(
-    input: Stream<G, B::Input>,
+pub(super) fn consolidate_and_pack<B, CB, L, F>(
+    input: Stream<Timestamp, B::Input>,
     log: L,
     mut logic: F,
-) -> Stream<G, CB::Container>
+) -> Stream<Timestamp, CB::Container>
 where
-    G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
-    B: Batcher<Time = G::Timestamp> + 'static,
+    B: Batcher<Time = Timestamp> + 'static,
     B::Input: Container + Clone + 'static,
     B::Output: Clone,
     CB: ContainerBuilder,

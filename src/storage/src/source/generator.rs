@@ -135,16 +135,16 @@ impl GeneratorKind {
         }
     }
 
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render(
         self,
-        scope: &mut G,
+        scope: &mut Scope<MzOffset>,
         config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, Infallible>,
-        StreamVec<G, HealthStatusMessage>,
+        BTreeMap<GlobalId, StackedCollection<MzOffset, Result<SourceMessage, DataflowError>>>,
+        StreamVec<MzOffset, Infallible>,
+        StreamVec<MzOffset, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
         // figure out which output types from the generator belong to which output indexes
@@ -203,16 +203,16 @@ impl SourceRender for LoadGeneratorSourceConnection {
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::Generator;
 
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render(
         self,
-        scope: &mut G,
+        scope: &mut Scope<Self::Time>,
         config: &RawSourceCreationConfig,
         committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<MzOffset>>,
+        BTreeMap<GlobalId, StackedCollection<Self::Time, Result<SourceMessage, DataflowError>>>,
+        StreamVec<Self::Time, HealthStatusMessage>,
+        StreamVec<Self::Time, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         let generator_kind = GeneratorKind::new(
@@ -235,19 +235,19 @@ impl SourceRender for LoadGeneratorSourceConnection {
     }
 }
 
-fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
+fn render_simple_generator(
     generator: Box<dyn Generator>,
     tick_micros: Option<u64>,
     as_of: MzOffset,
     up_to: MzOffset,
-    scope: &G,
+    scope: &Scope<MzOffset>,
     config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
 ) -> (
-    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    StreamVec<G, Infallible>,
-    StreamVec<G, HealthStatusMessage>,
+    BTreeMap<GlobalId, StackedCollection<MzOffset, Result<SourceMessage, DataflowError>>>,
+    StreamVec<MzOffset, Infallible>,
+    StreamVec<MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
@@ -466,15 +466,12 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
 ///
 /// This is used as a fallback for sources that don't support probing the frontier of the upstream
 /// system.
-fn synthesize_probes<G>(
+fn synthesize_probes(
     source_id: GlobalId,
-    progress: StreamVec<G, Infallible>,
+    progress: StreamVec<MzOffset, Infallible>,
     interval: Duration,
     now_fn: NowFn,
-) -> StreamVec<G, Probe<G::Timestamp>>
-where
-    G: Scope,
-{
+) -> StreamVec<MzOffset, Probe<MzOffset>> {
     let scope = progress.scope();
 
     let active_worker = usize::cast_from(source_id.hashed()) % scope.peers();

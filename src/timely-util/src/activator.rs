@@ -18,8 +18,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use timely::dataflow::Scope;
-use timely::scheduling::Activator;
+use timely::scheduling::{Activator, Scheduler};
 
 /// Generic activator behavior
 pub trait ActivatorTrait {
@@ -30,7 +29,7 @@ pub trait ActivatorTrait {
     fn ack(&self);
 
     /// Register a new operator with its path with this activator.
-    fn register<S: Scope>(&self, scope: &mut S, path: Rc<[usize]>);
+    fn register<S: Scheduler>(&self, scope: &mut S, path: Rc<[usize]>);
 }
 
 /// An shared handle to multiple activators with support for triggering and acknowledging
@@ -94,7 +93,7 @@ impl ActivatorTrait for RcActivator {
         self.ack()
     }
 
-    fn register<S: Scope>(&self, scope: &mut S, path: Rc<[usize]>) {
+    fn register<S: Scheduler>(&self, scope: &mut S, path: Rc<[usize]>) {
         self.register(scope.activator_for(path))
     }
 }

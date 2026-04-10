@@ -28,6 +28,7 @@ bytes.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
+columnation.workspace = true
 crc32fast.workspace = true
 csv.workspace = true
 differential-dataflow.workspace = true

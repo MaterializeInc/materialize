@@ -19,7 +19,7 @@ use std::num::NonZeroU64;
 use std::time::Instant;
 
 use bytesize::ByteSize;
-use differential_dataflow::containers::{Columnation, CopyRegion};
+use columnation::{Columnation, CopyRegion};
 use itertools::Itertools;
 use mz_lowertest::MzReflect;
 use mz_ore::cast::{CastFrom, CastInto};

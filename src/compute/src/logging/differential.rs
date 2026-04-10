@@ -52,8 +52,8 @@ pub(super) struct Return {
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
 /// * `shared_state`: Shared state across all logging dataflow fragments.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct(
+    mut scope: timely::dataflow::Scope<Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, DifferentialEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -135,7 +135,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // the call once.
         let stream_to_collection = |input: StreamVec<_, ((usize, ()), Timestamp, Diff)>, log| {
             let worker_id = scope.index();
-            consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
+            consolidate_and_pack::<KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
                 input,
                 log,
                 move |data, packer, session| {

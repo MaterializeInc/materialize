@@ -149,6 +149,8 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{Capability, CapabilitySet, probe};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
+use timely::scheduling::Scheduler;
+use timely::worker::AsWorker;
 use tokio::sync::watch;
 use tracing::trace;
 
@@ -158,10 +160,7 @@ use crate::render::sinks::SinkRender;
 use crate::sink::correction::{Correction, Logging};
 use crate::sink::refresh::apply_refresh;
 
-impl<G> SinkRender<G> for MaterializedViewSinkConnection<CollectionMetadata>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+impl SinkRender for MaterializedViewSinkConnection<CollectionMetadata> {
     fn render_sink(
         &self,
         compute_state: &mut ComputeState,
@@ -169,9 +168,9 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        mut ok_collection: VecCollection<G, Row, Diff>,
-        mut err_collection: VecCollection<G, DataflowError, Diff>,
-        _ct_times: Option<VecCollection<G, (), Diff>>,
+        mut ok_collection: VecCollection<mz_repr::Timestamp, Row, Diff>,
+        mut err_collection: VecCollection<mz_repr::Timestamp, DataflowError, Diff>,
+        _ct_times: Option<VecCollection<mz_repr::Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Attach probes reporting the compute frontier.
@@ -215,36 +214,37 @@ where
 }
 
 /// Type of the `desired` stream, split into `Ok` and `Err` streams.
-type DesiredStreams<S> =
-    OkErr<StreamVec<S, (Row, Timestamp, Diff)>, StreamVec<S, (DataflowError, Timestamp, Diff)>>;
+type DesiredStreams = OkErr<
+    StreamVec<Timestamp, (Row, Timestamp, Diff)>,
+    StreamVec<Timestamp, (DataflowError, Timestamp, Diff)>,
+>;
 
 /// Type of the `persist` stream, split into `Ok` and `Err` streams.
-type PersistStreams<S> =
-    OkErr<StreamVec<S, (Row, Timestamp, Diff)>, StreamVec<S, (DataflowError, Timestamp, Diff)>>;
+type PersistStreams = OkErr<
+    StreamVec<Timestamp, (Row, Timestamp, Diff)>,
+    StreamVec<Timestamp, (DataflowError, Timestamp, Diff)>,
+>;
 
 /// Type of the `descs` stream.
-type DescsStream<S> = StreamVec<S, BatchDescription>;
+type DescsStream = StreamVec<Timestamp, BatchDescription>;
 
 /// Type of the `batches` stream.
-type BatchesStream<S> = StreamVec<S, (BatchDescription, ProtoBatch)>;
+type BatchesStream = StreamVec<Timestamp, (BatchDescription, ProtoBatch)>;
 
 /// Type of the shared sink write frontier.
 type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 
 /// Renders an MV sink writing the given desired collection into the `target` persist collection.
-pub(super) fn persist_sink<S>(
+pub(super) fn persist_sink(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    ok_collection: VecCollection<S, Row, Diff>,
-    err_collection: VecCollection<S, DataflowError, Diff>,
+    ok_collection: VecCollection<Timestamp, Row, Diff>,
+    err_collection: VecCollection<Timestamp, DataflowError, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
     read_only_rx: watch::Receiver<bool>,
-) -> Rc<dyn Any>
-where
-    S: Scope<Timestamp = Timestamp>,
-{
+) -> Rc<dyn Any> {
     let mut scope = ok_collection.scope();
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
@@ -374,16 +374,13 @@ impl PersistApi {
 }
 
 /// Instantiate a persist source reading back the `target` collection.
-fn persist_source<S>(
-    scope: &mut S,
+fn persist_source(
+    scope: &mut Scope<Timestamp>,
     sink_id: GlobalId,
     target: CollectionMetadata,
     compute_state: &ComputeState,
     start_signal: StartSignal,
-) -> (PersistStreams<S>, Vec<PressOnDropButton>)
-where
-    S: Scope<Timestamp = Timestamp>,
-{
+) -> (PersistStreams, Vec<PressOnDropButton>) {
     // There is no guarantee that the sink as-of is beyond the persist shard's since. If it isn't,
     // instantiating a `persist_source` with it would panic. So instead we leave it to
     // `persist_source` to select an appropriate as-of. We only care about times beyond the current
@@ -473,21 +470,18 @@ mod mint {
     ///  * `as_of`: The first time for which the sink may produce output.
     ///  * `read_only_tx`: A receiver that reports the sink is in read-only mode.
     ///  * `desired`: The ok/err streams that should be sinked to persist.
-    pub fn render<S>(
+    pub fn render(
         sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
         mut read_only_rx: watch::Receiver<bool>,
-        desired: DesiredStreams<S>,
+        desired: DesiredStreams,
     ) -> (
-        DesiredStreams<S>,
-        DescsStream<S>,
+        DesiredStreams,
+        DescsStream,
         SharedSinkFrontier,
         PressOnDropButton,
-    )
-    where
-        S: Scope<Timestamp = Timestamp>,
-    {
+    ) {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
         let worker_count = scope.peers();
@@ -753,18 +747,15 @@ mod write {
     ///  * `desired`: The ok/err streams that should be sinked to persist.
     ///  * `persist`: The ok/err streams read back from the output persist shard.
     ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
-    pub fn render<S>(
+    pub fn render(
         sink_id: GlobalId,
         persist_api: PersistApi,
         as_of: Antichain<Timestamp>,
-        desired: DesiredStreams<S>,
-        persist: PersistStreams<S>,
-        descs: DescsStream<S>,
+        desired: DesiredStreams,
+        persist: PersistStreams,
+        descs: DescsStream,
         worker_config: Rc<ConfigSet>,
-    ) -> (BatchesStream<S>, PressOnDropButton)
-    where
-        S: Scope<Timestamp = Timestamp>,
-    {
+    ) -> (BatchesStream, PressOnDropButton) {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
 
@@ -1131,15 +1122,12 @@ mod append {
     ///  * `persist_api`: An object providing access to the output persist shard.
     ///  * `descs`: The stream of batch descriptions produced by the `mint` operator.
     ///  * `batches`: The stream of written batches produced by the `write` operator.
-    pub fn render<S>(
+    pub fn render(
         sink_id: GlobalId,
         persist_api: PersistApi,
-        descs: DescsStream<S>,
-        batches: BatchesStream<S>,
-    ) -> PressOnDropButton
-    where
-        S: Scope<Timestamp = Timestamp>,
-    {
+        descs: DescsStream,
+        batches: BatchesStream,
+    ) -> PressOnDropButton {
         let scope = descs.scope();
         let worker_id = scope.index();
 

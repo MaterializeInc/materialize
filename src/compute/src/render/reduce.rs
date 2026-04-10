@@ -14,11 +14,11 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use columnation::{Columnation, CopyRegion};
 use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::containers::{Columnation, CopyRegion};
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -61,8 +61,7 @@ use crate::typedefs::{
 
 impl<G, T> Context<G, T>
 where
-    G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
+    G: MzTimestamp + Refines<T>,
     T: MzTimestamp,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
@@ -83,7 +82,8 @@ where
                 .expect("Fused Reduce MFPs do not have temporal predicates")
         });
 
-        input.scope().region_named("Reduce", |inner| {
+        let outer_scope = input.scope();
+        outer_scope.clone().region_named("Reduce", |inner| {
             let KeyValPlan {
                 mut key_plan,
                 mut val_plan,
@@ -161,7 +161,7 @@ where
 
             // Render the reduce plan
             self.render_reduce_plan(reduce_plan, ok, err, key_arity, mfp_after)
-                .leave_region()
+                .leave_region(&outer_scope)
         })
     }
 
@@ -179,7 +179,7 @@ where
         mfp_after: Option<SafeMfpPlan>,
     ) -> CollectionBundle<S, T>
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         let mut errors = Default::default();
         let arrangement =
@@ -201,9 +201,9 @@ where
         errors: &mut Vec<VecCollection<S, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> Arranged<S, RowRowAgent<S::Timestamp, Diff>>
+    ) -> Arranged<RowRowAgent<S, Diff>>
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
         // not only values (database-issues#6658).
@@ -269,11 +269,11 @@ where
         collection: VecCollection<S, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        Arranged<S, TraceAgent<RowRowSpine<S::Timestamp, Diff>>>,
+        Arranged<TraceAgent<RowRowSpine<S, Diff>>>,
         VecCollection<S, DataflowError, Diff>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         let error_logger = self.error_logger();
 
@@ -357,7 +357,7 @@ where
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         // We are only using this function to render multiple basic aggregates and
         // stitch them together. If that's not true we should complain.
@@ -469,7 +469,7 @@ where
         Option<VecCollection<S, DataflowError, Diff>>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         let AggregateExpr {
             func,
@@ -742,24 +742,26 @@ where
         &self,
         input: VecCollection<S, Row, Diff>,
         name_tag: Option<&str>,
-    ) -> Arranged<S, TraceAgent<Tr>>
+    ) -> Arranged<TraceAgent<Tr>>
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
         Tr: for<'a> Trace<
                 Key<'a> = DatumSeq<'a>,
-                KeyOwn = Row,
-                Time = G::Timestamp,
+                KeyContainer: differential_dataflow::trace::implementations::BatchContainer<
+                    Owned = Row,
+                >,
+                Time = S,
                 Diff = Diff,
                 ValOwn: Data + MaybeValidatingRow<(), String>,
             > + 'static,
         Bu: Builder<
-                Time = G::Timestamp,
+                Time = S,
                 Input: Container
                            + InternalMerge
                            + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,
             >,
-        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
 
@@ -818,175 +820,180 @@ where
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         let mut err_output: Option<VecCollection<S, _, _>> = None;
-        let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
-            let input = input.enter(inner);
+        let outer_scope = input.scope();
+        let arranged_output = outer_scope
+            .clone()
+            .region_named("ReduceHierarchical", |inner| {
+                let input = input.enter(inner);
 
-            // The first mod to apply to the hash.
-            let first_mod = buckets.get(0).copied().unwrap_or(1);
-            let aggregations = aggr_funcs.len();
+                // The first mod to apply to the hash.
+                let first_mod = buckets.get(0).copied().unwrap_or(1);
+                let aggregations = aggr_funcs.len();
 
-            // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
-            let mut stage = input.map(move |(key, row)| {
-                let mut row_builder = SharedRow::get();
-                let mut row_packer = row_builder.packer();
-                row_packer.extend(row.iter().take(aggregations));
-                let values = row_builder.clone();
+                // Gather the relevant keys with their hashes along with values ordered by aggregation_index.
+                let mut stage = input.map(move |(key, row)| {
+                    let mut row_builder = SharedRow::get();
+                    let mut row_packer = row_builder.packer();
+                    row_packer.extend(row.iter().take(aggregations));
+                    let values = row_builder.clone();
 
-                // Apply the initial mod here.
-                let hash = values.hashed() % first_mod;
-                let hash_key =
-                    row_builder.pack_using(std::iter::once(Datum::from(hash)).chain(&key));
-                (hash_key, values)
-            });
+                    // Apply the initial mod here.
+                    let hash = values.hashed() % first_mod;
+                    let hash_key =
+                        row_builder.pack_using(std::iter::once(Datum::from(hash)).chain(&key));
+                    (hash_key, values)
+                });
 
-            // Repeatedly apply hierarchical reduction with a progressively coarser key.
-            for (index, b) in buckets.into_iter().enumerate() {
-                // Apply subsequent bucket mods for all but the first round.
-                let input = if index == 0 {
-                    stage
-                } else {
-                    stage.map(move |(hash_key, values)| {
-                        let mut hash_key_iter = hash_key.iter();
-                        let hash = hash_key_iter.next().unwrap().unwrap_uint64() % b;
-                        // TODO: Convert the `chain(hash_key_iter...)` into a memcpy.
-                        let hash_key = SharedRow::pack(
-                            std::iter::once(Datum::from(hash)).chain(hash_key_iter.take(key_arity)),
-                        );
-                        (hash_key, values)
-                    })
-                };
+                // Repeatedly apply hierarchical reduction with a progressively coarser key.
+                for (index, b) in buckets.into_iter().enumerate() {
+                    // Apply subsequent bucket mods for all but the first round.
+                    let input = if index == 0 {
+                        stage
+                    } else {
+                        stage.map(move |(hash_key, values)| {
+                            let mut hash_key_iter = hash_key.iter();
+                            let hash = hash_key_iter.next().unwrap().unwrap_uint64() % b;
+                            // TODO: Convert the `chain(hash_key_iter...)` into a memcpy.
+                            let hash_key = SharedRow::pack(
+                                std::iter::once(Datum::from(hash))
+                                    .chain(hash_key_iter.take(key_arity)),
+                            );
+                            (hash_key, values)
+                        })
+                    };
 
-                // We only want the first stage to perform validation of whether invalid accumulations
-                // were observed in the input. Subsequently, we will either produce an error in the error
-                // stream or produce correct data in the output stream.
-                let validating = err_output.is_none();
+                    // We only want the first stage to perform validation of whether invalid accumulations
+                    // were observed in the input. Subsequently, we will either produce an error in the error
+                    // stream or produce correct data in the output stream.
+                    let validating = err_output.is_none();
 
-                let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, input, validating);
-                if let Some(errs) = errs {
-                    err_output = Some(errs.leave_region());
+                    let (oks, errs) = self.build_bucketed_stage(&aggr_funcs, input, validating);
+                    if let Some(errs) = errs {
+                        err_output = Some(errs.leave_region(&outer_scope));
+                    }
+                    stage = oks
                 }
-                stage = oks
-            }
 
-            // Discard the hash from the key and return to the format of the input data.
-            let partial = stage.map(move |(hash_key, values)| {
-                let mut hash_key_iter = hash_key.iter();
-                let _hash = hash_key_iter.next();
-                (SharedRow::pack(hash_key_iter.take(key_arity)), values)
-            });
+                // Discard the hash from the key and return to the format of the input data.
+                let partial = stage.map(move |(hash_key, values)| {
+                    let mut hash_key_iter = hash_key.iter();
+                    let _hash = hash_key_iter.next();
+                    (SharedRow::pack(hash_key_iter.take(key_arity)), values)
+                });
 
-            // Allocations for the two closures.
-            let mut datums1 = DatumVec::new();
-            let mut datums2 = DatumVec::new();
-            let mfp_after1 = mfp_after.clone();
-            let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
-            let aggr_funcs2 = aggr_funcs.clone();
+                // Allocations for the two closures.
+                let mut datums1 = DatumVec::new();
+                let mut datums2 = DatumVec::new();
+                let mfp_after1 = mfp_after.clone();
+                let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
+                let aggr_funcs2 = aggr_funcs.clone();
 
-            // Build a series of stages for the reduction
-            // Arrange the final result into (key, Row)
-            let error_logger = self.error_logger();
-            // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
-            // view mz_introspection.mz_expected_group_size_advice.
-            let arranged = partial
-                .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    "Arrange ReduceMinsMaxes",
-                );
-            // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
-            // but we then wouldn't be able to do this error check conditionally.  See its documentation
-            // for the rationale around using a second reduction here.
-            let must_validate = err_output.is_none();
-            if must_validate || mfp_after2.is_some() {
-                let errs = arranged
-                    .clone()
-                    .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
-                        "ReduceMinsMaxes Error Check",
-                        move |key, source, target| {
-                            // Negative counts would be surprising, but until we are 100% certain we wont
-                            // see them, we should report when we do. We may want to bake even more info
-                            // in here in the future.
-                            if must_validate {
-                                for (val, count) in source.iter() {
-                                    if count.is_positive() {
-                                        continue;
+                // Build a series of stages for the reduction
+                // Arrange the final result into (key, Row)
+                let error_logger = self.error_logger();
+                // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
+                // view mz_introspection.mz_expected_group_size_advice.
+                let arranged = partial
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        "Arrange ReduceMinsMaxes",
+                    );
+                // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
+                // but we then wouldn't be able to do this error check conditionally.  See its documentation
+                // for the rationale around using a second reduction here.
+                let must_validate = err_output.is_none();
+                if must_validate || mfp_after2.is_some() {
+                    let errs = arranged
+                        .clone()
+                        .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
+                            "ReduceMinsMaxes Error Check",
+                            move |key, source, target| {
+                                // Negative counts would be surprising, but until we are 100% certain we wont
+                                // see them, we should report when we do. We may want to bake even more info
+                                // in here in the future.
+                                if must_validate {
+                                    for (val, count) in source.iter() {
+                                        if count.is_positive() {
+                                            continue;
+                                        }
+                                        let val = val.to_row();
+                                        let message =
+                                            "Non-positive accumulation in ReduceMinsMaxes";
+                                        error_logger
+                                            .log(message, &format!("val={val:?}, count={count}"));
+                                        target.push((
+                                            EvalError::Internal(message.into()).into(),
+                                            Diff::ONE,
+                                        ));
+                                        return;
                                     }
-                                    let val = val.to_row();
-                                    let message = "Non-positive accumulation in ReduceMinsMaxes";
-                                    error_logger
-                                        .log(message, &format!("val={val:?}, count={count}"));
-                                    target.push((
-                                        EvalError::Internal(message.into()).into(),
-                                        Diff::ONE,
-                                    ));
-                                    return;
                                 }
-                            }
 
-                            // We know that `mfp_after` can error if it exists, so try to evaluate it here.
-                            let Some(mfp) = &mfp_after2 else { return };
+                                // We know that `mfp_after` can error if it exists, so try to evaluate it here.
+                                let Some(mfp) = &mfp_after2 else { return };
+                                let temp_storage = RowArena::new();
+                                let datum_iter = key.to_datum_iter();
+                                let mut datums_local = datums2.borrow();
+                                datums_local.extend(datum_iter);
+
+                                let mut source_iters = source
+                                    .iter()
+                                    .map(|(values, _cnt)| *values)
+                                    .collect::<Vec<_>>();
+                                for func in aggr_funcs2.iter() {
+                                    let column_iter = (0..source_iters.len())
+                                        .map(|i| source_iters[i].next().unwrap());
+                                    datums_local.push(func.eval(column_iter, &temp_storage));
+                                }
+                                if let Result::Err(e) =
+                                    mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                                {
+                                    target.push((e.into(), Diff::ONE));
+                                }
+                            },
+                        )
+                        .as_collection(|_, v| v.clone())
+                        .leave_region(&outer_scope);
+                    if let Some(e) = err_output.take() {
+                        err_output = Some(e.concat(errs));
+                    } else {
+                        err_output = Some(errs);
+                    }
+                }
+                arranged
+                    .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                        "ReduceMinsMaxes",
+                        move |key, source, target| {
                             let temp_storage = RowArena::new();
                             let datum_iter = key.to_datum_iter();
-                            let mut datums_local = datums2.borrow();
+                            let mut datums_local = datums1.borrow();
                             datums_local.extend(datum_iter);
+                            let key_len = datums_local.len();
 
                             let mut source_iters = source
                                 .iter()
                                 .map(|(values, _cnt)| *values)
                                 .collect::<Vec<_>>();
-                            for func in aggr_funcs2.iter() {
+                            for func in aggr_funcs.iter() {
                                 let column_iter = (0..source_iters.len())
                                     .map(|i| source_iters[i].next().unwrap());
                                 datums_local.push(func.eval(column_iter, &temp_storage));
                             }
-                            if let Result::Err(e) =
-                                mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                            {
-                                target.push((e.into(), Diff::ONE));
+
+                            if let Some(row) = evaluate_mfp_after(
+                                &mfp_after1,
+                                &mut datums_local,
+                                &temp_storage,
+                                key_len,
+                            ) {
+                                target.push((row, Diff::ONE));
                             }
                         },
                     )
-                    .as_collection(|_, v| v.clone())
-                    .leave_region();
-                if let Some(e) = err_output.take() {
-                    err_output = Some(e.concat(errs));
-                } else {
-                    err_output = Some(errs);
-                }
-            }
-            arranged
-                .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    "ReduceMinsMaxes",
-                    move |key, source, target| {
-                        let temp_storage = RowArena::new();
-                        let datum_iter = key.to_datum_iter();
-                        let mut datums_local = datums1.borrow();
-                        datums_local.extend(datum_iter);
-                        let key_len = datums_local.len();
-
-                        let mut source_iters = source
-                            .iter()
-                            .map(|(values, _cnt)| *values)
-                            .collect::<Vec<_>>();
-                        for func in aggr_funcs.iter() {
-                            let column_iter =
-                                (0..source_iters.len()).map(|i| source_iters[i].next().unwrap());
-                            datums_local.push(func.eval(column_iter, &temp_storage));
-                        }
-
-                        if let Some(row) = evaluate_mfp_after(
-                            &mfp_after1,
-                            &mut datums_local,
-                            &temp_storage,
-                            key_len,
-                        ) {
-                            target.push((row, Diff::ONE));
-                        }
-                    },
-                )
-                .leave_region()
-        });
+                    .leave_region(&outer_scope)
+            });
         (
             arranged_output,
             err_output.expect("expected to validate in one level of the hierarchy"),
@@ -1009,7 +1016,7 @@ where
         Option<VecCollection<S, DataflowError, Diff>>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         let (input, negated_output, errs) = if validating {
             let (input, reduced) = self
@@ -1065,26 +1072,28 @@ where
         input: VecCollection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
     ) -> (
-        Arranged<S, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
-        Arranged<S, TraceAgent<Tr>>,
+        Arranged<TraceAgent<RowRowSpine<S, Diff>>>,
+        Arranged<TraceAgent<Tr>>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
         Tr: for<'a> Trace<
                 Key<'a> = DatumSeq<'a>,
-                KeyOwn = Row,
+                KeyContainer: differential_dataflow::trace::implementations::BatchContainer<
+                    Owned = Row,
+                >,
                 ValOwn: Data + MaybeValidatingRow<Row, Row>,
-                Time = G::Timestamp,
+                Time = S,
                 Diff = Diff,
             > + 'static,
         Bu: Builder<
-                Time = G::Timestamp,
+                Time = S,
                 Input: Container
                            + InternalMerge
                            + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,
             >,
-        Arranged<S, TraceAgent<Tr>>: ArrangementSize,
+        Arranged<TraceAgent<Tr>>: ArrangementSize,
     {
         let error_logger = self.error_logger();
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
@@ -1109,7 +1118,10 @@ where
                         );
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
-                        target.push((err(Tr::owned_key(key)), Diff::ONE));
+                        target.push((
+                            err(<Tr::KeyContainer as differential_dataflow::trace::implementations::BatchContainer>::into_owned(key)),
+                            Diff::ONE,
+                        ));
                         return;
                     }
                 }
@@ -1155,7 +1167,7 @@ where
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
@@ -1280,7 +1292,7 @@ where
         mfp_after: Option<SafeMfpPlan>,
     ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
-        S: Scope<Timestamp = G::Timestamp>,
+        S: crate::typedefs::MzTimestamp + Refines<T>,
     {
         let mut collection_scope = collection.scope();
 
@@ -2146,7 +2158,7 @@ mod monoids {
     // add a new enum variant here), because other code (e.g., `HierarchicalOneByOneAggr`)
     // assumes this.
 
-    use differential_dataflow::containers::{Columnation, Region};
+    use columnation::{Columnation, Region};
     use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::AggregateFunc;
     use mz_ore::soft_panic_or_log;

@@ -22,9 +22,9 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
-use mz_timely_util::scope_label::ScopeExt;
+use mz_timely_util::scope_label::scoped_labelled;
 use timely::ContainerBuilder;
-use timely::communication::Allocate;
+
 use timely::container::{ContainerBuilder as _, PushInto};
 use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
@@ -43,8 +43,8 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
-pub fn initialize<A: Allocate + 'static>(
-    worker: &mut timely::worker::Worker<A>,
+pub fn initialize(
+    worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
@@ -98,8 +98,8 @@ pub fn initialize<A: Allocate + 'static>(
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
-struct LoggingContext<'a, A: Allocate> {
-    worker: &'a mut timely::worker::Worker<A>,
+struct LoggingContext<'a> {
+    worker: &'a mut timely::worker::Worker,
     config: &'a LoggingConfig,
     interval_ms: u128,
     now: Instant,
@@ -123,83 +123,84 @@ pub(crate) struct LoggingTraces {
     pub compute_logger: super::compute::Logger,
 }
 
-impl<A: Allocate + 'static> LoggingContext<'_, A> {
+impl LoggingContext<'_> {
     fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
-            let scope = &mut scope.with_label();
+            let label = scope.name();
+            scoped_labelled(scope, &label, |scope| {
+                let mut collections = BTreeMap::new();
 
-            let mut collections = BTreeMap::new();
+                let super::timely::Return {
+                    collections: timely_collections,
+                } = super::timely::construct(
+                    scope.clone(),
+                    self.config,
+                    self.t_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(timely_collections);
 
-            let super::timely::Return {
-                collections: timely_collections,
-            } = super::timely::construct(
-                scope.clone(),
-                self.config,
-                self.t_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(timely_collections);
+                let super::reachability::Return {
+                    collections: reachability_collections,
+                } = super::reachability::construct(
+                    scope.clone(),
+                    self.config,
+                    self.r_event_queue.clone(),
+                );
+                collections.extend(reachability_collections);
 
-            let super::reachability::Return {
-                collections: reachability_collections,
-            } = super::reachability::construct(
-                scope.clone(),
-                self.config,
-                self.r_event_queue.clone(),
-            );
-            collections.extend(reachability_collections);
+                let super::differential::Return {
+                    collections: differential_collections,
+                } = super::differential::construct(
+                    scope.clone(),
+                    self.config,
+                    self.d_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(differential_collections);
 
-            let super::differential::Return {
-                collections: differential_collections,
-            } = super::differential::construct(
-                scope.clone(),
-                self.config,
-                self.d_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(differential_collections);
+                let super::compute::Return {
+                    collections: compute_collections,
+                } = super::compute::construct(
+                    scope.clone(),
+                    scope.clone(),
+                    self.config,
+                    self.c_event_queue.clone(),
+                    Rc::clone(&self.shared_state),
+                );
+                collections.extend(compute_collections);
 
-            let super::compute::Return {
-                collections: compute_collections,
-            } = super::compute::construct(
-                scope.clone(),
-                scope.parent().clone(),
-                self.config,
-                self.c_event_queue.clone(),
-                Rc::clone(&self.shared_state),
-            );
-            collections.extend(compute_collections);
+                let super::prometheus::Return {
+                    collections: prometheus_collections,
+                } = super::prometheus::construct(
+                    scope.clone(),
+                    self.config,
+                    self.metrics_registry.clone(),
+                    self.now,
+                    self.start_offset,
+                    Rc::clone(&self.worker_config),
+                    self.workers_per_process,
+                );
+                collections.extend(prometheus_collections);
 
-            let super::prometheus::Return {
-                collections: prometheus_collections,
-            } = super::prometheus::construct(
-                scope.clone(),
-                self.config,
-                self.metrics_registry.clone(),
-                self.now,
-                self.start_offset,
-                Rc::clone(&self.worker_config),
-                self.workers_per_process,
-            );
-            collections.extend(prometheus_collections);
+                let errs = scope.scoped("logging errors", |scope| {
+                    let collection: KeyCollection<_, DataflowError, Diff> =
+                        VecCollection::empty(scope).into();
+                    collection
+                        .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
+                        .trace
+                });
 
-            let errs = scope.scoped("logging errors", |scope| {
-                let collection: KeyCollection<_, DataflowError, Diff> =
-                    VecCollection::empty(scope).into();
-                collection
-                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
-                    .trace
-            });
-
-            let traces = collections
-                .into_iter()
-                .map(|(log, collection)| {
-                    let bundle = TraceBundle::new(collection.trace, errs.clone())
-                        .with_drop(collection.token);
-                    (log, bundle)
-                })
-                .collect();
-            traces
+                let traces = collections
+                    .into_iter()
+                    .map(|(log, collection)| {
+                        let bundle = TraceBundle::new(collection.trace, errs.clone())
+                            .with_drop(collection.token);
+                        (log, bundle)
+                    })
+                    .collect();
+                traces
+            })
         })
     }
 

@@ -21,8 +21,6 @@ use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
-use timely::communication::Allocate;
-use timely::communication::allocator::GenericBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
@@ -170,9 +168,9 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     const NAME: &str;
 
     /// Run the given Timely worker.
-    fn run_worker<A: Allocate + 'static>(
+    fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<A>,
+        timely_worker: &mut TimelyWorker,
         client_rx: mpsc::UnboundedReceiver<(
             Uuid,
             mpsc::UnboundedReceiver<Self::Command>,
@@ -204,26 +202,20 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             }
         };
 
-        let (builders, other) = if config.enable_zero_copy {
-            use timely::communication::allocator::zero_copy::allocator_process::ProcessBuilder;
-            initialize_networking::<ProcessBuilder>(
-                config.workers,
-                config.process,
-                config.addresses.clone(),
-                refill,
-                GenericBuilder::ZeroCopyBinary,
-            )
-            .await?
-        } else {
-            initialize_networking::<timely::communication::allocator::Process>(
-                config.workers,
-                config.process,
-                config.addresses.clone(),
-                refill,
-                GenericBuilder::ZeroCopy,
-            )
-            .await?
-        };
+        // `config.enable_zero_copy` selects the zero-copy serialized
+        // (bytes) intra-process allocator flavor. When false, the regular
+        // mpsc-based ("Typed") flavor is used. The new timely API expresses
+        // this as a runtime choice between `ProcessBuilder::new_bytes_vector`
+        // and `ProcessBuilder::new_typed_vector` rather than a generic
+        // parameter, so the call site collapses to a single branch.
+        let (builders, other) = initialize_networking(
+            config.workers,
+            config.process,
+            config.addresses.clone(),
+            refill,
+            config.enable_zero_copy,
+        )
+        .await?;
 
         let mut worker_config = WorkerConfig::default();
 

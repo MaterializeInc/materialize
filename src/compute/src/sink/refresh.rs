@@ -23,12 +23,11 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 ///
 /// Note that this currently only works with 1-dim timestamps. (This is not an issue for WMR,
 /// because iteration numbers should disappear by the time the data gets to the Persist sink.)
-pub(crate) fn apply_refresh<G, D>(
-    coll: VecCollection<G, D, Diff>,
+pub(crate) fn apply_refresh<D>(
+    coll: VecCollection<mz_repr::Timestamp, D, Diff>,
     refresh_schedule: RefreshSchedule,
-) -> VecCollection<G, D, Diff>
+) -> VecCollection<mz_repr::Timestamp, D, Diff>
 where
-    G: Scope<Timestamp = Timestamp>,
     D: Data,
 {
     // We need to disconnect the reachability graph and manage capabilities manually, because we'd
