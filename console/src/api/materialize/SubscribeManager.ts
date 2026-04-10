@@ -18,32 +18,57 @@ import {
   mapRowToObject,
 } from ".";
 import { MaterializeWebsocket, WebSocketResult } from "./MaterializeWebsocket";
-import {
-  ColumnMetadata,
-  ErrorCode,
-  SessionVariables,
-  SqlRequest,
-} from "./types";
+import { ColumnMetadata, SessionVariables, SqlRequest } from "./types";
 import { Connectable } from "./WebsocketConnectionManager";
 
+/** Application-level error codes for subscribe failures (not from the server). */
 export enum SUBSCRIBE_ERROR_CODE {
+  /** The WebSocket closed unexpectedly (network drop, server restart). */
   CONNECTION_CLOSED = "MZC001",
+  /** An ENVELOPE UPSERT key violation was received — indicates a query or key function bug. */
   KEY_VIOLATION = "MZC002",
+  /** An unrecognized `mz_state` value was received. */
   INVALID_STATE = "MZC003",
 }
 
 export interface SubscribeError {
-  code: ErrorCode | string;
+  /** Server error code or one of {@link SUBSCRIBE_ERROR_CODE}. */
+  code: string;
   message: string;
 }
 
+/**
+ * The external state exposed to React components via `getSnapshot()`.
+ *
+ * - `data` is the **current materialized view** of all rows at the latest
+ *   closed timestamp, after upsert/delete processing.
+ * - `snapshotComplete` flips to `true` once the initial snapshot has been
+ *   fully received (after the second progress message).
+ * - `error` is set if the connection drops or a protocol error occurs.
+ *   It is cleared on reconnect — the `onOpen` handler calls `reset()`
+ *   which restores a fresh empty state before the new snapshot arrives.
+ */
 export interface SubscribeState<T> {
-  /** The current values at the most recent closed timestamp */
   data: T[];
   snapshotComplete: boolean;
   error: SubscribeError | undefined;
 }
 
+/**
+ * Extracts a unique string key from a subscribe row. Used with ENVELOPE UPSERT
+ * to maintain a deduplicated map of rows. The key must be stable for a given
+ * logical row — if a row is updated, the new version must produce the same key
+ * so the old version is replaced.
+ *
+ * @example
+ * ```ts
+ * // Single column key
+ * const upsertKey = (row) => row.data.id;
+ *
+ * // Composite key
+ * const upsertKey = (row) => `${row.data.objectId}:${row.data.name}`;
+ * ```
+ */
 export interface UpsertKeyFunction<T> {
   (row: SubscribeRow<T>): string;
 }
@@ -56,34 +81,99 @@ export interface SubscribeManagerOptions<
   T extends object,
   R = SubscribeRow<T>,
 > {
+  /** WebSocket endpoint (e.g. the environment's httpAddress). */
   httpAddress: string;
+  /** The SQL request to send once the connection is ready. Can be omitted and provided later via `connect()`. */
   request?: SqlRequest;
+  /** If true, disconnects the socket after the query completes (useful for one-shot queries). */
   closeSocketOnComplete?: boolean;
+  /** Session variables (cluster, database, search_path) sent on connection. */
   sessionVariables?: SessionVariables;
+  /**
+   * How often (in ms) to flush buffered updates to state and notify listeners.
+   * Lower values = more responsive but more renders. Default: 16ms (~1 frame).
+   */
   flushInterval?: number;
+  /** Enables ENVELOPE UPSERT deduplication. Required when the SUBSCRIBE uses `ENVELOPE UPSERT`. */
   upsert?: UpsertSubscribeOptions<T>;
+  /**
+   * Transforms each `SubscribeRow<T>` into the shape `R` exposed in `data[]`.
+   * Commonly used to strip metadata: `select: (row) => row.data`.
+   * Applied lazily during `setState`, not on every incoming message.
+   */
   select?: SelectFunction<T, R>;
 }
 
+/** Transforms a raw `SubscribeRow<T>` into the consumer-facing shape `R`. */
 export type SelectFunction<T extends object, R> = (row: SubscribeRow<T>) => R;
 
 /**
- * Stateful object that executes Materialize SUBSCRIBE over a websocket. Results from the
- * socket are returned in raw form, meaning each progress message potentially causes a
- * render.
+ * Manages a single Materialize SUBSCRIBE query over a WebSocket connection.
  *
+ * ## What it does
+ *
+ * Connects to a Materialize environment via WebSocket, sends a SUBSCRIBE query,
+ * and maintains a **live materialized view** of the results. Incoming rows are
+ * buffered per-timestamp and flushed to state when each timestamp closes
+ * (indicated by a progress message). This avoids per-row re-renders.
+ *
+ * When configured with `upsert`, it maintains a deduplicated `Map` of rows
+ * keyed by the `upsertKey` function. Upserts replace existing rows; deletes
+ * remove them. The `data` array exposed via `getSnapshot()` is the current
+ * set of live rows.
+ *
+ * ## How to use it
+ *
+ * You typically don't use `SubscribeManager` directly. Instead, use one of
+ * the React hooks that wrap it:
+ *
+ * - **`useSubscribe()`** — per-component subscribe with local state. Opens a
+ *   WebSocket on mount, closes on unmount. Good for ephemeral data.
+ *
+ * - **`useGlobalUpsertSubscribe()`** — app-wide subscribe with state in a Jotai
+ *   atom. Started once in `AppInitializer`, data shared across all components.
+ *   Used for catalog data (objects, columns, indexes, dependencies).
+ *
+ * Both hooks wire up `WebsocketConnectionManager` for automatic reconnection
+ * with exponential backoff if the network drops.
+ *
+ * ## Lifecycle
+ *
+ * ```
+ * connect() → WebSocket opens → onOpen() resets state
+ *          → server sends ReadyForQuery → we send the SUBSCRIBE SQL
+ *          → server streams Row messages, buffered per-timestamp
+ *          → progress message closes a timestamp → buffer flushed to state
+ *          → 2nd progress message → snapshotComplete = true
+ *          → continues streaming incremental updates indefinitely
+ *
+ * Network drop → onClose() sets error → WebsocketConnectionManager
+ *              → schedules retry with exponential backoff (1s, 2s, 4s...)
+ *              → reconnect() → connect() with same SQL request
+ *              → onOpen() resets state → fresh snapshot replays
+ * ```
+ *
+ * ## React integration
+ *
+ * Uses the external store pattern (`onChange` + `getSnapshot`) compatible with
+ * `React.useSyncExternalStore`. The `snapshotState` reference is replaced (not
+ * mutated) on every state change so React detects updates.
+ *
+ * @see useSubscribe — per-component hook
+ * @see useGlobalUpsertSubscribe — global hook with Jotai atom
+ * @see WebsocketConnectionManager — automatic reconnection
+ * @see buildSubscribeQuery — constructs SUBSCRIBE SQL with WITH (PROGRESS) and ENVELOPE UPSERT
  */
 export class SubscribeManager<T extends object, R> implements Connectable {
   socket: MaterializeWebsocket;
-  /** A function to transform the current state into the desired output when calling getSnapshot */
+  /** Transforms raw rows into the consumer-facing shape. See {@link SelectFunction}. */
   select?: SelectFunction<T, R>;
-  /**
-   * Specifying `upsert` will ensure `data` is unique based on the
-   * upsert key function. The array will be ordered by insertion.
-   * The subscribe statement must include WITH (PROGRESS) and ENVELOPE UPSERT.
-   */
+  /** When set, rows are deduplicated by key. The SUBSCRIBE must use `ENVELOPE UPSERT`. */
   upsert?: UpsertSubscribeOptions<T>;
-  /** The snapshot state exposed to listeners */
+  /**
+   * The current state exposed to React via `getSnapshot()`.
+   * Replaced (not mutated) on every update so `useSyncExternalStore` detects changes.
+   */
   snapshotState: SubscribeState<R>;
   private sqlRequest: SqlRequest | undefined;
   private listeners = new Set<() => void>();
@@ -124,13 +214,19 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     this.snapshotState = this.currentState as SubscribeState<R>;
   }
 
+  /**
+   * Opens the WebSocket and begins streaming. If `request` is provided, it
+   * replaces the stored SQL request; otherwise the previously stored request
+   * is reused (enabling reconnection without re-specifying the query).
+   *
+   * Calling `connect()` on an already-connected manager disconnects first.
+   */
   connect = (
     request?: SqlRequest,
     httpAddress?: string,
     sessionVariables?: SessionVariables,
   ) => {
     this.disconnect();
-    // Only update sqlRequest if a new request is provided (allows reconnect to reuse existing)
     if (request !== undefined) {
       this.sqlRequest = request;
     }
@@ -141,6 +237,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     );
   };
 
+  /** Closes the WebSocket and stops the flush interval. State is preserved. */
   disconnect = () => {
     clearInterval(this.flushIntervalHandle);
     this.socket.disconnect();
@@ -181,6 +278,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     this.connect(undefined, httpAddress, sessionVariables);
   }
 
+  /** Clears all buffered and materialized state. Called automatically by `onOpen` after a reconnect. */
   reset = () => {
     this.columns = [];
     this.querySent = false;
@@ -200,6 +298,10 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     this.reset();
   };
 
+  /**
+   * Registers a listener called whenever state changes. Returns an unsubscribe function.
+   * Used internally by `useSyncExternalStore` — you typically don't call this directly.
+   */
   onChange = (callback: () => void) => {
     this.listeners.add(callback);
     return () => {
@@ -264,6 +366,7 @@ export class SubscribeManager<T extends object, R> implements Connectable {
           message: message.payload.message ?? "Unknown error",
         },
       });
+      return;
     }
     if (message.type === "Rows") {
       this.columns = message.payload.columns.map(mapColumnToColumnMetadata);
@@ -379,7 +482,9 @@ export class SubscribeManager<T extends object, R> implements Connectable {
     } else {
       newState.data = [
         ...newState.data,
-        ...this.closedTimestampBuffer.values(),
+        ...Array.from(this.closedTimestampBuffer.values()).filter(
+          (row) => row.mzState !== null,
+        ),
       ];
     }
 
@@ -402,18 +507,35 @@ export function extractSubscribeMetadata(
   return result as SubscribeMetadata;
 }
 
+/**
+ * Metadata columns injected by Materialize into every SUBSCRIBE output row.
+ * These are stripped from the user-facing `data` field and tracked separately.
+ */
 export type SubscribeMetadata = {
+  /** The logical timestamp of this row. Rows with the same timestamp form an atomic batch. */
   mzTimestamp: number;
-  /** when mzProgressed is true, mzState is null */
+  /**
+   * The operation type for ENVELOPE UPSERT subscribes:
+   * - `"upsert"` — insert or update this row
+   * - `"delete"` — remove the row with this key
+   * - `"key_violation"` — error: duplicate key (should not happen in practice)
+   * - `null` — this is a progress message, not a data row
+   */
   mzState: null | "upsert" | "delete" | "key_violation";
+  /** True on progress messages that mark timestamp boundaries. */
   mzProgressed?: boolean;
 };
 
+/**
+ * A single row from a SUBSCRIBE stream, combining the user data (`T`) with
+ * Materialize metadata (timestamp, state, progress). The `select` function
+ * typically extracts just `row.data` to expose to consumers.
+ */
 export interface SubscribeRow<T> extends SubscribeMetadata {
   data: T;
 }
 
-// Copied from https://materialize.com/docs/sql/subscribe/#output
+/** Column names that Materialize adds to SUBSCRIBE output. See https://materialize.com/docs/sql/subscribe/#output */
 export const SUBSCRIBE_METADATA_COLUMNS: { [columnName: string]: string } = {
   mz_timestamp: "mz_timestamp",
   mz_progressed: "mz_progressed",

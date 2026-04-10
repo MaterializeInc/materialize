@@ -21,6 +21,9 @@ import { useSentryIdentifyOrganization } from "~/sentry";
 import { useSubscribeToAllClusters } from "~/store/allClusters";
 import { useSubscribeToAllObjects } from "~/store/allObjects";
 import { useSubscribeToAllSchemas } from "~/store/allSchemas";
+import { useSubscribeToCatalogColumns } from "~/store/catalogColumns";
+import { useSubscribeToCatalogDependencies } from "~/store/catalogDependencies";
+import { useSubscribeToCatalogIndexes } from "~/store/catalogIndexes";
 import { usePollEnvironmentHealth } from "~/store/environments";
 import { useTrackFocus } from "~/store/focus";
 
@@ -36,6 +39,9 @@ const useAppInitializer = () => {
   useSubscribeToAllObjects();
   useSubscribeToAllSchemas();
   useSubscribeToAllClusters();
+  useSubscribeToCatalogColumns();
+  useSubscribeToCatalogIndexes();
+  useSubscribeToCatalogDependencies();
 
   return null;
 };

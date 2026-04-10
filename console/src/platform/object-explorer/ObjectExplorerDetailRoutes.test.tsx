@@ -45,6 +45,7 @@ function buildColumn(overrides?: Partial<Column>): Column {
   return {
     name: "user_id",
     type: "integer",
+    position: "1",
     nullable: false,
     columnComment: null,
     relationComment: null,
@@ -160,6 +161,7 @@ const testTableSubscribe: DatabaseObject = {
   objectType: "table",
   sourceType: null,
   isWebhookTable: null,
+  owner: "materialize",
   clusterId: "u1",
   clusterName: "quickstart",
 };

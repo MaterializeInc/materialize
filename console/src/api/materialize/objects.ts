@@ -32,6 +32,7 @@ export function buildAllObjectsQuery() {
     .leftJoin("mz_sources as s", "s.id", "ofqn.id")
     .leftJoin("mz_webhook_sources as ws", "ws.id", "ofqn.id")
     .leftJoin("mz_clusters as mc", "mc.id", "ofqn.cluster_id")
+    .innerJoin("mz_roles as r", "r.id", "o.owner_id")
     .select([
       "ofqn.id",
       "ofqn.name",
@@ -50,6 +51,7 @@ export function buildAllObjectsQuery() {
       `.as("isWebhookTable"),
       "o.cluster_id as clusterId",
       "mc.name as clusterName",
+      "r.name as owner",
     ])
     .where("ofqn.object_type", "in", ALLOWED_OBJECT_TYPES);
 }
