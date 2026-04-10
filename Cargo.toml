@@ -388,6 +388,7 @@ hyper = { version = "1.9.0", features = ["http1", "server"] }
 # hyper 0.14 is used by AWS SDK. Used to override the DNS resolver used by the SDK,
 # which can only be done by constructing the HTTP Client
 hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"] }
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by hyper-rustls.
 hyper-openssl = "0.10.2"
 hyper-rustls = { version = "0.27", default-features = false, features = ["aws-lc-rs", "http1", "http2", "native-tokio", "tls12"] }
 hyper-util = "0.1.20"
@@ -424,6 +425,7 @@ mysql_common = { version = "0.35.5", default-features = false, features = ["chro
 # Held back: 0.2.16+ bumps `security-framework` to 3.x, `core-foundation` to
 # 0.10, and `openssl-probe` to 0.2, which duplicates with our direct deps in
 # the `mz` CLI and with `system-configuration` (used by `hyper-util`).
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by rustls.
 native-tls = { version = "=0.2.18", features = ["alpn"] }
 nix = { version = "0.31.3", features = ["fs", "signal"] }
 num = "0.4.3"
@@ -433,8 +435,10 @@ num_enum = "0.7.6"
 open = "5.3.5"
 openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
 openssh-mux-client = "0.17.9"
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by rustls + aws-lc-rs.
 openssl = { version = "0.10.80", features = ["vendored"] }
 openssl-probe = "0.1.6"
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by aws-lc-rs.
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.31.0", features = ["trace"] }
 opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"] }
@@ -449,6 +453,7 @@ phf = { version = "0.13.1", features = ["uncased"] }
 phf_codegen = "0.13.1"
 pin-project = "1.1.13"
 postgres = "0.19.12"
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by tokio-postgres-rustls.
 postgres-openssl = "0.5.2"
 postgres-protocol = "0.6.9"
 postgres-replication = "0.6.7"
@@ -540,7 +545,9 @@ time = "0.3.17"
 timely = "0.30.0"
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 tokio-metrics = "0.5.0"
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by tokio-rustls.
 tokio-native-tls = "0.3.1"
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by tokio-rustls.
 tokio-openssl = "0.6.5"
 tokio-rustls = { version = "0.26", default-features = false }
 tokio-postgres = "0.7.15"
@@ -653,6 +660,7 @@ tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-protocol = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-replication = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres-types = { git = "https://github.com/MaterializeInc/rust-postgres" }
+# TODO(SEC-239): remove after TLS stack migration (PRs 2-6). Replaced by tokio-postgres-rustls.
 postgres-openssl = { git = "https://github.com/MaterializeInc/rust-postgres" }
 postgres_array = { git = "https://github.com/MaterializeInc/rust-postgres-array" }
 
