@@ -32,13 +32,13 @@ contains:Disconnected: connection closed by peer: receive 0 after POLLIN
     BROKER 'kafka:9093'
     -- SECURITY PROTOCOL defaults to SSL when no SASL options are specified.
   )
-contains:Invalid CA certificate
+contains:CERTIFICATE_VERIFY_FAILED
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9093',
     SSL CERTIFICATE AUTHORITY = '${ca-selective-crt}'
   )
-contains:Invalid CA certificate
+contains:CERTIFICATE_VERIFY_FAILED
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9093',
@@ -108,10 +108,10 @@ contains:Client creation error
 > ALTER CONNECTION kafka RESET (SSL CERTIFICATE) WITH (VALIDATE = true);
 
 ! ALTER CONNECTION kafka RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:Invalid CA certificate
+contains:CERTIFICATE_VERIFY_FAILED
 
 ! ALTER CONNECTION kafka RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = true);
-contains:Invalid CA certificate
+contains:CERTIFICATE_VERIFY_FAILED
 
 > ALTER CONNECTION kafka RESET (SSL KEY), RESET (SSL CERTIFICATE), RESET (SSL CERTIFICATE AUTHORITY) WITH (VALIDATE = false);
 
