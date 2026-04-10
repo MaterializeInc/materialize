@@ -19,15 +19,11 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-04-09* <br>
 *Released to Materialize Self-Managed: 2026-04-10* <br>
 
-This release introduces Iceberg Sink append mode and bug fixes.
+This release introduces append mode for our Iceberg sink, and bug fixes.
 
 ### Features {#v26.19-features}
 
-- **Iceberg Sink Append Mode**: Iceberg sinks now support `MODE APPEND`, which
-  outputs data rows with additional `_mz_diff` and `_mz_timestamp` columns to
-  capture the full update stream. Inserted rows get +1 diff, removed rows get
-  -1 diff, and updated rows become two output rows with -1 (before) and +1
-  (after) diffs.
+- **Iceberg Sink Append Only Mode**: Iceberg sinks now support append only mode. When using append only mode, retractions are not delivered to your iceberg table. This is especially useful if you're sinking data from a materialized view with temporal filters.
 
 ### Bug Fixes {#v26.19-bug-fixes}
 
