@@ -19,12 +19,12 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-04-09* <br>
 *Released to Materialize Self-Managed: 2026-04-10* <br>
 
-This release introduces append mode for the [Iceberg sink](/sql/create-sink/iceberg/),
+This release introduces append mode for [Iceberg sinks](/sql/create-sink/iceberg/),
 and bug fixes.
 
 ### Iceberg sink append mode
 
-[Iceberg sinks](/sql/create-sink/iceberg/) now support append mode. In append
+When an [Iceberg sinks](/sql/create-sink/iceberg/) is created in append
 mode, all changes are written as data rows — no Iceberg delete files are
 produced. This is especially useful if you're sinking data from a materialized
 view with temporal filters, and you don't want data to be deleted from your Iceberg table as it ages out.
