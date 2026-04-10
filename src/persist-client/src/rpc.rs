@@ -347,10 +347,18 @@ impl GrpcPubSubClient {
                 .broadcast_recv_lagged_count
                 .clone();
 
+            // `client.pub_sub(...)` starts a hyper background task reading from the
+            // `broadcast_messages` stream, to serve the HTTP2 connection. The broadcast stream
+            // doesn't normally terminate, which means the HTTP2 connection doesn't terminate
+            // either. We set up a cancelation token to force termination and avoid a connection
+            // leak.
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+
             // shard subscriptions are tracked by connection on the server, so if our
             // gRPC stream is ever swapped out, we must inform the server which shards
             // our client intended to be subscribed to.
             let broadcast_messages = async_stream::stream! {
+                let mut cancel_rx = std::pin::pin!(cancel_rx);
                 'reconnect: loop {
                     // If we have active subscriptions, resend them.
                     for id in sender.subscriptions() {
@@ -364,18 +372,28 @@ impl GrpcPubSubClient {
                     }
 
                     // Forward on messages from the broadcast channel, reconnecting if necessary.
-                    while let Some(message) = broadcast.next().await {
-                        debug!("sending pubsub message: {:?}", message);
-                        match message {
-                            Ok(message) => yield message,
-                            Err(BroadcastStreamRecvError::Lagged(i)) => {
-                                broadcast_errors.inc_by(i);
-                                continue 'reconnect;
+                    loop {
+                        tokio::select! {
+                            message = broadcast.next() => {
+                                debug!("sending pubsub message: {:?}", message);
+                                match message {
+                                    Some(Ok(message)) => yield message,
+                                    Some(Err(BroadcastStreamRecvError::Lagged(i))) => {
+                                        broadcast_errors.inc_by(i);
+                                        continue 'reconnect;
+                                    }
+                                    None => {
+                                        debug!("exhausted pubsub broadcast stream; shutting down");
+                                        return;
+                                    }
+                                }
+                            }
+                            _ = &mut cancel_rx => {
+                                debug!("pubsub broadcast stream cancelled; shutting down");
+                                return;
                             }
                         }
                     }
-                    debug!("exhausted pubsub broadcast stream; shutting down");
-                    break;
                 }
             };
             let pubsub_request =
@@ -396,6 +414,8 @@ impl GrpcPubSubClient {
                 metrics.as_ref(),
             )
             .await;
+
+            drop(cancel_tx);
 
             match stream_completed {
                 // common case: reconnect due to some transient error
