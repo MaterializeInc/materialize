@@ -17,7 +17,6 @@ chrono.workspace = true
 futures.workspace = true
 hex.workspace = true
 itertools.workspace = true
-libc.workspace = true
 maplit.workspace = true
 mz-orchestrator = { path = "../orchestrator", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network"] }

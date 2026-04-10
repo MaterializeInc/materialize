@@ -30,7 +30,6 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use futures::stream::{BoxStream, FuturesUnordered};
 use itertools::Itertools;
-use libc::{SIGABRT, SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 use maplit::btreemap;
 use mz_orchestrator::scheduling_config::ServiceSchedulingConfig;
 use mz_orchestrator::{
@@ -43,6 +42,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::UnixSocketAddr;
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
+use nix::sys::signal::Signal;
 use scopeguard::defer;
 use serde::Serialize;
 use sha1::{Digest, Sha1};
@@ -1037,10 +1037,16 @@ fn did_process_crash(status: ExitStatus) -> bool {
     // Likely not exhaustive. Feel free to add additional tests for other
     // indications of a crashed child process, as those conditions are
     // discovered.
-    matches!(
-        status.signal(),
-        Some(SIGABRT | SIGBUS | SIGSEGV | SIGTRAP | SIGILL)
-    )
+    status.signal().is_some_and(|s| {
+        matches!(
+            Signal::try_from(s),
+            Ok(Signal::SIGABRT
+                | Signal::SIGBUS
+                | Signal::SIGSEGV
+                | Signal::SIGTRAP
+                | Signal::SIGILL)
+        )
+    })
 }
 
 async fn write_pid_file(pid_file: &Path, pid: Pid) -> Result<(), anyhow::Error> {
