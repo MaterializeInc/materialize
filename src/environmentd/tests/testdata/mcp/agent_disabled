@@ -8,25 +8,25 @@
 # by the Apache License, Version 2.0.
 
 # =============================================================================
-# MCP agents endpoint disabled via feature flag
+# MCP agent endpoint disabled via feature flag
 # =============================================================================
 
-# When enable_mcp_agents is false, all requests should return 503 Service Unavailable.
+# When enable_mcp_agent is false, all requests should return 503 Service Unavailable.
 
 # Initialize request should return 503.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}
 ----
 503 Service Unavailable
 
 # tools/list should return 503.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":2,"method":"tools/list"}
 ----
 503 Service Unavailable
 
 # tools/call should return 503.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_data_products","arguments":{}}}
 ----
 503 Service Unavailable

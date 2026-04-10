@@ -13,12 +13,12 @@
 //!
 //! ## Endpoints
 //!
-//! - `/api/mcp/agents` - User data products for customer AI agents
+//! - `/api/mcp/agent` - User data products for customer AI agents
 //! - `/api/mcp/developer` - System catalog (`mz_*`) for troubleshooting
 //!
 //! ## Tools
 //!
-//! **Agents:** `get_data_products`, `get_data_product_details`, `query`
+//! **Agent:** `get_data_products`, `get_data_product_details`, `read_data_product`, `query`
 //! **Developer:** `query_system_catalog`
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
@@ -30,7 +30,7 @@ use axum::Json;
 use axum::response::IntoResponse;
 use http::{HeaderMap, StatusCode};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_DEVELOPER, MCP_MAX_RESPONSE_SIZE,
+    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
@@ -179,7 +179,7 @@ struct ClientInfo {
 #[serde(tag = "name", content = "arguments")]
 #[serde(rename_all = "snake_case")]
 enum ToolsCallParams {
-    // Agents endpoint tools
+    // Agent endpoint tools
     // Uses an ignored empty struct so MCP clients sending `"arguments": {}` can deserialize.
     GetDataProducts(#[serde(default)] ()),
     GetDataProductDetails(GetDataProductDetailsParams),
@@ -356,14 +356,14 @@ impl From<McpRequestError> for McpError {
 
 #[derive(Debug, Clone, Copy)]
 enum McpEndpointType {
-    Agents,
+    Agent,
     Developer,
 }
 
 impl std::fmt::Display for McpEndpointType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            McpEndpointType::Agents => write!(f, "agents"),
+            McpEndpointType::Agent => write!(f, "agent"),
             McpEndpointType::Developer => write!(f, "developer"),
         }
     }
@@ -375,8 +375,8 @@ pub async fn handle_mcp_method_not_allowed() -> impl IntoResponse {
     StatusCode::METHOD_NOT_ALLOWED
 }
 
-/// Agents endpoint: exposes user data products.
-pub async fn handle_mcp_agents(
+/// Agent endpoint: exposes user data products.
+pub async fn handle_mcp_agent(
     headers: HeaderMap,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
@@ -384,7 +384,7 @@ pub async fn handle_mcp_agents(
     if let Some(resp) = validate_origin(&headers) {
         return resp;
     }
-    handle_mcp_request(client, body, McpEndpointType::Agents)
+    handle_mcp_request(client, body, McpEndpointType::Agent)
         .await
         .into_response()
 }
@@ -446,7 +446,7 @@ async fn handle_mcp_request(
     let catalog = client.client.catalog_snapshot("mcp").await;
     let dyncfgs = catalog.system_config().dyncfgs();
     let enabled = match endpoint_type {
-        McpEndpointType::Agents => ENABLE_MCP_AGENTS.get(dyncfgs),
+        McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
         McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
     };
     if !enabled {
@@ -454,7 +454,7 @@ async fn handle_mcp_request(
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
-    let query_tool_enabled = ENABLE_MCP_AGENTS_QUERY_TOOL.get(dyncfgs);
+    let query_tool_enabled = ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
 
     let user = client.client.session().user().name.clone();
@@ -621,7 +621,7 @@ async fn handle_tools_list(
     let size_hint = format!("Response limit: {} MB.", max_response_size / 1_000_000);
 
     let tools = match endpoint_type {
-        McpEndpointType::Agents => {
+        McpEndpointType::Agent => {
             let mut tools = vec![
                 ToolDefinition {
                     name: "get_data_products".to_string(),
@@ -741,13 +741,13 @@ async fn handle_tools_call(
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     match (endpoint_type, params) {
-        (McpEndpointType::Agents, ToolsCallParams::GetDataProducts(_)) => {
+        (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
             get_data_products(client, max_response_size).await
         }
-        (McpEndpointType::Agents, ToolsCallParams::GetDataProductDetails(p)) => {
+        (McpEndpointType::Agent, ToolsCallParams::GetDataProductDetails(p)) => {
             get_data_product_details(client, &p.name, max_response_size).await
         }
-        (McpEndpointType::Agents, ToolsCallParams::ReadDataProduct(p)) => {
+        (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(p)) => {
             read_data_product(
                 client,
                 &p.name,
@@ -757,12 +757,12 @@ async fn handle_tools_call(
             )
             .await
         }
-        (McpEndpointType::Agents, ToolsCallParams::Query(_)) if !query_tool_enabled => {
+        (McpEndpointType::Agent, ToolsCallParams::Query(_)) if !query_tool_enabled => {
             Err(McpRequestError::ToolNotFound(
                 "query tool is not available. Use get_data_products, get_data_product_details, and read_data_product instead.".to_string(),
             ))
         }
-        (McpEndpointType::Agents, ToolsCallParams::Query(p)) => {
+        (McpEndpointType::Agent, ToolsCallParams::Query(p)) => {
             execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
         }
         (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
@@ -1555,8 +1555,8 @@ mod tests {
     // ── Query tool feature flag tests ──────────────────────────────────────
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_agents_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agents, false, 1_000_000)
+    async fn test_tools_list_agent_query_tool_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, false, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1582,8 +1582,8 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_agents_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Agents, true, 1_000_000)
+    async fn test_tools_list_agent_query_tool_enabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
