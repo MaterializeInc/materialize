@@ -59,7 +59,7 @@ with the ARN of your S3 table bucket:
             "Effect": "Allow",
             "Action": "s3tables:*",
             "Resource": [
-                "<S3 table bucket ARN>"
+                "<S3 table bucket ARN>",
                 "<S3 table bucket ARN>/table/*"
             ]
         }
