@@ -175,6 +175,10 @@ def workflow_drop_recreate(c: Composition, parser: WorkflowArgumentParser) -> No
     MySQL continues executing the restore script, recreating the tracked table.
 
     This test replicates that scenario: mysqldump + piped restore.
+    It isolates the same race that mysql-cdc-resumption/backup_restore_mysql
+    encounters. The fix (parsing DROP TABLE statements directly instead of
+    calling verify_schemas) also unblocks uncommenting verify-source-failed.td
+    in that test.
     """
 
     mysql_version = get_targeted_mysql_version(parser)
