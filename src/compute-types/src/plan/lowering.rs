@@ -766,7 +766,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                 // We don't have an MFP here -- install an operator to permute the
                 // input, if necessary.
                 let input = if !keys.raw {
-                    self.arrange_by(input, AvailableCollections::new_raw(), &keys, arity, input_future)
+                    self.arrange_by(
+                        input,
+                        AvailableCollections::new_raw(),
+                        &keys,
+                        arity,
+                        input_future,
+                    )
                 } else {
                     input
                 };
@@ -830,7 +836,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
                         // We don't have an MFP here -- install an operator to permute the
                         // input, if necessary.
                         if !keys.raw {
-                            self.arrange_by(plan, AvailableCollections::new_raw(), &keys, arity, future)
+                            self.arrange_by(
+                                plan,
+                                AvailableCollections::new_raw(),
+                                &keys,
+                                arity,
+                                future,
+                            )
                         } else {
                             plan
                         }
