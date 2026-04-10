@@ -8,4 +8,4 @@
 # by the Apache License, Version 2.0.
 
 name: openssh-static
-description: Statically-linked OpenSSH ssh client built against AWS-LC-FIPS.
+description: Statically-linked OpenSSH ssh client built against AWS-LC (FIPS optional).

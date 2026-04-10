@@ -647,8 +647,8 @@ pub fn main() {
     // optimization). In distroless images libeatmydata.so is not available,
     // so this is a no-op.
     //
-    // SAFETY: Called before any threads are spawned (main entry point, single
-    // threaded), so modifying env vars is safe.
+    // SAFETY: Called at the very start of main(), before any threads are
+    // spawned or other initialization runs.
     if std::env::var("MZ_EAT_MY_DATA").is_ok() {
         unsafe { std::env::set_var("LD_PRELOAD", "libeatmydata.so") };
     } else {
@@ -664,7 +664,8 @@ pub fn main() {
     }
     // In the previous bash entrypoint, environmentd would sleep forever after
     // a graceful exit. This keeps the container alive for debugging. Replicate
-    // that behavior here.
+    // that behavior here. In practice this is unreachable: run() blocks
+    // forever via thread::park(). Kept as a defensive safety net.
     eprintln!("environmentd exited gracefully; sleeping forever");
     loop {
         std::thread::sleep(std::time::Duration::from_secs(86400));
