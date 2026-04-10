@@ -234,35 +234,24 @@ pub fn main() {
             //
             // This avoids shelling out to `hostname --fqdn` which isn't
             // available in distroless images.
-            // Use the gethostname() syscall, matching what `hostname --fqdn`
-            // does internally, then resolve to FQDN via getaddrinfo.
-            let mut buf = [0u8; 256];
-            if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0 {
-                let hostname = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr().cast()) };
-                if let Ok(short) = hostname.to_str() {
+            if let Ok(hostname) = nix::unistd::gethostname() {
+                if let Some(short) = hostname.to_str() {
                     let fqdn = resolve_fqdn(short);
                     unsafe { std::env::set_var("CLUSTERD_GRPC_HOST", &fqdn) };
                 }
             }
         }
         if std::env::var("CLUSTERD_PROCESS").is_err() {
-            // Extract the ordinal index from the StatefulSet hostname
-            // (e.g., "clusterd-0" → "0").
+            // Extract the ordinal index from the last segment of the
+            // StatefulSet hostname (e.g., "mz5ncn-cluster-s1-replica-s1-gen-1-0"
+            // → "0"). This matches orchestrator-kubernetes which also uses
+            // split('-').next_back() to extract the process ID from pod names.
             if let Ok(hostname) = std::env::var("HOSTNAME") {
                 if let Some(ordinal) = hostname.rsplit('-').next() {
                     unsafe { std::env::set_var("CLUSTERD_PROCESS", ordinal) };
                 }
             }
         }
-    }
-
-    // Configure LD_PRELOAD for eatmydata if requested (CI performance
-    // optimization). In distroless images libeatmydata.so is not available,
-    // so this is a no-op.
-    if std::env::var("MZ_EAT_MY_DATA").is_ok() {
-        unsafe { std::env::set_var("LD_PRELOAD", "libeatmydata.so") };
-    } else {
-        unsafe { std::env::remove_var("LD_PRELOAD") };
     }
 
     let args = cli::parse_args(CliConfig {
