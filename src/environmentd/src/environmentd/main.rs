@@ -650,14 +650,9 @@ pub fn main() {
     if let Err(err) = run(args) {
         panic!("environmentd: fatal: {}", err.display_with_causes());
     }
-    // In the previous bash entrypoint, environmentd would sleep forever after
-    // a graceful exit. This keeps the container alive for debugging. Replicate
-    // that behavior here. In practice this is unreachable: run() blocks
-    // forever via thread::park(). Kept as a defensive safety net.
-    eprintln!("environmentd exited gracefully; sleeping forever");
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(86400));
-    }
+    // run() blocks forever via thread::park() and never returns Ok(()).
+    // If it somehow does, let the process exit so the issue is visible
+    // (Kubernetes will restart it and the logs will show the exit).
 }
 
 fn run(mut args: Args) -> Result<(), anyhow::Error> {
