@@ -24,11 +24,7 @@ hyper.workspace = true
 hyper-openssl.workspace = true
 hyper-util.workspace = true
 jsonwebtoken.workspace = true
-<<<<<<< HEAD
-launchdarkly-server-sdk.workspace = true
-=======
-launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"], optional = true }
->>>>>>> c3505bce8b (crypto: feature-gate telemetry SDKs (LaunchDarkly, Segment, Sentry))
+launchdarkly-server-sdk = { workspace = true, optional = true }
 mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }

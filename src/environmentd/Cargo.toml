@@ -61,7 +61,7 @@ mz-metrics = { path = "../metrics" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
-mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
 mz-orchestratord = { path = "../orchestratord", default-features = false }
 mz-ore = { path = "../ore", features = ["async", "panic", "process", "tracing", "id_gen"] }
 mz-persist-client = { path = "../persist-client" }
@@ -73,7 +73,7 @@ mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
 mz-segment = { path = "../segment", optional = true }
 mz-server-core = { path = "../server-core" }
-mz-service = { path = "../service" }
+mz-service = { path = "../service", default-features = false }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
