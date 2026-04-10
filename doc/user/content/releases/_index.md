@@ -19,11 +19,32 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-04-09* <br>
 *Released to Materialize Self-Managed: 2026-04-10* <br>
 
-This release introduces append mode for our Iceberg sink, and bug fixes.
+This release introduces append mode for the [Iceberg sink](/sql/create-sink/iceberg/),
+and bug fixes.
 
-### Features {#v26.19-features}
+### Iceberg sink append mode
 
-- **Iceberg Sink Append Only Mode**: Iceberg sinks now support append only mode. When using append only mode, retractions are not delivered to your iceberg table. This is especially useful if you're sinking data from a materialized view with temporal filters.
+[Iceberg sinks](/sql/create-sink/iceberg/) now support `MODE APPEND`. In append
+mode, all changes are written as data rows — no Iceberg delete files are
+produced. This is especially useful if you're sinking data from a materialized
+view with temporal filters.
+
+```mzsql
+CREATE SINK events_log_iceberg
+  IN CLUSTER analytics_cluster
+  FROM user_events
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = 'events',
+    TABLE = 'user_events_log'
+  )
+  USING AWS CONNECTION aws_connection
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '1m');
+```
+
+For more information, refer to:
+- [CREATE SINK: Iceberg](/sql/create-sink/iceberg/)
+- [Iceberg sink guide](/serve-results/sink/iceberg/)
 
 ### Bug Fixes {#v26.19-bug-fixes}
 
