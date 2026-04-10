@@ -394,6 +394,13 @@ impl MapFilterProject {
         }
     }
 
+    /// Returns `true` if any predicate in this MFP contains a temporal expression (`mz_now()`).
+    pub fn has_temporal_predicates(&self) -> bool {
+        self.predicates
+            .iter()
+            .any(|(_, predicate)| predicate.contains_temporal())
+    }
+
     /// Extracts temporal predicates into their own `Self`.
     ///
     /// Expressions that are used by the temporal predicates are exposed by `self.projection`,
