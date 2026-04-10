@@ -25,7 +25,7 @@ use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
     SniResolver,
 };
-use mz_environmentd::test_util::{self, Ca, make_pg_tls};
+use mz_environmentd::test_util::{self, Ca, TestTlsConfig, make_pg_tls};
 use mz_frontegg_auth::{
     Authenticator as FronteggAuthentication, AuthenticatorConfig as FronteggConfig,
     DEFAULT_REFRESH_DROP_FACTOR, DEFAULT_REFRESH_DROP_LRU_CACHE_SIZE,
@@ -40,14 +40,13 @@ use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
 use mz_server_core::TlsCertConfig;
-use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
-use openssl::x509::X509;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_balancer() {
+    let _ = mz_ore::crypto::fips_crypto_provider();
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
         .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
@@ -81,10 +80,10 @@ async fn test_balancer() {
         },
     )]);
 
+    let jwt_keys = Ca::generate_jwt_rsa_keypair();
     let issuer = "frontegg-mock".to_owned();
-    let encoding_key =
-        EncodingKey::from_rsa_pem(&ca.pkey.private_key_to_pem_pkcs8().unwrap()).unwrap();
-    let decoding_key = DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap();
+    let encoding_key = EncodingKey::from_rsa_pem(&jwt_keys.private_pem).unwrap();
+    let decoding_key = DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap();
 
     const EXPIRES_IN_SECS: i64 = 50;
     let frontegg_server = FronteggMockServer::start(
@@ -107,7 +106,7 @@ async fn test_balancer() {
     let frontegg_auth = FronteggAuthentication::new(
         FronteggConfig {
             admin_api_token_url: frontegg_server.auth_api_token_url(),
-            decoding_key: DecodingKey::from_rsa_pem(&ca.pkey.public_key_to_pem().unwrap()).unwrap(),
+            decoding_key: DecodingKey::from_rsa_pem(&jwt_keys.public_pem).unwrap(),
             tenant_id: Some(tenant_id),
             now: SYSTEM_TIME.clone(),
             admin_role: "mzadmin".to_string(),
@@ -167,7 +166,7 @@ async fn test_balancer() {
     });
 
     let body = r#"{"query": "select 12234"}"#;
-    let ca_cert = reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap();
+    let ca_cert = reqwest::Certificate::from_pem(&ca.cert_pem).unwrap();
     let client = reqwest::Client::builder()
         .add_root_certificate(ca_cert)
         // No pool so that connections are never re-used which can use old ssl certs.
@@ -215,9 +214,7 @@ async fn test_balancer() {
             balancer_pgwire_listen.port()
         ));
 
-        let tls = make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-            Ok(b.set_verify(SslVerifyMode::NONE))
-        }));
+        let tls = make_pg_tls(TestTlsConfig::no_verify());
 
         let (pg_client, conn) = tokio_postgres::connect(&conn_str, tls.clone())
             .await
@@ -258,19 +255,19 @@ async fn test_balancer() {
             .send()
             .await
             .unwrap();
-        let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
-        let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
-        let server_x509 = X509::from_pem(&std::fs::read(&server_cert).unwrap()).unwrap();
-        assert_eq!(resp_x509, server_x509);
         assert_contains!(resp.text().await.unwrap(), "12234");
+        let server_cert_der = test_util::cert_file_to_der(&server_cert);
+        let tls_cfg = TestTlsConfig::with_ca(&ca.ca_cert_path());
+        let peer_der = test_util::peer_certificate_der(balancer_https_listen, &tls_cfg).await;
+        assert_eq!(peer_der, server_cert_der);
 
         // Generate new certs. Install only the key, reload, and make sure the old cert is still in
         // use.
         let (next_cert, next_key) = ca
             .request_cert("next", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
             .unwrap();
-        let next_x509 = X509::from_pem(&std::fs::read(&next_cert).unwrap()).unwrap();
-        assert_ne!(next_x509, server_x509);
+        let next_cert_der = test_util::cert_file_to_der(&next_cert);
+        assert_ne!(next_cert_der, server_cert_der);
         std::fs::copy(next_key, &server_key).unwrap();
         let (tx, rx) = oneshot::channel();
         reload_tx.try_send(Some(tx)).unwrap();
@@ -278,17 +275,8 @@ async fn test_balancer() {
         assert_err!(res);
 
         // We should still be on the old cert because now the cert and key mismatch.
-        let resp = client
-            .post(&https_url)
-            .header("Content-Type", "application/json")
-            .basic_auth(frontegg_user, Some(&frontegg_password))
-            .body(body)
-            .send()
-            .await
-            .unwrap();
-        let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
-        let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
-        assert_eq!(resp_x509, server_x509);
+        let peer_der = test_util::peer_certificate_der(balancer_https_listen, &tls_cfg).await;
+        assert_eq!(peer_der, server_cert_der);
 
         // Now move the cert too. Reloading should succeed and the response should have the new
         // cert.
@@ -297,17 +285,8 @@ async fn test_balancer() {
         reload_tx.try_send(Some(tx)).unwrap();
         let res = rx.await.unwrap();
         assert_ok!(res);
-        let resp = client
-            .post(&https_url)
-            .header("Content-Type", "application/json")
-            .basic_auth(frontegg_user, Some(&frontegg_password))
-            .body(body)
-            .send()
-            .await
-            .unwrap();
-        let tlsinfo = resp.extensions().get::<reqwest::tls::TlsInfo>().unwrap();
-        let resp_x509 = X509::from_der(tlsinfo.peer_certificate().unwrap()).unwrap();
-        assert_eq!(resp_x509, next_x509);
+        let peer_der = test_util::peer_certificate_der(balancer_https_listen, &tls_cfg).await;
+        assert_eq!(peer_der, next_cert_der);
 
         if !is_multi_tenant_resolver {
             continue;
@@ -325,9 +304,7 @@ async fn test_balancer() {
                     let handle = task::spawn(|| "test conn", async move {
                         let (pg_client, conn) = tokio_postgres::connect(
                             &conn_str,
-                            make_pg_tls(Box::new(|b: &mut SslConnectorBuilder| {
-                                Ok(b.set_verify(SslVerifyMode::NONE))
-                            })),
+                            make_pg_tls(TestTlsConfig::no_verify()),
                         )
                         .await
                         .unwrap();

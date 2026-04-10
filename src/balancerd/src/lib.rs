@@ -50,6 +50,7 @@ use mz_ore::now::{NowFn, SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_ore::task::{JoinSetExt, spawn};
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{metric, netio};
+use mz_pgwire_common::TlsStream;
 use mz_pgwire_common::{
     ACCEPT_SSL_ENCRYPTION, CONN_UUID_KEY, Conn, ErrorResponse, FrontendMessage,
     FrontendStartupMessage, MZ_FORWARDED_FOR_KEY, REJECT_ENCRYPTION, VERSION_3, decode_startup,
@@ -58,17 +59,17 @@ use mz_server_core::{
     Connection, ConnectionStream, ListenerHandle, ReloadTrigger, ReloadingSslContext,
     ReloadingTlsConfig, ServeConfig, ServeDyncfg, TlsCertConfig, TlsMode, listen,
 };
-use openssl::ssl::{NameType, Ssl, SslConnector, SslMethod, SslVerifyMode};
 use prometheus::{IntCounterVec, IntGaugeVec};
 use proxy_header::{ProxiedAddress, ProxyHeader};
+use rustls::pki_types::ServerName;
 use semver::Version;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_metrics::TaskMetrics;
-use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
+use tokio_rustls::TlsConnector;
 use tower::Service;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
@@ -724,17 +725,13 @@ impl PgwireBalancer {
             let nread =
                 netio::read_exact_or_eof(&mut mz_stream, &mut maybe_ssl_request_response).await?;
             if nread == 1 && maybe_ssl_request_response == [ACCEPT_SSL_ENCRYPTION] {
-                // do a TLS handshake
-                let mut builder =
-                    SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                builder.set_verify(SslVerifyMode::NONE);
-                let mut ssl = builder
-                    .build()
-                    .configure()?
-                    .into_ssl(&envd_addr.to_string())?;
-                ssl.set_connect_state();
-                Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+                // do a TLS handshake — no verification for internal connections.
+                let tls_config = no_verify_client_config();
+                let connector = TlsConnector::from(tls_config);
+                let server_name = ServerName::try_from(envd_addr.ip().to_string())
+                    .unwrap_or_else(|_| ServerName::try_from("localhost").unwrap());
+                let tls_stream = connector.connect(server_name, mz_stream).await?;
+                Conn::Ssl(TlsStream::Client(tls_stream))
             } else {
                 Conn::Unencrypted(mz_stream)
             }
@@ -908,13 +905,11 @@ impl mz_server_core::Server for PgwireBalancer {
                         Some(FrontendStartupMessage::SslRequest) => match (conn, &tls) {
                             (Conn::Unencrypted(mut conn), Some(tls)) => {
                                 conn.write_all(&[ACCEPT_SSL_ENCRYPTION]).await?;
-                                let mut ssl_stream =
-                                    SslStream::new(Ssl::new(&tls.context.get())?, conn)?;
-                                if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                    let _ = ssl_stream.get_mut().shutdown().await;
-                                    return Err(e.into());
+                                let acceptor = tls.context.acceptor();
+                                match acceptor.accept(conn).await {
+                                    Ok(tls_stream) => Conn::Ssl(TlsStream::Server(tls_stream)),
+                                    Err(e) => return Err(e.into()),
                                 }
-                                Conn::Ssl(ssl_stream)
                             }
                             (mut conn, _) => {
                                 conn.write_all(&[REJECT_ENCRYPTION]).await?;
@@ -1216,14 +1211,10 @@ impl mz_server_core::Server for HttpsBalancer {
                 let (mut client_stream, servername): (Box<dyn ClientStream>, Option<String>) =
                     match tls_context {
                         Some(tls_context) => {
-                            let mut ssl_stream =
-                                SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                            if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                                let _ = ssl_stream.get_mut().shutdown().await;
-                                return Err(e.into());
-                            }
+                            let acceptor = tls_context.acceptor();
+                            let tls_stream = acceptor.accept(conn).await?;
                             let servername: Option<String> =
-                                ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
+                                tls_stream.get_ref().1.server_name().map(|sn| {
                                     match sn.split_once('.') {
                                         Some((left, _right)) => left,
                                         None => sn,
@@ -1231,7 +1222,7 @@ impl mz_server_core::Server for HttpsBalancer {
                                     .into()
                                 });
                             debug!("Found sni servername: {servername:?} (https)");
-                            (Box::new(ssl_stream), servername)
+                            (Box::new(tls_stream), servername)
                         }
                         _ => (Box::new(conn), None),
                     };
@@ -1278,17 +1269,13 @@ impl mz_server_core::Server for HttpsBalancer {
                 }
 
                 let mut mz_stream = if internal_tls {
-                    // do a TLS handshake
-                    let mut builder =
-                        SslConnector::builder(SslMethod::tls()).expect("Error creating builder.");
-                    // environmentd doesn't yet have a cert we trust, so for now disable verification.
-                    builder.set_verify(SslVerifyMode::NONE);
-                    let mut ssl = builder
-                        .build()
-                        .configure()?
-                        .into_ssl(&resolved.addr.to_string())?;
-                    ssl.set_connect_state();
-                    Conn::Ssl(SslStream::new(ssl, mz_stream)?)
+                    // do a TLS handshake — no verification for internal connections.
+                    let tls_config = no_verify_client_config();
+                    let connector = TlsConnector::from(tls_config);
+                    let server_name = ServerName::try_from(resolved.addr.ip().to_string())
+                        .unwrap_or_else(|_| ServerName::try_from("localhost").unwrap());
+                    let tls_stream = connector.connect(server_name, mz_stream).await?;
+                    Conn::Ssl(TlsStream::Client(tls_stream))
                 } else {
                     Conn::Unencrypted(mz_stream)
                 };
@@ -1356,12 +1343,10 @@ impl Resolver {
                 sni_resolver,
             ) => {
                 let servername = match conn.inner() {
-                    Conn::Ssl(ssl_stream) => {
-                        ssl_stream.ssl().servername(NameType::HOST_NAME).map(|sn| {
-                            match sn.split_once('.') {
-                                Some((left, _right)) => left,
-                                None => sn,
-                            }
+                    Conn::Ssl(tls_stream) => {
+                        tls_stream.server_name().map(|sn| match sn.split_once('.') {
+                            Some((left, _right)) => left,
+                            None => sn,
                         })
                     }
                     Conn::Unencrypted(_) => None,
@@ -1467,6 +1452,57 @@ struct ResolvedAddr {
     addr: SocketAddr,
     password: Option<String>,
     tenant: Option<String>,
+}
+
+/// Returns a rustls `ClientConfig` that skips server certificate verification.
+/// Used for internal connections where environmentd doesn't have a cert we trust.
+fn no_verify_client_config() -> std::sync::Arc<rustls::ClientConfig> {
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::{CertificateDer, UnixTime};
+    use rustls::{DigitallySignedStruct, SignatureScheme};
+
+    #[derive(Debug)]
+    struct NoVerifier(std::sync::Arc<rustls::crypto::CryptoProvider>);
+    impl ServerCertVerifier for NoVerifier {
+        fn verify_server_cert(
+            &self,
+            _: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            Ok(ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            self.0.signature_verification_algorithms.supported_schemes()
+        }
+    }
+
+    let provider = mz_ore::crypto::fips_crypto_provider();
+    let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::clone(&provider))
+        .with_protocol_versions(rustls::ALL_VERSIONS)
+        .expect("valid TLS versions")
+        .dangerous()
+        .with_custom_certificate_verifier(std::sync::Arc::new(NoVerifier(provider)))
+        .with_no_client_auth();
+    std::sync::Arc::new(config)
 }
 
 #[cfg(test)]
