@@ -1482,6 +1482,17 @@ pub trait RenderTimestamp: MzTimestamp + Refines<mz_repr::Timestamp> {
     /// Steps the timestamp back so that logical compaction to the output will
     /// not conflate `self` with any historical times.
     fn step_back(&self) -> Self;
+    /// Apply temporal bucketing to a stream if the timestamp type supports it.
+    ///
+    /// Temporal bucketing requires a total order on timestamps. For timestamp
+    /// types without a total order (e.g., in iterative scopes), this is a no-op.
+    fn maybe_apply_temporal_bucketing<G>(
+        stream: StreamVec<G, (Row, G::Timestamp, Diff)>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> VecCollection<G, Row, Diff>
+    where
+        G: Scope<Timestamp = Self>;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1502,6 +1513,21 @@ impl RenderTimestamp for mz_repr::Timestamp {
     }
     fn step_back(&self) -> Self {
         self.saturating_sub(1)
+    }
+    fn maybe_apply_temporal_bucketing<G>(
+        stream: StreamVec<G, (Row, G::Timestamp, Diff)>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> VecCollection<G, Row, Diff>
+    where
+        G: Scope<Timestamp = Self>,
+    {
+        use crate::extensions::temporal_bucket::TemporalBucketing;
+        use differential_dataflow::AsCollection;
+        use timely::container::CapacityContainerBuilder;
+        stream
+            .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
+            .as_collection()
     }
 }
 
@@ -1531,6 +1557,18 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
             *item = item.saturating_sub(1);
         }
         Product::new(self.outer.saturating_sub(1), PointStamp::new(vec))
+    }
+    fn maybe_apply_temporal_bucketing<G>(
+        stream: StreamVec<G, (Row, G::Timestamp, Diff)>,
+        _as_of: Antichain<mz_repr::Timestamp>,
+        _summary: mz_repr::Timestamp,
+    ) -> VecCollection<G, Row, Diff>
+    where
+        G: Scope<Timestamp = Self>,
+    {
+        use differential_dataflow::AsCollection;
+        // TODO: Implement bucketing on outer timestamp for iterative scopes.
+        stream.as_collection()
     }
 }
 
