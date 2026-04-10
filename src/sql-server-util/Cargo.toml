@@ -36,7 +36,7 @@ serde.workspace = true
 smallvec = { workspace = true, features = ["union"] }
 static_assertions.workspace = true
 thiserror.workspace = true
-tiberius.workspace = true
+tiberius = { workspace = true, features = ["chrono", "sql-browser-tokio", "tds73", "rustls"], default-features = false }
 timely.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true

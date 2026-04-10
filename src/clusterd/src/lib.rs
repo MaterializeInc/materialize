@@ -188,6 +188,9 @@ fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
 }
 
 pub fn main() {
+    // Install the process-wide CryptoProvider for rustls before any TLS usage.
+    // Required when both `aws-lc-rs` and `ring` features are active (e.g., --all-features builds).
+    let _ = mz_ore::crypto::fips_crypto_provider();
     mz_ore::panic::install_enhanced_handler();
 
     // Derive `CLUSTERD_PROCESS` (the process ordinal) from the pod hostname

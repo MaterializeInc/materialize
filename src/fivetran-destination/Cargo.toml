@@ -45,7 +45,8 @@ insta.workspace = true
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking", "rustls-tls-webpki-roots-no-provider"], default-features = false }
+rustls.workspace = true
 tonic-prost-build.workspace = true
 
 [features]
