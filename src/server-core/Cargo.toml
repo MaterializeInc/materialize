@@ -12,19 +12,21 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-clap = { workspace = true, features = ["env"] }
-openssl.workspace = true
+clap = { workspace = true, features = ["derive", "env"] }
+rustls = { workspace = true, features = ["aws_lc_rs"], default-features = false }
+rustls-pemfile.workspace = true
 schemars.workspace = true
 scopeguard.workspace = true
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 socket2.workspace = true
+tokio-rustls = { workspace = true, default-features = false }
 tokio-stream.workspace = true
 proxy-header.workspace = true
 tracing.workspace = true
 futures.workspace = true
 mz-dyncfg = { path = "../dyncfg", default-features = false }
-mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
+mz-ore = { path = "../ore", default-features = false, features = ["async", "crypto", "network", "test"] }
 tokio.workspace = true
 tokio-metrics.workspace = true
 uuid = { workspace = true, features = ["v4"] }

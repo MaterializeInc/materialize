@@ -16,7 +16,6 @@ use derivative::Derivative;
 use mz_ore::netio::AsyncReady;
 use mz_server_core::TlsMode;
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
-use tokio_openssl::SslStream;
 use tokio_postgres::error::SqlState;
 
 use crate::ErrorResponse;
@@ -24,10 +23,98 @@ use crate::ErrorResponse;
 pub const CONN_UUID_KEY: &str = "mz_connection_uuid";
 pub const MZ_FORWARDED_FOR_KEY: &str = "mz_forwarded_for";
 
+/// A TLS stream that can be either server-side or client-side.
+#[derive(Debug)]
+pub enum TlsStream<A> {
+    /// Server-side TLS (e.g., pgwire accept, HTTP accept).
+    Server(tokio_rustls::server::TlsStream<A>),
+    /// Client-side TLS (e.g., balancerd connecting to upstream environmentd).
+    Client(tokio_rustls::client::TlsStream<A>),
+}
+
+impl<A> TlsStream<A> {
+    /// Returns a mutable reference to the underlying IO stream.
+    pub fn get_mut(&mut self) -> &mut A {
+        match self {
+            TlsStream::Server(s) => s.get_mut().0,
+            TlsStream::Client(s) => s.get_mut().0,
+        }
+    }
+
+    /// Returns a reference to the underlying IO stream.
+    pub fn get_ref(&self) -> &A {
+        match self {
+            TlsStream::Server(s) => s.get_ref().0,
+            TlsStream::Client(s) => s.get_ref().0,
+        }
+    }
+
+    /// Returns the SNI server name from the TLS session, if available.
+    ///
+    /// For server-side streams, this is the server name the client requested
+    /// via Server Name Indication (SNI). For client-side streams, this returns
+    /// `None`.
+    pub fn server_name(&self) -> Option<&str> {
+        match self {
+            TlsStream::Server(s) => s.get_ref().1.server_name(),
+            TlsStream::Client(_) => None,
+        }
+    }
+}
+
+impl<A: AsyncRead + AsyncWrite + Unpin> AsyncRead for TlsStream<A> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut ReadBuf,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            TlsStream::Server(s) => Pin::new(s).poll_read(cx, buf),
+            TlsStream::Client(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl<A: AsyncRead + AsyncWrite + Unpin> AsyncWrite for TlsStream<A> {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            TlsStream::Server(s) => Pin::new(s).poll_write(cx, buf),
+            TlsStream::Client(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            TlsStream::Server(s) => Pin::new(s).poll_flush(cx),
+            TlsStream::Client(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            TlsStream::Server(s) => Pin::new(s).poll_shutdown(cx),
+            TlsStream::Client(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+#[async_trait]
+impl<A> AsyncReady for TlsStream<A>
+where
+    A: AsyncRead + AsyncWrite + AsyncReady + Sync + Send + Unpin,
+{
+    async fn ready(&self, interest: Interest) -> io::Result<Ready> {
+        match self {
+            TlsStream::Server(s) => s.get_ref().0.ready(interest).await,
+            TlsStream::Client(s) => s.get_ref().0.ready(interest).await,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum Conn<A> {
     Unencrypted(A),
-    Ssl(SslStream<A>),
+    Ssl(TlsStream<A>),
 }
 
 impl<A> Conn<A> {
@@ -110,7 +197,7 @@ where
 #[async_trait]
 impl<A> AsyncReady for Conn<A>
 where
-    A: AsyncRead + AsyncWrite + AsyncReady + Sync + Unpin,
+    A: AsyncRead + AsyncWrite + AsyncReady + Send + Sync + Unpin,
 {
     async fn ready(&self, interest: Interest) -> io::Result<Ready> {
         match self {

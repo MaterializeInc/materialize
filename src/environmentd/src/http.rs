@@ -53,7 +53,6 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -70,8 +69,6 @@ use headers::{HeaderMapExt, HeaderName};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use http::uri::Scheme;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
-use hyper_openssl::SslStream;
-use hyper_openssl::client::legacy::MaybeHttpsStream;
 use hyper_util::rt::TokioIo;
 use mz_adapter::session::{Session as AdapterSession, SessionConfig as AdapterSessionConfig};
 use mz_adapter::{AdapterError, AdapterNotice, Client, SessionClient, WebhookAppenderCache};
@@ -94,14 +91,12 @@ use mz_sql::session::user::{
     HTTP_DEFAULT_USER, INTERNAL_USER_NAMES, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_sql::session::vars::{Value, Var, VarInput, WELCOME_MESSAGE};
-use openssl::ssl::Ssl;
 use prometheus::{
     COMPUTE_METRIC_QUERIES, FRONTIER_METRIC_QUERIES, STORAGE_METRIC_QUERIES, USAGE_METRIC_QUERIES,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::oneshot::Receiver;
 use tokio::sync::{oneshot, watch};
 use tokio_metrics::TaskMetrics;
@@ -558,43 +553,49 @@ impl Server for HttpServer {
 
     fn handle_connection(
         &self,
-        conn: Connection,
+        mut conn: Connection,
         _tokio_metrics_intervals: impl Iterator<Item = TaskMetrics> + Send + 'static,
     ) -> ConnectionHandler {
         let router = self.router.clone();
         let tls_context = self.tls.clone();
-        let mut conn = TokioIo::new(conn);
 
         Box::pin(async {
-            let direct_peer_addr = conn.inner().peer_addr().context("fetching peer addr")?;
+            let direct_peer_addr = conn.peer_addr().context("fetching peer addr")?;
             let peer_addr = conn
-                .inner_mut()
                 .take_proxy_header_address()
                 .await
                 .map(|a| a.source)
                 .unwrap_or(direct_peer_addr);
 
-            let (conn, conn_protocol) = match tls_context {
-                Some(tls_context) => {
-                    let mut ssl_stream = SslStream::new(Ssl::new(&tls_context.get())?, conn)?;
-                    if let Err(e) = Pin::new(&mut ssl_stream).accept().await {
-                        let _ = ssl_stream.get_mut().inner_mut().shutdown().await;
-                        return Err(e.into());
-                    }
-                    (MaybeHttpsStream::Https(ssl_stream), ConnProtocol::Https)
-                }
-                _ => (MaybeHttpsStream::Http(conn), ConnProtocol::Http),
-            };
-            let mut make_tower_svc = router
-                .layer(Extension(conn_protocol))
-                .into_make_service_with_connect_info::<SocketAddr>();
-            let tower_svc = make_tower_svc.call(peer_addr).await.unwrap();
-            let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
             let http = hyper::server::conn::http1::Builder::new();
-            http.serve_connection(conn, hyper_svc)
-                .with_upgrades()
-                .err_into()
-                .await
+            match tls_context {
+                Some(tls_context) => {
+                    let acceptor = tls_context.acceptor();
+                    let tls_stream = acceptor.accept(conn).await?;
+                    let conn = TokioIo::new(tls_stream);
+                    let mut make_tower_svc = router
+                        .layer(Extension(ConnProtocol::Https))
+                        .into_make_service_with_connect_info::<SocketAddr>();
+                    let tower_svc = make_tower_svc.call(peer_addr).await.unwrap();
+                    let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
+                    http.serve_connection(conn, hyper_svc)
+                        .with_upgrades()
+                        .err_into()
+                        .await
+                }
+                _ => {
+                    let conn = TokioIo::new(conn);
+                    let mut make_tower_svc = router
+                        .layer(Extension(ConnProtocol::Http))
+                        .into_make_service_with_connect_info::<SocketAddr>();
+                    let tower_svc = make_tower_svc.call(peer_addr).await.unwrap();
+                    let hyper_svc = hyper::service::service_fn(|req| tower_svc.clone().call(req));
+                    http.serve_connection(conn, hyper_svc)
+                        .with_upgrades()
+                        .err_into()
+                        .await
+                }
+            }
         })
     }
 }

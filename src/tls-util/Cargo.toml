@@ -11,13 +11,13 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-mz-ore = { path = "../ore", default-features = false }
-openssl.workspace = true
-openssl-sys.workspace = true
-postgres-openssl.workspace = true
+mz-ore = { path = "../ore" }
+rustls = { workspace = true, features = ["aws_lc_rs", "std"], default-features = false }
+rustls-pki-types = { workspace = true, features = ["std"] }
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres.workspace = true
+tokio-rustls.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

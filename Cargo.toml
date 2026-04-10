@@ -451,7 +451,7 @@ rlimit = "0.11.0"
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rpassword = "7.4.0"
-rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-pemfile = "2"
 rustls-pki-types = { version = "1", features = ["std"] }
 ryu = "1.0.23"

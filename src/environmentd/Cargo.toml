@@ -28,9 +28,8 @@ futures.workspace = true
 headers.workspace = true
 http.workspace = true
 humantime.workspace = true
-hyper.workspace = true
-hyper-openssl.workspace = true
-hyper-tls = "0.6.0"
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-rustls.workspace = true
 hyper-util.workspace = true
 include_dir.workspace = true
 ipnet.workspace = true
@@ -63,7 +62,7 @@ mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 mz-orchestratord = { path = "../orchestratord", default-features = false }
-mz-ore = { path = "../ore", features = ["async", "panic", "process", "tracing", "id_gen"] }
+mz-ore = { path = "../ore", features = ["async", "crypto", "panic", "process", "tracing", "id_gen"] }
 mz-persist-client = { path = "../persist-client" }
 mz-pgrepr = { path = "../pgrepr" }
 mz-pgwire = { path = "../pgwire" }
@@ -77,11 +76,10 @@ mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
+mz-tls-util = { path = "../tls-util", optional = true }
 mz-tracing = { path = "../tracing", optional = true }
 nix.workspace = true
 num_cpus.workspace = true
-openssl.workspace = true
-openssl-sys.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 pin-project.workspace = true
@@ -91,8 +89,11 @@ prometheus.workspace = true
 rdkafka-sys.workspace = true
 rand.workspace = true
 regex = { workspace = true, optional = true }
+rcgen = { workspace = true, optional = true }
 reqwest.workspace = true
 rlimit.workspace = true
+rustls = { workspace = true, optional = true, features = ["aws_lc_rs"], default-features = false }
+rustls-pemfile = { workspace = true, optional = true }
 semver.workspace = true
 sentry-tracing.workspace = true
 serde.workspace = true
@@ -104,6 +105,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
+tokio-rustls = { workspace = true, optional = true, default-features = false }
 tokio-stream = { workspace = true, features = ["net"] }
 tokio-metrics.workspace = true
 tower.workspace = true
@@ -125,7 +127,7 @@ datadriven.workspace = true
 fallible-iterator.workspace = true
 flate2.workspace = true
 http-body-util.workspace = true
-insta.workspace = true
+insta = { workspace = true, features = ["json"] }
 itertools.workspace = true
 jsonwebtoken.workspace = true
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
@@ -165,7 +167,11 @@ jemalloc = ["mz-alloc/jemalloc"]
 test = [
     "postgres",
     "regex",
-    "postgres-openssl",
+    "rcgen",
+    "rustls",
+    "rustls-pemfile",
+    "tokio-rustls",
+    "mz-tls-util",
     "mz-tracing",
     "mz-frontegg-mock",
     "tracing-capture",
