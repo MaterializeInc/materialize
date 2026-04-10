@@ -73,12 +73,12 @@ pub(super) fn construct(
     let mut output = OutputBuilder::<_, ColumnBuilder<_>>::from(output);
 
     let operator_info = builder.operator_info();
+    let activator = scope.activator_for(operator_info.address);
     builder.build(move |capabilities| {
         // Metrics are per-process, so only one worker per process needs to
         // scrape. Drop the capability for disabled workers so the frontier
         // can advance without this operator holding it back.
         let mut cap = enable.then_some(capabilities.into_element());
-        let activator = scope.activator_for(operator_info.address);
 
         let mut prev_snapshot: BTreeMap<SnapshotKey, SnapshotValue> = BTreeMap::new();
         let mut next_scrape = Instant::now();
