@@ -24,7 +24,7 @@ and bug fixes.
 
 ### Iceberg sink append mode
 
-When an [Iceberg sinks](/sql/create-sink/iceberg/) is created in append
+When an [Iceberg sink](/sql/create-sink/iceberg/) is created in append
 mode, all changes are written as data rows — no Iceberg delete files are
 produced. This is especially useful if you're sinking data from a materialized
 view with temporal filters, and you don't want data to be deleted from your Iceberg table as it ages out.
