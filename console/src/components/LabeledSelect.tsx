@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { split } from "@chakra-ui/object-utils";
 import {
   chakra,
   forwardRef,
@@ -22,6 +21,7 @@ import {
   useMultiStyleConfig,
   useTheme,
 } from "@chakra-ui/react";
+import { split } from "@chakra-ui/utils";
 import { dataAttr } from "@chakra-ui/utils";
 import * as React from "react";
 
