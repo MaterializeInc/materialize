@@ -238,6 +238,9 @@ pub struct Args {
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_NAME_PREFIX")]
     orchestrator_kubernetes_name_prefix: Option<String>,
     /// Whether to enable pod metrics collection.
+    ///
+    /// Required for resource usage graphs in the console.
+    /// Requires metrics-server to be installed.
     #[clap(long, env = "ORCHESTRATOR_KUBERNETES_DISABLE_POD_METRICS_COLLECTION")]
     orchestrator_kubernetes_disable_pod_metrics_collection: bool,
     /// Whether to annotate pods for prometheus service discovery.
