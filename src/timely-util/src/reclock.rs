@@ -585,7 +585,6 @@ mod test {
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
     use serde::{Deserialize, Serialize};
-    use timely::communication::allocator::Thread;
     use timely::dataflow::operators::capture::{Event, Extract};
     use timely::dataflow::operators::vec::UnorderedInput;
     use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
@@ -624,7 +623,7 @@ mod test {
         FromTime: Timestamp + Refines<()>,
         D: ExchangeData,
         F: FnOnce(
-                &mut Worker<Thread>,
+                &mut Worker,
                 BindingHandle<FromTime>,
                 DataHandle<D, FromTime>,
                 ReclockedStream<D>,
@@ -660,7 +659,7 @@ mod test {
 
     /// Steps the worker four times which is the required number of times for both data and
     /// frontier updates to propagate across the two scopes and into the probing channels.
-    fn step(worker: &mut Worker<Thread>) {
+    fn step(worker: &mut Worker) {
         for _ in 0..4 {
             worker.step();
         }
