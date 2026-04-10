@@ -36,7 +36,6 @@ include_dir.workspace = true
 ipnet.workspace = true
 itertools.workspace = true
 jsonwebtoken.workspace = true
-libc.workspace = true
 maplit.workspace = true
 mime.workspace = true
 mz-alloc = { path = "../alloc" }
