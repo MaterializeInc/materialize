@@ -488,6 +488,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
+                input_has_future_updates: _,
             } => {
                 ctx.indent.set();
                 if forms.raw && forms.arranged.is_empty() {
@@ -897,6 +898,7 @@ impl Plan {
                 input,
                 input_mfp,
                 forms,
+                input_has_future_updates: _,
             } => {
                 writeln!(f, "{}ArrangeBy{}", ctx.indent, annotations)?;
                 ctx.indented(|ctx| {
