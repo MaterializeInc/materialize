@@ -11,6 +11,7 @@ import { prettyStr } from "@materializeinc/sql-pretty";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { quoteIdentifier } from "~/api/materialize";
 import { cancelQuery } from "~/api/materialize/cancelQuery";
 import { MaterializeWebsocket } from "~/api/materialize/MaterializeWebsocket";
 import { type Column, MzDataType } from "~/api/materialize/types";
@@ -18,9 +19,11 @@ import { useCurrentEnvironmentHttpAddress } from "~/store/environments";
 
 import {
   type QueryResult,
+  worksheetCancelAtom,
   worksheetExecuteAtom,
   worksheetExecutionAtom,
   worksheetInlineResultsAtom,
+  worksheetNoticeAtom,
   worksheetResultAtom,
   worksheetSessionAtom,
 } from "./store";
@@ -91,6 +94,7 @@ export function useExecution() {
   const session = useAtomValue(worksheetSessionAtom);
   const setExecution = useSetAtom(worksheetExecutionAtom);
   const setResult = useSetAtom(worksheetResultAtom);
+  const setNotice = useSetAtom(worksheetNoticeAtom);
   const setInlineResults = useSetAtom(worksheetInlineResultsAtom);
   const setSession = useSetAtom(worksheetSessionAtom);
 
@@ -123,6 +127,7 @@ export function useExecution() {
     setInlineResults,
     setSession,
     setSocketState,
+    setNotice,
   });
   useEffect(() => {
     settersRef.current = {
@@ -130,9 +135,10 @@ export function useExecution() {
       setResult,
       setInlineResults,
       setSession,
+      setNotice,
       setSocketState,
     };
-  }, [setExecution, setResult, setInlineResults, setSession]);
+  }, [setExecution, setResult, setInlineResults, setSession, setNotice]);
 
   // Initialize socket — only recreate when httpAddress changes
   useEffect(() => {
@@ -180,6 +186,10 @@ export function useExecution() {
             break;
 
           case "CommandComplete": {
+            // Skip CommandComplete for SET statements sent as part of
+            // multi-query execution (e.g. SET cluster before EXPLAIN ANALYZE).
+            if (result.payload === "SET" || result.payload === "RESET") break;
+
             const query = currentQueryRef.current;
             if (query) {
               const durationMs = Date.now() - query.startTime;
@@ -253,6 +263,11 @@ export function useExecution() {
           case "ReadyForQuery":
             currentQueryRef.current = null;
             setters.setExecution({ status: "idle" });
+            setters.setNotice(null);
+            break;
+
+          case "Notice":
+            setters.setNotice(result.payload.message);
             break;
 
           case "ParameterStatus": {
@@ -279,7 +294,16 @@ export function useExecution() {
                 return next;
               });
             }
-            setters.setResult(null);
+            const errorParts = [result.payload.message];
+            if (result.payload.detail) errorParts.push(result.payload.detail);
+            if (result.payload.hint) errorParts.push(`HINT: ${result.payload.hint}`);
+            setters.setResult({
+              columns: [{ name: "error", type_oid: MzDataType.text, type_len: -1, type_mod: -1 }],
+              rows: [[errorParts.join("\n\n")]],
+              commandComplete: "ERROR",
+              durationMs: query ? Date.now() - query.startTime : 0,
+              displayMode: "text",
+            });
             setters.setExecution({ status: "idle" });
             currentQueryRef.current = null;
             break;
@@ -311,20 +335,49 @@ export function useExecution() {
    * statement in the editor, used to position inline result decorations.
    */
   const execute = useCallback(
-    async (sql: string, kind: string, offset = 0) => {
+    async (
+      sql: string,
+      kind: string,
+      offset = 0,
+      options?: { cluster?: string; replica?: string },
+    ) => {
       const socket = socketRef.current;
       if (!socket) return;
 
-      // Clear previous inline results
+      // Clear previous state
       setInlineResults(new Map());
+      setNotice(null);
 
-      // Cancel-and-replace: cancel running query first
+      // Cancel-and-replace: cancel running query and wait for the socket
+      // to become ready before sending the new one.
       if (currentQueryRef.current && connectionIdRef.current) {
         try {
           await cancelQuery({
             params: { connectionId: connectionIdRef.current },
             getConnectionIdFromSessionIdQueryKey: ["worksheet-cancel-lookup"],
             cancelQueryQueryKey: ["worksheet-cancel"],
+          });
+          // Wait for the cancelled query's error/ReadyForQuery to arrive
+          // so the socket is free to accept a new query.
+          await new Promise<void>((resolve) => {
+            if (socket.getSnapshot().readyForQuery) {
+              resolve();
+              return;
+            }
+            const timeout = setTimeout(() => {
+              unsubscribe();
+              // Socket still busy after 5s — force reconnect
+              connectionIdRef.current = null;
+              socket.connect();
+              resolve();
+            }, 5000);
+            const unsubscribe = socket.onChange(() => {
+              if (socket.getSnapshot().readyForQuery) {
+                clearTimeout(timeout);
+                unsubscribe();
+                resolve();
+              }
+            });
           });
         } catch {
           // Best-effort cancel
@@ -341,20 +394,67 @@ export function useExecution() {
 
       setExecution({ status: "running", statementIndex: offset });
 
-      socket.send({ queries: [{ query: sql }] });
+      const queries: { query: string }[] = [];
+      const restoreCluster = options?.cluster
+        ? sessionRef.current.cluster
+        : null;
+      if (options?.cluster) {
+        queries.push({ query: `SET cluster = ${options.cluster}` });
+      }
+      if (options?.replica) {
+        queries.push({ query: `SET cluster_replica = '${options.replica}'` });
+      }
+      queries.push({ query: sql });
+      if (options?.replica) {
+        queries.push({ query: `RESET cluster_replica` });
+      }
+      if (restoreCluster) {
+        queries.push({ query: `SET cluster = ${restoreCluster}` });
+      }
+      socket.send({ queries });
     },
-    [setExecution, setInlineResults],
+    [setExecution, setInlineResults, setNotice],
   );
 
-  // Expose execute to global components (e.g. FloatingResultPanel) via atom.
+  const cancel = useCallback(async () => {
+    if (connectionIdRef.current) {
+      try {
+        await cancelQuery({
+          params: { connectionId: connectionIdRef.current },
+          getConnectionIdFromSessionIdQueryKey: ["worksheet-cancel-lookup"],
+          cancelQueryQueryKey: ["worksheet-cancel"],
+        });
+        return;
+      } catch {
+        // pg_cancel_backend failed — fall through to reconnect
+      }
+    }
+    // Force-reset: disconnect and reconnect the WebSocket, which kills
+    // the running query server-side.
+    const socket = socketRef.current;
+    if (socket) {
+      currentQueryRef.current = null;
+      setExecution({ status: "idle" });
+      setResult(null);
+      socket.connect();
+    }
+  }, [setExecution, setResult]);
+
+  // Expose execute and cancel to global components via atoms.
   const setExecute = useSetAtom(worksheetExecuteAtom);
+  const setCancel = useSetAtom(worksheetCancelAtom);
   useEffect(() => {
     setExecute(() => execute);
     return () => setExecute(null);
   }, [execute, setExecute]);
+  useEffect(() => {
+    setCancel(() => cancel);
+    return () => setCancel(null);
+  }, [cancel, setCancel]);
 
   return {
     execute,
+    cancel,
     isConnected: socketState.isConnected,
     isReady: socketState.readyForQuery,
     error: socketState.error,

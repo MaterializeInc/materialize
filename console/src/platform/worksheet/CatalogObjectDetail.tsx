@@ -20,7 +20,6 @@ import {
   VStack,
 } from "@chakra-ui/react";
 import { prettyStr } from "@materializeinc/sql-pretty";
-import { useSetAtom } from "jotai";
 import React, { useCallback } from "react";
 import { Link as RouterLink, useNavigate } from "react-router-dom";
 
@@ -54,11 +53,7 @@ import { useRegionSlug } from "~/store/environments";
 import type { MaterializeTheme } from "~/theme";
 
 import type { CatalogSelection } from "./CatalogPanel";
-import {
-  type QueryResult,
-  resultsPanelOpenAtom,
-  worksheetResultAtom,
-} from "./store";
+import { type QueryResult, useShowResult } from "./store";
 
 /**
  * Props for the catalog object detail panel, shown when a user drills into
@@ -164,8 +159,7 @@ const CatalogDetailViewContent = ({
   const { colors } = useTheme<MaterializeTheme>();
   const regionSlug = useRegionSlug();
   const navigate = useNavigate();
-  const setResult = useSetAtom(worksheetResultAtom);
-  const setResultsPanelOpen = useSetAtom(resultsPanelOpenAtom);
+  const showResult = useShowResult();
   const flags = useFlags();
   const showColumns = COLUMN_TYPES.has(objectType);
   const showIndexes = INDEX_TYPES.has(objectType);
@@ -201,8 +195,7 @@ const CatalogDetailViewContent = ({
         commandComplete: "ERROR",
         durationMs: 0,
       };
-      setResult(queryResult);
-      setResultsPanelOpen(true);
+      showResult(queryResult);
     },
   });
 
@@ -244,9 +237,10 @@ const CatalogDetailViewContent = ({
             displayMode: "sql",
             kind,
             objectName: qualifiedName,
+            clusterName: clusterName ?? undefined,
+            clusterId: clusterId ?? undefined,
           };
-          setResult(queryResult);
-          setResultsPanelOpen(true);
+          showResult(queryResult);
         },
       },
     );
@@ -257,8 +251,9 @@ const CatalogDetailViewContent = ({
     databaseName,
     schemaName,
     objectName,
-    setResult,
-    setResultsPanelOpen,
+    clusterId,
+    clusterName,
+    showResult,
   ]);
 
   const handleOpenMonitor = useCallback(() => {
@@ -502,7 +497,7 @@ const CatalogDetailViewContent = ({
                                 } catch {
                                   formattedSql = rawSql;
                                 }
-                                setResult({
+                                showResult({
                                   columns: [
                                     {
                                       name: "sql",
@@ -517,8 +512,9 @@ const CatalogDetailViewContent = ({
                                   displayMode: "sql",
                                   kind: "show_create_index",
                                   objectName: idxQualifiedName,
+                                  clusterName: idx.clusterName ?? undefined,
+                                  clusterId: idx.clusterId ?? undefined,
                                 });
-                                setResultsPanelOpen(true);
                               },
                             },
                           );
@@ -649,7 +645,7 @@ const DependenciesSection = ({
             <HStack key={dep.id} justifyContent="space-between">
               <Link
                 fontSize="sm"
-                color={colors.accent.purple}
+                color={colors.accent.brightPurple}
                 onClick={() =>
                   onNavigate({
                     id: dep.id,

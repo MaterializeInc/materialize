@@ -338,7 +338,7 @@ const InlineColumnPreview = ({
       <Box pl="12" pb="2">
         <Link
           fontSize="xs"
-          color={colors.accent.purple}
+          color={colors.accent.brightPurple}
           onClick={(e) => {
             e.stopPropagation();
             onViewDetail();
