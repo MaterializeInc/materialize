@@ -2514,6 +2514,7 @@ pub mod audit_log_event_v1 {
         System = 16,
         ContinualTask = 17,
         NetworkPolicy = 18,
+        ClusterReplicaSize = 19,
     }
 
     #[derive(

@@ -78,6 +78,7 @@ Cascade
 Case
 Cast
 Catalog
+Cc
 Certificate
 Chain
 Chains
@@ -120,6 +121,7 @@ Createnetworkpolicy
 Createrole
 Creation
 Credential
+Credits
 Cross
 Cse
 Csv
@@ -148,6 +150,7 @@ Delta
 Desc
 Details
 Direction
+Disabled
 Discard
 Disk
 Distinct
@@ -159,6 +162,7 @@ Eager
 Element
 Else
 Enable
+Enabled
 End
 Endpoint
 Enforced
@@ -171,6 +175,7 @@ Estimate
 Every
 Except
 Exclude
+Exclusive
 Execute
 Exists
 Expected
@@ -344,6 +349,7 @@ Partitions
 Password
 Path
 Pattern
+Per
 Physical
 Plan
 Plans
@@ -427,6 +433,7 @@ Secrets
 Security
 Seed
 Select
+Selectors
 Sequences
 Serializable
 Server

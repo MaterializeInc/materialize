@@ -677,6 +677,7 @@ Snapshot {
             ),
         },
     },
+    cluster_replica_sizes: {},
     introspection_sources: {},
     id_allocator: {
         IdAllocKey {

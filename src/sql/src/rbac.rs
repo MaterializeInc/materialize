@@ -455,6 +455,16 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateClusterReplicaSize(plan::CreateClusterReplicaSizePlan { .. }) => {
+            RbacRequirements {
+                superuser_action: Some("create cluster replica size".to_string()),
+                ..Default::default()
+            }
+        }
+        Plan::DropClusterReplicaSize(plan::DropClusterReplicaSizePlan { .. }) => RbacRequirements {
+            superuser_action: Some("drop cluster replica size".to_string()),
+            ..Default::default()
+        },
         Plan::CreateCluster(plan::CreateClusterPlan {
             name: _,
             variant: _,

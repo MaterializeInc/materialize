@@ -1493,6 +1493,8 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedContinualTask { .. }
         | ExecuteResponse::CreatedType
         | ExecuteResponse::CreatedNetworkPolicy
+        | ExecuteResponse::CreatedClusterReplicaSize
+        | ExecuteResponse::DroppedClusterReplicaSize
         | ExecuteResponse::Comment
         | ExecuteResponse::Deleted(_)
         | ExecuteResponse::DiscardedTemp

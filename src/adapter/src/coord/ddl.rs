@@ -1291,7 +1291,9 @@ impl Coordinator {
                 | Op::ResetAllSystemConfiguration { .. }
                 | Op::Comment { .. }
                 | Op::WeirdStorageUsageUpdates { .. }
-                | Op::InjectAuditEvents { .. } => {}
+                | Op::InjectAuditEvents { .. }
+                | Op::CreateClusterReplicaSize { .. }
+                | Op::DropClusterReplicaSize { .. } => {}
             }
         }
 

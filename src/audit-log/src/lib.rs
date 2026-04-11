@@ -145,6 +145,7 @@ pub enum ObjectType {
     Func,
     Index,
     MaterializedView,
+    ClusterReplicaSize,
     NetworkPolicy,
     Role,
     Secret,
@@ -162,6 +163,7 @@ impl ObjectType {
         match self {
             ObjectType::Cluster => "Cluster",
             ObjectType::ClusterReplica => "Cluster Replica",
+            ObjectType::ClusterReplicaSize => "Cluster Replica Size",
             ObjectType::Connection => "Connection",
             ObjectType::ContinualTask => "Continual Task",
             ObjectType::Database => "Database",

@@ -507,6 +507,9 @@ Trace {
             ),
         ],
     },
+    cluster_replica_sizes: CollectionTrace {
+        values: [],
+    },
     comments: CollectionTrace {
         values: [],
     },

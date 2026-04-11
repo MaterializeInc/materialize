@@ -82,6 +82,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             mz_audit_log::ObjectType::ClusterReplica => {
                 crate::objects::audit_log_event_v1::ObjectType::ClusterReplica
             }
+            mz_audit_log::ObjectType::ClusterReplicaSize => {
+                crate::objects::audit_log_event_v1::ObjectType::ClusterReplicaSize
+            }
             mz_audit_log::ObjectType::Connection => {
                 crate::objects::audit_log_event_v1::ObjectType::Connection
             }
@@ -132,6 +135,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             crate::objects::audit_log_event_v1::ObjectType::ClusterReplica => {
                 Ok(mz_audit_log::ObjectType::ClusterReplica)
+            }
+            crate::objects::audit_log_event_v1::ObjectType::ClusterReplicaSize => {
+                Ok(mz_audit_log::ObjectType::ClusterReplicaSize)
             }
             crate::objects::audit_log_event_v1::ObjectType::Connection => {
                 Ok(mz_audit_log::ObjectType::Connection)

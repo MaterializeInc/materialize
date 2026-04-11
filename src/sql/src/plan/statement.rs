@@ -166,6 +166,12 @@ pub fn describe(
         }
         Statement::CreateContinualTask(stmt) => ddl::describe_create_continual_task(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
+        Statement::CreateClusterReplicaSize(stmt) => {
+            ddl::describe_create_cluster_replica_size(&scx, stmt)?
+        }
+        Statement::DropClusterReplicaSize(stmt) => {
+            ddl::describe_drop_cluster_replica_size(&scx, stmt)?
+        }
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
 
@@ -361,6 +367,10 @@ pub fn plan(
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
         Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
+        Statement::CreateClusterReplicaSize(stmt) => {
+            ddl::plan_create_cluster_replica_size(scx, stmt)
+        }
+        Statement::DropClusterReplicaSize(stmt) => ddl::plan_drop_cluster_replica_size(scx, stmt),
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
 
@@ -1085,6 +1095,8 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateView(_) => DDL,
             Statement::CreateMaterializedView(_) => DDL,
             Statement::CreateNetworkPolicy(_) => DDL,
+            Statement::CreateClusterReplicaSize(_) => DDL,
+            Statement::DropClusterReplicaSize(_) => DDL,
             Statement::DropObjects(_) => DDL,
             Statement::DropOwned(_) => DDL,
 

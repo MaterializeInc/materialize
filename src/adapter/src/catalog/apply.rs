@@ -1476,10 +1476,21 @@ impl CatalogState {
                         .expect("could not pack audit log update"),
                 ]
             }
+            StateUpdateKind::ClusterReplicaSize(ref size) => {
+                if size.allocation.disabled {
+                    Vec::new()
+                } else {
+                    CatalogState::pack_replica_size_update(
+                        &size.name,
+                        &size.allocation,
+                        size.builtin,
+                        diff,
+                    )
+                }
+            }
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
-            | StateUpdateKind::ClusterReplicaSize(_)
             | StateUpdateKind::StorageCollectionMetadata(_)
             | StateUpdateKind::UnfinalizedShard(_) => Vec::new(),
         }

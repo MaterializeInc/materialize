@@ -1296,6 +1296,8 @@ impl Coordinator {
                     | Statement::CreateView(_)
                     | Statement::CreateWebhookSource(_)
                     | Statement::CreateNetworkPolicy(_)
+                    | Statement::CreateClusterReplicaSize(_)
+                    | Statement::DropClusterReplicaSize(_)
                     | Statement::Delete(_)
                     | Statement::DropObjects(_)
                     | Statement::DropOwned(_)

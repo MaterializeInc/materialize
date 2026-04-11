@@ -82,6 +82,8 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateSchema(_)
         | Plan::CreateRole(_)
         | Plan::CreateNetworkPolicy(_)
+        | Plan::CreateClusterReplicaSize(_)
+        | Plan::DropClusterReplicaSize(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
         | Plan::CreateContinualTask(_)

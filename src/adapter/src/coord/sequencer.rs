@@ -302,6 +302,18 @@ impl Coordinator {
                         .await;
                     ctx.retire(res);
                 }
+                Plan::CreateClusterReplicaSize(plan) => {
+                    let res = self
+                        .sequence_create_cluster_replica_size(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
+                }
+                Plan::DropClusterReplicaSize(plan) => {
+                    let res = self
+                        .sequence_drop_cluster_replica_size(ctx.session(), plan)
+                        .await;
+                    ctx.retire(res);
+                }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);

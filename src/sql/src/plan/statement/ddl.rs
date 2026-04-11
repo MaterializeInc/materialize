@@ -53,9 +53,10 @@ use mz_sql_parser::ast::{
     AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
     AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
-    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
-    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
+    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName, ClusterReplicaSizeOption,
+    ClusterReplicaSizeOptionName, ClusterScheduleOptionValue, ColumnDef, ColumnOption,
+    CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
+    ContinualTaskOption, ContinualTaskOptionName, CreateClusterReplicaSizeStatement,
     CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
     CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
     CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
@@ -68,19 +69,20 @@ use mz_sql_parser::ast::{
     CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
-    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
-    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
-    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
-    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
-    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
-    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
-    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
-    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
-    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
-    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
-    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
+    DocOnIdentifier, DocOnSchema, DropClusterReplicaSizeStatement, DropObjectsStatement,
+    DropOwnedStatement, Expr, Format, FormatSpecifier, IcebergSinkConfigOption, Ident,
+    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
+    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
+    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
+    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
+    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
+    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
+    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
+    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
+    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
+    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
+    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
+    WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -154,11 +156,12 @@ use crate::plan::{
     AlterSourceTimestampIntervalPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
     AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
+    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterReplicaSizePlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
+    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropClusterReplicaSizePlan, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
     MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
     PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
     Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
@@ -167,7 +170,8 @@ use crate::plan::{
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
-    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
+    ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_CUSTOM_CLUSTER_REPLICA_SIZES,
+    ENABLE_KAFKA_SINK_HEADERS, ENABLE_REFRESH_EVERY_MVS,
     ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
 };
 use crate::{names, parse};
@@ -4804,6 +4808,151 @@ pub fn plan_create_network_policy(
     }))
 }
 
+pub fn describe_create_cluster_replica_size(
+    _: &StatementContext,
+    _: CreateClusterReplicaSizeStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_create_cluster_replica_size(
+    scx: &StatementContext,
+    CreateClusterReplicaSizeStatement { name, options }: CreateClusterReplicaSizeStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    // mz_system can always manage sizes; others need the feature flag.
+    if !scx.catalog.active_role_id().is_system() {
+        scx.require_feature_flag(&ENABLE_CUSTOM_CLUSTER_REPLICA_SIZES)?;
+    }
+
+    let option_extracted: ClusterReplicaSizeOptionExtracted = options.try_into()?;
+
+    let workers = mz_ore::cast::u64_to_usize(u64::from(option_extracted.workers.unwrap_or(1)));
+    let scale = option_extracted.scale.unwrap_or(1);
+    let credits_per_hour_str = option_extracted.credits_per_hour.ok_or_else(|| {
+        sql_err!("CREDITS PER HOUR must be specified when creating cluster replica sizes")
+    })?;
+    let credits_per_hour = strconv::parse_numeric(&credits_per_hour_str)
+        .map_err(|_| {
+            sql_err!(
+                "invalid CREDITS PER HOUR value: {}",
+                credits_per_hour_str.quoted()
+            )
+        })?
+        .0;
+
+    // Parse memory/disk limits: supports human-readable formats like '4GiB', '512MiB', '1GB',
+    // or raw byte counts.
+    let memory_limit = option_extracted
+        .memory_limit
+        .map(|s| parse_bytes_str(&s, "MEMORY LIMIT"))
+        .transpose()?;
+    let disk_limit = option_extracted
+        .disk_limit
+        .map(|s| parse_bytes_str(&s, "DISK LIMIT"))
+        .transpose()?;
+
+    // Parse CPU limit: supports cores ('0.5', '2'), millicpus ('500m'), or raw nanocpus.
+    let cpu_limit = option_extracted
+        .cpu_limit
+        .map(|s| parse_cpu_str(&s))
+        .transpose()?;
+
+    let selectors = match option_extracted.node_selectors {
+        Some(s) => {
+            serde_json::from_str(&s).map_err(|e| sql_err!("invalid NODE SELECTORS value: {}", e))?
+        }
+        None => std::collections::BTreeMap::new(),
+    };
+
+    Ok(Plan::CreateClusterReplicaSize(
+        CreateClusterReplicaSizePlan {
+            name: normalize::ident(name),
+            workers,
+            scale,
+            credits_per_hour,
+            memory_limit,
+            cpu_limit,
+            disk_limit,
+            cpu_exclusive: option_extracted.cpu_exclusive.unwrap_or(false),
+            disabled: option_extracted.disabled.unwrap_or(false),
+            selectors,
+            is_cc: option_extracted.is_cc.unwrap_or(true),
+            swap_enabled: option_extracted.swap_enabled.unwrap_or(false),
+        },
+    ))
+}
+
+/// Parse a human-readable byte string into raw bytes.
+/// Supports: '4GiB', '512MiB', '1GB', '1024MB', '1073741824', etc.
+fn parse_bytes_str(s: &str, option_name: &str) -> Result<u64, PlanError> {
+    // First try as raw u64
+    if let Ok(bytes) = s.parse::<u64>() {
+        return Ok(bytes);
+    }
+    // Normalize GiB/MiB/TiB/KiB to GB/MB/TB/kB for mz_repr::bytes::ByteSize parser
+    let normalized = s
+        .replace("GiB", "GB")
+        .replace("MiB", "MB")
+        .replace("TiB", "TB")
+        .replace("KiB", "kB");
+    let byte_size = normalized
+        .parse::<mz_repr::bytes::ByteSize>()
+        .map_err(|e| sql_err!("invalid {} value '{}': {}", option_name, s, e))?;
+    Ok(byte_size.as_bytes())
+}
+
+/// Parse a CPU string into nanocpus.
+/// Supports: '0.5' (cores), '500m' (millicpus), '2000000000' (nanocpus).
+fn parse_cpu_str(s: &str) -> Result<u64, PlanError> {
+    let trimmed = s.trim();
+    if let Some(milli_str) = trimmed.strip_suffix('m') {
+        // Millicpus: '500m' -> 500_000_000 nanocpus
+        let millicpus = milli_str
+            .parse::<u64>()
+            .map_err(|_| sql_err!("invalid CPU LIMIT value '{}': expected millicpus", s))?;
+        Ok(millicpus * 1_000_000)
+    } else if trimmed.contains('.') {
+        // Fractional cores: '0.5' -> 500_000_000 nanocpus
+        let cores = trimmed
+            .parse::<f64>()
+            .map_err(|_| sql_err!("invalid CPU LIMIT value '{}': expected cores", s))?;
+        #[allow(clippy::as_conversions)]
+        Ok((cores * 1_000_000_000.0) as u64)
+    } else {
+        // Could be whole cores or raw nanocpus; treat values <= 1000 as cores
+        let val = trimmed
+            .parse::<u64>()
+            .map_err(|_| sql_err!("invalid CPU LIMIT value '{}'", s))?;
+        if val <= 1000 {
+            // Whole cores
+            Ok(val * 1_000_000_000)
+        } else {
+            // Raw nanocpus
+            Ok(val)
+        }
+    }
+}
+
+pub fn describe_drop_cluster_replica_size(
+    _: &StatementContext,
+    _: DropClusterReplicaSizeStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_drop_cluster_replica_size(
+    scx: &StatementContext,
+    DropClusterReplicaSizeStatement { name }: DropClusterReplicaSizeStatement,
+) -> Result<Plan, PlanError> {
+    if !scx.catalog.active_role_id().is_system() {
+        scx.require_feature_flag(&ENABLE_CUSTOM_CLUSTER_REPLICA_SIZES)?;
+    }
+
+    Ok(Plan::DropClusterReplicaSize(DropClusterReplicaSizePlan {
+        name: normalize::ident(name),
+    }))
+}
+
 pub fn plan_alter_network_policy(
     ctx: &StatementContext,
     AlterNetworkPolicyStatement { name, options }: AlterNetworkPolicyStatement<Aug>,
@@ -4884,6 +5033,21 @@ generate_extracted_config!(
     (Size, String),
     (Schedule, ClusterScheduleOptionValue),
     (WorkloadClass, OptionalString)
+);
+
+generate_extracted_config!(
+    ClusterReplicaSizeOption,
+    (Workers, u32),
+    (Scale, u16),
+    (CreditsPerHour, String),
+    (MemoryLimit, String),
+    (CpuLimit, String),
+    (DiskLimit, String),
+    (CpuExclusive, bool),
+    (Disabled, bool),
+    (NodeSelectors, String),
+    (IsCc, bool),
+    (SwapEnabled, bool)
 );
 
 generate_extracted_config!(

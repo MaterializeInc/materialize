@@ -43,6 +43,10 @@ pub enum ErrorKind {
     ReservedNetworkPolicyName(String),
     #[error("system network policy '{0}' cannot be modified")]
     ReadOnlyNetworkPolicy(String),
+    #[error("cannot drop cluster replica size '{}' because it is in use by an existing replica", .0)]
+    ClusterReplicaSizeInUse(String),
+    #[error("cannot drop builtin cluster replica size '{}'", .0)]
+    ReadOnlyClusterReplicaSize(String),
     #[error("replica name {} is reserved", .0.quoted())]
     ReservedReplicaName(String),
     #[error("system cluster '{0}' cannot be modified")]

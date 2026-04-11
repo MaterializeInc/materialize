@@ -906,6 +906,57 @@ impl Coordinator {
     }
 
     #[instrument]
+    pub(super) async fn sequence_create_cluster_replica_size(
+        &mut self,
+        _session: &Session,
+        plan: plan::CreateClusterReplicaSizePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let op = catalog::Op::CreateClusterReplicaSize {
+            name: plan.name,
+            workers: plan.workers,
+            scale: plan.scale,
+            credits_per_hour: plan.credits_per_hour,
+            memory_limit: plan.memory_limit,
+            cpu_limit: plan.cpu_limit,
+            disk_limit: plan.disk_limit,
+            cpu_exclusive: plan.cpu_exclusive,
+            disabled: plan.disabled,
+            selectors: plan.selectors,
+            is_cc: plan.is_cc,
+            swap_enabled: plan.swap_enabled,
+        };
+        self.catalog_transact(None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::CreatedClusterReplicaSize)
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_drop_cluster_replica_size(
+        &mut self,
+        _session: &Session,
+        plan: plan::DropClusterReplicaSizePlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // Check in-use
+        if self
+            .catalog()
+            .state()
+            .is_cluster_replica_size_in_use(&plan.name)
+        {
+            return Err(AdapterError::Catalog(
+                mz_catalog::memory::error::Error::new(
+                    mz_catalog::memory::error::ErrorKind::ClusterReplicaSizeInUse(
+                        plan.name.clone(),
+                    ),
+                ),
+            ));
+        }
+        let op = catalog::Op::DropClusterReplicaSize { name: plan.name };
+        self.catalog_transact(None, vec![op])
+            .await
+            .map(|_| ExecuteResponse::DroppedClusterReplicaSize)
+    }
+
+    #[instrument]
     pub(super) async fn sequence_alter_network_policy(
         &mut self,
         session: &Session,
