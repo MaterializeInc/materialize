@@ -7,7 +7,7 @@ menu:
   main:
     parent: "mcp-server"
     weight: 20
-    identifier: "mcp-server-agents"
+    identifier: "mcp-server-agent"
 ---
 
 {{< public-preview />}}
@@ -19,7 +19,7 @@ process or external server is required.
 
 ## Overview
 
-**Endpoint**: `/api/mcp/agents`
+**Endpoint**: `/api/mcp/agent`
 
 - Lets AI agents discover and query your real-time data products over HTTP.
 
@@ -262,7 +262,7 @@ If a data product is missing, check that:
    your MCP endpoint URL is:
 
    ```
-   http://<host>:6876/api/mcp/agents
+   http://<host>:6876/api/mcp/agent
    ```
 
    - For your Self-Managed Materialize deployment in AWS/GCP/Azure, the `<host>`
@@ -318,9 +318,9 @@ Create a `.mcp.json` file in your project directory:
 ```json
 {
   "mcpServers": {
-    "materialize-agents": {
+    "materialize-agent": {
       "type": "http",
-      "url": "https://<region-id>.materialize.cloud/api/mcp/agents",
+      "url": "https://<region-id>.materialize.cloud/api/mcp/agent",
       "headers": {
         "Authorization": "Basic <base64-token>"
       }
@@ -338,8 +338,8 @@ Add to your Claude Desktop MCP configuration (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
-    "materialize-agents": {
-      "url": "https://<region-id>.materialize.cloud/api/mcp/agents",
+    "materialize-agent": {
+      "url": "https://<region-id>.materialize.cloud/api/mcp/agent",
       "headers": {
         "Authorization": "Basic <base64-token>"
       }
@@ -357,8 +357,8 @@ In Cursor's MCP settings (`.cursor/mcp.json`):
 ```json
 {
   "mcpServers": {
-    "materialize-agents": {
-      "url": "https://<region-id>.materialize.cloud/api/mcp/agents",
+    "materialize-agent": {
+      "url": "https://<region-id>.materialize.cloud/api/mcp/agent",
       "headers": {
         "Authorization": "Basic <base64-token>"
       }
@@ -374,7 +374,7 @@ In Cursor's MCP settings (`.cursor/mcp.json`):
 Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests:
 
 ```bash
-curl -X POST <baseURL>/api/mcp/agents \
+curl -X POST <baseURL>/api/mcp/agent \
   -H "Content-Type: application/json" \
   -H "Authorization: Basic <base64-token>" \
   -d '{
@@ -476,7 +476,7 @@ Read rows from a data product.
 
 {{< note >}}
 The `query` tool is disabled by default. To enable it, set the
-`enable_mcp_agents_query_tool` system parameter to `true`.
+`enable_mcp_agent_query_tool` system parameter to `true`.
 {{< /note >}}
 
 Execute a SQL `SELECT` statement against your data products.
