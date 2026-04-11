@@ -690,7 +690,7 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, G::Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {

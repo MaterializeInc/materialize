@@ -59,22 +59,21 @@ use crate::typedefs::{
     RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
-impl<G, T> Context<G, T>
+impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
+    G::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &self,
         input_key: Option<Vec<MirScalarExpr>>,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<G>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         mfp_after: Option<MapFilterProject>,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<G> {
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
             m.into_plan()
@@ -177,7 +176,7 @@ where
         err_input: VecCollection<S, DataflowError, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> CollectionBundle<S, T>
+    ) -> CollectionBundle<S>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {

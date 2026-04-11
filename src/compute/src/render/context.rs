@@ -58,14 +58,13 @@ use crate::typedefs::{
 /// These assets include dataflow-local collections and arrangements, as well as imported
 /// arrangements from outside the dataflow.
 ///
-/// Context has two timestamp types, one from `S::Timestamp` and one from `T`, where the
+/// Context has two timestamp types, one from `S::Timestamp` and `mz_repr::Timestamp`, where the
 /// former must refine the latter. The former is the timestamp used by the scope in question,
 /// and the latter is the timestamp of imported traces. The two may be different in the case
 /// of regions or iteration.
-pub struct Context<S: Scope, T = mz_repr::Timestamp>
+pub struct Context<S: Scope>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// The scope within which all managed collections exist.
     ///
@@ -81,19 +80,19 @@ where
     ///
     /// We *must* apply it to sinks, to ensure correct outputs.
     /// We *should* apply it to sources and imported traces, because it improves performance.
-    pub as_of_frontier: Antichain<T>,
+    pub as_of_frontier: Antichain<mz_repr::Timestamp>,
     /// Frontier after which updates should not be emitted.
     /// Used to limit the amount of work done when appropriate.
-    pub until: Antichain<T>,
+    pub until: Antichain<mz_repr::Timestamp>,
     /// Bindings of identifiers to collections.
-    pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
+    pub bindings: BTreeMap<Id, CollectionBundle<S>>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
     /// past this frontier, except the empty frontier.
-    pub dataflow_expiration: Antichain<T>,
+    pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
     /// The config set for this context.
     pub config_set: Rc<ConfigSet>,
 }
@@ -144,10 +143,9 @@ where
     }
 }
 
-impl<S: Scope, T> Context<S, T>
+impl<S: Scope> Context<S>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -156,18 +154,18 @@ where
     pub fn insert_id(
         &mut self,
         id: Id,
-        collection: CollectionBundle<S, T>,
-    ) -> Option<CollectionBundle<S, T>> {
+        collection: CollectionBundle<S>,
+    ) -> Option<CollectionBundle<S>> {
         self.bindings.insert(id, collection)
     }
     /// Remove a collection bundle by an identifier.
     ///
     /// The primary use of this method is uninstalling `Let` bindings.
-    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S, T>> {
+    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S>> {
         self.bindings.remove(&id)
     }
     /// Melds a collection bundle to whatever exists.
-    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S, T>) {
+    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S>) {
         if !self.bindings.contains_key(&id) {
             self.bindings.insert(id, collection);
         } else {
@@ -184,7 +182,7 @@ where
         }
     }
     /// Look up a collection bundle by an identifier.
-    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S, T>> {
+    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S>> {
         self.bindings.get(&id).cloned()
     }
 
@@ -193,17 +191,16 @@ where
     }
 }
 
-impl<S: Scope, T> Context<S, T>
+impl<S: Scope> Context<S>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
         &self,
         region: &Child<'a, S, S::Timestamp>,
         bindings: Option<&std::collections::BTreeSet<Id>>,
-    ) -> Context<Child<'a, S, S::Timestamp>, T> {
+    ) -> Context<Child<'a, S, S::Timestamp>> {
         let bindings = self
             .bindings
             .iter()
@@ -229,10 +226,9 @@ where
 
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<S: Scope, T = mz_repr::Timestamp>
+pub enum ArrangementFlavor<S: Scope>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// A dataflow-local arrangement.
     Local(
@@ -245,15 +241,14 @@ where
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<S, RowRowEnter<T, Diff, S::Timestamp>>,
-        Arranged<S, ErrEnter<T, S::Timestamp>>,
+        Arranged<S, RowRowEnter<mz_repr::Timestamp, Diff, S::Timestamp>>,
+        Arranged<S, ErrEnter<mz_repr::Timestamp, S::Timestamp>>,
     ),
 }
 
-impl<S: Scope, T> ArrangementFlavor<S, T>
+impl<S: Scope> ArrangementFlavor<S>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -327,22 +322,21 @@ where
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let oks = CollectionBundle::<S>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let oks = CollectionBundle::<S>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
         }
     }
 }
-impl<S: Scope, T> ArrangementFlavor<S, T>
+impl<S: Scope> ArrangementFlavor<S>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
@@ -356,7 +350,7 @@ where
     pub fn enter_region<'a>(
         &self,
         region: &Child<'a, S, S::Timestamp>,
-    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>, T> {
+    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
                 oks.clone().enter_region(region),
@@ -370,13 +364,12 @@ where
         }
     }
 }
-impl<'a, S: Scope, T> ArrangementFlavor<Child<'a, S, S::Timestamp>, T>
+impl<'a, S: Scope> ArrangementFlavor<Child<'a, S, S::Timestamp>>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Extracts the arrangement flavor from a region.
-    pub fn leave_region(&self) -> ArrangementFlavor<S, T> {
+    pub fn leave_region(&self) -> ArrangementFlavor<S> {
         match self {
             ArrangementFlavor::Local(oks, errs) => {
                 ArrangementFlavor::Local(oks.clone().leave_region(), errs.clone().leave_region())
@@ -395,22 +388,20 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<S: Scope, T = mz_repr::Timestamp>
+pub struct CollectionBundle<S: Scope>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     pub collection: Option<(
         VecCollection<S, Row, Diff>,
         VecCollection<S, DataflowError, Diff>,
     )>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
+    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S>>,
 }
 
-impl<S: Scope, T> CollectionBundle<S, T>
+impl<S: Scope> CollectionBundle<S>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
@@ -424,10 +415,7 @@ where
     }
 
     /// Inserts arrangements by the expressions on which they are keyed.
-    pub fn from_expressions(
-        exprs: Vec<MirScalarExpr>,
-        arrangements: ArrangementFlavor<S, T>,
-    ) -> Self {
+    pub fn from_expressions(exprs: Vec<MirScalarExpr>, arrangements: ArrangementFlavor<S>) -> Self {
         let mut arranged = BTreeMap::new();
         arranged.insert(exprs, arrangements);
         Self {
@@ -439,7 +427,7 @@ where
     /// Inserts arrangements by the columns on which they are keyed.
     pub fn from_columns<I: IntoIterator<Item = usize>>(
         columns: I,
-        arrangements: ArrangementFlavor<S, T>,
+        arrangements: ArrangementFlavor<S>,
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
@@ -465,7 +453,7 @@ where
     pub fn enter_region<'a>(
         &self,
         region: &Child<'a, S, S::Timestamp>,
-    ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
+    ) -> CollectionBundle<Child<'a, S, S::Timestamp>> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
                 (
@@ -482,13 +470,12 @@ where
     }
 }
 
-impl<'a, S: Scope, T> CollectionBundle<Child<'a, S, S::Timestamp>, T>
+impl<'a, S: Scope> CollectionBundle<Child<'a, S, S::Timestamp>>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Extracts the collection bundle from a region.
-    pub fn leave_region(&self) -> CollectionBundle<S, T> {
+    pub fn leave_region(&self) -> CollectionBundle<S> {
         CollectionBundle {
             collection: self
                 .collection
@@ -503,10 +490,9 @@ where
     }
 }
 
-impl<S: Scope, T> CollectionBundle<S, T>
+impl<S: Scope> CollectionBundle<S>
 where
-    T: MzTimestamp,
-    S::Timestamp: MzTimestamp + Refines<T>,
+    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
@@ -686,16 +672,15 @@ where
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S, T>> {
+    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S>> {
         self.arranged.get(key).map(|x| x.clone())
     }
 }
 
-impl<S, T> CollectionBundle<S, T>
+impl<S> CollectionBundle<S>
 where
-    T: MzTimestamp,
     S: Scope,
-    S::Timestamp: Refines<T> + RenderTimestamp,
+    S::Timestamp: Refines<mz_repr::Timestamp> + RenderTimestamp,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///

@@ -72,14 +72,13 @@ where
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
-pub fn build_threshold_basic<G, T>(
-    input: CollectionBundle<G, T>,
+pub fn build_threshold_basic<G>(
+    input: CollectionBundle<G>,
     key: Vec<MirScalarExpr>,
-) -> CollectionBundle<G, T>
+) -> CollectionBundle<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
+    G::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     let arrangement = input
         .arrangement(&key)
@@ -107,17 +106,16 @@ where
     }
 }
 
-impl<G, T> Context<G, T>
+impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
+    G::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     pub(crate) fn render_threshold(
         &self,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<G>,
         threshold_plan: ThresholdPlan,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<G> {
         match threshold_plan {
             ThresholdPlan::Basic(BasicThresholdPlan {
                 ensure_arrangement: (key, _, _),
