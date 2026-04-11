@@ -32,7 +32,7 @@ use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
 use mz_repr::role_id::RoleId;
 use mz_repr::user::{ExternalUserMetadata, InternalUserMetadata};
-use mz_repr::{CatalogItemId, Datum, Row, RowIterator, SqlScalarType, TimestampManipulation};
+use mz_repr::{CatalogItemId, Datum, Row, RowIterator, SqlScalarType};
 use mz_sql::ast::{AstInfo, Raw, Statement, TransactionAccessMode};
 use mz_sql::plan::{Params, PlanContext, QueryWhen, StatementDesc};
 use mz_sql::session::metadata::SessionMetadata;
@@ -78,7 +78,7 @@ pub struct Session {
     uuid: Uuid,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
-    transaction: TransactionStatus<mz_repr::Timestamp>,
+    transaction: TransactionStatus,
     pcx: Option<PlanContext>,
     metrics: SessionMetrics,
     #[derivative(Debug = "ignore")]
@@ -462,7 +462,7 @@ impl Session {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(&mut self) -> TransactionStatus<mz_repr::Timestamp> {
+    pub fn clear_transaction(&mut self) -> TransactionStatus {
         self.portals.clear();
         self.pcx = None;
         self.state_revision += 1;
@@ -484,12 +484,12 @@ impl Session {
     }
 
     /// Returns the current transaction status.
-    pub fn transaction(&self) -> &TransactionStatus<mz_repr::Timestamp> {
+    pub fn transaction(&self) -> &TransactionStatus {
         &self.transaction
     }
 
     /// Returns the current transaction status.
-    pub fn transaction_mut(&mut self) -> &mut TransactionStatus<mz_repr::Timestamp> {
+    pub fn transaction_mut(&mut self) -> &mut TransactionStatus {
         &mut self.transaction
     }
 
@@ -501,10 +501,7 @@ impl Session {
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
-    pub fn add_transaction_ops(
-        &mut self,
-        add_ops: TransactionOps<mz_repr::Timestamp>,
-    ) -> Result<(), AdapterError> {
+    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
         self.transaction.add_ops(add_ops)
     }
 
@@ -1109,7 +1106,7 @@ impl LifecycleTimestamps {
 ///
 /// PostgreSQL's transaction states are in backend/access/transam/xact.c.
 #[derive(Debug)]
-pub enum TransactionStatus<T> {
+pub enum TransactionStatus {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
     /// Running a single-query transaction. Matches
@@ -1121,19 +1118,19 @@ pub enum TransactionStatus<T> {
     /// when using the extended query protocol. Therefore, we can guarantee that this state will
     /// always be a single-query transaction and never be upgraded into a multi-statement implicit
     /// query.
-    Started(Transaction<T>),
+    Started(Transaction),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
-    InTransaction(Transaction<T>),
+    InTransaction(Transaction),
     /// Currently in an implicit transaction started from a multi-statement query
     /// with more than 1 statements. Matches `TBLOCK_IMPLICIT_INPROGRESS`.
-    InTransactionImplicit(Transaction<T>),
+    InTransactionImplicit(Transaction),
     /// In a failed transaction. Matches `TBLOCK_ABORT`.
-    Failed(Transaction<T>),
+    Failed(Transaction),
 }
 
-impl<T: TimestampManipulation> TransactionStatus<T> {
+impl TransactionStatus {
     /// Extracts the inner transaction ops and write lock guard if not failed.
-    pub fn into_ops_and_lock_guard(self) -> (Option<TransactionOps<T>>, Option<WriteLocks>) {
+    pub fn into_ops_and_lock_guard(self) -> (Option<TransactionOps>, Option<WriteLocks>) {
         match self {
             TransactionStatus::Default | TransactionStatus::Failed(_) => (None, None),
             TransactionStatus::Started(txn)
@@ -1145,7 +1142,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     }
 
     /// Exposes the inner transaction.
-    pub fn inner(&self) -> Option<&Transaction<T>> {
+    pub fn inner(&self) -> Option<&Transaction> {
         match self {
             TransactionStatus::Default => None,
             TransactionStatus::Started(txn)
@@ -1156,7 +1153,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     }
 
     /// Exposes the inner transaction.
-    pub fn inner_mut(&mut self) -> Option<&mut Transaction<T>> {
+    pub fn inner_mut(&mut self) -> Option<&mut Transaction> {
         match self {
             TransactionStatus::Default => None,
             TransactionStatus::Started(txn)
@@ -1317,7 +1314,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
     /// If the operations are compatible but the operation metadata doesn't match. Such as reads at
     /// different timestamps, reads on different timelines, reads on different clusters, etc. It's
     /// up to the caller to make sure these are aligned.
-    pub fn add_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+    pub fn add_ops(&mut self, add_ops: TransactionOps) -> Result<(), AdapterError> {
         match self {
             TransactionStatus::Started(Transaction { ops, access, .. })
             | TransactionStatus::InTransaction(Transaction { ops, access, .. })
@@ -1446,7 +1443,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
 /// An abstraction allowing us to identify different transactions.
 pub type TransactionId = u64;
 
-impl<T> Default for TransactionStatus<T> {
+impl Default for TransactionStatus {
     fn default() -> Self {
         TransactionStatus::Default
     }
@@ -1454,11 +1451,11 @@ impl<T> Default for TransactionStatus<T> {
 
 /// State data for transactions.
 #[derive(Debug)]
-pub struct Transaction<T> {
+pub struct Transaction {
     /// Plan context.
     pub pcx: PlanContext,
     /// Transaction operations.
-    pub ops: TransactionOps<T>,
+    pub ops: TransactionOps,
     /// Uniquely identifies the transaction on a per connection basis.
     /// Two transactions started from separate connections may share the
     /// same ID.
@@ -1470,7 +1467,7 @@ pub struct Transaction<T> {
     access: Option<TransactionAccessMode>,
 }
 
-impl<T> Transaction<T> {
+impl Transaction {
     /// Tries to grant the write lock to this transaction for the remainder of its lifetime. Errors
     /// if this [`Transaction`] has already been granted write locks.
     fn try_grant_write_locks(&mut self, guards: WriteLocks) -> Result<(), &WriteLocks> {
@@ -1548,9 +1545,9 @@ impl From<TransactionCode> for String {
     }
 }
 
-impl<T> From<&TransactionStatus<T>> for TransactionCode {
+impl From<&TransactionStatus> for TransactionCode {
     /// Convert from the Session's version
-    fn from(status: &TransactionStatus<T>) -> TransactionCode {
+    fn from(status: &TransactionStatus) -> TransactionCode {
         match status {
             TransactionStatus::Default => TransactionCode::Idle,
             TransactionStatus::Started(_) => TransactionCode::InTransaction,
@@ -1568,7 +1565,7 @@ impl<T> From<&TransactionStatus<T>> for TransactionCode {
 /// happen at commit.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub enum TransactionOps<T> {
+pub enum TransactionOps {
     /// The transaction has been initiated, but no statement has yet been executed
     /// in it.
     None,
@@ -1578,7 +1575,7 @@ pub enum TransactionOps<T> {
     /// perform writes.
     Peeks {
         /// The timestamp and timestamp related metadata for the peek.
-        determination: TimestampDetermination<T>,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
         /// The cluster used to execute peeks.
         cluster_id: ClusterId,
         /// Whether this peek needs to be linearized.
@@ -1626,8 +1623,8 @@ pub enum TransactionOps<T> {
     },
 }
 
-impl<T> TransactionOps<T> {
-    fn timestamp_determination(self) -> Option<TimestampDetermination<T>> {
+impl TransactionOps {
+    fn timestamp_determination(self) -> Option<TimestampDetermination<mz_repr::Timestamp>> {
         match self {
             TransactionOps::Peeks { determination, .. } => Some(determination),
             TransactionOps::None
@@ -1639,7 +1636,7 @@ impl<T> TransactionOps<T> {
     }
 }
 
-impl<T> Default for TransactionOps<T> {
+impl Default for TransactionOps {
     fn default() -> Self {
         Self::None
     }

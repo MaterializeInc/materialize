@@ -2135,7 +2135,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         action: EndTransactionAction,
-    ) -> Result<(Option<TransactionOps<Timestamp>>, Option<WriteLocks>), AdapterError> {
+    ) -> Result<(Option<TransactionOps>, Option<WriteLocks>), AdapterError> {
         let txn = self.clear_transaction(ctx.session_mut()).await;
 
         if let EndTransactionAction::Commit = action {
