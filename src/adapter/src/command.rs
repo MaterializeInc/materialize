@@ -249,7 +249,7 @@ pub enum Command {
     },
 
     ExecuteSlowPathPeek {
-        dataflow_plan: Box<PeekDataflowPlan<mz_repr::Timestamp>>,
+        dataflow_plan: Box<PeekDataflowPlan>,
         determination: TimestampDetermination<mz_repr::Timestamp>,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
