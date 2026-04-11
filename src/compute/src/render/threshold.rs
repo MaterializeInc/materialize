@@ -21,7 +21,6 @@ use mz_repr::Diff;
 use timely::Container;
 use timely::container::PushInto;
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
