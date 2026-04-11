@@ -42,7 +42,6 @@ use serde::{Deserialize, Serialize};
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
@@ -50,31 +49,30 @@ use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
-use crate::render::{ArrangementFlavor, Pairer};
+use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowErrBuilder, RowErrSpine, RowRowAgent,
-    RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent, RowRowArrangement,
+    RowRowSpine, RowSpine, RowValSpine,
 };
 
-impl<G, T> Context<G, T>
+impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
+    G::Timestamp: RenderTimestamp,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &self,
         input_key: Option<Vec<MirScalarExpr>>,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<G>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         mfp_after: Option<MapFilterProject>,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<G> {
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
             m.into_plan()
@@ -177,7 +175,7 @@ where
         err_input: VecCollection<S, DataflowError, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> CollectionBundle<S, T>
+    ) -> CollectionBundle<S>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
