@@ -30,7 +30,7 @@ use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_timely_util::scope_label::ScopeExt;
-use timely::communication::Allocate;
+use timely::communication::allocator::Generic;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
@@ -81,7 +81,7 @@ impl Receiver {
 }
 
 /// Render the command channel dataflow.
-pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Receiver) {
+pub fn render(timely_worker: &mut TimelyWorker<Generic>) -> (Sender, Receiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
     let activator = Arc::new(Mutex::new(None));

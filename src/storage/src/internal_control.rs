@@ -20,7 +20,7 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::scope_label::ScopeExt;
 use serde::{Deserialize, Serialize};
-use timely::communication::Allocate;
+use timely::communication::allocator::Generic;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
@@ -166,8 +166,8 @@ impl InternalCommandReceiver {
     }
 }
 
-pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
-    timely_worker: &'w mut TimelyWorker<A>,
+pub(crate) fn setup_command_sequencer<'w>(
+    timely_worker: &'w mut TimelyWorker<Generic>,
 ) -> (InternalCommandSender, InternalCommandReceiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
