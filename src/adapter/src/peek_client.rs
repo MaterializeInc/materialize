@@ -166,7 +166,7 @@ impl PeekClient {
     pub async fn acquire_read_holds_and_least_valid_write(
         &mut self,
         id_bundle: &CollectionIdBundle,
-    ) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionLookupError> {
+    ) -> Result<(ReadHolds, Antichain<Timestamp>), CollectionLookupError> {
         let mut read_holds = ReadHolds::new();
         let mut upper = Antichain::new();
 
@@ -232,7 +232,7 @@ impl PeekClient {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
-        input_read_holds: ReadHolds<Timestamp>,
+        input_read_holds: ReadHolds,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,

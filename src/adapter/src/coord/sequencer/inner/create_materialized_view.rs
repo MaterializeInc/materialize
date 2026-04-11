@@ -793,7 +793,7 @@ impl Coordinator {
         &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
-        read_holds: &ReadHolds<mz_repr::Timestamp>,
+        read_holds: &ReadHolds,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,

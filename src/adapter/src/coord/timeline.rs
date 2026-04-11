@@ -71,7 +71,7 @@ impl TimelineContext {
 /// guarantee that those read timestamps are valid.
 pub(crate) struct TimelineState {
     pub(crate) oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
-    pub(crate) read_holds: ReadHolds<Timestamp>,
+    pub(crate) read_holds: ReadHolds,
 }
 
 impl fmt::Debug for TimelineState {

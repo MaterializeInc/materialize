@@ -1502,7 +1502,7 @@ impl PeekClient {
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds), AdapterError> {
         // this is copy-pasted from Coordinator
 
         let isolation_level = session.vars().transaction_isolation();
@@ -1574,7 +1574,7 @@ impl PeekClient {
     }
 
     fn assert_read_holds_correct(
-        read_holds: &ReadHolds<Timestamp>,
+        read_holds: &ReadHolds,
         execution: &Execution,
         determination: &TimestampDetermination<Timestamp>,
         target_cluster_id: ClusterId,

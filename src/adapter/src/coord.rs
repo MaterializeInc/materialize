@@ -1020,7 +1020,7 @@ pub struct IntrospectionSubscribeTimestampOptimizeLir {
 pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
-    read_holds: ReadHolds<Timestamp>,
+    read_holds: ReadHolds,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }
@@ -1855,7 +1855,7 @@ pub struct Coordinator {
     /// For each transaction, the read holds taken to support any performed reads.
     ///
     /// Upon completing a transaction, these read holds should be dropped.
-    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
+    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -4960,7 +4960,7 @@ pub struct AlterSinkReadyContext {
     otel_ctx: OpenTelemetryContext,
     plan: AlterSinkPlan,
     plan_validity: PlanValidity,
-    read_hold: ReadHolds<Timestamp>,
+    read_hold: ReadHolds,
 }
 
 impl AlterSinkReadyContext {
