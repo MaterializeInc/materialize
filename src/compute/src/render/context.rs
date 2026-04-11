@@ -762,6 +762,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             );
         }
 
+        // Track whether we applied temporal bucketing, to avoid double-bucketing.
+        let mut bucketed = false;
+
         // We need the collection if either (1) it is explicitly demanded, or (2) we are going to render any arrangement
         let form_raw_collection = collections.raw
             || collections
@@ -772,13 +775,18 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             let (oks, errs) =
                 self.as_collection_core(input_mfp, input_key.map(|k| (k, None)), until, config_set);
             // Apply temporal bucketing if the input may contain future updates.
+            // This path fires when the collection must be formed from scratch
+            // (e.g., from an arrangement via as_collection_core).
             let oks = if input_has_future_updates && ENABLE_TEMPORAL_BUCKETING.get(config_set) {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                     .get(config_set)
                     .try_into()
                     .expect("must fit");
+                bucketed = true;
                 <S::Timestamp as RenderTimestamp>::maybe_apply_temporal_bucketing(
-                    oks.inner, as_of, summary,
+                    oks.inner,
+                    as_of.clone(),
+                    summary,
                 )
             } else {
                 oks
@@ -794,6 +802,27 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
+                // Apply temporal bucketing if the collection already existed on
+                // the bundle (e.g., from an upstream temporal Mfp or Get) and we
+                // haven't bucketed yet. This is the common path for temporal-MFP
+                // → ArrangeBy flows.
+                let oks = if !bucketed
+                    && input_has_future_updates
+                    && ENABLE_TEMPORAL_BUCKETING.get(config_set)
+                {
+                    let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
+                        .get(config_set)
+                        .try_into()
+                        .expect("must fit");
+                    bucketed = true;
+                    <S::Timestamp as RenderTimestamp>::maybe_apply_temporal_bucketing(
+                        oks.inner,
+                        as_of.clone(),
+                        summary,
+                    )
+                } else {
+                    oks
+                };
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
