@@ -210,7 +210,7 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
-use timely::communication::Allocate;
+use timely::communication::allocator::Generic;
 use timely::dataflow::Scope;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
@@ -231,8 +231,8 @@ pub mod sources;
 ///
 /// This method creates a new dataflow to host the implementations of sources for the `dataflow`
 /// argument, and returns assets for each source that can import the results into a new dataflow.
-pub fn build_ingestion_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_ingestion_dataflow(
+    timely_worker: &mut TimelyWorker<Generic>,
     storage_state: &mut StorageState,
     primary_source_id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
@@ -435,8 +435,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 }
 
 /// do the export dataflow thing
-pub fn build_export_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_export_dataflow(
+    timely_worker: &mut TimelyWorker<Generic>,
     storage_state: &mut StorageState,
     id: GlobalId,
     description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
@@ -478,8 +478,8 @@ pub fn build_export_dataflow<A: Allocate>(
     });
 }
 
-pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub(crate) fn build_oneshot_ingestion_dataflow(
+    timely_worker: &mut TimelyWorker<Generic>,
     storage_state: &mut StorageState,
     ingestion_id: uuid::Uuid,
     collection_id: GlobalId,

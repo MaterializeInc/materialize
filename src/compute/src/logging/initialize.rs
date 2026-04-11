@@ -24,7 +24,7 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::ContainerBuilder;
-use timely::communication::Allocate;
+use timely::communication::allocator::Generic;
 use timely::container::{ContainerBuilder as _, PushInto};
 use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
@@ -43,8 +43,8 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
-pub fn initialize<A: Allocate + 'static>(
-    worker: &mut timely::worker::Worker<A>,
+pub fn initialize(
+    worker: &mut timely::worker::Worker<Generic>,
     config: &LoggingConfig,
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
@@ -98,8 +98,8 @@ pub fn initialize<A: Allocate + 'static>(
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
-struct LoggingContext<'a, A: Allocate> {
-    worker: &'a mut timely::worker::Worker<A>,
+struct LoggingContext<'a> {
+    worker: &'a mut timely::worker::Worker<Generic>,
     config: &'a LoggingConfig,
     interval_ms: u128,
     now: Instant,
@@ -123,7 +123,7 @@ pub(crate) struct LoggingTraces {
     pub compute_logger: super::compute::Logger,
 }
 
-impl<A: Allocate + 'static> LoggingContext<'_, A> {
+impl LoggingContext<'_> {
     fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
             let scope = &mut scope.with_label();
