@@ -18,8 +18,8 @@
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 
+use columnation::Columnation;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::containers::Columnation;
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder, Description};

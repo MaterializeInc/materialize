@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker, ready};
 
-use differential_dataflow::containers::Columnation;
+use columnation::Columnation;
 use futures_util::Stream;
 use futures_util::task::ArcWake;
 use timely::communication::{Pull, Push};
