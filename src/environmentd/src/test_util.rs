@@ -167,7 +167,7 @@ impl Default for TestHarness {
                             internal: false,
                             metrics: false,
                             profiling: false,
-                            mcp_agents: false,
+                            mcp_agent: false,
                             mcp_developer: false,
                             console_config: true,
                         },
@@ -185,7 +185,7 @@ impl Default for TestHarness {
                             internal: true,
                             metrics: true,
                             profiling: true,
-                            mcp_agents: false,
+                            mcp_agent: false,
                             mcp_developer: false,
                             console_config: true,
                         },
@@ -346,7 +346,7 @@ impl TestHarness {
                         internal: false,
                         metrics: false,
                         profiling: false,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -364,7 +364,7 @@ impl TestHarness {
                         internal: true,
                         metrics: true,
                         profiling: true,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -410,7 +410,7 @@ impl TestHarness {
                         internal: false,
                         metrics: false,
                         profiling: false,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -428,7 +428,7 @@ impl TestHarness {
                         internal: true,
                         metrics: true,
                         profiling: true,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -484,7 +484,7 @@ impl TestHarness {
                         internal: true,
                         metrics: false,
                         profiling: true,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -502,7 +502,7 @@ impl TestHarness {
                         internal: false,
                         metrics: true,
                         profiling: false,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -538,7 +538,7 @@ impl TestHarness {
                         internal: true,
                         metrics: false,
                         profiling: true,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -556,7 +556,7 @@ impl TestHarness {
                         internal: false,
                         metrics: true,
                         profiling: false,
-                        mcp_agents: false,
+                        mcp_agent: false,
                         mcp_developer: false,
                         console_config: true,
                     },
@@ -646,9 +646,9 @@ impl TestHarness {
         self
     }
 
-    pub fn with_mcp_routes(mut self, agents: bool, developer: bool) -> Self {
+    pub fn with_mcp_routes(mut self, agent: bool, developer: bool) -> Self {
         for config in self.listeners_config.http.values_mut() {
-            config.routes.mcp_agents = agents;
+            config.routes.mcp_agent = agent;
             config.routes.mcp_developer = developer;
         }
         self

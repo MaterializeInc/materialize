@@ -62,9 +62,9 @@ pub struct HttpRoutesEnabled {
     pub metrics: bool,
     /// Include /prof/ endpoint, and enable profiling in the / endpoint (included in base).
     pub profiling: bool,
-    /// Include /api/mcp/agents endpoint for Model Context Protocol (AI agents).
+    /// Include /api/mcp/agent endpoint for Model Context Protocol (AI agents).
     #[serde(default)]
-    pub mcp_agents: bool,
+    pub mcp_agent: bool,
     /// Include /api/mcp/developer endpoint for system catalog queries via MCP.
     #[serde(default)]
     pub mcp_developer: bool,

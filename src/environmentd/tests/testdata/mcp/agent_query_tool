@@ -12,7 +12,7 @@
 # =============================================================================
 
 # tools/list should include the query tool when enabled.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":1,"method":"tools/list"}
 ----
 200 OK
@@ -23,14 +23,14 @@ mcp-agents
 # =============================================================================
 
 # Simple SELECT should work.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1 AS val"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"1\"\n  ]\n]"}],"isError":false}}
 
 # SHOW statement should work.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SHOW DATABASES"}}}
 ----
 200 OK
@@ -41,49 +41,49 @@ mcp-agents
 # =============================================================================
 
 # CREATE TABLE should be rejected by validation.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"CREATE TABLE evil (id int)"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":20,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # DROP TABLE should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"DROP TABLE IF EXISTS evil"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":21,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # INSERT should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"INSERT INTO evil VALUES (1)"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":22,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # DELETE should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"DELETE FROM evil"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":23,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # UPDATE should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":24,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"UPDATE evil SET id = 1"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":24,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # ALTER should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"ALTER TABLE evil ADD COLUMN name text"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":25,"error":{"code":-32602,"message":"Query validation failed: Only SELECT, SHOW, and EXPLAIN statements are allowed","data":{"error_type":"ValidationError"}}}
 
 # GRANT should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"GRANT ALL ON SYSTEM TO evil_user"}}}
 ----
 200 OK
@@ -94,14 +94,14 @@ mcp-agents
 # =============================================================================
 
 # Multiple statements should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1; SELECT 2"}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":30,"error":{"code":-32602,"message":"Query validation failed: Only one query allowed at a time. Found 2 statements.","data":{"error_type":"ValidationError"}}}
 
 # SELECT followed by DDL should be rejected (multi-statement).
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SELECT 1; DROP TABLE evil"}}}
 ----
 200 OK
@@ -112,14 +112,14 @@ mcp-agents
 # =============================================================================
 
 # Empty query should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":""}}}
 ----
 200 OK
 {"jsonrpc":"2.0","id":32,"error":{"code":-32602,"message":"Query validation failed: Empty query","data":{"error_type":"ValidationError"}}}
 
 # Whitespace-only query should be rejected.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"   "}}}
 ----
 200 OK
@@ -130,7 +130,7 @@ mcp-agents
 # =============================================================================
 
 # SUBSCRIBE is not an allowed statement type.
-mcp-agents
+mcp-agent
 {"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"query","arguments":{"cluster":"quickstart","sql_query":"SUBSCRIBE (SELECT 1)"}}}
 ----
 200 OK

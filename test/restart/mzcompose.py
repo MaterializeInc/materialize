@@ -419,7 +419,7 @@ def workflow_allow_user_sessions(c: Composition) -> None:
 
 
 def workflow_mcp_feature_flags(c: Composition) -> None:
-    """Test that enable_mcp_agents and enable_mcp_developer dyncfg flags
+    """Test that enable_mcp_agent and enable_mcp_developer dyncfg flags
     can disable MCP endpoints without a restart."""
 
     mcp_request = {
@@ -441,21 +441,21 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         c.up("materialized")
         http_port = c.port("materialized", 6876)
 
-        agents_url = f"http://localhost:{http_port}/api/mcp/agents"
+        agent_url = f"http://localhost:{http_port}/api/mcp/agent"
         developer_url = f"http://localhost:{http_port}/api/mcp/developer"
 
         # Both endpoints should be disabled by default (feature flags default to false).
-        assert requests.post(agents_url, json=mcp_request).status_code == 503
+        assert requests.post(agent_url, json=mcp_request).status_code == 503
         assert requests.post(developer_url, json=mcp_request).status_code == 503
 
-        # Enable the agents endpoint individually.
+        # Enable the agent endpoint individually.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_agents = true",
+            "ALTER SYSTEM SET enable_mcp_agent = true",
             port=6877,
             user="mz_system",
         )
 
-        assert requests.post(agents_url, json=mcp_request).status_code == 200
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
         # Developer should still be disabled.
         assert requests.post(developer_url, json=mcp_request).status_code == 503
 
@@ -468,24 +468,24 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
 
         assert requests.post(developer_url, json=mcp_request).status_code == 200
 
-        # Disable agents again — developer should remain enabled.
+        # Disable agent again — developer should remain enabled.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_agents = false",
+            "ALTER SYSTEM SET enable_mcp_agent = false",
             port=6877,
             user="mz_system",
         )
 
-        assert requests.post(agents_url, json=mcp_request).status_code == 503
+        assert requests.post(agent_url, json=mcp_request).status_code == 503
         assert requests.post(developer_url, json=mcp_request).status_code == 200
 
-        # Re-enable agents.
+        # Re-enable agent.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_agents = true",
+            "ALTER SYSTEM SET enable_mcp_agent = true",
             port=6877,
             user="mz_system",
         )
 
-        assert requests.post(agents_url, json=mcp_request).status_code == 200
+        assert requests.post(agent_url, json=mcp_request).status_code == 200
         assert requests.post(developer_url, json=mcp_request).status_code == 200
 
         c.kill("materialized")

@@ -25,7 +25,7 @@
         "internal": false,
         "metrics": false,
         "profiling": false,
-        "mcp_agents": true,
+        "mcp_agent": true,
         "mcp_developer": true,
         "console_config": true
       }
@@ -41,7 +41,7 @@
         "internal": true,
         "metrics": true,
         "profiling": true,
-        "mcp_agents": true,
+        "mcp_agent": true,
         "mcp_developer": true,
         "console_config": false
       }
