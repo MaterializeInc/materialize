@@ -109,7 +109,8 @@ where
             let max_demand = demand.iter().max().map(|x| *x + 1).unwrap_or(0);
             let skips = mz_compute_types::plan::reduce::convert_indexes_to_skips(demand);
 
-            let (key_val_input, err_input) = input.enter_region(inner).flat_map(
+            let entered = input.enter_region(inner);
+            let (key_val_input, err_input) = entered.flat_map(
                 input_key.map(|k| (k, None)),
                 max_demand,
                 move |row_datums, time, diff| {

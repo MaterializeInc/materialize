@@ -48,8 +48,8 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
-    RowRowSpine,
+    ColumnarCollection, ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp,
+    RowRowAgent, RowRowEnter, RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -175,8 +175,8 @@ where
                 .bindings
                 .get_mut(&id)
                 .expect("Binding verified to exist");
-            if collection.collection.is_some() {
-                binding.collection = collection.collection;
+            if collection.columnar_collection.is_some() {
+                binding.columnar_collection = collection.columnar_collection;
             }
             for (key, flavor) in collection.arranged.into_iter() {
                 binding.arranged.insert(key, flavor);
@@ -400,8 +400,10 @@ where
     T: MzTimestamp,
     S::Timestamp: MzTimestamp + Refines<T>,
 {
-    pub collection: Option<(
-        VecCollection<S, Row, Diff>,
+    /// Columnar variant of the unarranged collection.
+    /// Error streams remain Vec-based since `DataflowError` is not suited for columnar layout.
+    pub columnar_collection: Option<(
+        ColumnarCollection<S, Row, Diff>,
         VecCollection<S, DataflowError, Diff>,
     )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
@@ -412,14 +414,53 @@ where
     T: MzTimestamp,
     S::Timestamp: MzTimestamp + Refines<T>,
 {
-    /// Construct a new collection bundle from update streams.
+    /// Construct a new collection bundle from Vec update streams.
+    ///
+    /// Converts the Vec collection to columnar internally.
     pub fn from_collections(
         oks: VecCollection<S, Row, Diff>,
         errs: VecCollection<S, DataflowError, Diff>,
     ) -> Self {
+        let columnar_oks = crate::render::columnar::vec_to_columnar(oks);
         Self {
-            collection: Some((oks, errs)),
+            columnar_collection: Some((columnar_oks, errs)),
             arranged: BTreeMap::default(),
+        }
+    }
+
+    /// Construct a new collection bundle from columnar update streams.
+    pub fn from_columnar_collections(
+        oks: ColumnarCollection<S, Row, Diff>,
+        errs: VecCollection<S, DataflowError, Diff>,
+    ) -> Self {
+        Self {
+            columnar_collection: Some((oks, errs)),
+            arranged: BTreeMap::default(),
+        }
+    }
+
+    /// Returns the columnar collection if present.
+    pub fn columnar_collection(
+        &self,
+    ) -> Option<&(
+        ColumnarCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    )> {
+        self.columnar_collection.as_ref()
+    }
+
+    /// Returns the collection as a Vec-based collection, converting from columnar if needed.
+    pub fn as_vec_collection(
+        &self,
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
+        if let Some((col_oks, col_errs)) = &self.columnar_collection {
+            let vec_oks = crate::render::columnar::columnar_to_vec(col_oks.clone());
+            (vec_oks, col_errs.clone())
+        } else {
+            panic!("CollectionBundle contains no collection.")
         }
     }
 
@@ -431,7 +472,7 @@ where
         let mut arranged = BTreeMap::new();
         arranged.insert(exprs, arrangements);
         Self {
-            collection: None,
+            columnar_collection: None,
             arranged,
         }
     }
@@ -450,7 +491,7 @@ where
 
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
-        if let Some((oks, _errs)) = &self.collection {
+        if let Some((oks, _errs)) = &self.columnar_collection {
             oks.inner.scope()
         } else {
             self.arranged
@@ -467,7 +508,7 @@ where
         region: &Child<'a, S, S::Timestamp>,
     ) -> CollectionBundle<Child<'a, S, S::Timestamp>, T> {
         CollectionBundle {
-            collection: self.collection.as_ref().map(|(oks, errs)| {
+            columnar_collection: self.columnar_collection.as_ref().map(|(oks, errs)| {
                 (
                     oks.clone().enter_region(region),
                     errs.clone().enter_region(region),
@@ -490,8 +531,8 @@ where
     /// Extracts the collection bundle from a region.
     pub fn leave_region(&self) -> CollectionBundle<S, T> {
         CollectionBundle {
-            collection: self
-                .collection
+            columnar_collection: self
+                .columnar_collection
                 .as_ref()
                 .map(|(oks, errs)| (oks.clone().leave_region(), errs.clone().leave_region())),
             arranged: self
@@ -534,10 +575,7 @@ where
         //
         // If it doesn't, we panic.
         match key {
-            None => self
-                .collection
-                .clone()
-                .expect("The unarranged collection doesn't exist."),
+            None => self.as_vec_collection(),
             Some(key) => {
                 let arranged = self.arranged.get(key).unwrap_or_else(|| {
                     panic!("The collection arranged by {:?} doesn't exist.", key)
@@ -591,10 +629,7 @@ where
                 .flat_map(val.as_ref(), max_demand, logic)
         } else {
             use timely::dataflow::operators::vec::Map;
-            let (oks, errs) = self
-                .collection
-                .clone()
-                .expect("Invariant violated: CollectionBundle contains no collection.");
+            let (oks, errs) = self.as_vec_collection();
             let mut datums = DatumVec::new();
             let oks = oks.inner.flat_map(move |(v, t, d)| {
                 logic(&mut datums.borrow_with_limit(&v, max_demand), t, d)
@@ -787,6 +822,29 @@ where
 
         (oks, errors.concat(errs))
     }
+
+    /// Columnar variant of `as_collection_core`.
+    ///
+    /// Applies `MapFilterProject` to the bundle and returns a columnar collection.
+    /// For now, this converts to Vec internally and applies the existing row-at-a-time
+    /// MFP evaluation, then converts the result back to columnar. Vectorized evaluation
+    /// will be added in a future step.
+    pub fn as_columnar_collection_core(
+        &self,
+        mfp: MapFilterProject,
+        key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
+        until: Antichain<mz_repr::Timestamp>,
+        config_set: &ConfigSet,
+    ) -> (
+        ColumnarCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
+        // Delegate to Vec-based as_collection_core (which converts from columnar
+        // internally via as_vec_collection) and convert the result back to columnar.
+        let (oks, errs) = self.as_collection_core(mfp, key_val, until, config_set);
+        (crate::render::columnar::vec_to_columnar(oks), errs)
+    }
+
     pub fn ensure_collections(
         mut self,
         collections: AvailableCollections,
@@ -819,8 +877,15 @@ where
                 .arranged
                 .iter()
                 .any(|(key, _, _)| !self.arranged.contains_key(key));
-        if form_raw_collection && self.collection.is_none() {
-            self.collection = Some(self.as_collection_core(
+
+        // Materialize a Vec collection for arrangement creation.
+        // This is a local cache; we convert back to columnar at the end if needed.
+        let mut cached_vec: Option<(
+            VecCollection<S, Row, Diff>,
+            VecCollection<S, DataflowError, Diff>,
+        )> = None;
+        if form_raw_collection {
+            cached_vec = Some(self.as_collection_core(
                 input_mfp,
                 input_key.map(|k| (k, None)),
                 until,
@@ -832,20 +897,24 @@ where
                 // TODO: Consider allowing more expressive names.
                 let name = format!("ArrangeBy[{:?}]", key);
 
-                let (oks, errs) = self
-                    .collection
-                    .take()
-                    .expect("Collection constructed above");
+                let (oks, errs) = cached_vec.take().expect("Collection constructed above");
                 let (oks, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
-                self.collection = Some((passthrough, errs));
+                cached_vec = Some((passthrough, errs));
                 let errs =
                     errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         &format!("{}-errors", name),
                     );
                 self.arranged
                     .insert(key, ArrangementFlavor::Local(oks, errs));
+            }
+        }
+        // If the raw collection was demanded, store the passthrough as columnar.
+        if collections.raw {
+            if let Some((oks, errs)) = cached_vec {
+                self.columnar_collection =
+                    Some((crate::render::columnar::vec_to_columnar(oks), errs));
             }
         }
         self
