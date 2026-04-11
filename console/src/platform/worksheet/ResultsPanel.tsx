@@ -7,19 +7,26 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { CloseIcon, DownloadIcon } from "@chakra-ui/icons";
+import { ChevronDownIcon, CloseIcon, DownloadIcon } from "@chakra-ui/icons";
 import {
   Box,
   Button,
   HStack,
   IconButton,
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuList,
+  Spinner,
   Text,
+  Tooltip,
   useTheme,
 } from "@chakra-ui/react";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import React, { useCallback, useMemo, useState } from "react";
 
 import ReadOnlyCommandBlock from "~/components/CommandBlock/ReadOnlyCommandBlock";
+import { useAllClusters } from "~/store/allClusters";
 import { CopyButton } from "~/components/copyableComponents";
 import formatRows from "~/components/formatRows";
 import SqlSelectTable, { TablePagination } from "~/components/SqlSelectTable";
@@ -30,6 +37,7 @@ import type { SubscribeState } from "./store";
 import {
   type QueryResult,
   worksheetExecutionAtom,
+  worksheetNoticeAtom,
   worksheetResultAtom,
   worksheetStashedSqlResultAtom,
 } from "./store";
@@ -47,7 +55,9 @@ export interface ResultsPanelProps {
   /** Closes the results panel entirely. */
   onDismiss: () => void;
   /** Executes a SQL statement through the worksheet WebSocket. */
-  onExecute: (sql: string, kind: string, offset: number) => void;
+  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
+  /** Cancels the currently running query. */
+  onCancel: () => void;
 }
 
 /**
@@ -60,6 +70,7 @@ const ResultsPanel = ({
   onStopSubscribe,
   onDismiss,
   onExecute,
+  onCancel,
 }: ResultsPanelProps) => {
   const result = useAtomValue(worksheetResultAtom);
   const execution = useAtomValue(worksheetExecutionAtom);
@@ -80,6 +91,10 @@ const ResultsPanel = ({
     );
   }
 
+  if (execution.status === "running") {
+    return <RunningView onCancel={onCancel} onDismiss={onDismiss} />;
+  }
+
   if (!result) {
     return null;
   }
@@ -89,10 +104,59 @@ const ResultsPanel = ({
   }
 
   if (result.displayMode === "text") {
-    return <TextView result={result} onDismiss={onDismiss} />;
+    return <TextView result={result} onDismiss={onDismiss} onExecute={onExecute} />;
   }
 
-  return <ResultTable result={result} onDismiss={onDismiss} />;
+  return <ResultTable result={result} onDismiss={onDismiss} onExecute={onExecute} />;
+};
+
+/** Shown while a query is executing, with a Cancel button. */
+const RunningView = ({
+  onCancel,
+  onDismiss,
+}: {
+  onCancel: () => void;
+  onDismiss: () => void;
+}) => {
+  const { colors } = useTheme<MaterializeTheme>();
+  const notice = useAtomValue(worksheetNoticeAtom);
+  return (
+    <Box height="100%">
+      <HStack
+        px="4"
+        py="2"
+        borderBottomWidth="1px"
+        borderColor={colors.border.secondary}
+        justifyContent="space-between"
+      >
+        <HStack spacing="2">
+          <Spinner size="xs" />
+          <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
+            Running...
+          </Text>
+        </HStack>
+        <HStack spacing="1">
+          <Button size="xs" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <IconButton
+            icon={<CloseIcon boxSize="2.5" />}
+            aria-label="Dismiss results"
+            onClick={onDismiss}
+            variant="ghost"
+            size="xs"
+          />
+        </HStack>
+      </HStack>
+      {notice && (
+        <Box px="4" py="2">
+          <Text fontSize="sm" color={colors.foreground.secondary}>
+            NOTICE: {notice}
+          </Text>
+        </Box>
+      )}
+    </Box>
+  );
 };
 
 /** Maps SHOW CREATE kinds to their EXPLAIN prefix for objects that support it. */
@@ -101,7 +165,109 @@ const EXPLAINABLE_KINDS: Record<string, string> = {
   show_create_index: "EXPLAIN INDEX",
 };
 
-/** Renders a SHOW CREATE result with an optional Explain button for MVs and indexes. */
+/** Maps SHOW CREATE kinds to their EXPLAIN ANALYZE prefix. */
+const ANALYZABLE_KINDS: Record<string, string> = {
+  show_create_materialized_view: "EXPLAIN ANALYZE CPU, MEMORY FOR MATERIALIZED VIEW",
+  show_create_index: "EXPLAIN ANALYZE CPU, MEMORY FOR INDEX",
+};
+
+
+/** Shared SQL/Explain/Analyze toggle for SHOW CREATE results. */
+const SqlExplainToggle = ({
+  activeTab,
+  stashedResult,
+  canAnalyze,
+  onSqlClick,
+  onExplainClick,
+  onAnalyzeClick,
+}: {
+  activeTab: "sql" | "explain" | "analyze";
+  stashedResult: QueryResult | null;
+  canAnalyze: boolean;
+  onSqlClick: () => void;
+  onExplainClick: () => void;
+  onAnalyzeClick: (replica?: string) => void;
+}) => {
+  const source = stashedResult ?? undefined;
+  const explainPrefix = source?.kind ? EXPLAINABLE_KINDS[source.kind] : null;
+  const analyzePrefix = source?.kind ? ANALYZABLE_KINDS[source.kind] : null;
+  const { getClusterById } = useAllClusters();
+  const replicas = source?.clusterId
+    ? (getClusterById(source.clusterId)?.replicas ?? [])
+    : [];
+
+  if (!explainPrefix) return null;
+
+  const analyzeButton = (
+    <Tooltip
+      label={canAnalyze ? undefined : "Requires superuser or USAGE privilege on the schema"}
+      placement="top"
+      hasArrow
+      isDisabled={canAnalyze}
+    >
+      <Button
+        size="xs"
+        variant={activeTab === "analyze" ? "solid" : "ghost"}
+        onClick={() => onAnalyzeClick(replicas.length > 1 ? replicas[0].name : undefined)}
+        borderLeftRadius={0}
+        borderRightRadius={replicas.length > 1 ? 0 : undefined}
+        isDisabled={!canAnalyze}
+      >
+        Analyze
+      </Button>
+    </Tooltip>
+  );
+
+  return (
+    <HStack spacing="0">
+      <Button
+        size="xs"
+        variant={activeTab === "sql" ? "solid" : "ghost"}
+        onClick={onSqlClick}
+        borderRightRadius={0}
+      >
+        SQL
+      </Button>
+      <Button
+        size="xs"
+        variant={activeTab === "explain" ? "solid" : "ghost"}
+        onClick={onExplainClick}
+        borderRadius={analyzePrefix ? 0 : undefined}
+        borderLeftRadius={0}
+      >
+        Explain
+      </Button>
+      {analyzePrefix && analyzeButton}
+      {analyzePrefix && replicas.length > 1 && canAnalyze && (
+        <Menu>
+          <MenuButton
+            as={Button}
+            size="xs"
+            variant={activeTab === "analyze" ? "solid" : "ghost"}
+            borderLeftRadius={0}
+            px="1"
+          >
+            <ChevronDownIcon />
+          </MenuButton>
+          <MenuList minW="auto">
+            {replicas.map((r) => (
+              <MenuItem
+                key={r.id}
+                fontSize="sm"
+                fontWeight={r.name === source?.selectedReplica ? 600 : 400}
+                onClick={() => onAnalyzeClick(r.name)}
+              >
+                {r.name === source?.selectedReplica ? `✓ ${r.name}` : r.name}
+              </MenuItem>
+            ))}
+          </MenuList>
+        </Menu>
+      )}
+    </HStack>
+  );
+};
+
+/** Renders a SHOW CREATE result with SQL/Explain/Analyze toggle. */
 const SqlView = ({
   result,
   onDismiss,
@@ -109,27 +275,40 @@ const SqlView = ({
 }: {
   result: QueryResult;
   onDismiss: () => void;
-  onExecute: (sql: string, kind: string, offset: number) => void;
+  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const setStashedSqlResult = useSetAtom(worksheetStashedSqlResultAtom);
   const sqlText = String(result.rows[0]?.[0] ?? "");
 
   const explainPrefix = result.kind ? EXPLAINABLE_KINDS[result.kind] : null;
-  const explainQuery = useMemo(
-    () =>
-      explainPrefix && result.objectName
-        ? `${explainPrefix} ${result.objectName}`
-        : null,
-    [explainPrefix, result.objectName],
-  );
+  const analyzePrefix = result.kind ? ANALYZABLE_KINDS[result.kind] : null;
+  const canAnalyze = true;
 
   const handleExplainClick = useCallback(() => {
-    if (explainQuery) {
+    if (explainPrefix && result.objectName) {
       setStashedSqlResult(result);
-      onExecute(explainQuery, "explain_plan", 0);
+      onExecute(`${explainPrefix} ${result.objectName}`, "explain_plan", 0);
     }
-  }, [explainQuery, onExecute, result, setStashedSqlResult]);
+  }, [explainPrefix, result, onExecute, setStashedSqlResult]);
+
+  const handleAnalyzeClick = useCallback(
+    (replica?: string) => {
+      if (analyzePrefix && result.objectName) {
+        setStashedSqlResult({ ...result, selectedReplica: replica });
+        onExecute(
+          `${analyzePrefix} ${result.objectName}`,
+          "explain_analyze_object",
+          0,
+          {
+            ...(result.clusterName ? { cluster: result.clusterName } : {}),
+            ...(replica ? { replica } : {}),
+          },
+        );
+      }
+    },
+    [analyzePrefix, result, onExecute, setStashedSqlResult],
+  );
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([sqlText], { type: "text/sql" });
@@ -151,11 +330,14 @@ const SqlView = ({
         justifyContent="space-between"
       >
         <HStack spacing="2">
-          {explainQuery && (
-            <Button size="xs" variant="ghost" onClick={handleExplainClick}>
-              Explain
-            </Button>
-          )}
+          <SqlExplainToggle
+            activeTab="sql"
+            stashedResult={result}
+            canAnalyze={canAnalyze}
+            onSqlClick={() => {}}
+            onExplainClick={handleExplainClick}
+            onAnalyzeClick={handleAnalyzeClick}
+          />
           <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
             {result.commandComplete}
           </Text>
@@ -189,9 +371,11 @@ const SqlView = ({
 const TextView = ({
   result,
   onDismiss,
+  onExecute,
 }: {
   result: QueryResult;
   onDismiss: () => void;
+  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const text = String(result.rows[0]?.[0] ?? "");
@@ -199,6 +383,7 @@ const TextView = ({
     worksheetStashedSqlResultAtom,
   );
   const setResult = useSetAtom(worksheetResultAtom);
+  const canAnalyze = true;
 
   const handleBackToSql = useCallback(() => {
     if (stashedSqlResult) {
@@ -206,6 +391,36 @@ const TextView = ({
       setStashedSqlResult(null);
     }
   }, [stashedSqlResult, setResult, setStashedSqlResult]);
+
+  const handleExplainClick = useCallback(() => {
+    const source = stashedSqlResult;
+    if (!source) return;
+    const prefix = source.kind ? EXPLAINABLE_KINDS[source.kind] : null;
+    if (prefix && source.objectName) {
+      onExecute(`${prefix} ${source.objectName}`, "explain_plan", 0);
+    }
+  }, [stashedSqlResult, onExecute]);
+
+  const handleAnalyzeClick = useCallback(
+    (replica?: string) => {
+      const source = stashedSqlResult;
+      if (!source) return;
+      const prefix = source.kind ? ANALYZABLE_KINDS[source.kind] : null;
+      if (prefix && source.objectName) {
+        setStashedSqlResult({ ...source, selectedReplica: replica });
+        onExecute(
+          `${prefix} ${source.objectName}`,
+          "explain_analyze_object",
+          0,
+          {
+            ...(source.clusterName ? { cluster: source.clusterName } : {}),
+            ...(replica ? { replica } : {}),
+          },
+        );
+      }
+    },
+    [stashedSqlResult, onExecute, setStashedSqlResult],
+  );
 
   const handleDownload = useCallback(() => {
     const blob = new Blob([text], { type: "text/plain" });
@@ -216,6 +431,8 @@ const TextView = ({
     a.click();
     URL.revokeObjectURL(url);
   }, [text]);
+
+  const activeTab = result.kind === "explain_analyze_object" ? "analyze" as const : "explain" as const;
 
   return (
     <Box height="100%" overflow="auto">
@@ -228,9 +445,14 @@ const TextView = ({
       >
         <HStack spacing="2">
           {stashedSqlResult && (
-            <Button size="xs" variant="ghost" onClick={handleBackToSql}>
-              SQL
-            </Button>
+            <SqlExplainToggle
+              activeTab={activeTab}
+              stashedResult={stashedSqlResult}
+              canAnalyze={canAnalyze}
+              onSqlClick={handleBackToSql}
+              onExplainClick={handleExplainClick}
+              onAnalyzeClick={handleAnalyzeClick}
+            />
           )}
           <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
             {result.commandComplete}
@@ -258,7 +480,7 @@ const TextView = ({
         p="4"
         fontFamily="mono"
         fontSize="sm"
-        whiteSpace="pre"
+        whiteSpace="pre-wrap"
         overflowX="auto"
       >
         {text}
@@ -271,12 +493,19 @@ const TextView = ({
 const ResultTable = ({
   result,
   onDismiss,
+  onExecute,
 }: {
   result: QueryResult;
   onDismiss: () => void;
+  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const [currentPage, setCurrentPage] = useState(0);
+  const [stashedSqlResult, setStashedSqlResult] = useAtom(
+    worksheetStashedSqlResultAtom,
+  );
+  const setResult = useSetAtom(worksheetResultAtom);
+  const canAnalyze = true;
 
   React.useEffect(() => {
     setCurrentPage(0);
@@ -302,14 +531,64 @@ const ResultTable = ({
         borderColor={colors.border.secondary}
         justifyContent="space-between"
       >
-        <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
-          Results — {result.rows.length} row
-          {result.rows.length !== 1 ? "s" : ""} in {result.durationMs}ms
-        </Text>
-        <HStack>
-          <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
-            {result.commandComplete}
+        <HStack spacing="2">
+          {stashedSqlResult && (
+            <SqlExplainToggle
+              activeTab="analyze"
+              stashedResult={stashedSqlResult}
+              canAnalyze={canAnalyze}
+              onSqlClick={() => {
+                setResult(stashedSqlResult);
+                setStashedSqlResult(null);
+              }}
+              onExplainClick={() => {
+                const source = stashedSqlResult;
+                const prefix = source.kind
+                  ? EXPLAINABLE_KINDS[source.kind]
+                  : null;
+                if (prefix && source.objectName) {
+                  onExecute(
+                    `${prefix} ${source.objectName}`,
+                    "explain_plan",
+                    0,
+                  );
+                }
+              }}
+              onAnalyzeClick={(replica?: string) => {
+                const source = stashedSqlResult;
+                if (!source) return;
+                const prefix = source.kind
+                  ? ANALYZABLE_KINDS[source.kind]
+                  : null;
+                if (prefix && source.objectName) {
+                  setStashedSqlResult({ ...source, selectedReplica: replica });
+                  onExecute(
+                    `${prefix} ${source.objectName}`,
+                    "explain_analyze_object",
+                    0,
+                    {
+                      ...(source.clusterName
+                        ? { cluster: source.clusterName }
+                        : {}),
+                      ...(replica ? { replica } : {}),
+                    },
+                  );
+                }
+              }}
+            />
+          )}
+          <Text textStyle="text-ui-med" color={colors.foreground.secondary}>
+            {stashedSqlResult
+              ? result.commandComplete
+              : `Results — ${result.rows.length} row${result.rows.length !== 1 ? "s" : ""} in ${result.durationMs}ms`}
           </Text>
+        </HStack>
+        <HStack>
+          {!stashedSqlResult && (
+            <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+              {result.commandComplete}
+            </Text>
+          )}
           <IconButton
             icon={<CloseIcon boxSize="2.5" />}
             aria-label="Dismiss results"

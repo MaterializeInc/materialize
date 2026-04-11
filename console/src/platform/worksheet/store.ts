@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { atom } from "jotai";
+import { atom, useAtomValue, useSetAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
+import { useCallback } from "react";
 
 import type { Column } from "~/api/materialize/types";
 
@@ -86,17 +87,35 @@ export interface QueryResult {
   kind?: string;
   /** For SHOW CREATE results: the qualified object name returned by the server. */
   objectName?: string;
+  /** For SHOW CREATE results: the cluster the object runs on. */
+  clusterName?: string;
+  /** For SHOW CREATE results: the cluster ID, used to look up replicas. */
+  clusterId?: string;
+  /** The replica last used for EXPLAIN ANALYZE. */
+  selectedReplica?: string;
 }
 
 /** The most recent row-returning query result, shown in the results panel. */
 export const worksheetResultAtom = atom<QueryResult | null>(null);
 
+/** Server notice shown while a query is running (e.g. introspection relations accessed). */
+export const worksheetNoticeAtom = atom<string | null>(null);
+
 /** Stashed SQL result to return to after viewing an EXPLAIN plan. */
 export const worksheetStashedSqlResultAtom = atom<QueryResult | null>(null);
 
+/** Cancel function exposed by useExecution, used by FloatingResultPanel to cancel running queries. */
+export const worksheetCancelAtom = atom<(() => void) | null>(null);
+
 /** Execute function exposed by useExecution, used by FloatingResultPanel to run queries like EXPLAIN. */
 export const worksheetExecuteAtom = atom<
-  ((sql: string, kind: string, offset: number) => void) | null
+  | ((
+      sql: string,
+      kind: string,
+      offset: number,
+      options?: { cluster?: string; replica?: string },
+    ) => void)
+  | null
 >(null);
 
 /**
@@ -172,3 +191,21 @@ export const subscribeStateAtom = atom<SubscribeState>(INITIAL_SUBSCRIBE_STATE);
 
 /** Callback to stop an active SUBSCRIBE. Set by the worksheet's useSubscribe hook. */
 export const stopSubscribeAtom = atom<(() => void) | null>(null);
+
+/** Sets a result in the panel, stopping any active subscribe first. */
+export function useShowResult() {
+  const setResult = useSetAtom(worksheetResultAtom);
+  const setPanelOpen = useSetAtom(resultsPanelOpenAtom);
+  const setSubscribeState = useSetAtom(subscribeStateAtom);
+  const stopSubscribe = useAtomValue(stopSubscribeAtom);
+
+  return useCallback(
+    (result: QueryResult) => {
+      stopSubscribe?.();
+      setSubscribeState(INITIAL_SUBSCRIBE_STATE);
+      setResult(result);
+      setPanelOpen(true);
+    },
+    [stopSubscribe, setSubscribeState, setResult, setPanelOpen],
+  );
+}
