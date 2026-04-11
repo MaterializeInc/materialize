@@ -14,11 +14,11 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
+use columnation::{Columnation, CopyRegion};
 use dec::OrderedDecimal;
 use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::containers::{Columnation, CopyRegion};
 use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
@@ -2146,7 +2146,7 @@ mod monoids {
     // add a new enum variant here), because other code (e.g., `HierarchicalOneByOneAggr`)
     // assumes this.
 
-    use differential_dataflow::containers::{Columnation, Region};
+    use columnation::{Columnation, Region};
     use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
     use mz_expr::AggregateFunc;
     use mz_ore::soft_panic_or_log;
