@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: 62f6c5cc15
+revision: 4218b69078
 ---
 
 # adapter::coord::sequencer::inner
@@ -10,3 +10,4 @@ Each method validates the plan against the current catalog and session state, pe
 The `inner` sub-modules split out the most complex individual statement types (peek, subscribe, cluster, index, materialized view, view, continual task, copy_from, secret, explain_timestamp) into separate files.
 Also defines the `sequence_staged` generic driver and `Staged` / `StagedContext` traits used across all multi-stage sequencing pipelines.
 `validate_role_attributes` permits the `LOGIN` attribute even when password auth is disabled, restricting the unavailable-feature gate to `SUPERUSER` and `PASSWORD` attributes.
+`CREATE CONNECTION ... VALIDATE` and `ALTER CONNECTION ... VALIDATE` tasks are wrapped in `ore_catch_unwind` to convert panics (e.g., from malformed TLS material) into `AdapterError::Internal` rather than crashing the coordinator.

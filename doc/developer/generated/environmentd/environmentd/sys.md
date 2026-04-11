@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/environmentd/sys.rs
-revision: dbba0c5a2a
+revision: f6f7d70cc4
 ---
 
 # environmentd::environmentd::sys
