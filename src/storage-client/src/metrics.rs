@@ -274,6 +274,8 @@ pub struct CommandMetrics<M> {
     pub run_oneshot_ingestion: M,
     /// Metrics for `CancelOneshotIngestion`.
     pub cancel_oneshot_ingestion: M,
+    /// Metrics for `RestartDataflow`.
+    pub restart_dataflow: M,
 }
 
 impl<M> CommandMetrics<M> {
@@ -291,6 +293,7 @@ impl<M> CommandMetrics<M> {
             run_sink: build_metric("run_sink"),
             run_oneshot_ingestion: build_metric("run_oneshot_ingestion"),
             cancel_oneshot_ingestion: build_metric("cancel_oneshot_ingestion"),
+            restart_dataflow: build_metric("restart_dataflow"),
         }
     }
 
@@ -307,6 +310,7 @@ impl<M> CommandMetrics<M> {
         f(&self.run_sink);
         f(&self.run_oneshot_ingestion);
         f(&self.cancel_oneshot_ingestion);
+        f(&self.restart_dataflow);
     }
 
     pub fn for_command<T>(&self, command: &StorageCommand<T>) -> &M {
@@ -322,6 +326,7 @@ impl<M> CommandMetrics<M> {
             RunSink(..) => &self.run_sink,
             RunOneshotIngestion(..) => &self.run_oneshot_ingestion,
             CancelOneshotIngestion(..) => &self.cancel_oneshot_ingestion,
+            RestartDataflow(..) => &self.restart_dataflow,
         }
     }
 }
@@ -334,6 +339,7 @@ struct ResponseMetrics<M> {
     staged_batches: M,
     statistics_updates: M,
     status_update: M,
+    halt_request: M,
 }
 
 impl<M> ResponseMetrics<M> {
@@ -347,6 +353,7 @@ impl<M> ResponseMetrics<M> {
             staged_batches: build_metric("staged_batches"),
             statistics_updates: build_metric("statistics_updates"),
             status_update: build_metric("status_update"),
+            halt_request: build_metric("halt_request"),
         }
     }
 
@@ -359,6 +366,7 @@ impl<M> ResponseMetrics<M> {
             StagedBatches(..) => &self.staged_batches,
             StatisticsUpdates(..) => &self.statistics_updates,
             StatusUpdate(..) => &self.status_update,
+            HaltRequest { .. } => &self.halt_request,
         }
     }
 }

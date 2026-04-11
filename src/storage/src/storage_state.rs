@@ -226,6 +226,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 timely_worker.peers(),
             ),
             shared_status_updates: Default::default(),
+            shared_halt_requests: Default::default(),
             latest_status_updates: Default::default(),
             initial_status_reported: Default::default(),
             internal_cmd_tx,
@@ -313,6 +314,11 @@ pub struct StorageState {
     /// status updates if the status of the ingestion/export in question has _changed_.
     pub shared_status_updates: Rc<RefCell<Vec<StatusUpdate>>>,
 
+    /// A place shared with running dataflows, so that health operators can
+    /// report halt requests (transient errors requiring restart) back to us.
+    /// These are forwarded to the controller, which decides when to restart.
+    pub shared_halt_requests: Rc<RefCell<Vec<crate::healthcheck::HaltRequest>>>,
+
     /// The latest status update for each object.
     pub latest_status_updates: BTreeMap<GlobalId, StatusUpdate>,
 
@@ -363,15 +369,17 @@ pub struct StorageState {
 }
 
 impl StorageState {
-    /// Return an error handler that triggers a suspend and restart of the corresponding storage
-    /// dataflow.
+    /// Return an error handler that requests a restart of the corresponding storage
+    /// dataflow via the controller.
     pub fn error_handler(&self, context: &'static str, id: GlobalId) -> ErrorHandler {
-        let tx = self.internal_cmd_tx.clone();
+        let halt_requests = Rc::clone(&self.shared_halt_requests);
         ErrorHandler::signal(move |e| {
-            tx.send(InternalStorageCommand::SuspendAndRestart {
-                id,
-                reason: format!("{context}: {e:#}"),
-            })
+            halt_requests
+                .borrow_mut()
+                .push(crate::healthcheck::HaltRequest {
+                    id,
+                    reason: format!("{context}: {e:#}"),
+                })
         })
     }
 }
@@ -569,96 +577,6 @@ impl<'w, A: Allocate> Worker<'w, A> {
     /// Entry point for applying an internal storage command.
     pub fn handle_internal_storage_command(&mut self, internal_cmd: InternalStorageCommand) {
         match internal_cmd {
-            InternalStorageCommand::SuspendAndRestart { id, reason } => {
-                info!(
-                    "worker {}/{} initiating suspend-and-restart for {id} because of: {reason}",
-                    self.timely_worker.index(),
-                    self.timely_worker.peers(),
-                );
-
-                let maybe_ingestion = self.storage_state.ingestions.get(&id).cloned();
-                if let Some(ingestion_description) = maybe_ingestion {
-                    // Yank the token of the previously existing source dataflow.Note that this
-                    // token also includes any source exports/subsources.
-                    let maybe_token = self.storage_state.source_tokens.remove(&id);
-                    if maybe_token.is_none() {
-                        // Something has dropped the source. Make sure we don't
-                        // accidentally re-create it.
-                        return;
-                    }
-
-                    // This needs to be done by one worker, which will
-                    // broadcasts a `CreateIngestionDataflow` command to all
-                    // workers based on the response that contains the
-                    // resumption upper.
-                    //
-                    // Doing this separately on each worker could lead to
-                    // differing resume_uppers which might lead to all kinds of
-                    // mayhem.
-                    //
-                    // TODO(aljoscha): If we ever become worried that this is
-                    // putting undue pressure on worker 0 we can pick the
-                    // designated worker for a source/sink based on `id.hash()`.
-                    if self.timely_worker.index() == 0 {
-                        for (id, _) in ingestion_description.source_exports.iter() {
-                            self.storage_state
-                                .aggregated_statistics
-                                .advance_global_epoch(*id);
-                        }
-                        self.storage_state
-                            .async_worker
-                            .update_ingestion_frontiers(id, ingestion_description);
-                    }
-
-                    // Continue with other commands.
-                    return;
-                }
-
-                let maybe_sink = self.storage_state.exports.get(&id).cloned();
-                if let Some(sink_description) = maybe_sink {
-                    // Yank the token of the previously existing sink
-                    // dataflow.
-                    let maybe_token = self.storage_state.sink_tokens.remove(&id);
-
-                    if maybe_token.is_none() {
-                        // Something has dropped the sink. Make sure we don't
-                        // accidentally re-create it.
-                        return;
-                    }
-
-                    // This needs to be broadcast by one worker and go through
-                    // the internal command fabric, to ensure consistent
-                    // ordering of dataflow rendering across all workers.
-                    if self.timely_worker.index() == 0 {
-                        self.storage_state
-                            .aggregated_statistics
-                            .advance_global_epoch(id);
-                        self.storage_state
-                            .async_worker
-                            .update_sink_frontiers(id, sink_description);
-                    }
-
-                    // Continue with other commands.
-                    return;
-                }
-
-                if !self
-                    .storage_state
-                    .ingestions
-                    .values()
-                    .any(|v| v.source_exports.contains_key(&id))
-                {
-                    // Our current approach to dropping a source results in a race between shard
-                    // finalization (which happens in the controller) and dataflow shutdown (which
-                    // happens in clusterd). If a source is created and dropped fast enough -or the
-                    // two commands get sufficiently delayed- then it's possible to receive a
-                    // SuspendAndRestart command for an unknown source. We cannot assert that this
-                    // never happens but we log an error here to track how often this happens.
-                    warn!(
-                        "got InternalStorageCommand::SuspendAndRestart for something that is not a source or sink: {id}"
-                    );
-                }
-            }
             InternalStorageCommand::CreateIngestionDataflow {
                 id: ingestion_id,
                 mut ingestion_description,
@@ -931,6 +849,17 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 .latest_status_updates
                 .insert(shared_update.id, shared_update);
         }
+
+        // Pump halt requests from the health operators and forward to the controller.
+        for halt_request in self.storage_state.shared_halt_requests.take() {
+            self.send_storage_response(
+                response_tx,
+                StorageResponse::HaltRequest {
+                    id: halt_request.id,
+                    reason: halt_request.reason,
+                },
+            );
+        }
     }
 
     /// Report source statistics back to the controller.
@@ -1067,7 +996,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 }
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
-                | StorageCommand::UpdateConfiguration(_) => (),
+                | StorageCommand::UpdateConfiguration(_)
+                | StorageCommand::RestartDataflow(_) => (),
             }
         }
 
@@ -1187,7 +1117,8 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 StorageCommand::InitializationComplete
                 | StorageCommand::AllowWrites
                 | StorageCommand::UpdateConfiguration(_)
-                | StorageCommand::AllowCompaction(_, _) => (),
+                | StorageCommand::AllowCompaction(_, _)
+                | StorageCommand::RestartDataflow(_) => (),
             }
             if should_keep {
                 filtered_commands.push_front(command);
@@ -1397,6 +1328,60 @@ impl StorageState {
                     // Indicates that we may drop `id`, as there are no more valid times to read.
                     self.drop_collection(id);
                 }
+            }
+            StorageCommand::RestartDataflow(id) => {
+                info!(
+                    "worker {}/{} received controller-initiated restart for {id}",
+                    self.timely_worker_index, self.timely_worker_peers,
+                );
+
+                let maybe_ingestion = self.ingestions.get(&id).cloned();
+                if let Some(ingestion_description) = maybe_ingestion {
+                    // Yank the token of the previously existing source dataflow.
+                    // This also includes any source exports/subsources.
+                    let maybe_token = self.source_tokens.remove(&id);
+                    if maybe_token.is_none() {
+                        // Something has dropped the source. Make sure we don't
+                        // accidentally re-create it.
+                        return;
+                    }
+
+                    // This needs to be done by one worker, which will broadcast a
+                    // `CreateIngestionDataflow` command to all workers based on the
+                    // response that contains the resumption upper.
+                    if self.timely_worker_index == 0 {
+                        for (export_id, _) in ingestion_description.source_exports.iter() {
+                            self.aggregated_statistics.advance_global_epoch(*export_id);
+                        }
+                        self.async_worker
+                            .update_ingestion_frontiers(id, ingestion_description);
+                    }
+
+                    return;
+                }
+
+                let maybe_sink = self.exports.get(&id).cloned();
+                if let Some(sink_description) = maybe_sink {
+                    let maybe_token = self.sink_tokens.remove(&id);
+                    if maybe_token.is_none() {
+                        // Something has dropped the sink. Make sure we don't
+                        // accidentally re-create it.
+                        return;
+                    }
+
+                    if self.timely_worker_index == 0 {
+                        self.aggregated_statistics.advance_global_epoch(id);
+                        self.async_worker
+                            .update_sink_frontiers(id, sink_description);
+                    }
+
+                    return;
+                }
+
+                warn!(
+                    "got StorageCommand::RestartDataflow for something that is \
+                    not a source or sink: {id}"
+                );
             }
         }
     }

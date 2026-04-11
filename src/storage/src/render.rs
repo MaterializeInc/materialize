@@ -218,6 +218,7 @@ use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
 use timely::worker::{AsWorker, Worker as TimelyWorker};
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
@@ -300,6 +301,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 config: storage_state.storage_configuration.clone(),
                 remap_collection_id: description.remap_collection_id,
                 busy_signal: Arc::clone(&busy_signal),
+                transient_error_token: CancellationToken::new(),
             };
 
             let (outputs, source_health, source_tokens) = match connection {
@@ -415,15 +417,13 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 "source",
                 health_stream,
                 crate::healthcheck::DefaultWriter {
-                    command_tx: storage_state.internal_cmd_tx.clone(),
                     updates: Rc::clone(&storage_state.shared_status_updates),
+                    halt_requests: Rc::clone(&storage_state.shared_halt_requests),
                 },
                 storage_state
                     .storage_configuration
                     .parameters
                     .record_namespaced_errors,
-                dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
-                    .get(storage_state.storage_configuration.config_set()),
             );
             tokens.push(health_token);
 
@@ -462,15 +462,13 @@ pub fn build_export_dataflow<A: Allocate>(
             "sink",
             health_stream,
             crate::healthcheck::DefaultWriter {
-                command_tx: storage_state.internal_cmd_tx.clone(),
                 updates: Rc::clone(&storage_state.shared_status_updates),
+                halt_requests: Rc::clone(&storage_state.shared_halt_requests),
             },
             storage_state
                 .storage_configuration
                 .parameters
                 .record_namespaced_errors,
-            dyncfgs::STORAGE_SUSPEND_AND_RESTART_DELAY
-                .get(storage_state.storage_configuration.config_set()),
         );
         tokens.push(health_token);
 

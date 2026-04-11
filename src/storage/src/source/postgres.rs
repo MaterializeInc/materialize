@@ -230,8 +230,13 @@ impl SourceRender for PostgresSourceConnection {
         // N.B. Note that we don't check ssh tunnel statuses here. We could, but immediately on
         // restart we are going to set the status to an ssh error correctly, so we don't do this
         // extra work.
+        let transient_error_token = config.transient_error_token.clone();
         let errs = snapshot_err.concat(repl_err).map(move |err| {
-            // This update will cause the dataflow to restart
+            // Signal transient error before emitting the halting health status.
+            // This ensures the remap operator will not seal the remap shard when
+            // the probe channel closes.
+            transient_error_token.cancel();
+
             let err_string = err.display_with_causes().to_string();
             let update = HealthStatusUpdate::halting(err_string.clone(), None);
 

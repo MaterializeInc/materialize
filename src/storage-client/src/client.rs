@@ -106,6 +106,12 @@ pub enum StorageCommand<T = mz_repr::Timestamp> {
     /// [`CancelOneshotIngestion`]: crate::client::StorageCommand::CancelOneshotIngestion
     /// [`RunOneshotIngestion`]: crate::client::StorageCommand::RunOneshotIngestion
     CancelOneshotIngestion(Uuid),
+    /// Instructs the replica to restart the dataflow identified by the given `GlobalId`.
+    ///
+    /// This is sent by the controller in response to a `HaltRequest` from the worker,
+    /// after applying backoff logic. The worker should tear down the existing dataflow
+    /// and re-render it with fresh frontiers from persist.
+    RestartDataflow(GlobalId),
 }
 
 impl<T> StorageCommand<T> {
@@ -118,7 +124,8 @@ impl<T> StorageCommand<T> {
             | AllowWrites
             | UpdateConfiguration(_)
             | AllowCompaction(_, _)
-            | CancelOneshotIngestion { .. } => false,
+            | CancelOneshotIngestion { .. }
+            | RestartDataflow(_) => false,
             // TODO(cf2): multi-replica oneshot ingestions. At the moment returning
             // true here means we can't run `COPY FROM` on multi-replica clusters, this
             // should be easy enough to support though.
@@ -344,6 +351,17 @@ pub enum StorageResponse<T = mz_repr::Timestamp> {
     /// A status update for a source or a sink. Periodically sent from
     /// storage workers to convey the latest status information about an object.
     StatusUpdate(StatusUpdate),
+    /// A request from the worker that the identified dataflow should be restarted.
+    ///
+    /// The worker has detected a transient error and is requesting the controller
+    /// to schedule a restart (with appropriate backoff). The worker does not
+    /// self-restart; it waits for the controller to send a `RestartDataflow` command.
+    HaltRequest {
+        /// The id of the dataflow that should be restarted.
+        id: GlobalId,
+        /// The reason for the restart request.
+        reason: String,
+    },
 }
 
 /// Maintained state for partitioned storage clients.
@@ -402,7 +420,8 @@ where
             | StorageCommand::UpdateConfiguration(_)
             | StorageCommand::AllowCompaction(_, _)
             | StorageCommand::RunOneshotIngestion(_)
-            | StorageCommand::CancelOneshotIngestion { .. } => {}
+            | StorageCommand::CancelOneshotIngestion { .. }
+            | StorageCommand::RestartDataflow(_) => {}
         }
     }
 
@@ -496,6 +515,11 @@ where
             }
             StorageResponse::StatusUpdate(updates) => {
                 Some(Ok(StorageResponse::StatusUpdate(updates)))
+            }
+            StorageResponse::HaltRequest { id, reason } => {
+                // Forward halt requests directly; only one worker should emit them
+                // (the health operator's chosen worker), so no deduplication needed.
+                Some(Ok(StorageResponse::HaltRequest { id, reason }))
             }
             StorageResponse::StagedBatches(batches) => {
                 let mut finished_batches = BTreeMap::new();

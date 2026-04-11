@@ -15,7 +15,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::Debug;
 use std::rc::Rc;
-use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use differential_dataflow::Hashable;
@@ -31,8 +30,6 @@ use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
 use tracing::{error, info};
-
-use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
 
 /// The namespace of the update. The `Ord` impl matter here, later variants are
 /// displayed over earlier ones.
@@ -270,10 +267,19 @@ pub trait HealthOperator {
     }
 }
 
+/// A halt request from the health operator, indicating a dataflow should be restarted.
+#[derive(Clone, Debug)]
+pub struct HaltRequest {
+    /// The id of the dataflow that should be restarted.
+    pub id: GlobalId,
+    /// The reason for the restart request.
+    pub reason: String,
+}
+
 /// A default `HealthOperator` for use in normal cases.
 pub struct DefaultWriter {
-    pub command_tx: InternalCommandSender,
     pub updates: Rc<RefCell<Vec<StatusUpdate>>>,
+    pub halt_requests: Rc<RefCell<Vec<HaltRequest>>>,
 }
 
 impl HealthOperator for DefaultWriter {
@@ -306,13 +312,10 @@ impl HealthOperator for DefaultWriter {
     }
 
     fn send_halt(&self, id: GlobalId, error: Option<(StatusNamespace, HealthStatusUpdate)>) {
-        self.command_tx
-            .send(InternalStorageCommand::SuspendAndRestart {
-                // Suspend and restart is expected to operate on the primary object and
-                // not any of the sub-objects
-                id,
-                reason: format!("{:?}", error),
-            });
+        self.halt_requests.borrow_mut().push(HaltRequest {
+            id,
+            reason: format!("{:?}", error),
+        });
     }
 }
 
@@ -351,9 +354,6 @@ pub(crate) fn health_operator<G, P>(
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
     write_namespaced_map: bool,
-    // How long to wait before initiating a `SuspendAndRestart` command, to
-    // prevent hot restart loops.
-    suspend_and_restart_delay: Duration,
 ) -> PressOnDropButton
 where
     G: Scope,
@@ -490,10 +490,6 @@ where
                     }
                 }
 
-                // TODO(aljoscha): Instead of threading through the
-                // `should_halt` bit, we can give an internal command sender
-                // directly to the places where `should_halt = true` originates.
-                // We should definitely do that, but this is okay for a PoC.
                 if let Some((id, halt_with)) = halt_with_outer {
                     mz_ore::soft_assert_or_log!(
                         id == halting_id,
@@ -505,11 +501,12 @@ where
                     );
 
                     info!(
-                        "Broadcasting suspend-and-restart \
-                        command because of {:?} after {:?} delay",
-                        halt_with, suspend_and_restart_delay
+                        "Sending halt request to controller for \
+                        {object_type} {id} because of {:?}",
+                        halt_with
                     );
-                    tokio::time::sleep(suspend_and_restart_delay).await;
+                    // Send halt request to the controller which will decide
+                    // when to restart with appropriate backoff.
                     health_operator_impl.send_halt(id, halt_with);
                 }
             }
@@ -1107,7 +1104,6 @@ mod tests {
                                     input_mapping: inputs,
                                 },
                                 write_namespaced_map,
-                                Duration::from_secs(5),
                             )));
                         });
                 });
