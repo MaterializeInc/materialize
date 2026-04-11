@@ -46,7 +46,7 @@ use timely::progress::timestamp::Refines;
 use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
-use crate::extensions::reduce::{MzReduce, ReduceExt};
+use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
@@ -283,20 +283,14 @@ where
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
-        let (output, errors) = collection
+        let arranged = collection
             .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "Arranged DistinctBy",
-            )
-            .reduce_pair::<
-                _,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-                _,
-                RowErrBuilder<_, _>,
-                RowErrSpine<_, _>,
-            >(
+            );
+        let output = arranged
+            .clone()
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "DistinctBy",
-                "DistinctByErrorCheck",
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();
                     let mut datums_local = datums1.borrow();
@@ -317,28 +311,31 @@ where
                         output.push((Row::default(), Diff::ONE));
                     }
                 },
-                move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowError, _)>| {
-                    for (_, count) in input.iter() {
-                        if count.is_positive() {
-                            continue;
-                        }
-                        let message = "Non-positive multiplicity in DistinctBy";
-                        error_logger.log(message, &format!("row={key:?}, count={count}"));
-                        output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
-                        return;
-                    }
-                    // If `mfp_after` can error, then evaluate it here.
-                    let Some(mfp) = &mfp_after2 else { return };
-                    let temp_storage = RowArena::new();
-                    let datum_iter = key.to_datum_iter();
-                    let mut datums_local = datums2.borrow();
-                    datums_local.extend(datum_iter);
-
-                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
-                        output.push((e.into(), Diff::ONE));
-                    }
-                },
             );
+        let errors = arranged.mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
+            "DistinctByErrorCheck",
+            move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowError, _)>| {
+                for (_, count) in input.iter() {
+                    if count.is_positive() {
+                        continue;
+                    }
+                    let message = "Non-positive multiplicity in DistinctBy";
+                    error_logger.log(message, &format!("row={key:?}, count={count}"));
+                    output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
+                    return;
+                }
+                // If `mfp_after` can error, then evaluate it here.
+                let Some(mfp) = &mfp_after2 else { return };
+                let temp_storage = RowArena::new();
+                let datum_iter = key.to_datum_iter();
+                let mut datums_local = datums2.borrow();
+                datums_local.extend(datum_iter);
+
+                if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                    output.push((e.into(), Diff::ONE));
+                }
+            },
+        );
         (output, errors.as_collection(|_k, v| v.clone()))
     }
 
@@ -1391,45 +1388,35 @@ where
 
         let error_logger = self.error_logger();
         let err_full_aggrs = full_aggrs.clone();
-        let (arranged_output, arranged_errs) = collection
-            .mz_arrange::<
-                RowBatcher<_, _>,
-                RowBuilder<_, _>,
-                RowSpine<_, (Vec<Accum>, Diff)>,
-            >("ArrangeAccumulable [val: empty]")
-            .reduce_pair::<
-                _,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
-                _,
-                RowErrBuilder<_, _>,
-                RowErrSpine<_, _>,
-            >(
-                "ReduceAccumulable",
-                "AccumulableErrorCheck",
-                {
-                    move |key, input, output| {
-                        let (ref accums, total) = input[0].1;
+        let arranged = collection
+            .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, (Vec<Accum>, Diff)>>(
+                "ArrangeAccumulable [val: empty]",
+            );
+        let arranged_output = arranged
+            .clone()
+            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>("ReduceAccumulable", {
+                move |key, input, output| {
+                    let (ref accums, total) = input[0].1;
 
-                        let temp_storage = RowArena::new();
-                        let datum_iter = key.to_datum_iter();
-                        let mut datums_local = datums1.borrow();
-                        datums_local.extend(datum_iter);
-                        let key_len = datums_local.len();
-                        for (aggr, accum) in full_aggrs.iter().zip_eq(accums) {
-                            datums_local.push(finalize_accum(&aggr.func, accum, total));
-                        }
-
-                        if let Some(row) = evaluate_mfp_after(
-                            &mfp_after1,
-                            &mut datums_local,
-                            &temp_storage,
-                            key_len,
-                        ) {
-                            output.push((row, Diff::ONE));
-                        }
+                    let temp_storage = RowArena::new();
+                    let datum_iter = key.to_datum_iter();
+                    let mut datums_local = datums1.borrow();
+                    datums_local.extend(datum_iter);
+                    let key_len = datums_local.len();
+                    for (aggr, accum) in full_aggrs.iter().zip_eq(accums) {
+                        datums_local.push(finalize_accum(&aggr.func, accum, total));
                     }
-                },
+
+                    if let Some(row) =
+                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
+                    {
+                        output.push((row, Diff::ONE));
+                    }
+                }
+            });
+        let arranged_errs = arranged
+            .mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
+                "AccumulableErrorCheck",
                 move |key, input, output| {
                     let (ref accums, total) = input[0].1;
                     for (aggr, accum) in err_full_aggrs.iter().zip_eq(accums) {
@@ -1461,8 +1448,7 @@ where
                                         "Invalid data in source, saw negative accumulation with \
                                          unsigned type for key {key}"
                                     );
-                                    let err =
-                                        EvalError::Internal(message.into());
+                                    let err = EvalError::Internal(message.into());
                                     output.push((err.into(), Diff::ONE));
                                 }
                             }
