@@ -3957,6 +3957,75 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_CLUSTER_REPLICA_SIZE_DETAILS: LazyLock<BuiltinTable> =
+    LazyLock::new(|| BuiltinTable {
+        name: "mz_cluster_replica_size_details",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_CLUSTER_REPLICA_SIZE_DETAILS_OID,
+        desc: RelationDesc::builder()
+            .with_column("size", SqlScalarType::String.nullable(false))
+            .with_column("processes", SqlScalarType::UInt64.nullable(false))
+            .with_column("workers", SqlScalarType::UInt64.nullable(false))
+            .with_column("cpu_nano_cores", SqlScalarType::UInt64.nullable(false))
+            .with_column("memory_bytes", SqlScalarType::UInt64.nullable(false))
+            .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
+            .with_column(
+                "credits_per_hour",
+                SqlScalarType::Numeric { max_scale: None }.nullable(false),
+            )
+            .with_column("cpu_exclusive", SqlScalarType::Bool.nullable(false))
+            .with_column("is_cc", SqlScalarType::Bool.nullable(false))
+            .with_column("swap_enabled", SqlScalarType::Bool.nullable(false))
+            .with_column("disabled", SqlScalarType::Bool.nullable(false))
+            .with_column("builtin", SqlScalarType::Bool.nullable(false))
+            .with_column("node_selectors", SqlScalarType::Jsonb.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("size", "The human-readable replica size name."),
+            (
+                "processes",
+                "The number of processes (scale) in the replica.",
+            ),
+            (
+                "workers",
+                "The number of Timely Dataflow workers per process.",
+            ),
+            (
+                "cpu_nano_cores",
+                "The CPU allocation per process, in billionths of a vCPU core.",
+            ),
+            ("memory_bytes", "The RAM allocation per process, in bytes."),
+            ("disk_bytes", "The disk allocation per process, in bytes."),
+            (
+                "credits_per_hour",
+                "The number of compute credits consumed per hour.",
+            ),
+            (
+                "cpu_exclusive",
+                "Whether each process has exclusive access to its CPU cores.",
+            ),
+            ("is_cc", "Whether this is a modern cc-style size."),
+            (
+                "swap_enabled",
+                "Whether swap is used as the spill-to-disk mechanism.",
+            ),
+            (
+                "disabled",
+                "Whether this size is disabled and cannot be used for new replicas.",
+            ),
+            (
+                "builtin",
+                "Whether this size is a builtin (from env var) or user-defined.",
+            ),
+            (
+                "node_selectors",
+                "Kubernetes node selectors for scheduling, as a JSON object.",
+            ),
+        ]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    });
+
 pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_audit_events",
     schema: MZ_CATALOG_SCHEMA,
@@ -14333,6 +14402,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS_HISTORY),
         Builtin::View(&MZ_CLUSTER_REPLICA_METRICS),
         Builtin::Table(&MZ_CLUSTER_REPLICA_SIZES),
+        Builtin::Table(&MZ_CLUSTER_REPLICA_SIZE_DETAILS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_STATUS_HISTORY),
         Builtin::View(&MZ_CLUSTER_REPLICA_STATUSES),
         Builtin::MaterializedView(&MZ_INTERNAL_CLUSTER_REPLICAS),

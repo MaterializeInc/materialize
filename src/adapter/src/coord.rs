@@ -2391,12 +2391,8 @@ impl Coordinator {
             self.initialize_read_policies(&policies, cw).await;
         }
 
-        // Expose mapping from T-shirt sizes to actual sizes
-        builtin_table_updates.extend(
-            self.catalog().state().resolve_builtin_table_updates(
-                self.catalog().state().pack_all_replica_size_updates(),
-            ),
-        );
+        // Cluster replica sizes are now durable objects; their builtin table updates
+        // are generated via state updates in apply.rs, so no manual packing needed here.
 
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
