@@ -1,0 +1,1 @@
+APPROVED: Minimal, focused fix — adds `rowCount` from `rows?.length ?? 0` and conditionally renders the row count vs "No results". No changes outside `console/`, no drive-bys, no hardcoded colors, no obvious bugs. Tests follow console/CLAUDE.md patterns (`renderComponent`, co-located `.papercut.test.tsx`, behavior-focused assertions, one case per `it`).
