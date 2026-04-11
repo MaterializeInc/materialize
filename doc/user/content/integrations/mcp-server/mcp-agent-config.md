@@ -17,7 +17,6 @@ The following configurations are available for the `/api/mcp/agent` endpoint:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `enable_mcp_agent` | `true` | Enable or disable the `/api/mcp/agent` endpoint. When disabled, requests return `HTTP 503 (Service Unavailable)`.|
-| `enable_mcp_agent_query_tool` | `true` | Show or hide the `query` tool on the agent endpoint. |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
 ## Example: Enable endpoint

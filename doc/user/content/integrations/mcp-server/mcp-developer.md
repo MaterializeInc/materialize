@@ -13,7 +13,21 @@ menu:
 
 Materialize provides a built-in [Model Context Protocol
 (MCP)](https://modelcontextprotocol.io/) endpoint for troubleshooting and
-observability. The MCP interface is served directly by the database; no sidecar
+observability. Connect an MCP-compatible AI agent (such as Claude Code, Claude
+Desktop, or Cursor) and ask natural language questions like:
+
+| Question | What the agent does |
+|----------|---------------------|
+| **Why is my materialized view stale?** | Checks materialization lag, hydration status, replica health, and source errors. |
+| **Why is my cluster running out of memory?** | Checks replica utilization, identifies the largest dataflows, and finds optimization opportunities via the built-in index advisor. |
+| **Has my source finished snapshotting yet?** | Checks source statistics and status. |
+| **How much memory is my cluster using?** | Checks replica utilization metrics across all clusters. |
+| **What's the health of my environment?** | Checks replica statuses, source and sink health, and resource utilization. |
+| **What can I optimize to save costs?** | Queries the index advisor for materialized views that can be dematerialized and indexes that can be dropped. |
+
+The agent translates these questions into the appropriate system catalog
+queries, runs them via the `query_system_catalog` tool, and synthesizes the
+results. The MCP interface is served directly by the database; no sidecar
 process or external server is required.
 
 ## Overview
@@ -205,25 +219,6 @@ curl -X POST <baseURL>/api/mcp/developer \
 {{< /tab >}}
 
 {{< /tabs >}}
-
-## What you can ask
-
-After connecting an MCP-compatible AI agent (such as Claude Code, Claude
-Desktop, or Cursor) to the developer endpoint, you can ask natural language
-questions like:
-
-| Question | What the agent does |
-|----------|---------------------|
-| **Why is my materialized view stale?** | Checks materialization lag, hydration status, replica health, and source errors. |
-| **Why is my cluster running out of memory?** | Checks replica utilization, identifies the largest dataflows, and finds optimization           opportunities via the built-in index advisor. |
-| **Has my source finished snapshotting yet?** | Checks source statistics and status. |
-| **How much memory is my cluster using?** | Checks replica utilization metrics across all clusters. |
-| **What's the health of my environment?** | Checks replica statuses, source and sink health, and resource utilization. |
-| **What can I optimize to save costs?** | Queries the index advisor for materialized views that can be dematerialized and indexes that can be  dropped. |
-
-The agent translates these questions into the appropriate system catalog
-queries, runs them via the `query_system_catalog` tool, and synthesizes the
-results.
 
 ## Tools
 

@@ -472,38 +472,6 @@ Read rows from a data product.
 }
 ```
 
-### `query`
-
-{{< note >}}
-The `query` tool is disabled by default. To enable it, set the
-`enable_mcp_agent_query_tool` system parameter to `true`.
-{{< /note >}}
-
-Execute a SQL `SELECT` statement against your data products.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `cluster` | string | Yes | Exact cluster name from the data product details. |
-| `sql_query` | string | Yes | PostgreSQL-compatible `SELECT` statement. |
-
-**Example response:**
-
-```json
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "content": [
-      {
-        "type": "text",
-        "text": "[\n  [\n    42,\n    \"shipped\"\n  ]\n]"
-      }
-    ],
-    "isError": false
-  }
-}
-```
-
 ## Related pages
 
 - [MCP Server for Developers](/integrations/mcp-server/mcp-developer/)
