@@ -179,7 +179,7 @@
     "react-refresh": "^0.14.2",
     "terser": "^5.46.1",
     "typescript-eslint-language-service": "^5.0.5",
-    "vite": "^6.4.1",
+    "vite": "^6.4.2",
     "vite-bundle-analyzer": "^0.12.1",
     "vite-plugin-html": "^3.2.2",
     "vite-plugin-svgr": "^4.3.0",
