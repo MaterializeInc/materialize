@@ -189,7 +189,7 @@ impl YieldSpec {
 enum JoinedFlavor<G>
 where
     G: Scope,
-    G::Timestamp: Refines<mz_repr::Timestamp> + MzTimestamp,
+    G::Timestamp: RenderTimestamp,
 {
     /// Streamed data as a collection.
     Collection(VecCollection<G, Row, Diff>),

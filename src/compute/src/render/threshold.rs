@@ -25,6 +25,7 @@ use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
+use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
@@ -78,7 +79,7 @@ pub fn build_threshold_basic<G>(
 ) -> CollectionBundle<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    G::Timestamp: RenderTimestamp,
 {
     let arrangement = input
         .arrangement(&key)
@@ -109,7 +110,7 @@ where
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    G::Timestamp: RenderTimestamp,
 {
     pub(crate) fn render_threshold(
         &self,

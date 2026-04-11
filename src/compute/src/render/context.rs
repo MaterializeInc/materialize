@@ -64,7 +64,7 @@ use crate::typedefs::{
 /// of regions or iteration.
 pub struct Context<S: Scope>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// The scope within which all managed collections exist.
     ///
@@ -99,7 +99,7 @@ where
 
 impl<S: Scope> Context<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
@@ -145,7 +145,7 @@ where
 
 impl<S: Scope> Context<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -193,7 +193,7 @@ where
 
 impl<S: Scope> Context<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
@@ -228,7 +228,7 @@ where
 #[derive(Clone)]
 pub enum ArrangementFlavor<S: Scope>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// A dataflow-local arrangement.
     Local(
@@ -248,7 +248,7 @@ where
 
 impl<S: Scope> ArrangementFlavor<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -336,7 +336,7 @@ where
 }
 impl<S: Scope> ArrangementFlavor<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> S {
@@ -366,7 +366,7 @@ where
 }
 impl<'a, S: Scope> ArrangementFlavor<Child<'a, S, S::Timestamp>>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Extracts the arrangement flavor from a region.
     pub fn leave_region(&self) -> ArrangementFlavor<S> {
@@ -390,7 +390,7 @@ where
 #[derive(Clone)]
 pub struct CollectionBundle<S: Scope>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     pub collection: Option<(
         VecCollection<S, Row, Diff>,
@@ -401,7 +401,7 @@ where
 
 impl<S: Scope> CollectionBundle<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
@@ -472,7 +472,7 @@ where
 
 impl<'a, S: Scope> CollectionBundle<Child<'a, S, S::Timestamp>>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Extracts the collection bundle from a region.
     pub fn leave_region(&self) -> CollectionBundle<S> {
@@ -492,7 +492,7 @@ where
 
 impl<S: Scope> CollectionBundle<S>
 where
-    S::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    S::Timestamp: RenderTimestamp,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
@@ -680,7 +680,7 @@ where
 impl<S> CollectionBundle<S>
 where
     S: Scope,
-    S::Timestamp: Refines<mz_repr::Timestamp> + RenderTimestamp,
+    S::Timestamp: RenderTimestamp,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///

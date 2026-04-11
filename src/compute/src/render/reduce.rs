@@ -50,7 +50,7 @@ use crate::extensions::reduce::MzReduce;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
-use crate::render::{ArrangementFlavor, Pairer};
+use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
@@ -62,7 +62,7 @@ use crate::typedefs::{
 impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<mz_repr::Timestamp>,
+    G::Timestamp: RenderTimestamp,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
