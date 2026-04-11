@@ -31,6 +31,7 @@ use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
+use timely::scheduling::Scheduler;
 use timely::worker::AsWorker;
 
 use crate::arrangement::manager::TraceBundle;
@@ -163,7 +164,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 collections: compute_collections,
             } = super::compute::construct(
                 scope.clone(),
-                scope.parent().clone(),
+                scope.activations(),
                 self.config,
                 self.c_event_queue.clone(),
                 Rc::clone(&self.shared_state),
