@@ -48,6 +48,7 @@ use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
+use timely::progress::Timestamp as _;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -70,17 +71,14 @@ const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);
 /// A session holds per-connection state.
 #[derive(Derivative)]
 #[derivative(Debug)]
-pub struct Session<T = mz_repr::Timestamp>
-where
-    T: Debug + Clone + Send + Sync,
-{
+pub struct Session {
     conn_id: ConnectionId,
     /// A globally unique identifier for the session. Not to be confused
     /// with `conn_id`, which may be reused.
     uuid: Uuid,
     prepared_statements: BTreeMap<String, PreparedStatement>,
     portals: BTreeMap<String, Portal>,
-    transaction: TransactionStatus<T>,
+    transaction: TransactionStatus<mz_repr::Timestamp>,
     pcx: Option<PlanContext>,
     metrics: SessionMetrics,
     #[derivative(Debug = "ignore")]
@@ -119,7 +117,8 @@ where
     // on. We express this by gating access with this token.
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
-    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<T, NowFn<T>>>,
+    session_oracles:
+        BTreeMap<Timeline, InMemoryTimestampOracle<mz_repr::Timestamp, NowFn<mz_repr::Timestamp>>>,
     /// Incremented when session state that is relevant to prepared statement planning changes.
     /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
     /// need to be tracked, because prepared statements can't depend on other prepared statements.
@@ -128,11 +127,7 @@ where
     state_revision: u64,
 }
 
-impl<T> SessionMetadata for Session<T>
-where
-    T: Debug + Clone + Send + Sync,
-    T: TimestampManipulation,
-{
+impl SessionMetadata for Session {
     fn conn_id(&self) -> &ConnectionId {
         &self.conn_id
     }
@@ -218,13 +213,13 @@ pub struct SessionConfig {
     pub authenticator_kind: AuthenticatorKind,
 }
 
-impl<T: TimestampManipulation> Session<T> {
+impl Session {
     /// Creates a new session for the specified connection ID.
     pub(crate) fn new(
         build_info: &'static BuildInfo,
         config: SessionConfig,
         metrics: SessionMetrics,
-    ) -> Session<T> {
+    ) -> Session {
         assert_ne!(config.conn_id, DUMMY_CONNECTION_ID);
         Self::new_internal(build_info, config, metrics)
     }
@@ -289,7 +284,7 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// Dummy sessions are intended for use when executing queries on behalf of
     /// the system itself, rather than on behalf of a user.
-    pub fn dummy() -> Session<T> {
+    pub fn dummy() -> Session {
         let registry = MetricsRegistry::new();
         let metrics = Metrics::register_into(&registry);
         let metrics = metrics.session_metrics();
@@ -322,7 +317,7 @@ impl<T: TimestampManipulation> Session<T> {
             authenticator_kind,
         }: SessionConfig,
         metrics: SessionMetrics,
-    ) -> Session<T> {
+    ) -> Session {
         let (notices_tx, notices_rx) = mpsc::unbounded_channel();
         let default_cluster = INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER.get(&user);
         let user = User {
@@ -467,7 +462,7 @@ impl<T: TimestampManipulation> Session<T> {
     /// and
     /// > An unnamed portal is destroyed at the end of the transaction
     #[must_use]
-    pub fn clear_transaction(&mut self) -> TransactionStatus<T> {
+    pub fn clear_transaction(&mut self) -> TransactionStatus<mz_repr::Timestamp> {
         self.portals.clear();
         self.pcx = None;
         self.state_revision += 1;
@@ -489,12 +484,12 @@ impl<T: TimestampManipulation> Session<T> {
     }
 
     /// Returns the current transaction status.
-    pub fn transaction(&self) -> &TransactionStatus<T> {
+    pub fn transaction(&self) -> &TransactionStatus<mz_repr::Timestamp> {
         &self.transaction
     }
 
     /// Returns the current transaction status.
-    pub fn transaction_mut(&mut self) -> &mut TransactionStatus<T> {
+    pub fn transaction_mut(&mut self) -> &mut TransactionStatus<mz_repr::Timestamp> {
         &mut self.transaction
     }
 
@@ -506,7 +501,10 @@ impl<T: TimestampManipulation> Session<T> {
     /// Adds operations to the current transaction. An error is produced if
     /// they cannot be merged (i.e., a timestamp-dependent read cannot be
     /// merged to an insert).
-    pub fn add_transaction_ops(&mut self, add_ops: TransactionOps<T>) -> Result<(), AdapterError> {
+    pub fn add_transaction_ops(
+        &mut self,
+        add_ops: TransactionOps<mz_repr::Timestamp>,
+    ) -> Result<(), AdapterError> {
         self.transaction.add_ops(add_ops)
     }
 
@@ -585,7 +583,9 @@ impl<T: TimestampManipulation> Session<T> {
     /// ops to `None`, returning the old read timestamp context if
     /// any existed. Must only be used after verifying that no transaction
     /// anomalies will occur if cleared.
-    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext<T>> {
+    pub fn take_transaction_timestamp_context(
+        &mut self,
+    ) -> Option<TimestampContext<mz_repr::Timestamp>> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks { .. } = ops {
                 let ops = std::mem::take(ops);
@@ -606,7 +606,9 @@ impl<T: TimestampManipulation> Session<T> {
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination<T>> {
+    pub fn get_transaction_timestamp_determination(
+        &self,
+    ) -> Option<TimestampDetermination<mz_repr::Timestamp>> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
@@ -889,15 +891,20 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn ensure_timestamp_oracle(
         &mut self,
         timeline: Timeline,
-    ) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
-        self.session_oracles
-            .entry(timeline)
-            .or_insert_with(|| InMemoryTimestampOracle::new(T::minimum(), NowFn::from(T::minimum)))
+    ) -> &mut InMemoryTimestampOracle<mz_repr::Timestamp, NowFn<mz_repr::Timestamp>> {
+        self.session_oracles.entry(timeline).or_insert_with(|| {
+            InMemoryTimestampOracle::new(
+                mz_repr::Timestamp::minimum(),
+                NowFn::from(mz_repr::Timestamp::minimum),
+            )
+        })
     }
 
     /// Ensures that a timestamp oracle exists for reads and writes from/to a local input and
     /// returns a mutable reference to the timestamp oracle.
-    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle<T, NowFn<T>> {
+    pub fn ensure_local_timestamp_oracle(
+        &mut self,
+    ) -> &mut InMemoryTimestampOracle<mz_repr::Timestamp, NowFn<mz_repr::Timestamp>> {
         self.ensure_timestamp_oracle(Timeline::EpochMilliseconds)
     }
 
@@ -905,13 +912,13 @@ impl<T: TimestampManipulation> Session<T> {
     pub fn get_timestamp_oracle(
         &self,
         timeline: &Timeline,
-    ) -> Option<&InMemoryTimestampOracle<T, NowFn<T>>> {
+    ) -> Option<&InMemoryTimestampOracle<mz_repr::Timestamp, NowFn<mz_repr::Timestamp>>> {
         self.session_oracles.get(timeline)
     }
 
     /// If the current session is using the Strong Session Serializable isolation level advance the
     /// session local timestamp oracle to `write_ts`.
-    pub fn apply_write(&mut self, timestamp: T) {
+    pub fn apply_write(&mut self, timestamp: mz_repr::Timestamp) {
         if self.vars().transaction_isolation() == &IsolationLevel::StrongSessionSerializable {
             self.ensure_local_timestamp_oracle().apply_write(timestamp);
         }
