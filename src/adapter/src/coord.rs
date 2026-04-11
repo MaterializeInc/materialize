@@ -1842,7 +1842,7 @@ pub struct Coordinator {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
+    global_timelines: BTreeMap<Timeline, TimelineState>,
 
     /// A generator for transient [`GlobalId`]s, shareable with other threads.
     transient_id_gen: Arc<TransientIdGen>,
