@@ -1819,18 +1819,12 @@ impl<'a> RunnerInner<'a> {
                 num_attributes,
             }) => {
                 let query_outcome = self.execute_query(sql, output, location.clone()).await?;
-                if is_select && self.auto_index_selects {
+                if is_select && self.auto_index_selects && query_outcome.success() {
                     let view_outcome = self
                         .execute_view(sql, None, output, location.clone())
                         .await?;
 
-                    // We compare here the query-based and view-based outcomes.
-                    // We only produce a test failure if the outcomes are of different
-                    // variant types, thus accepting smaller deviations in the details
-                    // produced for each variant.
-                    if std::mem::discriminant::<Outcome>(&query_outcome)
-                        != std::mem::discriminant::<Outcome>(&view_outcome)
-                    {
+                    if !view_outcome.success() {
                         // Before producing a failure outcome, we try to obtain a new
                         // outcome for view-based execution exploiting analysis of the
                         // number of attributes. This two-level strategy can avoid errors
@@ -1842,9 +1836,7 @@ impl<'a> RunnerInner<'a> {
                             view_outcome
                         };
 
-                        if std::mem::discriminant::<Outcome>(&query_outcome)
-                            != std::mem::discriminant::<Outcome>(&view_outcome)
-                        {
+                        if !view_outcome.success() {
                             let inconsistent_view_outcome = Outcome::InconsistentViewOutcome {
                                 query_outcome: Box::new(query_outcome),
                                 view_outcome: Box::new(view_outcome),
@@ -2115,12 +2107,8 @@ const INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS: [&str; 9] = [
 /// provides enough information as to whether a warning should be emitted or not.
 fn should_warn(outcome: &Outcome) -> bool {
     match outcome {
-        Outcome::InconsistentViewOutcome {
-            query_outcome,
-            view_outcome,
-            ..
-        } => match (query_outcome.as_ref(), view_outcome.as_ref()) {
-            (Outcome::Success, Outcome::PlanFailure { error, .. }) => {
+        Outcome::InconsistentViewOutcome { view_outcome, .. } => match view_outcome.as_ref() {
+            Outcome::PlanFailure { error, .. } => {
                 INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
                     Regex::new(s)
                         .expect("unexpected error in regular expression parsing")
