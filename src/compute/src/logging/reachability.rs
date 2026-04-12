@@ -44,59 +44,66 @@ pub(super) struct Return {
 /// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct(
+    scope: &Scope<'_, Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
 ) -> Return {
-    let collections = scope.scoped("timely reachability logging", move |scope| {
-        let enable_logging = config.enable_logging;
-        let interval_ms = std::cmp::max(1, config.interval.as_millis());
-        type UpdatesKey = (bool, usize, usize, usize, Timestamp);
+    let collections = scope
+        .clone()
+        .scoped("timely reachability logging", move |scope| {
+            let enable_logging = config.enable_logging;
+            let interval_ms = std::cmp::max(1, config.interval.as_millis());
+            type UpdatesKey = (bool, usize, usize, usize, Timestamp);
 
-        type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
-        let (logs, token) = if enable_logging {
-            event_queue.links.mz_replay(
-                scope,
-                "reachability logs",
-                config.interval,
-                event_queue.activator,
-            )
-        } else {
-            let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
-            (empty(scope), token)
-        };
-        let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_, _| {
-            move |input, output| {
-                input.for_each_time(|time, data| {
-                    output
-                        .session_with_builder(&time)
-                        .give_iterator(data.flat_map(|d| {
-                            d.borrow().into_index_iter().flat_map(
-                                move |(time, (operator_id, massaged))| {
-                                    let time_ms =
-                                        ((time.as_millis() / interval_ms) + 1) * interval_ms;
-                                    let time_ms: Timestamp = time_ms.try_into().expect("must fit");
-                                    massaged.into_iter().map(
-                                        move |(source, port, update_type, ts, diff)| {
-                                            let datum =
-                                                (update_type, operator_id, source, port, ts);
-                                            ((datum, ()), time_ms, diff)
-                                        },
-                                    )
-                                },
-                            )
-                        }));
-                });
-            }
-        });
+            type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
+            let (logs, token) = if enable_logging {
+                event_queue.links.mz_replay(
+                    scope,
+                    "reachability logs",
+                    config.interval,
+                    event_queue.activator,
+                )
+            } else {
+                let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
+                (empty(scope), token)
+            };
+            let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_, _| {
+                move |input, output| {
+                    input.for_each_time(|time, data| {
+                        output
+                            .session_with_builder(&time)
+                            .give_iterator(data.flat_map(|d| {
+                                d.borrow().into_index_iter().flat_map(
+                                    move |(time, (operator_id, massaged))| {
+                                        let time_ms =
+                                            ((time.as_millis() / interval_ms) + 1) * interval_ms;
+                                        let time_ms: Timestamp =
+                                            time_ms.try_into().expect("must fit");
+                                        massaged.into_iter().map(
+                                            move |(source, port, update_type, ts, diff)| {
+                                                let datum =
+                                                    (update_type, operator_id, source, port, ts);
+                                                ((datum, ()), time_ms, diff)
+                                            },
+                                        )
+                                    },
+                                )
+                            }));
+                    });
+                }
+            });
 
-        // Restrict results by those logs that are meant to be active.
-        let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
-        let worker_id = scope.index();
+            // Restrict results by those logs that are meant to be active.
+            let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
+            let worker_id = scope.index();
 
-        let updates =
-            consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
+            let updates = consolidate_and_pack::<
+                Col2ValBatcher<UpdatesKey, _, _, _>,
+                ColumnBuilder<_>,
+                _,
+                _,
+            >(
                 logs,
                 TimelyLog::Reachability,
                 move |data, packer, session| {
@@ -116,13 +123,13 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 },
             );
 
-        let mut result = BTreeMap::new();
-        for variant in logs_active {
-            if config.index_logs.contains_key(&variant) {
-                let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                    columnar_exchange::<Row, Row, Timestamp, Diff>,
-                );
-                let trace = updates
+            let mut result = BTreeMap::new();
+            for variant in logs_active {
+                if config.index_logs.contains_key(&variant) {
+                    let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                        columnar_exchange::<Row, Row, Timestamp, Diff>,
+                    );
+                    let trace = updates
                     .clone()
                     .mz_arrange_core::<
                         _,
@@ -131,15 +138,15 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                         RowRowSpine<_, _>,
                     >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
-                let collection = LogCollection {
-                    trace,
-                    token: Rc::clone(&token),
-                };
-                result.insert(variant, collection);
+                    let collection = LogCollection {
+                        trace,
+                        token: Rc::clone(&token),
+                    };
+                    result.insert(variant, collection);
+                }
             }
-        }
-        result
-    });
+            result
+        });
 
     Return { collections }
 }

@@ -103,7 +103,6 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::IngestionDescription;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::allocator::Generic;
 use timely::order::PartialOrder;
 use timely::progress::Timestamp as _;
 use timely::progress::frontier::Antichain;
@@ -135,7 +134,7 @@ pub struct Worker<'w> {
     /// The underlying Timely worker.
     ///
     /// NOTE: This is `pub` for testing.
-    pub timely_worker: &'w mut TimelyWorker<Generic>,
+    pub timely_worker: &'w mut TimelyWorker,
     /// The channel over which communication handles for newly connected clients
     /// are delivered.
     pub client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
@@ -146,7 +145,7 @@ pub struct Worker<'w> {
 impl<'w> Worker<'w> {
     /// Creates new `Worker` state from the given components.
     pub fn new(
-        timely_worker: &'w mut TimelyWorker<Generic>,
+        timely_worker: &'w mut TimelyWorker,
         client_rx: mpsc::UnboundedReceiver<(Uuid, CommandReceiver, ResponseSender)>,
         metrics: StorageMetrics,
         now: NowFn,

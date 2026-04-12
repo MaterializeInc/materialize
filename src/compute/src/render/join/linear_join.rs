@@ -28,17 +28,17 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
-use timely::dataflow::scopes::Child;
-use timely::dataflow::{Scope, ScopeParent};
+use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{RowRowAgent, RowRowEnter};
+use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -92,19 +92,16 @@ impl LinearJoinSpec {
     }
 
     /// Render a join operator according to this specification.
-    fn render<G, Tr1, Tr2, L, I>(
+    fn render<'s, T, Tr1, Tr2, L, I>(
         &self,
-        arranged1: Arranged<G, Tr1>,
-        arranged2: Arranged<G, Tr2>,
+        arranged1: Arranged<'s, Tr1>,
+        arranged2: Arranged<'s, Tr2>,
         result: L,
-    ) -> VecCollection<G, I::Item, Diff>
+    ) -> VecCollection<'s, T, I::Item, Diff>
     where
-        G: Scope,
-        G::Timestamp: Lattice,
-        Tr1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
-            + Clone
-            + 'static,
+        T: Lattice + timely::progress::Timestamp,
+        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
+        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
         L: FnMut(Tr1::Key<'_>, Tr1::Val<'_>, Tr2::Val<'_>) -> I + 'static,
         I: IntoIterator<Item: Data> + 'static,
     {
@@ -185,29 +182,29 @@ impl YieldSpec {
 }
 
 /// Different forms the streamed data might take.
-enum JoinedFlavor<G>
+enum JoinedFlavor<'scope, TInner, T>
 where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
+    TInner: MzTimestamp + Refines<T>,
+    T: MzTimestamp,
 {
     /// Streamed data as a collection.
-    Collection(VecCollection<G, Row, Diff>),
+    Collection(VecCollection<'scope, TInner, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(Arranged<G, RowRowAgent<G::Timestamp, Diff>>),
+    Local(Arranged<'scope, RowRowAgent<TInner, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<G, RowRowEnter<mz_repr::Timestamp, Diff, G::Timestamp>>),
+    Trace(Arranged<'scope, RowRowEnter<T, Diff, TInner>>),
 }
 
-impl<G> Context<G>
+impl<'scope, TInner, T> Context<'scope, TInner, T>
 where
-    G: Scope,
-    G::Timestamp: Lattice + RenderTimestamp,
+    TInner: Lattice + Refines<T> + RenderTimestamp,
+    T: MzTimestamp,
 {
     pub(crate) fn render_join(
         &self,
-        inputs: Vec<CollectionBundle<G>>,
+        inputs: Vec<CollectionBundle<'scope, TInner, T>>,
         linear_plan: LinearJoinPlan,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, TInner, T> {
         self.scope.clone().region_named("Join(Linear)", |inner| {
             self.render_join_inner(inputs, linear_plan, inner)
         })
@@ -215,10 +212,10 @@ where
 
     fn render_join_inner(
         &self,
-        inputs: Vec<CollectionBundle<G>>,
+        inputs: Vec<CollectionBundle<'scope, TInner, T>>,
         linear_plan: LinearJoinPlan,
-        inner: &mut Child<G, <G as ScopeParent>::Timestamp>,
-    ) -> CollectionBundle<G> {
+        inner: &mut Scope<'_, TInner>,
+    ) -> CollectionBundle<'scope, TInner, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
 
@@ -328,15 +325,15 @@ where
         } else {
             panic!("Unexpectedly arranged join output");
         };
-        bundle.leave_region()
+        bundle.leave_region(&self.scope)
     }
 
     /// Looks up the arrangement for the next input and joins it to the arranged
     /// version of the join of previous inputs.
-    fn differential_join<S>(
+    fn differential_join<'s>(
         &self,
-        mut joined: JoinedFlavor<S>,
-        lookup_relation: CollectionBundle<S>,
+        mut joined: JoinedFlavor<'s, TInner, T>,
+        lookup_relation: CollectionBundle<'s, TInner, T>,
         LinearStagePlan {
             stream_key,
             stream_thinning,
@@ -344,17 +341,14 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<VecCollection<S, DataflowError, Diff>>,
-    ) -> VecCollection<S, Row, Diff>
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        errors: &mut Vec<VecCollection<'s, TInner, DataflowError, Diff>>,
+    ) -> VecCollection<'s, TInner, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let name = "LinearJoinKeyPreparation";
             let (keyed, errs) = stream
                 .inner
-                .unary_fallible::<ColumnBuilder<((Row, Row), S::Timestamp, Diff)>, _, _, _>(
+                .unary_fallible::<ColumnBuilder<((Row, Row), TInner, Diff)>, _, _, _>(
                     Pipeline,
                     name,
                     |_, _| {
@@ -400,7 +394,7 @@ where
                     RowRowSpine<_, _>,
                 >(
                     ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                        columnar_exchange::<Row, Row, S::Timestamp, Diff>,
+                        columnar_exchange::<Row, Row, TInner, Diff>,
                     ),
                     "JoinStage"
                 );
@@ -419,7 +413,7 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowAgent<_, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, RowRowAgent<_, _>>(
                             local, oks, closure,
                         );
 
@@ -429,7 +423,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
                             local, oks, closure,
                         );
 
@@ -441,7 +435,7 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
+                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
                             trace, oks, closure,
                         );
 
@@ -451,7 +445,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<_, RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                             trace, oks, closure,
                         );
 
@@ -469,19 +463,18 @@ where
     ///
     /// The return type includes an optional error collection, which may be
     /// `None` if we can determine that `closure` cannot error.
-    fn differential_join_inner<S, Tr1, Tr2>(
+    fn differential_join_inner<'s, Tr1, Tr2>(
         &self,
-        prev_keyed: Arranged<S, Tr1>,
-        next_input: Arranged<S, Tr2>,
+        prev_keyed: Arranged<'s, Tr1>,
+        next_input: Arranged<'s, Tr2>,
         closure: JoinClosure,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        Option<VecCollection<S, DataflowError, Diff>>,
+        VecCollection<'s, TInner, Row, Diff>,
+        Option<VecCollection<'s, TInner, DataflowError, Diff>>,
     )
     where
-        S: Scope<Timestamp = G::Timestamp>,
-        Tr1: TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = G::Timestamp, Diff = Diff>
+        Tr1: TraceReader<Time = TInner, Diff = Diff> + Clone + 'static,
+        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = TInner, Diff = Diff>
             + Clone
             + 'static,
         for<'a> Tr1::Key<'a>: ToDatumIter,

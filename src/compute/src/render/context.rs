@@ -36,10 +36,11 @@ use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::operate::FrontierInterest;
+use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
+use timely::scheduling::Scheduler;
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
@@ -47,7 +48,8 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
+    RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -56,18 +58,19 @@ use crate::typedefs::{
 /// These assets include dataflow-local collections and arrangements, as well as imported
 /// arrangements from outside the dataflow.
 ///
-/// Context has two timestamp types, one from `S::Timestamp` and `mz_repr::Timestamp`, where the
+/// Context has two timestamp types, `TInner` and `T`, where the
 /// former must refine the latter. The former is the timestamp used by the scope in question,
 /// and the latter is the timestamp of imported traces. The two may be different in the case
 /// of regions or iteration.
-pub struct Context<S: Scope>
+pub struct Context<'scope, TInner, T = mz_repr::Timestamp>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// The scope within which all managed collections exist.
     ///
     /// It is an error to add any collections not contained in this scope.
-    pub(crate) scope: S,
+    pub(crate) scope: Scope<'scope, TInner>,
     /// The debug name of the dataflow associated with this context.
     pub debug_name: String,
     /// The Timely ID of the dataflow associated with this context.
@@ -78,31 +81,31 @@ where
     ///
     /// We *must* apply it to sinks, to ensure correct outputs.
     /// We *should* apply it to sources and imported traces, because it improves performance.
-    pub as_of_frontier: Antichain<mz_repr::Timestamp>,
+    pub as_of_frontier: Antichain<T>,
     /// Frontier after which updates should not be emitted.
     /// Used to limit the amount of work done when appropriate.
-    pub until: Antichain<mz_repr::Timestamp>,
+    pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
-    pub bindings: BTreeMap<Id, CollectionBundle<S>>,
+    pub bindings: BTreeMap<Id, CollectionBundle<'scope, TInner, T>>,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
     pub(super) linear_join_spec: LinearJoinSpec,
     /// The expiration time for dataflows in this context. The output's frontier should never advance
     /// past this frontier, except the empty frontier.
-    pub dataflow_expiration: Antichain<mz_repr::Timestamp>,
+    pub dataflow_expiration: Antichain<T>,
     /// The config set for this context.
     pub config_set: Rc<ConfigSet>,
 }
 
-impl<S: Scope> Context<S>
+impl<'scope, TInner> Context<'scope, TInner>
 where
-    S::Timestamp: RenderTimestamp,
+    TInner: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
-        scope: S,
+        scope: Scope<'scope, TInner>,
         compute_state: &ComputeState,
         until: Antichain<mz_repr::Timestamp>,
         dataflow_expiration: Antichain<mz_repr::Timestamp>,
@@ -141,9 +144,10 @@ where
     }
 }
 
-impl<S: Scope> Context<S>
+impl<'scope, TInner, T> Context<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -152,18 +156,18 @@ where
     pub fn insert_id(
         &mut self,
         id: Id,
-        collection: CollectionBundle<S>,
-    ) -> Option<CollectionBundle<S>> {
+        collection: CollectionBundle<'scope, TInner, T>,
+    ) -> Option<CollectionBundle<'scope, TInner, T>> {
         self.bindings.insert(id, collection)
     }
     /// Remove a collection bundle by an identifier.
     ///
     /// The primary use of this method is uninstalling `Let` bindings.
-    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<S>> {
+    pub fn remove_id(&mut self, id: Id) -> Option<CollectionBundle<'scope, TInner, T>> {
         self.bindings.remove(&id)
     }
     /// Melds a collection bundle to whatever exists.
-    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<S>) {
+    pub fn update_id(&mut self, id: Id, collection: CollectionBundle<'scope, TInner, T>) {
         if !self.bindings.contains_key(&id) {
             self.bindings.insert(id, collection);
         } else {
@@ -180,7 +184,7 @@ where
         }
     }
     /// Look up a collection bundle by an identifier.
-    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<S>> {
+    pub fn lookup_id(&self, id: Id) -> Option<CollectionBundle<'scope, TInner, T>> {
         self.bindings.get(&id).cloned()
     }
 
@@ -189,16 +193,17 @@ where
     }
 }
 
-impl<S: Scope> Context<S>
+impl<'scope, TInner, T> Context<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
         &self,
-        region: &Child<'a, S, S::Timestamp>,
+        region: &Scope<'a, TInner>,
         bindings: Option<&std::collections::BTreeSet<Id>>,
-    ) -> Context<Child<'a, S, S::Timestamp>> {
+    ) -> Context<'a, TInner, T> {
         let bindings = self
             .bindings
             .iter()
@@ -224,14 +229,15 @@ where
 
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<S: Scope>
+pub enum ArrangementFlavor<'scope, TInner, T = mz_repr::Timestamp>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// A dataflow-local arrangement.
     Local(
-        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        Arranged<S, ErrAgent<S::Timestamp, Diff>>,
+        Arranged<'scope, RowRowAgent<TInner, Diff>>,
+        Arranged<'scope, ErrAgent<TInner, Diff>>,
     ),
     /// An imported trace from outside the dataflow.
     ///
@@ -239,14 +245,15 @@ where
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<S, RowRowEnter<mz_repr::Timestamp, Diff, S::Timestamp>>,
-        Arranged<S, ErrEnter<mz_repr::Timestamp, S::Timestamp>>,
+        Arranged<'scope, RowRowEnter<T, Diff, TInner>>,
+        Arranged<'scope, ErrEnter<T, TInner>>,
     ),
 }
 
-impl<S: Scope> ArrangementFlavor<S>
+impl<'scope, TInner, T> ArrangementFlavor<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -259,8 +266,8 @@ where
     pub fn as_collection(
         &self,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<'scope, TInner, Row, Diff>,
+        VecCollection<'scope, TInner, DataflowError, Diff>,
     ) {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq| {
@@ -284,7 +291,7 @@ where
     /// Constructs and applies logic to elements of `self` and returns the results.
     ///
     /// The `logic` receives a vector of datums, a timestamp, and a diff, and produces
-    /// an iterator of `(D, S::Timestamp, Diff)` updates.
+    /// an iterator of `(D, TInner, Diff)` updates.
     ///
     /// If `key` is set, this is a promise that `logic` will produce no results on
     /// records for which the key does not evaluate to the value. This is used to
@@ -298,11 +305,14 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (
+        StreamVec<'scope, TInner, I::Item>,
+        VecCollection<'scope, TInner, DataflowError, Diff>,
+    )
     where
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        I: IntoIterator<Item = (D, TInner, Diff)>,
         D: Data,
-        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, S::Timestamp, Diff) -> I + 'static,
+        L: for<'a, 'b> FnMut(&'a mut DatumVecBorrow<'b>, TInner, Diff) -> I + 'static,
     {
         // Set a number of tuples after which the operator should yield.
         // This allows us to remain responsive even when enumerating a substantial
@@ -320,24 +330,27 @@ where
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<S>::flat_map_core(oks.clone(), key, logic, refuel);
+                let oks =
+                    CollectionBundle::<TInner, T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<S>::flat_map_core(oks.clone(), key, logic, refuel);
+                let oks =
+                    CollectionBundle::<TInner, T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
         }
     }
 }
-impl<S: Scope> ArrangementFlavor<S>
+impl<'scope, TInner, T> ArrangementFlavor<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
+    pub fn scope(&self) -> Scope<'scope, TInner> {
         match self {
             ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
             ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
@@ -345,10 +358,7 @@ where
     }
 
     /// Brings the arrangement flavor into a region.
-    pub fn enter_region<'a>(
-        &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> ArrangementFlavor<Child<'a, S, S::Timestamp>> {
+    pub fn enter_region<'a>(&self, region: &Scope<'a, TInner>) -> ArrangementFlavor<'a, TInner, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
                 oks.clone().enter_region(region),
@@ -362,20 +372,25 @@ where
         }
     }
 }
-impl<'a, S: Scope> ArrangementFlavor<Child<'a, S, S::Timestamp>>
+impl<'scope, TInner, T> ArrangementFlavor<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// Extracts the arrangement flavor from a region.
-    pub fn leave_region(&self) -> ArrangementFlavor<S> {
+    pub fn leave_region<'outer>(
+        &self,
+        outer: &Scope<'outer, TInner>,
+    ) -> ArrangementFlavor<'outer, TInner, T> {
         match self {
-            ArrangementFlavor::Local(oks, errs) => {
-                ArrangementFlavor::Local(oks.clone().leave_region(), errs.clone().leave_region())
-            }
+            ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
+            ),
             ArrangementFlavor::Trace(gid, oks, errs) => ArrangementFlavor::Trace(
                 *gid,
-                oks.clone().leave_region(),
-                errs.clone().leave_region(),
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
             ),
         }
     }
@@ -386,25 +401,27 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<S: Scope>
+pub struct CollectionBundle<'scope, TInner, T = mz_repr::Timestamp>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     pub collection: Option<(
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<'scope, TInner, Row, Diff>,
+        VecCollection<'scope, TInner, DataflowError, Diff>,
     )>,
-    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S>>,
+    pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<'scope, TInner, T>>,
 }
 
-impl<S: Scope> CollectionBundle<S>
+impl<'scope, TInner, T> CollectionBundle<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
-        oks: VecCollection<S, Row, Diff>,
-        errs: VecCollection<S, DataflowError, Diff>,
+        oks: VecCollection<'scope, TInner, Row, Diff>,
+        errs: VecCollection<'scope, TInner, DataflowError, Diff>,
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
@@ -413,7 +430,10 @@ where
     }
 
     /// Inserts arrangements by the expressions on which they are keyed.
-    pub fn from_expressions(exprs: Vec<MirScalarExpr>, arrangements: ArrangementFlavor<S>) -> Self {
+    pub fn from_expressions(
+        exprs: Vec<MirScalarExpr>,
+        arrangements: ArrangementFlavor<'scope, TInner, T>,
+    ) -> Self {
         let mut arranged = BTreeMap::new();
         arranged.insert(exprs, arrangements);
         Self {
@@ -425,7 +445,7 @@ where
     /// Inserts arrangements by the columns on which they are keyed.
     pub fn from_columns<I: IntoIterator<Item = usize>>(
         columns: I,
-        arrangements: ArrangementFlavor<S>,
+        arrangements: ArrangementFlavor<'scope, TInner, T>,
     ) -> Self {
         let mut keys = Vec::new();
         for column in columns {
@@ -435,7 +455,7 @@ where
     }
 
     /// The scope containing the collection bundle.
-    pub fn scope(&self) -> S {
+    pub fn scope(&self) -> Scope<'scope, TInner> {
         if let Some((oks, _errs)) = &self.collection {
             oks.inner.scope()
         } else {
@@ -448,10 +468,10 @@ where
     }
 
     /// Brings the collection bundle into a region.
-    pub fn enter_region<'a>(
+    pub fn enter_region<'inner>(
         &self,
-        region: &Child<'a, S, S::Timestamp>,
-    ) -> CollectionBundle<Child<'a, S, S::Timestamp>> {
+        region: &Scope<'inner, TInner>,
+    ) -> CollectionBundle<'inner, TInner, T> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
                 (
@@ -468,29 +488,36 @@ where
     }
 }
 
-impl<'a, S: Scope> CollectionBundle<Child<'a, S, S::Timestamp>>
+impl<'scope, TInner, T> CollectionBundle<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// Extracts the collection bundle from a region.
-    pub fn leave_region(&self) -> CollectionBundle<S> {
+    pub fn leave_region<'outer>(
+        &self,
+        outer: &Scope<'outer, TInner>,
+    ) -> CollectionBundle<'outer, TInner, T> {
         CollectionBundle {
-            collection: self
-                .collection
-                .as_ref()
-                .map(|(oks, errs)| (oks.clone().leave_region(), errs.clone().leave_region())),
+            collection: self.collection.as_ref().map(|(oks, errs)| {
+                (
+                    oks.clone().leave_region(outer),
+                    errs.clone().leave_region(outer),
+                )
+            }),
             arranged: self
                 .arranged
                 .iter()
-                .map(|(key, bundle)| (key.clone(), bundle.leave_region()))
+                .map(|(key, bundle)| (key.clone(), bundle.leave_region(outer)))
                 .collect(),
         }
     }
 }
 
-impl<S: Scope> CollectionBundle<S>
+impl<'scope, TInner, T> CollectionBundle<'scope, TInner, T>
 where
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: MzTimestamp + Refines<T>,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
@@ -509,8 +536,8 @@ where
         key: Option<&[MirScalarExpr]>,
         config_set: &ConfigSet,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<'scope, TInner, Row, Diff>,
+        VecCollection<'scope, TInner, DataflowError, Diff>,
     ) {
         // Any operator that uses this method was told to use a particular
         // collection during LIR planning, where we should have made
@@ -560,11 +587,14 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (StreamVec<S, I::Item>, VecCollection<S, DataflowError, Diff>)
+    ) -> (
+        StreamVec<'scope, TInner, I::Item>,
+        VecCollection<'scope, TInner, DataflowError, Diff>,
+    )
     where
-        I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
+        I: IntoIterator<Item = (D, TInner, Diff)>,
         D: Data,
-        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, S::Timestamp, Diff) -> I + 'static,
+        L: for<'a> FnMut(&'a mut DatumVecBorrow<'_>, TInner, Diff) -> I + 'static,
     {
         // If `key_val` is set, we should have to use the corresponding arrangement.
         // If there isn't one, that implies an error in the contract between
@@ -595,23 +625,24 @@ where
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
     fn flat_map_core<Tr, D, I, L>(
-        trace: Arranged<S, Tr>,
-        key: Option<&Tr::KeyOwn>,
+        trace: Arranged<'scope, Tr>,
+        key: Option<&<Tr::KeyContainer as differential_dataflow::trace::implementations::BatchContainer>::Owned>,
         mut logic: L,
         refuel: usize,
-    ) -> StreamVec<S, I::Item>
+    ) -> StreamVec<'scope, TInner, I::Item>
     where
         Tr: for<'a> TraceReader<
                 Key<'a>: ToDatumIter,
-                KeyOwn: PartialEq,
                 Val<'a>: ToDatumIter,
-                Time = S::Timestamp,
+                Time = TInner,
                 Diff = mz_repr::Diff,
             > + Clone
             + 'static,
+        <Tr::KeyContainer as differential_dataflow::trace::implementations::BatchContainer>::Owned:
+            PartialEq,
         I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
-        L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
+        L: FnMut(Tr::Key<'_>, Tr::Val<'_>, TInner, mz_repr::Diff) -> I + 'static,
     {
         use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
         let scope = trace.stream.scope();
@@ -670,15 +701,18 @@ where
     ///
     /// The result may be `None` if no such arrangement exists, or it may be one of many
     /// "arrangement flavors" that represent the types of arranged data we might have.
-    pub fn arrangement(&self, key: &[MirScalarExpr]) -> Option<ArrangementFlavor<S>> {
+    pub fn arrangement(
+        &self,
+        key: &[MirScalarExpr],
+    ) -> Option<ArrangementFlavor<'scope, TInner, T>> {
         self.arranged.get(key).map(|x| x.clone())
     }
 }
 
-impl<S> CollectionBundle<S>
+impl<'scope, TInner, T> CollectionBundle<'scope, TInner, T>
 where
-    S: Scope,
-    S::Timestamp: RenderTimestamp,
+    T: MzTimestamp,
+    TInner: Refines<T> + RenderTimestamp,
 {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
@@ -695,8 +729,8 @@ where
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
-        VecCollection<S, mz_repr::Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
+        VecCollection<'scope, TInner, mz_repr::Row, Diff>,
+        VecCollection<'scope, TInner, DataflowError, Diff>,
     ) {
         mfp.optimize();
         let mfp_plan = mfp.clone().into_plan().unwrap();
@@ -747,13 +781,13 @@ where
                 .map(move |x| match x {
                     Ok((row, event_time, diff)) => {
                         // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
+                        let mut time: TInner = time.clone();
                         *time.event_time_mut() = event_time;
                         (Ok(row), time, diff)
                     }
                     Err((e, event_time, diff)) => {
                         // Copy the whole time, and re-populate event time.
-                        let mut time: S::Timestamp = time.clone();
+                        let mut time: TInner = time.clone();
                         *time.event_time_mut() = event_time;
                         (Err(e), time, diff)
                     }
@@ -846,13 +880,13 @@ where
     /// teeing the stream.
     fn arrange_collection(
         name: &String,
-        oks: VecCollection<S, Row, Diff>,
+        oks: VecCollection<'scope, TInner, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
-        Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        VecCollection<S, DataflowError, Diff>,
-        VecCollection<S, Row, Diff>,
+        Arranged<'scope, RowRowAgent<TInner, Diff>>,
+        VecCollection<'scope, TInner, DataflowError, Diff>,
+        VecCollection<'scope, TInner, Row, Diff>,
     ) {
         // This operator implements a `map_fallible`, but produces columnar updates for the ok
         // stream. The `map_fallible` cannot be used here because the closure cannot return
@@ -861,7 +895,7 @@ where
         let mut builder = OperatorBuilder::new("FormArrangementKey".to_string(), oks.inner.scope());
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output =
-            OutputBuilder::<_, ColumnBuilder<((Row, Row), S::Timestamp, Diff)>>::from(ok_output);
+            OutputBuilder::<_, ColumnBuilder<((Row, Row), TInner, Diff)>>::from(ok_output);
         let (err_output, err_stream) = builder.new_output();
         let mut err_output = OutputBuilder::from(err_output);
         let (passthrough_output, passthrough_stream) = builder.new_output();
@@ -908,7 +942,7 @@ where
                 RowRowSpine<_, _>,
             >(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                    columnar_exchange::<Row, Row, S::Timestamp, Diff>,
+                    columnar_exchange::<Row, Row, TInner, Diff>,
                 ),
                 name
             );
@@ -931,7 +965,7 @@ where
 
 impl<C> PendingWork<C>
 where
-    C: Cursor<KeyOwn: PartialEq + Sized>,
+    C: Cursor<KeyContainer: BatchContainer<Owned: PartialEq + Sized>>,
 {
     /// Create a new bundle of pending work, from the capability, cursor, and backing storage.
     fn new(capability: Capability<C::Time>, cursor: C, batch: C::Storage) -> Self {

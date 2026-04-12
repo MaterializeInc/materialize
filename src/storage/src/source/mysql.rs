@@ -102,16 +102,19 @@ impl SourceRender for MySqlSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = GtidPartition>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: &mut Scope<'scope, GtidPartition>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<GtidPartition>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, GtidPartition, HealthStatusMessage>,
+        StreamVec<'scope, GtidPartition, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.

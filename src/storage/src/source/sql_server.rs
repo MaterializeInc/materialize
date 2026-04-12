@@ -104,17 +104,17 @@ impl SourceRender for SqlServerSourceConnection {
 
     const STATUS_NAMESPACE: StatusNamespace = StatusNamespace::SqlServer;
 
-    fn render<G: Scope<Timestamp = Self::Time>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: &mut Scope<'scope, Lsn>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
+        resume_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
         _start_signal: impl Future<Output = ()> + 'static,
     ) -> (
         // Timely Collection for each Source Export defined in the provided `config`.
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<Self::Time>>,
+        BTreeMap<GlobalId, StackedCollection<'scope, Lsn, Result<SourceMessage, DataflowError>>>,
+        StreamVec<'scope, Lsn, HealthStatusMessage>,
+        StreamVec<'scope, Lsn, Probe<Lsn>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.

@@ -24,9 +24,7 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::ContainerBuilder;
-use timely::communication::allocator::Generic;
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
@@ -45,7 +43,7 @@ use crate::typedefs::{ErrBatcher, ErrBuilder};
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
 pub fn initialize(
-    worker: &mut timely::worker::Worker<Generic>,
+    worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
@@ -100,7 +98,7 @@ pub fn initialize(
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
 struct LoggingContext<'a> {
-    worker: &'a mut timely::worker::Worker<Generic>,
+    worker: &'a mut timely::worker::Worker,
     config: &'a LoggingConfig,
     interval_ms: u128,
     now: Instant,
@@ -134,7 +132,7 @@ impl LoggingContext<'_> {
             let super::timely::Return {
                 collections: timely_collections,
             } = super::timely::construct(
-                scope.clone(),
+                &scope,
                 self.config,
                 self.t_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -143,17 +141,13 @@ impl LoggingContext<'_> {
 
             let super::reachability::Return {
                 collections: reachability_collections,
-            } = super::reachability::construct(
-                scope.clone(),
-                self.config,
-                self.r_event_queue.clone(),
-            );
+            } = super::reachability::construct(&scope, self.config, self.r_event_queue.clone());
             collections.extend(reachability_collections);
 
             let super::differential::Return {
                 collections: differential_collections,
             } = super::differential::construct(
-                scope.clone(),
+                &scope,
                 self.config,
                 self.d_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -174,7 +168,7 @@ impl LoggingContext<'_> {
             let super::prometheus::Return {
                 collections: prometheus_collections,
             } = super::prometheus::construct(
-                scope.clone(),
+                &scope,
                 self.config,
                 self.metrics_registry.clone(),
                 self.now,

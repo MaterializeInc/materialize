@@ -181,7 +181,6 @@ use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolida
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::capture::Event;
@@ -190,6 +189,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
 use timely::progress::{Antichain, Timestamp};
+use timely::worker::AsWorker;
 
 /// Constructs an operator that reclocks a `source` collection varying with some time `FromTime`
 /// into the corresponding `reclocked` collection varying over some time `IntoTime` using the
@@ -198,15 +198,14 @@ use timely::progress::{Antichain, Timestamp};
 /// In order for the operator to read the `source` collection a `Pusher` is returned which can be
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
-pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: VecCollection<G, FromTime, Overflowing<i64>>,
-    as_of: Antichain<G::Timestamp>,
+pub fn reclock<'scope, D, FromTime, IntoTime, R>(
+    remap_collection: VecCollection<'scope, IntoTime, FromTime, Overflowing<i64>>,
+    as_of: Antichain<IntoTime>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
-    VecCollection<G, D, R>,
+    VecCollection<'scope, IntoTime, D, R>,
 )
 where
-    G: Scope<Timestamp = IntoTime>,
     D: ExchangeData,
     FromTime: Timestamp,
     IntoTime: Timestamp + Lattice + TotalOrder,

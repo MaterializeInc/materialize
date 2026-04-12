@@ -191,13 +191,13 @@ use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
 use crate::sink::ConsolidatingVec;
 
-pub(crate) struct ContinualTaskCtx<G: Scope<Timestamp = Timestamp>> {
+pub(crate) struct ContinualTaskCtx<'scope> {
     name: Option<String>,
     dataflow_as_of: Option<Antichain<Timestamp>>,
     inputs_with_snapshot: Option<bool>,
     ct_inputs: BTreeSet<GlobalId>,
     ct_outputs: BTreeSet<GlobalId>,
-    pub ct_times: Vec<VecCollection<G, (), Diff>>,
+    pub ct_times: Vec<VecCollection<'scope, Timestamp, (), Diff>>,
 }
 
 /// An encapsulation of the transformation logic necessary on data coming into a
@@ -267,14 +267,14 @@ impl ContinualTaskSourceTransformer {
     /// Returns the transformed "oks" and "errs" collections. Also returns the
     /// appropriate `ct_times` collection used to inform the sink which times
     /// were changed in the inputs.
-    pub fn transform<S: Scope<Timestamp = Timestamp>>(
+    pub fn transform<'s>(
         &self,
-        oks: VecCollection<S, Row, Diff>,
-        errs: VecCollection<S, DataflowError, Diff>,
+        oks: VecCollection<'s, Timestamp, Row, Diff>,
+        errs: VecCollection<'s, Timestamp, DataflowError, Diff>,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
-        VecCollection<S, (), Diff>,
+        VecCollection<'s, Timestamp, Row, Diff>,
+        VecCollection<'s, Timestamp, DataflowError, Diff>,
+        VecCollection<'s, Timestamp, (), Diff>,
     ) {
         use ContinualTaskSourceTransformer::*;
         match self {
@@ -316,7 +316,7 @@ impl ContinualTaskSourceTransformer {
     }
 }
 
-impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
+impl<'scope> ContinualTaskCtx<'scope> {
     pub fn new<P, S>(dataflow: &DataflowDescription<P, S, Timestamp>) -> Self {
         let mut name = None;
         let mut ct_inputs = BTreeSet::new();
@@ -403,7 +403,10 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         Some(transformer)
     }
 
-    pub fn input_times(&self, scope: &G) -> Option<VecCollection<G, (), Diff>> {
+    pub fn input_times(
+        &self,
+        scope: &Scope<'scope, Timestamp>,
+    ) -> Option<VecCollection<'scope, Timestamp, (), Diff>> {
         // We have a name iff this is a CT dataflow.
         assert_eq!(self.is_ct_dataflow(), self.name.is_some());
         let Some(name) = self.name.as_ref() else {
@@ -423,10 +426,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
     }
 }
 
-impl<G> SinkRender<G> for ContinualTaskConnection<CollectionMetadata>
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+impl<'scope> SinkRender<'scope> for ContinualTaskConnection<CollectionMetadata> {
     fn render_sink(
         &self,
         compute_state: &mut ComputeState,
@@ -434,9 +434,9 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        oks: VecCollection<G, Row, Diff>,
-        errs: VecCollection<G, DataflowError, Diff>,
-        append_times: Option<VecCollection<G, (), Diff>>,
+        oks: VecCollection<'scope, Timestamp, Row, Diff>,
+        errs: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+        append_times: Option<VecCollection<'scope, Timestamp, (), Diff>>,
         flow_control_probe: &probe::Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         let name = sink_id.to_string();
@@ -499,10 +499,10 @@ where
     }
 }
 
-fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
+fn continual_task_sink<'scope>(
     name: &str,
-    to_append: VecCollection<G, SourceData, Diff>,
-    append_times: VecCollection<G, (), Diff>,
+    to_append: VecCollection<'scope, Timestamp, SourceData, Diff>,
+    append_times: VecCollection<'scope, Timestamp, (), Diff>,
     as_of: Antichain<Timestamp>,
     write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, StorageDiff>>
     + Send
@@ -761,7 +761,7 @@ impl<D: Ord> SinkState<D, Timestamp> {
     }
 }
 
-trait StepForward<G: Scope, D, R> {
+trait StepForward<D, R> {
     /// Translates a collection one timestamp "forward" (i.e. `T` -> `T+1` as
     /// defined by `TimestampManipulation::step_forward`).
     ///
@@ -774,16 +774,15 @@ trait StepForward<G: Scope, D, R> {
     /// The caller is responsible for ensuring that all data and capabilities given
     /// to this operator can be stepped forward without panicking, otherwise the
     /// operator will panic at runtime.
-    fn step_forward(self, name: &str) -> VecCollection<G, D, R>;
+    fn step_forward(self, name: &str) -> Self;
 }
 
-impl<G, D, R> StepForward<G, D, R> for VecCollection<G, D, R>
+impl<'scope, D, R> StepForward<D, R> for VecCollection<'scope, Timestamp, D, R>
 where
-    G: Scope<Timestamp = Timestamp>,
     D: Clone + 'static,
     R: Semigroup + 'static,
 {
-    fn step_forward(self, name: &str) -> VecCollection<G, D, R> {
+    fn step_forward(self, name: &str) -> VecCollection<'scope, Timestamp, D, R> {
         let name = format!("ct_step_forward({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
         let (output, output_stream) = builder.new_output();
@@ -816,29 +815,26 @@ where
     }
 }
 
-trait TimesExtract<G: Scope, D, R> {
-    /// Returns a collection with the times changed in the input collection.
-    ///
-    /// This works by mapping the data piece of the differential tuple to `()`.
-    /// It is essentially the same as the following, but without cloning
-    /// everything in the input.
-    ///
-    /// ```ignore
-    /// input.map(|(_data, ts, diff)| ((), ts, diff))
-    /// ```
-    ///
-    /// The output may be partially consolidated, but no consolidation
-    /// guarantees are made.
-    fn times_extract(self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>);
+trait TimesExtract<D, R> {
+    type Times;
+    fn times_extract(self, name: &str) -> (Self, Self::Times)
+    where
+        Self: Sized;
 }
 
-impl<G, D, R> TimesExtract<G, D, R> for VecCollection<G, D, R>
+impl<'scope, D, R> TimesExtract<D, R> for VecCollection<'scope, Timestamp, D, R>
 where
-    G: Scope<Timestamp = Timestamp>,
     D: Clone + 'static,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_extract(self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>) {
+    type Times = VecCollection<'scope, Timestamp, (), R>;
+    fn times_extract(
+        self,
+        name: &str,
+    ) -> (
+        VecCollection<'scope, Timestamp, D, R>,
+        VecCollection<'scope, Timestamp, (), R>,
+    ) {
         let name = format!("ct_times_extract({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
         let (passthrough, passthrough_stream) = builder.new_output();
@@ -870,18 +866,17 @@ where
     }
 }
 
-trait TimesReduce<G: Scope, R> {
+trait TimesReduce<R> {
     /// This is essentially a specialized impl of consolidate, with a HashMap
     /// instead of the Trace.
-    fn times_reduce(self, name: &str) -> VecCollection<G, (), R>;
+    fn times_reduce(self, name: &str) -> Self;
 }
 
-impl<G, R> TimesReduce<G, R> for VecCollection<G, (), R>
+impl<'scope, R> TimesReduce<R> for VecCollection<'scope, Timestamp, (), R>
 where
-    G: Scope<Timestamp = Timestamp>,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_reduce(self, name: &str) -> VecCollection<G, (), R> {
+    fn times_reduce(self, name: &str) -> VecCollection<'scope, Timestamp, (), R> {
         let name = format!("ct_times_reduce({})", name);
         self.inner
             .unary_frontier(Pipeline, &name, |_caps, _info| {

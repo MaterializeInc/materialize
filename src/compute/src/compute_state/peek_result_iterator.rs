@@ -41,9 +41,13 @@ struct Literals<Tr: TraceReader> {
     current_index: Option<usize>,
 }
 
-impl<Tr: TraceReader<KeyOwn: Ord>> Literals<Tr> {
+impl<Tr: TraceReader<KeyContainer: BatchContainer<Owned: Ord>>> Literals<Tr> {
     /// Construct a new `Literals` from a mutable slice of literals. Sorts contents.
-    fn new(literals: &mut [Tr::KeyOwn], cursor: &mut Tr::Cursor, storage: &Tr::Storage) -> Self {
+    fn new(
+        literals: &mut [<Tr::KeyContainer as BatchContainer>::Owned],
+        cursor: &mut Tr::Cursor,
+        storage: &Tr::Storage,
+    ) -> Self {
         // We have to sort the literal constraints because cursor.seek_key can
         // seek only forward.
         literals.sort();
@@ -97,7 +101,7 @@ impl<Tr> PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<
             Key<'a>: ToDatumIter + Eq,
-            KeyOwn = Row,
+            KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
@@ -135,7 +139,7 @@ where
 impl<Tr> FusedIterator for PeekResultIterator<Tr> where
     for<'a> Tr: TraceReader<
             Key<'a>: ToDatumIter + Eq,
-            KeyOwn = Row,
+            KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
@@ -147,7 +151,7 @@ impl<Tr> Iterator for PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<
             Key<'a>: ToDatumIter + Eq,
-            KeyOwn = Row,
+            KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,
@@ -192,7 +196,7 @@ impl<Tr> PeekResultIterator<Tr>
 where
     for<'a> Tr: TraceReader<
             Key<'a>: ToDatumIter + Eq,
-            KeyOwn = Row,
+            KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a> = &'a Diff,

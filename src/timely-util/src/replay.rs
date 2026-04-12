@@ -32,7 +32,7 @@ use timely::dataflow::operators::capture::event::EventIterator;
 use timely::dataflow::operators::generic::builder_raw::OperatorBuilder;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Timestamp;
-use timely::scheduling::ActivateOnDrop;
+use timely::scheduling::{ActivateOnDrop, Scheduler};
 
 use crate::activator::ActivatorTrait;
 
@@ -53,13 +53,13 @@ where
     /// * `period`: Reschedule the operator once the period has elapsed.
     ///    Provide [Duration::MAX] to disable periodic scheduling.
     /// * `activator`: An activator to trigger the operator.
-    fn mz_replay<S: Scope<Timestamp = T>>(
+    fn mz_replay<'scope>(
         self,
-        scope: &mut S,
+        scope: &mut Scope<'scope, T>,
         name: &str,
         period: Duration,
         activator: A,
-    ) -> (Stream<S, C>, Rc<dyn Any>);
+    ) -> (Stream<'scope, T, C>, Rc<dyn Any>);
 }
 
 impl<T, C, I, A> MzReplay<T, C, A> for I
@@ -70,13 +70,13 @@ where
     I::Item: EventIterator<T, C> + 'static,
     A: ActivatorTrait + 'static,
 {
-    fn mz_replay<S: Scope<Timestamp = T>>(
+    fn mz_replay<'scope>(
         self,
-        scope: &mut S,
+        scope: &mut Scope<'scope, T>,
         name: &str,
         period: Duration,
         activator: A,
-    ) -> (Stream<S, C>, Rc<dyn Any>) {
+    ) -> (Stream<'scope, T, C>, Rc<dyn Any>) {
         let name = format!("Replay {}", name);
         let mut builder = OperatorBuilder::new(name, scope.clone());
 
@@ -91,8 +91,7 @@ where
 
         let mut last_active = Instant::now();
 
-        let mut progress_sofar =
-            <timely::progress::ChangeBatch<_>>::new_from(S::Timestamp::minimum(), 1);
+        let mut progress_sofar = <timely::progress::ChangeBatch<_>>::new_from(T::minimum(), 1);
         let token = Rc::new(ActivateOnDrop::new(
             (),
             Rc::clone(&address),
@@ -123,8 +122,8 @@ where
                     .len()
                     .try_into()
                     .expect("Implausibly large vector");
-                progress.internals[0].update(S::Timestamp::minimum(), len - 1);
-                progress_sofar.update(S::Timestamp::minimum(), len);
+                progress.internals[0].update(T::minimum(), len - 1);
+                progress_sofar.update(T::minimum(), len);
                 started = true;
             }
 

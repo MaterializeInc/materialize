@@ -30,6 +30,7 @@ use mz_timely_util::builder_async::{
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
+use timely::progress::Timestamp;
 use tracing::{error, info};
 
 use crate::internal_control::{InternalCommandSender, InternalStorageCommand};
@@ -335,8 +336,8 @@ pub struct HealthStatusMessage {
 ///
 /// The `OutputIndex` values that come across `health_stream` must be a strict subset of those in
 /// `configs`'s keys.
-pub(crate) fn health_operator<G, P>(
-    scope: &G,
+pub(crate) fn health_operator<'scope, T: Timestamp, P>(
+    scope: &Scope<'scope, T>,
     now: NowFn,
     // A set of id's that should be marked as `HealthStatusUpdate::starting()` during startup.
     mark_starting: BTreeSet<GlobalId>,
@@ -346,7 +347,7 @@ pub(crate) fn health_operator<G, P>(
     // A description of the object type we are writing status updates about. Used in log lines.
     object_type: &'static str,
     // An indexed stream of health updates. Indexes are configured in `configs`.
-    health_stream: StreamVec<G, HealthStatusMessage>,
+    health_stream: StreamVec<'scope, T, HealthStatusMessage>,
     // An impl of `HealthOperator` that configures the output behavior of this operator.
     health_operator_impl: P,
     // Whether or not we should actually write namespaced errors in the `details` column.
@@ -356,7 +357,6 @@ pub(crate) fn health_operator<G, P>(
     suspend_and_restart_delay: Duration,
 ) -> PressOnDropButton
 where
-    G: Scope,
     P: HealthOperator + 'static,
 {
     // Derived config options

@@ -126,16 +126,16 @@ use super::{
 };
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
     metrics: MySqlSnapshotMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    StreamVec<G, RewindRequest>,
-    StreamVec<G, ReplicationError>,
+    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, GtidPartition, RewindRequest>,
+    StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
 ) {
     let mut builder =
@@ -179,7 +179,7 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         }
     }
 
-    let (button, transient_errors): (_, StreamVec<G, Rc<TransientError>>) =
+    let (button, transient_errors): (_, StreamVec<'scope, GtidPartition, Rc<TransientError>>) =
         builder.build_fallible(move |caps| {
             let busy_signal = Arc::clone(&config.busy_signal);
             Box::pin(SignaledFuture::new(busy_signal, async move {
