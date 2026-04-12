@@ -12,8 +12,6 @@ use itertools::Itertools;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::ops::{Deref, Range};
 use std::sync::Arc;
-use timely::progress::Timestamp;
-
 use crate::{Diff, RowRef};
 
 /// An immutable, shared slice. Morally, this is [bytes::Bytes] but with fewer features
@@ -194,7 +192,7 @@ pub struct UpdateCollectionBuilder<T = crate::Timestamp> {
     diffs: Vec<Diff>,
 }
 
-impl<T: Timestamp> UpdateCollectionBuilder<T> {
+impl<T: Clone> UpdateCollectionBuilder<T> {
     pub fn push(&mut self, (row, time, diff): (&RowRef, &T, Diff)) {
         self.rows.push(row);
         self.times.push(time.clone());
@@ -228,7 +226,7 @@ impl<T> Default for UpdateCollection<T> {
     }
 }
 
-impl<'a, T: Timestamp> FromIterator<(&'a RowRef, &'a T, Diff)> for UpdateCollection<T> {
+impl<'a, T: Clone> FromIterator<(&'a RowRef, &'a T, Diff)> for UpdateCollection<T> {
     fn from_iter<I: IntoIterator<Item = (&'a RowRef, &'a T, Diff)>>(iter: I) -> Self {
         let iter = iter.into_iter();
         let len_hint = iter.size_hint().0;

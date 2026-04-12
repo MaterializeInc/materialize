@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use dec::TryFromDecimalError;
 use mz_proto::{RustType, TryFromProtoError};
-use mz_timely_util::temporal::BucketTimestamp;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
 
@@ -181,13 +180,44 @@ mod columnar_timestamp {
     }
 }
 
-impl BucketTimestamp for Timestamp {
+#[cfg(feature = "timely-dataflow")]
+impl mz_timely_util::temporal::BucketTimestamp for Timestamp {
     fn advance_by_power_of_two(&self, exponent: u32) -> Option<Self> {
         let rhs = 1_u64.checked_shl(exponent)?;
         Some(self.internal.checked_add(rhs)?.into())
     }
 }
 
+macro_rules! define_timestamp_manipulation_methods {
+    () => {
+        /// Advance a timestamp by the least amount possible such that
+        /// `ts < ts.step_forward()`. Panic if unable to do so.
+        fn step_forward(&self) -> Self;
+        /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
+        fn step_forward_by(&self, amount: &Self) -> Self;
+        /// Advance a timestamp forward by the given `amount`. Return `None` if unable to do so.
+        fn try_step_forward_by(&self, amount: &Self) -> Option<Self>;
+        /// Advance a timestamp by the least amount possible. Return `None` if unable to do so.
+        fn try_step_forward(&self) -> Option<Self>;
+        /// Retreat a timestamp by the least amount possible. Return `None` at the minimum.
+        fn step_back(&self) -> Option<Self>;
+        /// Return the maximum value for this timestamp.
+        fn maximum() -> Self;
+        /// Return the minimum value for this timestamp.
+        fn minimum() -> Self;
+        /// Rounds up the timestamp to the time of the next refresh.
+        fn round_up(&self, schedule: &RefreshSchedule) -> Option<Self>;
+        /// Rounds down `timestamp - 1` to the time of the previous refresh.
+        fn round_down_minus_1(&self, schedule: &RefreshSchedule) -> Option<Self>;
+    };
+}
+
+/// Timestamp manipulation for the control plane.
+///
+/// When the `timely-dataflow` feature is enabled, this trait also extends
+/// timely/differential traits for compatibility with data-plane code.
+/// When disabled, it only requires `Ord` — no timely dependency needed.
+#[cfg(feature = "timely-dataflow")]
 pub trait TimestampManipulation:
     timely::progress::Timestamp
     + timely::order::TotalOrder
@@ -196,70 +226,27 @@ pub trait TimestampManipulation:
     + mz_persist_types::StepForward
     + Sync
 {
-    /// Advance a timestamp by the least amount possible such that
-    /// `ts.less_than(ts.step_forward())` is true. Panic if unable to do so.
-    fn step_forward(&self) -> Self;
+    define_timestamp_manipulation_methods!();
+}
 
-    /// Advance a timestamp forward by the given `amount`. Panic if unable to do so.
-    fn step_forward_by(&self, amount: &Self) -> Self;
-
-    /// Advance a timestamp forward by the given `amount`. Return `None` if unable to do so.
-    fn try_step_forward_by(&self, amount: &Self) -> Option<Self>;
-
-    /// Advance a timestamp by the least amount possible such that `ts.less_than(ts.step_forward())`
-    /// is true. Return `None` if unable to do so.
-    fn try_step_forward(&self) -> Option<Self>;
-
-    /// Retreat a timestamp by the least amount possible such that
-    /// `ts.step_back().unwrap().less_than(ts)` is true. Return `None` if unable,
-    /// which must only happen if the timestamp is `Timestamp::minimum()`.
-    fn step_back(&self) -> Option<Self>;
-
-    /// Return the maximum value for this timestamp.
-    fn maximum() -> Self;
-
-    /// Rounds up the timestamp to the time of the next refresh according to the given schedule.
-    /// Returns None if there is no next refresh.
-    fn round_up(&self, schedule: &RefreshSchedule) -> Option<Self>;
-
-    /// Rounds down `timestamp - 1` to the time of the previous refresh according to the given
-    /// schedule.
-    /// Returns None if there is no previous refresh.
-    fn round_down_minus_1(&self, schedule: &RefreshSchedule) -> Option<Self>;
+/// Timestamp manipulation for the control plane (no timely dependency).
+#[cfg(not(feature = "timely-dataflow"))]
+pub trait TimestampManipulation:
+    Clone + Eq + Ord + std::fmt::Debug + Send + Sync + mz_persist_types::StepForward
+{
+    define_timestamp_manipulation_methods!();
 }
 
 impl TimestampManipulation for Timestamp {
-    fn step_forward(&self) -> Self {
-        self.step_forward()
-    }
-
-    fn step_forward_by(&self, amount: &Self) -> Self {
-        self.step_forward_by(amount)
-    }
-
-    fn try_step_forward(&self) -> Option<Self> {
-        self.try_step_forward()
-    }
-
-    fn try_step_forward_by(&self, amount: &Self) -> Option<Self> {
-        self.try_step_forward_by(amount)
-    }
-
-    fn step_back(&self) -> Option<Self> {
-        self.step_back()
-    }
-
-    fn maximum() -> Self {
-        Self::MAX
-    }
-
-    fn round_up(&self, schedule: &RefreshSchedule) -> Option<Self> {
-        schedule.round_up_timestamp(*self)
-    }
-
-    fn round_down_minus_1(&self, schedule: &RefreshSchedule) -> Option<Self> {
-        schedule.round_down_timestamp_m1(*self)
-    }
+    fn step_forward(&self) -> Self { self.step_forward() }
+    fn step_forward_by(&self, amount: &Self) -> Self { self.step_forward_by(amount) }
+    fn try_step_forward(&self) -> Option<Self> { self.try_step_forward() }
+    fn try_step_forward_by(&self, amount: &Self) -> Option<Self> { self.try_step_forward_by(amount) }
+    fn step_back(&self) -> Option<Self> { self.step_back() }
+    fn maximum() -> Self { Self::MAX }
+    fn minimum() -> Self { Self::MIN }
+    fn round_up(&self, schedule: &RefreshSchedule) -> Option<Self> { schedule.round_up_timestamp(*self) }
+    fn round_down_minus_1(&self, schedule: &RefreshSchedule) -> Option<Self> { schedule.round_down_timestamp_m1(*self) }
 }
 
 impl mz_persist_types::StepForward for Timestamp {
@@ -428,69 +415,51 @@ impl<'de> Deserialize<'de> for Timestamp {
     }
 }
 
-impl timely::order::PartialOrder for Timestamp {
-    fn less_equal(&self, other: &Self) -> bool {
-        self.internal.less_equal(&other.internal)
-    }
-}
+// --- timely/differential trait impls (only when timely-dataflow feature is enabled) ---
 
-impl timely::order::PartialOrder<&Timestamp> for Timestamp {
-    fn less_equal(&self, other: &&Self) -> bool {
-        self.internal.less_equal(&other.internal)
-    }
-}
+#[cfg(feature = "timely-dataflow")]
+mod timely_impls {
+    use super::Timestamp;
+    use timely::order::PartialOrder;
 
-impl timely::order::PartialOrder<Timestamp> for &Timestamp {
-    fn less_equal(&self, other: &Timestamp) -> bool {
-        self.internal.less_equal(&other.internal)
+    impl PartialOrder for Timestamp {
+        fn less_equal(&self, other: &Self) -> bool { self.internal.less_equal(&other.internal) }
     }
-}
+    impl PartialOrder<&Timestamp> for Timestamp {
+        fn less_equal(&self, other: &&Self) -> bool { self.internal.less_equal(&other.internal) }
+    }
+    impl PartialOrder<Timestamp> for &Timestamp {
+        fn less_equal(&self, other: &Timestamp) -> bool { self.internal.less_equal(&other.internal) }
+    }
+    impl timely::order::TotalOrder for Timestamp {}
 
-impl timely::order::TotalOrder for Timestamp {}
+    impl timely::progress::Timestamp for Timestamp {
+        type Summary = Timestamp;
+        fn minimum() -> Self { Self::MIN }
+    }
 
-impl timely::progress::Timestamp for Timestamp {
-    type Summary = Timestamp;
+    impl timely::progress::PathSummary<Timestamp> for Timestamp {
+        #[inline]
+        fn results_in(&self, src: &Timestamp) -> Option<Timestamp> {
+            self.internal.checked_add(src.internal).map(|internal| Self { internal })
+        }
+        #[inline]
+        fn followed_by(&self, other: &Timestamp) -> Option<Timestamp> {
+            self.internal.checked_add(other.internal).map(|internal| Self { internal })
+        }
+    }
 
-    fn minimum() -> Self {
-        Self::MIN
+    impl timely::progress::timestamp::Refines<()> for Timestamp {
+        fn to_inner(_: ()) -> Timestamp { Default::default() }
+        fn to_outer(self) {}
+        fn summarize(_: <Timestamp as timely::progress::timestamp::Timestamp>::Summary) {}
     }
-}
 
-impl timely::progress::PathSummary<Timestamp> for Timestamp {
-    #[inline]
-    fn results_in(&self, src: &Timestamp) -> Option<Timestamp> {
-        self.internal
-            .checked_add(src.internal)
-            .map(|internal| Self { internal })
-    }
-    #[inline]
-    fn followed_by(&self, other: &Timestamp) -> Option<Timestamp> {
-        self.internal
-            .checked_add(other.internal)
-            .map(|internal| Self { internal })
-    }
-}
-
-impl timely::progress::timestamp::Refines<()> for Timestamp {
-    fn to_inner(_: ()) -> Timestamp {
-        Default::default()
-    }
-    fn to_outer(self) -> () {
-        ()
-    }
-    fn summarize(_: <Timestamp as timely::progress::timestamp::Timestamp>::Summary) -> () {
-        ()
-    }
-}
-
-impl differential_dataflow::lattice::Lattice for Timestamp {
-    #[inline]
-    fn join(&self, other: &Self) -> Self {
-        ::std::cmp::max(*self, *other)
-    }
-    #[inline]
-    fn meet(&self, other: &Self) -> Self {
-        ::std::cmp::min(*self, *other)
+    impl differential_dataflow::lattice::Lattice for Timestamp {
+        #[inline]
+        fn join(&self, other: &Self) -> Self { std::cmp::max(*self, *other) }
+        #[inline]
+        fn meet(&self, other: &Self) -> Self { std::cmp::min(*self, *other) }
     }
 }
 

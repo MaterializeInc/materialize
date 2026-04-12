@@ -37,8 +37,9 @@ columnation.workspace = true
 chrono.workspace = true
 compact_bytes.workspace = true
 dec = { workspace = true, features = ["serde"] }
-differential-dataflow.workspace = true
+differential-dataflow = { workspace = true, optional = true }
 enum-kinds.workspace = true
+mz-frontier = { path = "../frontier" }
 hex.workspace = true
 itertools.workspace = true
 mz-lowertest = { path = "../lowertest", default-features = false }
@@ -55,7 +56,7 @@ mz-persist-types = { path = "../persist-types", default-features = false }
 mz-pgtz = { path = "../pgtz", default-features = false }
 mz-proto = { path = "../proto", features = ["chrono"], default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
-mz-timely-util = { path = "../timely-util", default-features = false }
+mz-timely-util = { path = "../timely-util", default-features = false, optional = true }
 num-traits.workspace = true
 num_enum.workspace = true
 ordered-float.workspace = true
@@ -68,7 +69,7 @@ serde_json = { workspace = true, features = ["arbitrary_precision", "preserve_or
 smallvec = { workspace = true, features = ["serde", "union"] }
 static_assertions.workspace = true
 strsim.workspace = true
-timely.workspace = true
+timely = { workspace = true, optional = true }
 tokio-postgres.workspace = true
 tracing-core.workspace = true
 url = { workspace = true, features = ["serde"] }
@@ -100,3 +101,4 @@ default = [
     "mz-proto/default",
     ]
 tracing = ["tracing-subscriber"]
+timely-dataflow = ["timely", "differential-dataflow", "mz-timely-util"]

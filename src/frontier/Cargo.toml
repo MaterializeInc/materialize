@@ -1,0 +1,14 @@
+[package]
+name = "mz-frontier"
+description = "Frontier tracking and consolidation for Materialize's control plane."
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+smallvec = { workspace = true, features = ["serde"] }

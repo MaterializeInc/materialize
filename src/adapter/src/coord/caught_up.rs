@@ -28,7 +28,7 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, Timestamp};
 use timely::PartialOrder;
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::Antichain;
 
 use crate::coord::Coordinator;
 
@@ -110,7 +110,7 @@ impl Coordinator {
             .map(|(oid, _replica_id, upper_ts)| (oid, upper_ts))
             .into_grouping_map()
             .fold(
-                Antichain::from_elem(Timestamp::minimum()),
+                Antichain::from_elem(<Timestamp as timely::progress::Timestamp>::minimum()),
                 |mut acc, _key, upper| {
                     acc.join_assign(&upper);
                     acc
@@ -290,7 +290,7 @@ impl Coordinator {
                     // The collection didn't previously exist, so consider
                     // ourselves hydrated as long as our write_ts is > 0.
                     tracing::info!(?write_frontier, "collection {id} not in live frontiers");
-                    if write_frontier.less_equal(&Timestamp::minimum()) {
+                    if write_frontier.less_equal(&<Timestamp as timely::progress::Timestamp>::minimum()) {
                         all_caught_up = false;
                     }
                     continue;

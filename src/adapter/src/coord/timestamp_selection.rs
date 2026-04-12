@@ -396,7 +396,7 @@ pub trait TimestampProvider {
 
         // Determine a candidate based on constraints and preferences.
         let constraint_candidate = {
-            let mut candidate = Timestamp::minimum();
+            let mut candidate = <Timestamp as TimestampManipulation>::minimum();
             // Note: These `advance_by` calls are no-ops if the given frontier is `[]`.
             candidate.advance_by(constraints.lower_bound().borrow());
             // If we have a preference to be the freshest available, advance to the minimum
@@ -661,7 +661,7 @@ impl Coordinator {
     /// The largest timestamp not greater or equal to an element of `upper`.
     ///
     /// If no such timestamp exists, for example because `upper` contains only the
-    /// minimal timestamp, the return value is `Timestamp::minimum()`.
+    /// minimal timestamp, the return value is `<Timestamp as TimestampManipulation>::minimum()`.
     pub(crate) fn largest_not_in_advance_of_upper(
         upper: &Antichain<mz_repr::Timestamp>,
     ) -> mz_repr::Timestamp {
@@ -670,7 +670,7 @@ impl Coordinator {
         // is no "prior" answer, and we do not want to peek at it as it risks
         // hanging awaiting the response to data that may never arrive.
         if let Some(upper) = upper.as_option() {
-            upper.step_back().unwrap_or_else(Timestamp::minimum)
+            upper.step_back().unwrap_or_else(<Timestamp as timely::progress::Timestamp>::minimum)
         } else {
             // A complete trace can be read in its final form with this time.
             //
@@ -978,7 +978,7 @@ mod constraints {
 
         /// An antichain equal to the least upper bound of lower bounds.
         pub fn lower_bound(&self) -> Antichain<mz_repr::Timestamp> {
-            let mut lower = Antichain::from_elem(mz_repr::Timestamp::minimum());
+            let mut lower = Antichain::from_elem(<mz_repr::Timestamp as timely::progress::Timestamp>::minimum());
             for (anti, _) in self.lower.iter() {
                 lower = lower.join(anti);
             }

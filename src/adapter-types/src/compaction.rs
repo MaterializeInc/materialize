@@ -13,7 +13,7 @@ use std::time::Duration;
 use mz_repr::{Timestamp, TimestampManipulation};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::progress::Antichain;
 
 /// `DEFAULT_LOGICAL_COMPACTION_WINDOW`, in milliseconds.
 /// The default is set to a second to track the default timestamp frequency for sources.
@@ -49,7 +49,7 @@ impl CompactionWindow {
     pub fn lag_from(&self, from: Timestamp) -> Timestamp {
         let lag = match self {
             CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
-            CompactionWindow::DisableCompaction => return Timestamp::minimum(),
+            CompactionWindow::DisableCompaction => return <Timestamp as TimestampManipulation>::minimum(),
             CompactionWindow::Duration(d) => *d,
         };
         from.saturating_sub(lag)
@@ -71,7 +71,7 @@ impl From<CompactionWindow> for ReadPolicy {
             CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
             CompactionWindow::Duration(time) => time,
             CompactionWindow::DisableCompaction => {
-                return ReadPolicy::ValidFrom(Antichain::from_elem(Timestamp::minimum()));
+                return ReadPolicy::ValidFrom(Antichain::from_elem(<Timestamp as TimestampManipulation>::minimum()));
             }
         };
         ReadPolicy::lag_writes_by(time, SINCE_GRANULARITY)

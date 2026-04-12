@@ -192,7 +192,7 @@ impl Coordinator {
     ) -> &'a mut TimelineState {
         Self::ensure_timeline_state_with_initial_time(
             timeline,
-            Timestamp::minimum(),
+            <Timestamp as timely::progress::Timestamp>::minimum(),
             self.catalog().config().now.clone(),
             self.timestamp_oracle_config.clone(),
             &mut self.global_timelines,
@@ -226,7 +226,7 @@ impl Coordinator {
                 // Passing in a clock that always yields the minimum takes the
                 // clock out of the equation and makes timestamps advance only
                 // by the rule about strict monotonicity mentioned above.
-                NowFn::from(|| Timestamp::minimum().into())
+                NowFn::from(|| <Timestamp as timely::progress::Timestamp>::minimum().into())
             };
 
             let oracle_config = oracle_config.expect(

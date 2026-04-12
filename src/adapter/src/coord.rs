@@ -2407,7 +2407,7 @@ impl Coordinator {
         // hydrated. Additionally, these shards are not registered with the txn-shard, and cannot
         // be registered while in read-only, so they are written to directly.
         let migrated_updates_fut = if self.controller.read_only() {
-            let min_timestamp = Timestamp::minimum();
+            let min_timestamp = <Timestamp as timely::progress::Timestamp>::minimum();
             let migrated_builtin_table_updates: Vec<_> = builtin_table_updates
                 .extract_if(.., |update| {
                     let gid = self.catalog().get_entry(&update.id).latest_global_id();
@@ -3008,7 +3008,7 @@ impl Coordinator {
                                         .clone()
                                         .into_inline_connection(self.catalog().state()),
                                     envelope: sink.envelope,
-                                    as_of: Antichain::from_elem(Timestamp::minimum()),
+                                    as_of: Antichain::from_elem(<Timestamp as timely::progress::Timestamp>::minimum()),
                                     with_snapshot: sink.with_snapshot,
                                     version: sink.version,
                                     from_storage_metadata: (),

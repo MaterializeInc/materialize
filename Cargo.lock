@@ -6730,6 +6730,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-frontier"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "smallvec",
+]
+
+[[package]]
 name = "mz-http-util"
 version = "0.0.0"
 dependencies = [
@@ -7615,6 +7623,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "mz-build-tools",
+ "mz-frontier",
  "mz-lowertest",
  "mz-ore",
  "mz-persist",
