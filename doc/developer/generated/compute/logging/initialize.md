@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/logging/initialize.rs
-revision: f94584ddef
+revision: 8864f35b2c
 ---
 
 # mz-compute::logging::initialize

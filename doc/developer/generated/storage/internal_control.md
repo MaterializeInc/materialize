@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/internal_control.rs
-revision: e79a6d96d9
+revision: 3ac449b444
 ---
 
 # mz-storage::internal_control

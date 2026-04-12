@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/server.rs
-revision: f94584ddef
+revision: 3ac449b444
 ---
 
 # mz-compute::server
