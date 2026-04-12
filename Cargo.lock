@@ -2443,19 +2443,20 @@ dependencies = [
 
 [[package]]
 name = "ctor"
-version = "0.6.3"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "424e0138278faeb2b401f174ad17e715c829512d74f3d1e81eb43365c2e0590e"
+checksum = "c1c888a2a4f677017373fb6c01e13e318dd9e78758445ed5eb985e355d3f8281"
 dependencies = [
  "ctor-proc-macro",
  "dtor",
+ "link-section",
 ]
 
 [[package]]
 name = "ctor-proc-macro"
-version = "0.0.7"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52560adf09603e58c9a7ee1fe1dcb95a16927b17c127f0ac02d6e768a0e25bc1"
+checksum = "a7ab264ea985f1bd27887d7b21ea2bb046728e05d11909ca138d700c494730db"
 
 [[package]]
 name = "custom-labels"
@@ -2957,18 +2958,18 @@ dependencies = [
 
 [[package]]
 name = "dtor"
-version = "0.1.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "404d02eeb088a82cfd873006cb713fe411306c7d182c344905e101fb1167d301"
+checksum = "30e4690622ab6700ced40fc370a3f07b7d111f0154bb6fb08f73b4c8834f75b6"
 dependencies = [
  "dtor-proc-macro",
 ]
 
 [[package]]
 name = "dtor-proc-macro"
-version = "0.0.6"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f678cf4a922c215c63e0de95eb1ff08a958a81d47e485cf9da1e27bf6305cfa5"
+checksum = "8c98b077c7463d01d22dde8a24378ddf1ca7263dc687cffbed38819ea6c21131"
 
 [[package]]
 name = "duckdb"
@@ -4291,7 +4292,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -5162,6 +5163,12 @@ checksum = "9d240c6f7e1ba3a28b0249f774e6a9dd0175054b52dfbb61b16eb8505c3785c9"
 dependencies = [
  "cc",
 ]
+
+[[package]]
+name = "link-section"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f52437d47b0358721ec869cc7374b2a21f7b2237af9b439c0391341a1fbfbf1b"
 
 [[package]]
 name = "linked-hash-map"
