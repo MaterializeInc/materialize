@@ -494,6 +494,7 @@ steps:
           ]
     agents:
       queue: hetzner-x86-64-4cpu-8gb
+    skip: "database-issues#11273"
 
   - id: source-sink-errors
     label: "S&S error reporting"

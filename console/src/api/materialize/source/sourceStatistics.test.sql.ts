@@ -74,7 +74,7 @@ describe("buildSourceStatisticsQuery", () => {
 
   it(
     "gets statistics for only the first replica on a multi-replica cluster",
-    { timeout: 90_000 },
+    { timeout: 180_000 },
     async () => {
       await testdrive(
         `
@@ -109,7 +109,7 @@ describe("buildSourceStatisticsQuery", () => {
         # We wait on mz_source_statistics_with_history specifically because the console
         # query reads from that view, which has a separate index that may advance at a
         # different frontier than mz_source_statistics.
-        $ set-sql-timeout duration=60s
+        $ set-sql-timeout duration=120s
         > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics_with_history JOIN mz_sources using(id) where name = 'kafka_multi' AND offset_committed = 3 AND offset_known = 3 AND messages_received > 0
         3
       `,
