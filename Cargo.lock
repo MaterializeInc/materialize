@@ -4291,7 +4291,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6492,6 +6492,7 @@ dependencies = [
  "bytesize",
  "chrono",
  "chrono-tz",
+ "columnation",
  "crc32fast",
  "criterion",
  "csv",
@@ -6617,7 +6618,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "socket2 0.6.0",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
@@ -7732,7 +7733,7 @@ dependencies = [
  "scopeguard",
  "serde",
  "serde_json",
- "socket2 0.6.0",
+ "socket2 0.6.3",
  "tokio",
  "tokio-metrics",
  "tokio-stream",
@@ -10992,9 +10993,9 @@ dependencies = [
 
 [[package]]
 name = "semver"
-version = "1.0.27"
+version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
+checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 dependencies = [
  "serde",
  "serde_core",
@@ -11482,12 +11483,12 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.6.0"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "233504af464074f9d066d7b5416c5f9b894a5862a6506e306f7b816cdd6f1807"
+checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.1",
 ]
 
 [[package]]
@@ -12039,15 +12040,15 @@ dependencies = [
 
 [[package]]
 name = "timely_bytes"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51ae21fb064a79d9010f8108429745fa91b92b694fa4df218ba84d7f3b2dbd60"
+checksum = "18f23a0d67d58c5e33b1d2e1405f153302eaed97b03b019eaadc506078b0d9b3"
 
 [[package]]
 name = "timely_communication"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2c086160017fb45428d907e2abfe102a75c4563ef93db5b34bd66bc85d4c140"
+checksum = "7dfca21d938082bdd981b2e68dbbcc84c5d1a3540b9cb186f70e3280f75f5366"
 dependencies = [
  "byteorder",
  "columnar",
@@ -12060,15 +12061,15 @@ dependencies = [
 
 [[package]]
 name = "timely_container"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fb11577da6f9af245617074f52c1327ff670f940cbd44fad5c3cbd99c1b1ee1"
+checksum = "59d871973712d029dc403809a06bd33134f4e91c2da9d86b7476b946d64db1e7"
 
 [[package]]
 name = "timely_logging"
-version = "0.28.0"
+version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15dae737805a73889faeff9446b18e17dbeebb3941c9d8861d4c19a14074f543"
+checksum = "7071ee1e8c0e4d0e97041819a114ca037f197616691039845973b88138fa0b78"
 dependencies = [
  "timely_container",
 ]
@@ -12119,7 +12120,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.0",
+ "socket2 0.6.3",
  "tokio-macros",
  "tracing",
  "windows-sys 0.61.1",
@@ -12208,7 +12209,7 @@ dependencies = [
  "postgres-types",
  "rand 0.9.2",
  "serde",
- "socket2 0.6.0",
+ "socket2 0.6.3",
  "tokio",
  "tokio-util",
  "whoami",
@@ -12346,7 +12347,7 @@ dependencies = [
  "hyper-util",
  "percent-encoding",
  "pin-project",
- "socket2 0.6.0",
+ "socket2 0.6.3",
  "sync_wrapper",
  "tokio",
  "tokio-stream",

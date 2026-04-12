@@ -1336,7 +1336,7 @@ fn create_connection_info(
                     internal: false,
                     metrics: false,
                     profiling: false,
-                    mcp_agents: true,
+                    mcp_agent: true,
                     mcp_developer: true,
                     console_config: true,
                 }
@@ -1358,7 +1358,7 @@ fn create_connection_info(
                     internal: true,
                     metrics: true,
                     profiling: true,
-                    mcp_agents: true,
+                    mcp_agent: true,
                     mcp_developer: true,
                     console_config: false,
                 }
@@ -1402,7 +1402,7 @@ fn create_connection_info(
                     internal: false,
                     metrics: true,
                     profiling: false,
-                    mcp_agents: false,
+                    mcp_agent: false,
                     mcp_developer: false,
                     console_config: false,
                 },

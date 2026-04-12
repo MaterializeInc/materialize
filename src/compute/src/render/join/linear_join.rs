@@ -32,14 +32,13 @@ use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, ScopeParent};
-use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -186,31 +185,29 @@ impl YieldSpec {
 }
 
 /// Different forms the streamed data might take.
-enum JoinedFlavor<G, T>
+enum JoinedFlavor<G>
 where
     G: Scope,
-    G::Timestamp: Refines<T> + MzTimestamp,
-    T: MzTimestamp,
+    G::Timestamp: RenderTimestamp,
 {
     /// Streamed data as a collection.
     Collection(VecCollection<G, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<G, RowRowAgent<G::Timestamp, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<G, RowRowEnter<T, Diff, G::Timestamp>>),
+    Trace(Arranged<G, RowRowEnter<mz_repr::Timestamp, Diff, G::Timestamp>>),
 }
 
-impl<G, T> Context<G, T>
+impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: Lattice + Refines<T> + RenderTimestamp,
-    T: MzTimestamp,
+    G::Timestamp: Lattice + RenderTimestamp,
 {
     pub(crate) fn render_join(
         &self,
-        inputs: Vec<CollectionBundle<G, T>>,
+        inputs: Vec<CollectionBundle<G>>,
         linear_plan: LinearJoinPlan,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<G> {
         self.scope.clone().region_named("Join(Linear)", |inner| {
             self.render_join_inner(inputs, linear_plan, inner)
         })
@@ -218,10 +215,10 @@ where
 
     fn render_join_inner(
         &self,
-        inputs: Vec<CollectionBundle<G, T>>,
+        inputs: Vec<CollectionBundle<G>>,
         linear_plan: LinearJoinPlan,
         inner: &mut Child<G, <G as ScopeParent>::Timestamp>,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<G> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
 
@@ -338,8 +335,8 @@ where
     /// version of the join of previous inputs.
     fn differential_join<S>(
         &self,
-        mut joined: JoinedFlavor<S, T>,
-        lookup_relation: CollectionBundle<S, T>,
+        mut joined: JoinedFlavor<S>,
+        lookup_relation: CollectionBundle<S>,
         LinearStagePlan {
             stream_key,
             stream_thinning,

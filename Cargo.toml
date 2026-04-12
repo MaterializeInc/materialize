@@ -454,7 +454,7 @@ schemars = { version = "1.2.1", features = ["uuid1"] }
 scopeguard = "1.2.0"
 seahash = "4.1.0"
 segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
-semver = "1.0.27"
+semver = "1.0.28"
 sentry = { version = "0.46.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
 sentry-panic = "0.46.1"
 sentry-tracing = "0.46.1"
@@ -473,7 +473,7 @@ similar = "2.7.0"
 similar-asserts = "1.7"
 smallvec = "1.15.1"
 snap = "1.1.1"
-socket2 = "0.6.0"
+socket2 = "0.6.3"
 ssh-key = "0.6.7"
 stacker = "0.1.23"
 static_assertions = "1.1"

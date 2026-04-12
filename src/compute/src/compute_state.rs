@@ -58,7 +58,7 @@ use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
-use timely::communication::Allocate;
+use timely::communication::allocator::Generic;
 use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
@@ -355,9 +355,9 @@ impl ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub(crate) struct ActiveComputeState<'a, A: Allocate> {
+pub(crate) struct ActiveComputeState<'a> {
     /// The underlying Timely worker.
-    pub timely_worker: &'a mut TimelyWorker<A>,
+    pub timely_worker: &'a mut TimelyWorker<Generic>,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
@@ -374,7 +374,7 @@ impl SinkToken {
     }
 }
 
-impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
+impl<'a> ActiveComputeState<'a> {
     /// Entrypoint for applying a compute command.
     #[mz_ore::instrument(level = "debug")]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
@@ -1160,12 +1160,12 @@ impl PendingPeek {
         })
     }
 
-    fn persist<A: Allocate>(
+    fn persist(
         peek: Peek,
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
         max_result_size: usize,
-        timely_worker: &TimelyWorker<A>,
+        timely_worker: &TimelyWorker<Generic>,
     ) -> Self {
         let active_worker = {
             // Choose the worker that does the actual peek arbitrarily but consistently.

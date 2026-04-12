@@ -21,10 +21,10 @@ use mz_repr::Diff;
 use timely::Container;
 use timely::container::PushInto;
 use timely::dataflow::Scope;
-use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::MzReduce;
+use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
@@ -72,14 +72,13 @@ where
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
-pub fn build_threshold_basic<G, T>(
-    input: CollectionBundle<G, T>,
+pub fn build_threshold_basic<G>(
+    input: CollectionBundle<G>,
     key: Vec<MirScalarExpr>,
-) -> CollectionBundle<G, T>
+) -> CollectionBundle<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
+    G::Timestamp: RenderTimestamp,
 {
     let arrangement = input
         .arrangement(&key)
@@ -107,17 +106,16 @@ where
     }
 }
 
-impl<G, T> Context<G, T>
+impl<G> Context<G>
 where
     G: Scope,
-    G::Timestamp: MzTimestamp + Refines<T>,
-    T: MzTimestamp,
+    G::Timestamp: RenderTimestamp,
 {
     pub(crate) fn render_threshold(
         &self,
-        input: CollectionBundle<G, T>,
+        input: CollectionBundle<G>,
         threshold_plan: ThresholdPlan,
-    ) -> CollectionBundle<G, T> {
+    ) -> CollectionBundle<G> {
         match threshold_plan {
             ThresholdPlan::Basic(BasicThresholdPlan {
                 ensure_arrangement: (key, _, _),

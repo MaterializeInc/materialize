@@ -49,7 +49,7 @@ def workflow_default(c: Composition) -> None:
 
     # MCP feature flags default to false; enable them for testing.
     c.sql(
-        "ALTER SYSTEM SET enable_mcp_agents = true",
+        "ALTER SYSTEM SET enable_mcp_agent = true",
         user="mz_system",
         port=6877,
         print_statement=False,
@@ -61,10 +61,10 @@ def workflow_default(c: Composition) -> None:
         print_statement=False,
     )
 
-    with c.test_case("agents_initialize"):
+    with c.test_case("agent_initialize"):
         r = post_mcp(
             c,
-            "agents",
+            "agent",
             jsonrpc(
                 "initialize",
                 {
@@ -80,10 +80,10 @@ def workflow_default(c: Composition) -> None:
         result = body["result"]
         assert result["protocolVersion"] == "2025-11-25"
         assert "serverInfo" in result
-        assert result["serverInfo"]["name"] == "materialize-mcp-agents"
+        assert result["serverInfo"]["name"] == "materialize-mcp-agent"
 
-    with c.test_case("agents_tools_list"):
-        r = post_mcp(c, "agents", jsonrpc("tools/list"))
+    with c.test_case("agent_tools_list"):
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
         assert r.status_code == 200
         body = r.json()
         tools = body["result"]["tools"]
@@ -98,10 +98,10 @@ def workflow_default(c: Composition) -> None:
             "query" not in tool_names
         ), f"query should be hidden by default: {tool_names}"
 
-    with c.test_case("agents_get_data_products"):
+    with c.test_case("agent_get_data_products"):
         r = post_mcp(
             c,
-            "agents",
+            "agent",
             jsonrpc("tools/call", {"name": "get_data_products", "arguments": {}}),
         )
         assert r.status_code == 200
@@ -110,18 +110,18 @@ def workflow_default(c: Composition) -> None:
         assert len(content) > 0
         assert content[0]["type"] == "text"
 
-    with c.test_case("agents_unknown_tool"):
+    with c.test_case("agent_unknown_tool"):
         # Unknown tool name fails serde deserialization → Axum returns 422.
         r = post_mcp(
             c,
-            "agents",
+            "agent",
             jsonrpc("tools/call", {"name": "no_such_tool", "arguments": {}}),
         )
         assert r.status_code == 422, f"expected 422, got {r.status_code}: {r.text}"
 
-    with c.test_case("agents_invalid_jsonrpc"):
+    with c.test_case("agent_invalid_jsonrpc"):
         r = requests.post(
-            mcp_url(c, "agents"),
+            mcp_url(c, "agent"),
             json={"jsonrpc": "1.0", "id": 1, "method": "tools/list"},
         )
         assert r.status_code == 200
@@ -321,7 +321,7 @@ def workflow_default(c: Composition) -> None:
 
     # -- developer: wrong endpoint -------------------------------------------
 
-    with c.test_case("developer_reject_agents_tool"):
+    with c.test_case("developer_reject_agent_tool"):
         r = post_mcp(
             c,
             "developer",
@@ -364,31 +364,31 @@ def workflow_default(c: Composition) -> None:
         r = post_mcp(c, "developer", jsonrpc("tools/list"))
         assert r.status_code == 200
 
-    # -- agents: disable/enable via flag ---------------------------------------
+    # -- agent: disable/enable via flag ----------------------------------------
 
-    with c.test_case("agents_disable_via_flag"):
+    with c.test_case("agent_disable_via_flag"):
         # Confirm it works first.
-        r = post_mcp(c, "agents", jsonrpc("tools/list"))
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
         assert r.status_code == 200
 
         # Disable via system parameter.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_agents = false",
+            "ALTER SYSTEM SET enable_mcp_agent = false",
             user="mz_system",
             port=6877,
             print_statement=False,
         )
 
-        r = post_mcp(c, "agents", jsonrpc("tools/list"))
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
         assert r.status_code == 503
 
         # Re-enable.
         c.sql(
-            "ALTER SYSTEM SET enable_mcp_agents = true",
+            "ALTER SYSTEM SET enable_mcp_agent = true",
             user="mz_system",
             port=6877,
             print_statement=False,
         )
 
-        r = post_mcp(c, "agents", jsonrpc("tools/list"))
+        r = post_mcp(c, "agent", jsonrpc("tools/list"))
         assert r.status_code == 200

@@ -102,7 +102,7 @@ SERVICES = [
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+            "log_filter": "mz_storage::source::postgres=trace,info"
         },
         default_replication_factor=2,
     ),

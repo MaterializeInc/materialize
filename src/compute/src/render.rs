@@ -139,7 +139,7 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
-use timely::communication::Allocate;
+use timely::communication::allocator::Generic;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::vec::ToStream;
@@ -184,8 +184,8 @@ pub use join::LinearJoinSpec;
 /// This method imports sources from provided assets, and then builds the remaining
 /// dataflow using "compute-local" assets like shared arrangements, and producing
 /// both arrangements and sinks.
-pub fn build_compute_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_compute_dataflow(
+    timely_worker: &mut TimelyWorker<Generic>,
     compute_state: &mut ComputeState,
     dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     start_signal: StartSignal,
@@ -690,7 +690,7 @@ where
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
 // That makes some sense, because we are hoping to deposit an arrangement in the trace manager.
-impl<'g, G> Context<Child<'g, G, G::Timestamp>, G::Timestamp>
+impl<'g, G> Context<Child<'g, G, G::Timestamp>>
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
 {

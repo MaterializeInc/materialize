@@ -3,11 +3,11 @@ annotated-types==0.7.0
 attrs==26.1.0
 babel==2.18.0
 certifi==2026.2.25
-charset-normalizer==3.4.6
-click==8.3.1
+charset-normalizer==3.4.7
+click==8.3.2
 colorama==0.4.6
 daff==1.4.2
-dbt-adapters==1.22.9
+dbt-adapters==1.22.10
 dbt-common==1.37.3
 dbt-core==1.11.7
 dbt-extractor==0.6.0
@@ -40,7 +40,7 @@ protobuf==6.33.5
 psycopg2-binary==2.9.11
 pydantic==2.12.5
 pydantic_core==2.41.5
-Pygments==2.19.2
+Pygments==2.20.0
 pytest==8.4.2
 pytest-split==0.11.0
 python-dateutil==2.9.0.post0
@@ -49,7 +49,7 @@ pytimeparse==1.1.8
 pytz==2026.1.post1
 PyYAML==6.0.3
 referencing==0.37.0
-requests==2.33.0
+requests==2.33.1
 rpds-py==0.30.0
 six==1.17.0
 snowplow-tracker==1.1.0

@@ -474,17 +474,17 @@ impl HttpServer {
         }
 
         // MCP (Model Context Protocol) endpoints
-        // Enabled via runtime `routes_enabled.mcp_agents` and `routes_enabled.mcp_developer` configuration
-        if routes_enabled.mcp_agents || routes_enabled.mcp_developer {
+        // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
+        if routes_enabled.mcp_agent || routes_enabled.mcp_developer {
             use tracing::info;
 
             let mut mcp_router = Router::new();
 
-            if routes_enabled.mcp_agents {
-                info!("Enabling MCP agents endpoint: /api/mcp/agents");
+            if routes_enabled.mcp_agent {
+                info!("Enabling MCP agent endpoint: /api/mcp/agent");
                 mcp_router = mcp_router.route(
-                    "/api/mcp/agents",
-                    routing::post(mcp::handle_mcp_agents).get(mcp::handle_mcp_method_not_allowed),
+                    "/api/mcp/agent",
+                    routing::post(mcp::handle_mcp_agent).get(mcp::handle_mcp_method_not_allowed),
                 );
             }
 

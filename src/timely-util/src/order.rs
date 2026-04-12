@@ -19,7 +19,7 @@ use std::cmp::Ordering;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
 
-use differential_dataflow::containers::CopyRegion;
+use columnation::CopyRegion;
 use serde::{Deserialize, Serialize};
 use timely::order::Product;
 use timely::progress::Antichain;

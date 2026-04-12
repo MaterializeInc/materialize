@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use columnar::{Columnar, Index};
-use differential_dataflow::containers::{Columnation, CopyRegion};
+use columnation::{Columnation, CopyRegion};
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};

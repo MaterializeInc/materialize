@@ -21,9 +21,8 @@ use mz_cluster_client::client::{TimelyConfig, TryIntoProtocolNonce};
 use mz_service::client::{GenericClient, Partitionable, Partitioned};
 use mz_service::local::LocalClient;
 use timely::WorkerConfig;
-use timely::communication::Allocate;
-use timely::communication::allocator::GenericBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
+use timely::communication::allocator::{Generic, GenericBuilder};
 use timely::communication::initialize::WorkerGuards;
 use timely::execute::execute_from;
 use timely::worker::Worker as TimelyWorker;
@@ -170,9 +169,9 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     const NAME: &str;
 
     /// Run the given Timely worker.
-    fn run_worker<A: Allocate + 'static>(
+    fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<A>,
+        timely_worker: &mut TimelyWorker<Generic>,
         client_rx: mpsc::UnboundedReceiver<(
             Uuid,
             mpsc::UnboundedReceiver<Self::Command>,
