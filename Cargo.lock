@@ -2837,6 +2837,7 @@ dependencies = [
 [[package]]
 name = "differential-dataflow"
 version = "0.22.0"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow?branch=master-next#6f2f19e3fea36b5b2622c9466eff7a4ad601b5bd"
 dependencies = [
  "columnar",
  "columnation",
@@ -2850,6 +2851,7 @@ dependencies = [
 [[package]]
 name = "differential-dogs3"
 version = "0.22.0"
+source = "git+https://github.com/TimelyDataflow/differential-dataflow?branch=master-next#6f2f19e3fea36b5b2622c9466eff7a4ad601b5bd"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -4287,7 +4289,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -12017,6 +12019,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.28.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#52ecffbd346b8e28024d66f4bc34ceb1aed243a8"
 dependencies = [
  "bincode",
  "byteorder",
@@ -12035,10 +12038,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.28.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#52ecffbd346b8e28024d66f4bc34ceb1aed243a8"
 
 [[package]]
 name = "timely_communication"
 version = "0.28.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#52ecffbd346b8e28024d66f4bc34ceb1aed243a8"
 dependencies = [
  "byteorder",
  "columnar",
@@ -12052,10 +12057,12 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.28.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#52ecffbd346b8e28024d66f4bc34ceb1aed243a8"
 
 [[package]]
 name = "timely_logging"
 version = "0.28.1"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow#52ecffbd346b8e28024d66f4bc34ceb1aed243a8"
 dependencies = [
  "timely_container",
 ]
