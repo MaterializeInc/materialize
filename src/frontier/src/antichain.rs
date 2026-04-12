@@ -5,13 +5,11 @@
 //! Antichain data structures for totally-ordered time domains.
 //!
 //! Because the control plane only works with totally-ordered timestamps,
-//! an antichain is always either empty or a single element. This is
-//! represented internally as `Option<T>`, giving O(1) operations and
-//! eliminating the incomparability checks needed for partial orders.
+//! an antichain is always either empty or a single element. Internally
+//! this is just `Option<T>`.
 
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -27,54 +25,53 @@ use smallvec::SmallVec;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Serialize", deserialize = "T: Deserialize<'de>"))]
 pub struct Antichain<T> {
-    // We use SmallVec<[T; 1]> for API compatibility: elements() returns &[T],
-    // and timely-bridge conversions work naturally.
-    elements: SmallVec<[T; 1]>,
+    element: Option<T>,
 }
 
 impl<T> Antichain<T> {
     /// Creates an empty antichain (closed frontier).
     pub fn new() -> Self {
-        Antichain {
-            elements: SmallVec::new(),
-        }
+        Antichain { element: None }
     }
 
     /// Creates an antichain containing a single element.
     pub fn from_elem(element: T) -> Self {
-        let mut elements = SmallVec::new();
-        elements.push(element);
-        Antichain { elements }
+        Antichain {
+            element: Some(element),
+        }
     }
 
     /// Returns the contained elements as a slice (0 or 1 elements).
     pub fn elements(&self) -> &[T] {
-        &self.elements
+        match &self.element {
+            Some(t) => std::slice::from_ref(t),
+            None => &[],
+        }
     }
 
     /// Borrows the antichain as an [`AntichainRef`].
     pub fn borrow(&self) -> AntichainRef<'_, T> {
-        AntichainRef::new(&self.elements)
+        AntichainRef::new(self.elements())
     }
 
     /// Returns `true` if the frontier is empty (closed).
     pub fn is_empty(&self) -> bool {
-        self.elements.is_empty()
+        self.element.is_none()
     }
 
     /// Clears the antichain.
     pub fn clear(&mut self) {
-        self.elements.clear();
+        self.element = None;
     }
 
-    /// Sorts the elements (no-op for 0 or 1 elements, but provided for API compat).
+    /// No-op (provided for API compatibility with timely's Antichain).
     pub fn sort(&mut self)
     where
         T: Ord,
     {
     }
 
-    /// Reserves capacity (no-op, but provided for API compat).
+    /// No-op (provided for API compatibility).
     pub fn reserve(&mut self, _additional: usize) {}
 }
 
@@ -86,11 +83,10 @@ impl<T: Ord> Antichain<T> {
     /// added (i.e., it was smaller than the existing element, or the
     /// antichain was empty).
     pub fn insert(&mut self, element: T) -> bool {
-        match self.elements.first() {
+        match &self.element {
             Some(existing) if *existing <= element => false,
             _ => {
-                self.elements.clear();
-                self.elements.push(element);
+                self.element = Some(element);
                 true
             }
         }
@@ -101,11 +97,10 @@ impl<T: Ord> Antichain<T> {
     where
         T: Clone,
     {
-        match self.elements.first() {
+        match &self.element {
             Some(existing) if *existing <= *element => false,
             _ => {
-                self.elements.clear();
-                self.elements.push(element.clone());
+                self.element = Some(element.clone());
                 true
             }
         }
@@ -113,12 +108,12 @@ impl<T: Ord> Antichain<T> {
 
     /// Returns `true` if the frontier element is strictly less than `time`.
     pub fn less_than(&self, time: &T) -> bool {
-        self.elements.first().map_or(false, |e| *e < *time)
+        self.element.as_ref().is_some_and(|e| *e < *time)
     }
 
     /// Returns `true` if the frontier element is less than or equal to `time`.
     pub fn less_equal(&self, time: &T) -> bool {
-        self.elements.first().map_or(false, |e| *e <= *time)
+        self.element.as_ref().is_some_and(|e| *e <= *time)
     }
 
     /// Extends the antichain with multiple elements (keeps the minimum).
@@ -129,20 +124,24 @@ impl<T: Ord> Antichain<T> {
     }
 }
 
-impl<T: Ord + Clone> Antichain<T> {
-    /// Returns the single element if this antichain contains exactly one.
+impl<T> Antichain<T> {
+    /// Returns the single element, consuming the antichain.
     ///
     /// # Panics
     ///
     /// Panics if the antichain is empty.
     pub fn into_element(self) -> T {
-        assert_eq!(self.elements.len(), 1, "expected exactly one element");
-        self.elements.into_iter().next().unwrap()
+        self.element.expect("expected exactly one element")
     }
 
     /// Returns `Some(&T)` if there is exactly one element, `None` if empty.
     pub fn as_option(&self) -> Option<&T> {
-        self.elements.first()
+        self.element.as_ref()
+    }
+
+    /// Returns the inner `Option<T>`.
+    pub fn into_option(self) -> Option<T> {
+        self.element
     }
 }
 
@@ -154,15 +153,15 @@ impl<T> Default for Antichain<T> {
 
 impl<T: PartialEq> PartialEq for Antichain<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.elements == other.elements
+        self.element == other.element
     }
 }
 
 impl<T: Eq> Eq for Antichain<T> {}
 
-impl<T: Ord + Hash> Hash for Antichain<T> {
+impl<T: Hash> Hash for Antichain<T> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.elements.hash(state);
+        self.element.hash(state);
     }
 }
 
@@ -174,30 +173,23 @@ impl<T: Ord> PartialOrd for Antichain<T> {
 
 impl<T: Ord> Ord for Antichain<T> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.elements.cmp(&other.elements)
-    }
-}
-
-impl<T> Deref for Antichain<T> {
-    type Target = [T];
-    fn deref(&self) -> &[T] {
-        &self.elements
+        self.element.cmp(&other.element)
     }
 }
 
 impl<T> IntoIterator for Antichain<T> {
     type Item = T;
-    type IntoIter = smallvec::IntoIter<[T; 1]>;
+    type IntoIter = std::option::IntoIter<T>;
     fn into_iter(self) -> Self::IntoIter {
-        self.elements.into_iter()
+        self.element.into_iter()
     }
 }
 
 impl<'a, T> IntoIterator for &'a Antichain<T> {
     type Item = &'a T;
-    type IntoIter = std::slice::Iter<'a, T>;
+    type IntoIter = std::option::Iter<'a, T>;
     fn into_iter(self) -> Self::IntoIter {
-        self.elements.iter()
+        self.element.iter()
     }
 }
 
@@ -221,7 +213,7 @@ impl<T: Ord> From<Vec<T>> for Antichain<T> {
 // AntichainRef
 // ---------------------------------------------------------------------------
 
-/// A borrowed reference to an antichain.
+/// A borrowed reference to an antichain (a slice of 0 or 1 elements).
 pub struct AntichainRef<'a, T> {
     frontier: &'a [T],
 }
@@ -244,21 +236,21 @@ impl<'a, T> AntichainRef<'a, T> {
         T: Clone,
     {
         Antichain {
-            elements: self.frontier.iter().cloned().collect(),
+            element: self.frontier.first().cloned(),
         }
     }
 }
 
 impl<'a, T: Ord> AntichainRef<'a, T> {
     pub fn less_than(&self, time: &T) -> bool {
-        self.frontier.first().map_or(false, |e| *e < *time)
+        self.frontier.first().is_some_and(|e| *e < *time)
     }
     pub fn less_equal(&self, time: &T) -> bool {
-        self.frontier.first().map_or(false, |e| *e <= *time)
+        self.frontier.first().is_some_and(|e| *e <= *time)
     }
 }
 
-impl<'a, T> Deref for AntichainRef<'a, T> {
+impl<'a, T> std::ops::Deref for AntichainRef<'a, T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
         self.frontier
@@ -329,23 +321,21 @@ impl<T: Clone + Ord> MutableAntichain<T> {
         &mut self,
         updates: impl IntoIterator<Item = (T, i64)>,
     ) -> SmallVec<[(T, i64); 2]> {
-        let old_frontier: SmallVec<[T; 2]> =
-            self.frontier.elements().iter().cloned().collect();
+        let old_frontier = self.frontier.element.clone();
 
         for (time, delta) in updates {
             self.updates.push((time, delta));
         }
         self.rebuild();
 
+        let new_frontier = &self.frontier.element;
         let mut changes = SmallVec::<[(T, i64); 2]>::new();
-        for old in &old_frontier {
-            if !self.frontier.elements().contains(old) {
-                changes.push((old.clone(), -1));
+        if old_frontier != *new_frontier {
+            if let Some(old) = old_frontier {
+                changes.push((old, -1));
             }
-        }
-        for new in self.frontier.elements() {
-            if !old_frontier.contains(new) {
-                changes.push((new.clone(), 1));
+            if let Some(new) = new_frontier.clone() {
+                changes.push((new, 1));
             }
         }
         changes
@@ -372,6 +362,7 @@ impl<T: Clone + Ord> MutableAntichain<T> {
         }
         self.clean = self.updates.len();
 
+        // Frontier is the minimum time with positive count.
         self.frontier.clear();
         for (time, count) in &self.updates {
             if *count > 0 {
