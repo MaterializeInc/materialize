@@ -545,7 +545,7 @@ impl DataSubscribe {
                         async {},
                         ErrorHandler::Halt("data_subscribe"),
                     );
-                    (data_stream.leave(&outer), token)
+                    (data_stream.leave(outer), token)
                 });
             let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {

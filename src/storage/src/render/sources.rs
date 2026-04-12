@@ -161,7 +161,7 @@ where
 /// Completes the rendering of a particular source stream by applying decoding and envelope
 /// processing as necessary
 fn render_source_stream<'scope, FromTime>(
-    scope: &mut Scope<'scope, mz_repr::Timestamp>,
+    scope: &Scope<'scope, mz_repr::Timestamp>,
     dataflow_debug_name: &String,
     export_id: GlobalId,
     ok_source: VecCollection<'scope, mz_repr::Timestamp, SourceOutput<FromTime>, Diff>,

@@ -37,7 +37,7 @@ use crate::storage_state::StorageState;
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
 pub(crate) fn render_sink<'scope>(
-    scope: &mut Scope<'scope, ()>,
+    scope: &Scope<'scope, ()>,
     storage_state: &mut StorageState,
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,

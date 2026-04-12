@@ -206,14 +206,14 @@ where
     let is_transient = !until.is_empty();
 
     let (descs, descs_token) = shard_source_descs::<K, V, D, TOuter>(
-        &outer,
+        outer,
         name,
         client(),
         shard_id.clone(),
         as_of,
         snapshot_mode,
         until,
-        completed_fetches_feedback_stream.leave(&outer),
+        completed_fetches_feedback_stream.leave(outer),
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
@@ -690,7 +690,6 @@ mod tests {
     use std::sync::Arc;
 
     use mz_persist::location::SeqNo;
-    use timely::dataflow::Scope;
     use timely::dataflow::operators::Leave;
     use timely::dataflow::operators::Probe;
     use timely::dataflow::operators::probe::Handle as ProbeHandle;
@@ -743,8 +742,8 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
-                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
+                let (stream, token) = outer.clone().scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         outer,
                         scope,
@@ -814,8 +813,8 @@ mod tests {
             let until = Antichain::new();
 
             let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
-                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
-                    let transformer = move |_, descs: StreamVec<_, _>, _| (descs.clone(), vec![]);
+                let (stream, token) = outer.clone().scoped::<u64, _, _>("hybrid", |scope| {
+                    let transformer = move |_, descs, _| (descs, vec![]);
                     let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
                         outer,
                         scope,

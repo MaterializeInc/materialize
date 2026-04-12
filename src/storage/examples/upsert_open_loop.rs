@@ -778,13 +778,12 @@ enum GeneratorEvent {
 ///
 /// Only one worker is expected to read from the channel that the associated generator is writing
 /// to.
-fn generator_source<G>(
-    scope: &G,
+fn generator_source<'scope>(
+    scope: &Scope<'scope, u64>,
     source_id: usize,
     generator_rxs: Arc<Mutex<BTreeMap<usize, UnboundedReceiver<GeneratorEvent>>>>,
-) -> StreamVec<G, (Vec<u8>, Vec<u8>)>
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>
 where
-    G: Scope<Timestamp = u64>,
 {
     let generator_rxs = Arc::clone(&generator_rxs);
 
@@ -835,16 +834,15 @@ where
 }
 
 /// A representative upsert operator.
-fn upsert<G>(
-    scope: &G,
-    source_stream: StreamVec<G, (Vec<u8>, Vec<u8>)>,
+fn upsert<'scope>(
+    scope: &Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     instance_dir: &PathBuf,
     args: Args,
     rocksdb_options: &rocksdb::Options,
-) -> StreamVec<G, (Vec<u8>, Vec<u8>, i32)>
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)>
 where
-    G: Scope<Timestamp = u64>,
 {
     // TODO(aljoscha): Not liking this duplications...!
     if args.upsert_pre_reduce {
@@ -908,14 +906,13 @@ where
     }
 }
 
-fn upsert_core_pre_reduce<G, M: Map + 'static>(
-    scope: &G,
-    source_stream: StreamVec<G, (Vec<u8>, Vec<u8>)>,
+fn upsert_core_pre_reduce<'scope, M: Map + 'static>(
+    scope: &Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> StreamVec<G, (Vec<u8>, Vec<u8>, i32)>
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)>
 where
-    G: Scope<Timestamp = u64>,
 {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
@@ -1007,14 +1004,13 @@ where
     output_stream
 }
 
-fn upsert_core<G, M: Map + 'static>(
-    scope: &G,
-    source_stream: StreamVec<G, (Vec<u8>, Vec<u8>)>,
+fn upsert_core<'scope, M: Map + 'static>(
+    scope: &Scope<'scope, u64>,
+    source_stream: StreamVec<'scope, u64, (Vec<u8>, Vec<u8>)>,
     source_id: usize,
     mut current_values: M,
-) -> StreamVec<G, (Vec<u8>, Vec<u8>, i32)>
+) -> StreamVec<'scope, u64, (Vec<u8>, Vec<u8>, i32)>
 where
-    G: Scope<Timestamp = u64>,
 {
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());

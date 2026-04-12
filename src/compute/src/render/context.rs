@@ -626,7 +626,7 @@ where
     /// where key and value are potentially specialized, but convertible into rows.
     fn flat_map_core<Tr, D, I, L>(
         trace: Arranged<'scope, Tr>,
-        key: Option<&<Tr::KeyContainer as differential_dataflow::trace::implementations::BatchContainer>::Owned>,
+        key: Option<&<Tr::KeyContainer as BatchContainer>::Owned>,
         mut logic: L,
         refuel: usize,
     ) -> StreamVec<'scope, TInner, I::Item>
@@ -638,8 +638,7 @@ where
                 Diff = mz_repr::Diff,
             > + Clone
             + 'static,
-        <Tr::KeyContainer as differential_dataflow::trace::implementations::BatchContainer>::Owned:
-            PartialEq,
+        <Tr::KeyContainer as BatchContainer>::Owned: PartialEq,
         I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>, TInner, mz_repr::Diff) -> I + 'static,

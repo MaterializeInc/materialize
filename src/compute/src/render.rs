@@ -344,7 +344,7 @@ pub fn build_compute_dataflow(
                             // ContinualTaskCtx, but the types are tricky.
                             ct_ctx
                                 .ct_times
-                                .push(ct_times.leave_region(region).leave_region(&scope));
+                                .push(ct_times.leave_region(region).leave_region(scope));
                             (oks.inner, errs.inner)
                         }
                     };
@@ -353,11 +353,11 @@ pub fn build_compute_dataflow(
                         ok_stream
                             .as_collection()
                             .leave_region(region)
-                            .leave_region(&scope),
+                            .leave_region(scope),
                         err_stream
                             .as_collection()
                             .leave_region(region)
-                            .leave_region(&scope),
+                            .leave_region(scope),
                     );
 
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
@@ -399,7 +399,7 @@ pub fn build_compute_dataflow(
                         SnapshotMode::Exclude
                     };
                     context.import_index(
-                        &scope,
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
@@ -446,7 +446,7 @@ pub fn build_compute_dataflow(
                 // Export declared indexes.
                 for (idx_id, dependencies, idx) in indexes {
                     context.export_index_iterative(
-                        &scope,
+                        scope,
                         compute_state,
                         &tokens,
                         dependencies,
@@ -465,9 +465,9 @@ pub fn build_compute_dataflow(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&scope),
+                        ct_ctx.input_times(scope),
                         &output_probe,
-                        &scope,
+                        scope,
                     );
                 }
             });
@@ -512,7 +512,7 @@ pub fn build_compute_dataflow(
                         SnapshotMode::Exclude
                     };
                     context.import_index(
-                        &scope,
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
@@ -569,9 +569,9 @@ pub fn build_compute_dataflow(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&scope),
+                        ct_ctx.input_times(scope),
                         &output_probe,
-                        &scope,
+                        scope,
                     );
                 }
             });

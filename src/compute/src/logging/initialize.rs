@@ -132,7 +132,7 @@ impl LoggingContext<'_> {
             let super::timely::Return {
                 collections: timely_collections,
             } = super::timely::construct(
-                &scope,
+                scope,
                 self.config,
                 self.t_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -141,13 +141,13 @@ impl LoggingContext<'_> {
 
             let super::reachability::Return {
                 collections: reachability_collections,
-            } = super::reachability::construct(&scope, self.config, self.r_event_queue.clone());
+            } = super::reachability::construct(scope, self.config, self.r_event_queue.clone());
             collections.extend(reachability_collections);
 
             let super::differential::Return {
                 collections: differential_collections,
             } = super::differential::construct(
-                &scope,
+                scope,
                 self.config,
                 self.d_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -168,7 +168,7 @@ impl LoggingContext<'_> {
             let super::prometheus::Return {
                 collections: prometheus_collections,
             } = super::prometheus::construct(
-                &scope,
+                scope,
                 self.config,
                 self.metrics_registry.clone(),
                 self.now,

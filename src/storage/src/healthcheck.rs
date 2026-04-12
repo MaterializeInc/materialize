@@ -1162,10 +1162,10 @@ mod tests {
     /// After the channel is empty on the first worker, then the frontier will go to [].
     /// Also ensures that updates are routed to the correct worker based on the `TestUpdate`
     /// using an exchange.
-    fn producer<G: Scope<Timestamp = ()>>(
-        scope: G,
+    fn producer<'scope>(
+        scope: Scope<'scope, ()>,
         mut input: UnboundedReceiver<TestUpdate>,
-    ) -> StreamVec<G, HealthStatusMessage> {
+    ) -> StreamVec<'scope, (), HealthStatusMessage> {
         let mut iterator = AsyncOperatorBuilder::new("iterator".to_string(), scope.clone());
         let (output_handle, output) = iterator.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
