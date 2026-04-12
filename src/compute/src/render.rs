@@ -393,6 +393,7 @@ pub fn build_compute_dataflow(
                         SnapshotMode::Exclude
                     };
                     context.import_index(
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
@@ -457,7 +458,7 @@ pub fn build_compute_dataflow(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&context.scope.parent),
+                        ct_ctx.input_times(scope),
                         &output_probe,
                     );
                 }
@@ -503,6 +504,7 @@ pub fn build_compute_dataflow(
                         SnapshotMode::Exclude
                     };
                     context.import_index(
+                        scope,
                         compute_state,
                         &mut tokens,
                         input_probe,
@@ -559,7 +561,7 @@ pub fn build_compute_dataflow(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(&context.scope.parent),
+                        ct_ctx.input_times(scope),
                         &output_probe,
                     );
                 }
@@ -598,6 +600,7 @@ where
 
     pub(crate) fn import_index(
         &mut self,
+        outer: &G,
         compute_state: &mut ComputeState,
         tokens: &mut BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
         input_probe: probe::Handle<mz_repr::Timestamp>,
@@ -616,7 +619,7 @@ where
             let token = traces.to_drop().clone();
 
             let (mut oks, ok_button) = traces.oks_mut().import_frontier_core(
-                &self.scope.parent,
+                outer,
                 &format!("Index({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
@@ -625,7 +628,7 @@ where
             oks.stream = oks.stream.probe_with(&input_probe);
 
             let (err_arranged, err_button) = traces.errs_mut().import_frontier_core(
-                &self.scope.parent,
+                outer,
                 &format!("ErrIndex({}, {:?})", idx.on_id, idx.key),
                 self.as_of_frontier.clone(),
                 self.until.clone(),
