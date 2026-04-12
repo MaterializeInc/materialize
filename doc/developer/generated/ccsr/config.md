@@ -1,6 +1,6 @@
 ---
 source: src/ccsr/src/config.rs
-revision: dbce370304
+revision: 4218b69078
 ---
 
 # mz-ccsr::config

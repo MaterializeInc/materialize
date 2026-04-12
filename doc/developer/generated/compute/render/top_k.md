@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/top_k.rs
-revision: c642b63c77
+revision: 834eb88f27
 ---
 
 # mz-compute::render::top_k
