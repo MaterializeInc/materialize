@@ -306,7 +306,7 @@ cc = "1.2.58"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
-clap = { version = "4.5.23", features = ["derive"] }
+clap = { version = "4.5.60", features = ["derive"] }
 columnar = "0.12.1"
 columnation = "0.1.2"
 compact_bytes = "0.2.1"
