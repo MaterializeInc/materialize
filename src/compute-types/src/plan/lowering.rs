@@ -9,7 +9,7 @@
 
 //! Lowering [`DataflowDescription`]s from MIR ([`MirRelationExpr`]) to LIR ([`Plan`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use columnar::Len;
 use itertools::Itertools;
@@ -32,6 +32,9 @@ use crate::plan::{AvailableCollections, GetPlan, LirId, Plan, PlanNode};
 pub(super) struct Context {
     /// Known bindings to (possibly arranged) collections.
     arrangements: BTreeMap<Id, AvailableCollections>,
+    /// Ids whose collections may contain updates at future timestamps,
+    /// e.g., from a temporal MFP using `mz_now()`.
+    has_future_updates: BTreeSet<Id>,
     /// Tracks the next available `LirId`.
     next_lir_id: LirId,
     /// Information to print along with error messages.
@@ -44,6 +47,7 @@ impl Context {
     pub fn new(debug_name: String, features: &OptimizerFeatures) -> Self {
         Self {
             arrangements: Default::default(),
+            has_future_updates: Default::default(),
             next_lir_id: LirId(1),
             debug_info: LirDebugInfo {
                 debug_name,
@@ -102,9 +106,12 @@ impl Context {
         let mut objects_to_build = Vec::with_capacity(desc.objects_to_build.len());
         for build in desc.objects_to_build {
             self.debug_info.id = build.id;
-            let (plan, keys, _has_future_updates) = self.lower_mir_expr(&build.plan)?;
+            let (plan, keys, has_future_updates) = self.lower_mir_expr(&build.plan)?;
 
             self.arrangements.insert(Id::Global(build.id), keys);
+            if has_future_updates {
+                self.has_future_updates.insert(Id::Global(build.id));
+            }
             objects_to_build.push(BuildDesc { id: build.id, plan });
         }
 
@@ -261,7 +268,7 @@ impl Context {
                     GetPlan::Arrangement(_, _, mfp) | GetPlan::Collection(mfp) => {
                         mfp.has_temporal_predicates()
                     }
-                    GetPlan::PassArrangements => false,
+                    GetPlan::PassArrangements => self.has_future_updates.contains(id),
                 };
 
                 let lir_id = self.allocate_lir_id();
@@ -280,13 +287,17 @@ impl Context {
 
                 // Plan the value using only the initial arrangements, but
                 // introduce any resulting arrangements bound to `id`.
-                let (value, v_keys, _v_future) = self.lower_mir_expr(value)?;
+                let (value, v_keys, v_future) = self.lower_mir_expr(value)?;
                 let pre_existing = self.arrangements.insert(Id::Local(*id), v_keys);
                 assert_none!(pre_existing);
+                if v_future {
+                    self.has_future_updates.insert(Id::Local(*id));
+                }
                 // Plan the body using initial and `value` arrangements,
                 // and then remove reference to the value arrangements.
                 let (body, b_keys, b_future) = self.lower_mir_expr(body)?;
                 self.arrangements.remove(&Id::Local(*id));
+                self.has_future_updates.remove(&Id::Local(*id));
                 // Return the plan, and any `body` arrangements.
                 let lir_id = self.allocate_lir_id();
                 (
@@ -314,7 +325,7 @@ impl Context {
                 // as we cannot circulate an arrangement through a `Variable` yet.
                 let mut lir_values = Vec::with_capacity(values.len());
                 for (id, value) in ids.iter().zip_eq(values) {
-                    let (mut lir_value, mut v_keys, _v_future) = self.lower_mir_expr(value)?;
+                    let (mut lir_value, mut v_keys, v_future) = self.lower_mir_expr(value)?;
                     // If `v_keys` does not contain an unarranged collection, we must form it.
                     if !v_keys.raw {
                         // Choose an "arbitrary" arrangement; TODO: prefer a specific one.
@@ -377,6 +388,9 @@ impl Context {
                     }
                     let pre_existing = self.arrangements.insert(Id::Local(*id), v_keys);
                     assert_none!(pre_existing);
+                    if v_future {
+                        self.has_future_updates.insert(Id::Local(*id));
+                    }
                     lir_values.push(lir_value);
                 }
                 // As we exit the iterative scope, we must leave all arrangements behind,
@@ -390,6 +404,7 @@ impl Context {
                 let (body, b_keys, b_future) = self.lower_mir_expr(body)?;
                 for id in ids.iter() {
                     self.arrangements.remove(&Id::Local(*id));
+                    self.has_future_updates.remove(&Id::Local(*id));
                 }
                 // Return the plan, and any `body` arrangements.
                 let lir_id = self.allocate_lir_id();
