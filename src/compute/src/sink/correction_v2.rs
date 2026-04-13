@@ -422,6 +422,158 @@ impl<D: Data> CorrectionV2<D> {
         self.prev_size = new_size;
         self.prev_update_count = new_length;
     }
+
+    /// Merge the given chains, advancing times by the given `since` in the process.
+    fn merge_chains<D: Data>(
+        chains: impl IntoIterator<Item = Chain<D>>,
+        since: &Antichain<Timestamp>,
+    ) -> Chain<D> {
+        let Some(&since_ts) = since.as_option() else {
+            return Chain::default();
+        };
+
+        let mut to_merge = Vec::new();
+        for chain in chains {
+            if let Some(cursor) = chain.into_cursor() {
+                let mut runs = cursor.advance_by(since_ts);
+                to_merge.append(&mut runs);
+            }
+        }
+
+        merge_cursors(to_merge)
+    }
+
+    /// Merge the given chains, advancing times by the given `since` in the process, but only up to the
+    /// given `upper`.
+    ///
+    /// Returns the merged chain and a list of non-empty remainders of the input chains.
+    fn merge_chains_up_to<D: Data>(
+        chains: Vec<Chain<D>>,
+        since: &Antichain<Timestamp>,
+        upper: &Antichain<Timestamp>,
+    ) -> (Chain<D>, Vec<Chain<D>>) {
+        let Some(&since_ts) = since.as_option() else {
+            return (Chain::default(), Vec::new());
+        };
+        let Some(&upper_ts) = upper.as_option() else {
+            let merged = merge_chains(chains, since);
+            return (merged, Vec::new());
+        };
+
+        if since_ts >= upper_ts {
+            // After advancing by `since` there will be no updates before `upper`.
+            return (Chain::default(), chains);
+        }
+
+        let mut to_merge = Vec::new();
+        let mut to_keep = Vec::new();
+        for chain in chains {
+            if let Some(cursor) = chain.into_cursor() {
+                let mut runs = cursor.advance_by(since_ts);
+                if let Some(last) = runs.pop() {
+                    let (before, beyond) = last.split_at_time(upper_ts);
+                    before.map(|c| runs.push(c));
+                    beyond.map(|c| to_keep.push(c));
+                }
+                to_merge.append(&mut runs);
+            }
+        }
+
+        let merged = merge_cursors(to_merge);
+        let remains = to_keep
+            .into_iter()
+            .map(|c| c.try_unwrap().expect("unwrapable"))
+            .collect();
+
+        (merged, remains)
+    }
+
+    /// Merge the given cursors into one chain.
+    fn merge_cursors<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
+        match cursors.len() {
+            0 => Chain::default(),
+            1 => {
+                let [cur] = cursors.try_into().unwrap();
+                Chain::from(cur)
+            }
+            2 => {
+                let [a, b] = cursors.try_into().unwrap();
+                merge_2(a, b)
+            }
+            _ => merge_many(cursors),
+        }
+    }
+
+    /// Merge the given two cursors using a 2-way merge.
+    ///
+    /// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
+    fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
+        let mut rest1 = Some(cursor1);
+        let mut rest2 = Some(cursor2);
+        let mut merged = Chain::default();
+
+        loop {
+            match (rest1, rest2) {
+                (Some(c1), Some(c2)) => {
+                    let (d1, t1, r1) = c1.get();
+                    let (d2, t2, r2) = c2.get();
+
+                    match (t1, d1).cmp(&(t2, d2)) {
+                        Ordering::Less => {
+                            merged.push((d1, t1, r1));
+                            rest1 = c1.step();
+                            rest2 = Some(c2);
+                        }
+                        Ordering::Greater => {
+                            merged.push((d2, t2, r2));
+                            rest1 = Some(c1);
+                            rest2 = c2.step();
+                        }
+                        Ordering::Equal => {
+                            let r = r1 + r2;
+                            if r != Diff::ZERO {
+                                merged.push((d1, t1, r));
+                            }
+                            rest1 = c1.step();
+                            rest2 = c2.step();
+                        }
+                    }
+                }
+                (Some(c), None) | (None, Some(c)) => {
+                    merged.push_cursor(c);
+                    break;
+                }
+                (None, None) => break,
+            }
+        }
+
+        merged
+    }
+
+    /// Merge the given cursors using a k-way merge with a binary heap.
+    fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
+        let mut heap = MergeHeap::from_iter(cursors);
+        let mut merged = Chain::default();
+        while let Some(cursor1) = heap.pop() {
+            let (data, time, mut diff) = cursor1.get();
+
+            while let Some((cursor2, r)) = heap.pop_equal(data, time) {
+                diff += r;
+                if let Some(cursor2) = cursor2.step() {
+                    heap.push(cursor2);
+                }
+            }
+
+            if diff != Diff::ZERO {
+                merged.push((data, time, diff));
+            }
+            if let Some(cursor1) = cursor1.step() {
+                heap.push(cursor1);
+            }
+        }
+
+        merged
+    }
 }
 
 impl<D: Data> Drop for CorrectionV2<D> {
@@ -1172,158 +1324,6 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
     }
 
     updates.truncate(offset);
-}
-
-/// Merge the given chains, advancing times by the given `since` in the process.
-fn merge_chains<D: Data>(
-    chains: impl IntoIterator<Item = Chain<D>>,
-    since: &Antichain<Timestamp>,
-) -> Chain<D> {
-    let Some(&since_ts) = since.as_option() else {
-        return Chain::default();
-    };
-
-    let mut to_merge = Vec::new();
-    for chain in chains {
-        if let Some(cursor) = chain.into_cursor() {
-            let mut runs = cursor.advance_by(since_ts);
-            to_merge.append(&mut runs);
-        }
-    }
-
-    merge_cursors(to_merge)
-}
-
-/// Merge the given chains, advancing times by the given `since` in the process, but only up to the
-/// given `upper`.
-///
-/// Returns the merged chain and a list of non-empty remainders of the input chains.
-fn merge_chains_up_to<D: Data>(
-    chains: Vec<Chain<D>>,
-    since: &Antichain<Timestamp>,
-    upper: &Antichain<Timestamp>,
-) -> (Chain<D>, Vec<Chain<D>>) {
-    let Some(&since_ts) = since.as_option() else {
-        return (Chain::default(), Vec::new());
-    };
-    let Some(&upper_ts) = upper.as_option() else {
-        let merged = merge_chains(chains, since);
-        return (merged, Vec::new());
-    };
-
-    if since_ts >= upper_ts {
-        // After advancing by `since` there will be no updates before `upper`.
-        return (Chain::default(), chains);
-    }
-
-    let mut to_merge = Vec::new();
-    let mut to_keep = Vec::new();
-    for chain in chains {
-        if let Some(cursor) = chain.into_cursor() {
-            let mut runs = cursor.advance_by(since_ts);
-            if let Some(last) = runs.pop() {
-                let (before, beyond) = last.split_at_time(upper_ts);
-                before.map(|c| runs.push(c));
-                beyond.map(|c| to_keep.push(c));
-            }
-            to_merge.append(&mut runs);
-        }
-    }
-
-    let merged = merge_cursors(to_merge);
-    let remains = to_keep
-        .into_iter()
-        .map(|c| c.try_unwrap().expect("unwrapable"))
-        .collect();
-
-    (merged, remains)
-}
-
-/// Merge the given cursors into one chain.
-fn merge_cursors<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
-    match cursors.len() {
-        0 => Chain::default(),
-        1 => {
-            let [cur] = cursors.try_into().unwrap();
-            Chain::from(cur)
-        }
-        2 => {
-            let [a, b] = cursors.try_into().unwrap();
-            merge_2(a, b)
-        }
-        _ => merge_many(cursors),
-    }
-}
-
-/// Merge the given two cursors using a 2-way merge.
-///
-/// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
-fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
-    let mut rest1 = Some(cursor1);
-    let mut rest2 = Some(cursor2);
-    let mut merged = Chain::default();
-
-    loop {
-        match (rest1, rest2) {
-            (Some(c1), Some(c2)) => {
-                let (d1, t1, r1) = c1.get();
-                let (d2, t2, r2) = c2.get();
-
-                match (t1, d1).cmp(&(t2, d2)) {
-                    Ordering::Less => {
-                        merged.push((d1, t1, r1));
-                        rest1 = c1.step();
-                        rest2 = Some(c2);
-                    }
-                    Ordering::Greater => {
-                        merged.push((d2, t2, r2));
-                        rest1 = Some(c1);
-                        rest2 = c2.step();
-                    }
-                    Ordering::Equal => {
-                        let r = r1 + r2;
-                        if r != Diff::ZERO {
-                            merged.push((d1, t1, r));
-                        }
-                        rest1 = c1.step();
-                        rest2 = c2.step();
-                    }
-                }
-            }
-            (Some(c), None) | (None, Some(c)) => {
-                merged.push_cursor(c);
-                break;
-            }
-            (None, None) => break,
-        }
-    }
-
-    merged
-}
-
-/// Merge the given cursors using a k-way merge with a binary heap.
-fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
-    let mut heap = MergeHeap::from_iter(cursors);
-    let mut merged = Chain::default();
-    while let Some(cursor1) = heap.pop() {
-        let (data, time, mut diff) = cursor1.get();
-
-        while let Some((cursor2, r)) = heap.pop_equal(data, time) {
-            diff += r;
-            if let Some(cursor2) = cursor2.step() {
-                heap.push(cursor2);
-            }
-        }
-
-        if diff != Diff::ZERO {
-            merged.push((data, time, diff));
-        }
-        if let Some(cursor1) = cursor1.step() {
-            heap.push(cursor1);
-        }
-    }
-
-    merged
 }
 
 /// A binary heap specialized for merging [`Cursor`]s.
