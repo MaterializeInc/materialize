@@ -41,7 +41,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
-use tracing::{Instrument, error, info, info_span};
+use tracing::{Instrument, debug, error, info, info_span};
 
 mod usage_metrics;
 
@@ -299,8 +299,17 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 let (conn, remote_addr) = match listener.accept().await {
                     Ok(peer) => peer,
                     Err(error) => {
-                        error!("internal_http connection failed: {error:#}");
-                        break;
+                        // Match hyper's AddrIncoming error handling:
+                        // connection errors are per-connection and can be
+                        // skipped immediately; all other errors (e.g., EMFILE)
+                        // sleep to avoid a tight loop on resource exhaustion.
+                        if is_connection_error(&error) {
+                            debug!("accepted connection already errored: {error:#}");
+                        } else {
+                            error!("internal_http accept error: {error:#}");
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                        continue;
                     }
                 };
 
@@ -432,4 +441,16 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
 
     // Block forever.
     future::pending().await
+}
+
+/// Per-connection errors from `accept()` that can be skipped immediately.
+/// All other errors (e.g., EMFILE/ENFILE resource exhaustion) warrant a sleep
+/// before retrying. Mirrors hyper's `AddrIncoming` classification.
+fn is_connection_error(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+    )
 }
