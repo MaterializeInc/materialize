@@ -9,17 +9,12 @@
 
 import { useColorMode } from "@chakra-ui/react";
 import { getKeywords } from "@materializeinc/sql-lexer";
-import Editor, { loader, OnMount } from "@monaco-editor/react";
+import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
 // TODO: Switch to @materializeinc/sql-parser when published.
 import { parse } from "@sjwiesman/sql-parser";
 import { useAtom, useAtomValue } from "jotai";
-import * as monaco from "monaco-editor";
+import type * as monacoEditor from "monaco-editor";
 import React, { useCallback, useEffect, useRef } from "react";
-
-// Use the local monaco-editor package instead of loading from CDN.
-// This ensures our hooks (CodeLens, diagnostics) operate on the same
-// Monaco instance that the Editor component uses.
-loader.config({ monaco });
 
 import { SAVE_DEBOUNCE_MS } from "./constants";
 import { useInlineResultDecorations } from "./InlineResultDecoration";
@@ -47,13 +42,13 @@ export interface WorksheetEditorHandle {
 let languageRegistered = false;
 
 /** Registers the Materialize SQL dialect with Monaco (syntax highlighting + keyword completions). */
-function registerSqlLanguage() {
+function registerSqlLanguage(monacoInstance: Monaco) {
   if (languageRegistered) return;
   languageRegistered = true;
 
   const keywords = getKeywords();
 
-  monaco.languages.setMonarchTokensProvider("sql", {
+  monacoInstance.languages.setMonarchTokensProvider("sql", {
     ignoreCase: true,
     keywords: keywords.map((k: string) => k.toLowerCase()),
     tokenizer: {
@@ -77,12 +72,12 @@ function registerSqlLanguage() {
         [/./, "comment"],
       ],
     },
-  } as monaco.languages.IMonarchLanguage);
+  } as monacoEditor.languages.IMonarchLanguage);
 
-  monaco.languages.registerCompletionItemProvider("sql", {
-    provideCompletionItems(model, position) {
+  monacoInstance.languages.registerCompletionItemProvider("sql", {
+    provideCompletionItems(model: monacoEditor.editor.ITextModel, position: monacoEditor.Position) {
       const word = model.getWordUntilPosition(position);
-      const range = new monaco.Range(
+      const range = new monacoInstance.Range(
         position.lineNumber,
         word.startColumn,
         position.lineNumber,
@@ -91,7 +86,7 @@ function registerSqlLanguage() {
       return {
         suggestions: keywords.map((kw: string) => ({
           label: kw.toUpperCase(),
-          kind: monaco.languages.CompletionItemKind.Keyword,
+          kind: monacoInstance.languages.CompletionItemKind.Keyword,
           insertText: kw.toUpperCase(),
           range,
         })),
@@ -105,7 +100,7 @@ const WorksheetEditor = React.forwardRef<
   WorksheetEditorProps
 >(({ onExecute }, ref) => {
   const { colorMode } = useColorMode();
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const editorRef = useRef<monacoEditor.editor.IStandaloneCodeEditor | null>(null);
   const [content, setContent] = useAtom(worksheetContentAtom);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const { parseContent } = useStatements();
@@ -157,10 +152,10 @@ const WorksheetEditor = React.forwardRef<
   const goToDefinitionRef = useGoToDefinition();
 
   const handleMount: OnMount = useCallback(
-    (editor) => {
+    (editor, monaco) => {
       editorRef.current = editor;
-      registerSqlLanguage();
-      goToDefinitionRef.current(editor);
+      registerSqlLanguage(monaco);
+      goToDefinitionRef.current(editor, monaco);
 
       const model = editor.getModel();
       if (model) {
@@ -171,7 +166,7 @@ const WorksheetEditor = React.forwardRef<
       editor.addAction({
         id: "worksheet.executeCurrent",
         label: "Execute Current Statement",
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter] as const,
         run: (ed) => {
           const position = ed.getPosition();
           if (!position) return;

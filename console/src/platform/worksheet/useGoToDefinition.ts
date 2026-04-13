@@ -19,7 +19,8 @@
  */
 
 import { useAtomValue, useSetAtom } from "jotai";
-import * as monaco from "monaco-editor";
+import type { Monaco } from "@monaco-editor/react";
+import type * as monacoEditor from "monaco-editor";
 import React from "react";
 
 import { parseSearchPath } from "~/api/materialize";
@@ -35,8 +36,8 @@ import { worksheetSessionAtom } from "./store";
  * Returns the full text (e.g. "raw.customers").
  */
 export function getQualifiedIdentifier(
-  model: monaco.editor.ITextModel,
-  position: monaco.Position,
+  model: monacoEditor.editor.ITextModel,
+  position: monacoEditor.Position,
 ): { text: string } {
   const lineContent = model.getLineContent(position.lineNumber);
   const col = position.column - 1; // 0-based
@@ -144,13 +145,14 @@ export function resolveObject(
 /**
  * Returns a ref to a function that registers the "See Details" context menu
  * action and Cmd+D keybinding on a Monaco editor instance. Call the ref's
- * current value in the editor's onMount callback.
+ * current value in the editor's onMount callback, passing both the editor
+ * and the Monaco instance.
  *
  * Uses refs internally so the action callback always reads the latest
  * catalog data and session context without re-registering.
  */
 export function useGoToDefinition(): React.MutableRefObject<
-  (editor: monaco.editor.IStandaloneCodeEditor) => void
+  (editor: monacoEditor.editor.IStandaloneCodeEditor, monacoInstance: Monaco) => void
 > {
   const objectsState = useAtomValue(allObjects);
   const session = useAtomValue(worksheetSessionAtom);
@@ -174,13 +176,13 @@ export function useGoToDefinition(): React.MutableRefObject<
   }, [setCatalogDetail, setCatalogVisible]);
 
   const registerRef = React.useRef(
-    (editor: monaco.editor.IStandaloneCodeEditor) => {
+    (editor: monacoEditor.editor.IStandaloneCodeEditor, monacoInstance: Monaco) => {
       editor.addAction({
         id: "worksheet.seeDetails",
         label: "See Details",
         contextMenuGroupId: "navigation",
         contextMenuOrder: 1,
-        keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyD],
+        keybindings: [monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyD],
         run: (ed) => {
           const position = ed.getPosition();
           if (!position) return;

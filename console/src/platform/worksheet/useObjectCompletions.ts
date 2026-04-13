@@ -22,8 +22,9 @@
  * after user objects.
  */
 
+import { useMonaco } from "@monaco-editor/react";
 import { useAtomValue } from "jotai";
-import * as monaco from "monaco-editor";
+import type * as monacoEditor from "monaco-editor";
 import React from "react";
 
 import { useAllObjects } from "~/store/allObjects";
@@ -38,38 +39,17 @@ const SYSTEM_SCHEMAS = new Set([
   "information_schema",
 ]);
 
-/** Maps object types to Monaco CompletionItemKind for visual distinction in the dropdown. */
-function objectTypeToCompletionKind(
-  objectType: string,
-): monaco.languages.CompletionItemKind {
-  switch (objectType) {
-    case "table":
-      return monaco.languages.CompletionItemKind.Struct;
-    case "view":
-    case "materialized-view":
-      return monaco.languages.CompletionItemKind.Interface;
-    case "source":
-    case "sink":
-      return monaco.languages.CompletionItemKind.Event;
-    case "connection":
-      return monaco.languages.CompletionItemKind.Module;
-    case "secret":
-      return monaco.languages.CompletionItemKind.Property;
-    default:
-      return monaco.languages.CompletionItemKind.Value;
-  }
-}
-
 /**
  * Registers a Monaco completion provider that suggests catalog object names.
  * Re-registers when the object list or session context changes so suggestions
  * are always current.
  */
 export function useObjectCompletions(
-  editorRef: React.RefObject<monaco.editor.IStandaloneCodeEditor | null>,
+  editorRef: React.RefObject<monacoEditor.editor.IStandaloneCodeEditor | null>,
 ) {
   const { data: objects } = useAllObjects();
   const session = useAtomValue(worksheetSessionAtom);
+  const monaco = useMonaco();
 
   // Store current values in refs so the provider callback always reads
   // the latest data without needing to re-register on every change.
@@ -83,9 +63,35 @@ export function useObjectCompletions(
   }, [session]);
 
   React.useEffect(() => {
-    const disposable = monaco.languages.registerCompletionItemProvider("sql", {
+    if (!monaco) return;
+
+    const monacoInstance = monaco; // Capture in a const to narrow the type
+
+    /** Maps object types to Monaco CompletionItemKind for visual distinction in the dropdown. */
+    function objectTypeToCompletionKind(
+      objectType: string,
+    ): monacoEditor.languages.CompletionItemKind {
+      switch (objectType) {
+        case "table":
+          return monacoInstance.languages.CompletionItemKind.Struct;
+        case "view":
+        case "materialized-view":
+          return monacoInstance.languages.CompletionItemKind.Interface;
+        case "source":
+        case "sink":
+          return monacoInstance.languages.CompletionItemKind.Event;
+        case "connection":
+          return monacoInstance.languages.CompletionItemKind.Module;
+        case "secret":
+          return monacoInstance.languages.CompletionItemKind.Property;
+        default:
+          return monacoInstance.languages.CompletionItemKind.Value;
+      }
+    }
+
+    const disposable = monacoInstance.languages.registerCompletionItemProvider("sql", {
       triggerCharacters: ["."],
-      provideCompletionItems(model, position) {
+      provideCompletionItems(model: monacoEditor.editor.ITextModel, position: monacoEditor.Position) {
         // Scan backwards to find any dotted qualifier prefix (e.g. "raw." or "db.schema.")
         const lineContent = model.getLineContent(position.lineNumber);
         const textBeforeCursor = lineContent.substring(0, position.column - 1);
@@ -104,7 +110,7 @@ export function useObjectCompletions(
           prefixPart2 = qualifiedMatch[2]?.replace(".", "");
         }
 
-        const range = new monaco.Range(
+        const range = new monacoInstance.Range(
           position.lineNumber,
           startColumn,
           position.lineNumber,
@@ -114,7 +120,7 @@ export function useObjectCompletions(
         const currentObjects = objectsRef.current;
         const currentSession = sessionRef.current;
 
-        const suggestions: monaco.languages.CompletionItem[] = [];
+        const suggestions: monacoEditor.languages.CompletionItem[] = [];
 
         for (const obj of currentObjects) {
           if (obj.objectType === "index") continue;
@@ -200,5 +206,5 @@ export function useObjectCompletions(
     });
 
     return () => disposable.dispose();
-  }, []); // Register once — refs keep data current
+  }, [monaco]);
 }
