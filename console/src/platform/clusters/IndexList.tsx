@@ -33,6 +33,7 @@ import {
 } from "~/api/materialize";
 import { Replica } from "~/api/materialize/cluster/clusterList";
 import { Index } from "~/api/materialize/cluster/indexesList";
+import type { SupportedObjectType } from "~/api/materialize/types";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import IndexListEmptyState from "~/components/IndexListEmptyState";
 import { LoadingContainer } from "~/components/LoadingContainer";
@@ -51,7 +52,6 @@ import useLocalStorage from "~/hooks/useLocalStorage";
 import { InfoIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { NULL_DATABASE_NAME } from "~/platform/constants";
-import type { SupportedObjectType } from "~/api/materialize/types";
 import { useBuildIndexPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { useOpenCatalogDetail } from "~/store/catalog";

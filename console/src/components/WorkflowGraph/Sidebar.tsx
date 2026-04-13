@@ -25,13 +25,13 @@ import React from "react";
 import { Link, LinkProps } from "react-router-dom";
 
 import { LagInfo } from "~/api/materialize/cluster/materializationLag";
+import type { SupportedObjectType } from "~/api/materialize/types";
 import { WorkflowGraphNode } from "~/api/materialize/workflowGraphNodes";
 import { ConnectorStatusPill } from "~/components/StatusPill";
 import {
   formatLagInfoDetailed,
   formatObjectType,
 } from "~/platform/clusters/format";
-import type { SupportedObjectType } from "~/api/materialize/types";
 import { relativeClusterPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import { useOpenCatalogDetail } from "~/store/catalog";
