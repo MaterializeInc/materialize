@@ -446,7 +446,7 @@ impl ReplicaMetrics {
     }
 }
 
-impl<T> transport::Metrics<ComputeCommand<T>, ComputeResponse<T>> for ReplicaMetrics {
+impl transport::Metrics<ComputeCommand, ComputeResponse> for ReplicaMetrics {
     fn bytes_sent(&mut self, len: usize) {
         self.inner
             .command_message_bytes_total
@@ -459,11 +459,11 @@ impl<T> transport::Metrics<ComputeCommand<T>, ComputeResponse<T>> for ReplicaMet
             .inc_by(u64::cast_from(len));
     }
 
-    fn message_sent(&mut self, msg: &ComputeCommand<T>) {
+    fn message_sent(&mut self, msg: &ComputeCommand) {
         self.inner.commands_total.for_command(msg).inc();
     }
 
-    fn message_received(&mut self, msg: &ComputeResponse<T>) {
+    fn message_received(&mut self, msg: &ComputeResponse) {
         self.inner.responses_total.for_response(msg).inc();
     }
 }
@@ -537,7 +537,7 @@ impl<M> CommandMetrics<M> {
     }
 
     /// TODO(database-issues#7533): Add documentation.
-    pub fn for_command<T>(&self, command: &ComputeCommand<T>) -> &M {
+    pub fn for_command(&self, command: &ComputeCommand) -> &M {
         use ComputeCommand::*;
 
         match command {
@@ -579,7 +579,7 @@ impl<M> ResponseMetrics<M> {
         }
     }
 
-    fn for_response<T>(&self, response: &ComputeResponse<T>) -> &M {
+    fn for_response(&self, response: &ComputeResponse) -> &M {
         use ComputeResponse::*;
 
         match response {

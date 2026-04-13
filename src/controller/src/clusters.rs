@@ -22,7 +22,6 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
-use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
@@ -357,10 +356,7 @@ pub struct ClusterEvent {
     pub time: DateTime<Utc>,
 }
 
-impl<T> Controller<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl Controller {
     /// Creates a cluster with the specified identifier and configuration.
     ///
     /// A cluster is a combination of a storage instance and a compute instance.

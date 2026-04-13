@@ -23,7 +23,7 @@ use mz_expr::RowSetFinishing;
 use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::read_holds::{self, ReadHold};
 use thiserror::Error;
 use timely::progress::{Antichain, ChangeBatch};
@@ -35,8 +35,7 @@ use uuid::Uuid;
 use crate::controller::error::CollectionMissing;
 use crate::controller::instance::{Command, Instance, SharedCollectionState};
 use crate::controller::{
-    ComputeControllerResponse, ComputeControllerTimestamp, IntrospectionUpdates, ReplicaId,
-    StorageCollections,
+    ComputeControllerResponse, IntrospectionUpdates, ReplicaId, StorageCollections,
 };
 use crate::logging::LogVariant;
 use crate::metrics::InstanceMetrics;
@@ -97,16 +96,16 @@ impl From<InstanceShutDown> for AcquireReadHoldsError {
 /// A client for an `Instance` task.
 #[derive(Clone, derivative::Derivative)]
 #[derivative(Debug)]
-pub struct InstanceClient<T: ComputeControllerTimestamp> {
+pub struct InstanceClient {
     /// A sender for commands for the instance.
-    command_tx: mpsc::UnboundedSender<Command<T>>,
+    command_tx: mpsc::UnboundedSender<Command>,
     /// A sender for read hold changes for collections installed on the instance.
     #[derivative(Debug = "ignore")]
-    read_hold_tx: read_holds::ChangeTx<T>,
+    read_hold_tx: read_holds::ChangeTx<Timestamp>,
 }
 
-impl<T: ComputeControllerTimestamp> InstanceClient<T> {
-    pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
+impl InstanceClient {
+    pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx<Timestamp> {
         Arc::clone(&self.read_hold_tx)
     }
 
@@ -114,7 +113,7 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
     /// Does not wait for a response message.
     pub(super) fn call<F>(&self, f: F) -> Result<(), InstanceShutDown>
     where
-        F: FnOnce(&mut Instance<T>) + Send + 'static,
+        F: FnOnce(&mut Instance) + Send + 'static,
     {
         let otel_ctx = OpenTelemetryContext::obtain();
         self.command_tx
@@ -131,7 +130,7 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
     /// waiting for a response message.
     pub(super) async fn call_sync<F, R>(&self, f: F) -> Result<R, InstanceShutDown>
     where
-        F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
+        F: FnOnce(&mut Instance) -> R + Send + 'static,
         R: Send + 'static,
     {
         let (tx, rx) = oneshot::channel();
@@ -151,14 +150,14 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
     pub(super) fn spawn(
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
-        storage: StorageCollections<T>,
+        storage: StorageCollections,
         peek_stash_persist_location: PersistLocation,
-        arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState<T>)>,
+        arranged_logs: Vec<(LogVariant, GlobalId, SharedCollectionState)>,
         metrics: InstanceMetrics,
         now: NowFn,
-        wallclock_lag: WallclockLagFn<T>,
+        wallclock_lag: WallclockLagFn<Timestamp>,
         dyncfg: Arc<ConfigSet>,
-        response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
+        response_tx: mpsc::UnboundedSender<ComputeControllerResponse>,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         read_only: bool,
     ) -> Self {
@@ -167,7 +166,7 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
         let read_hold_tx: read_holds::ChangeTx<_> = {
             let command_tx = command_tx.clone();
             Arc::new(move |id, change: ChangeBatch<_>| {
-                let cmd: Command<_> = {
+                let cmd: Command = {
                     let change = change.clone();
                     Box::new(move |i| i.apply_read_hold_change(id, change))
                 };
@@ -206,7 +205,8 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
     pub async fn acquire_read_holds_and_collection_write_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, AcquireReadHoldsError> {
+    ) -> Result<Vec<(GlobalId, ReadHold<Timestamp>, Antichain<Timestamp>)>, AcquireReadHoldsError>
+    {
         self.call_sync(move |i| {
             let mut result = Vec::new();
             for id in ids.into_iter() {
@@ -229,11 +229,11 @@ impl<T: ComputeControllerTimestamp> InstanceClient<T> {
         peek_target: PeekTarget,
         literal_constraints: Option<Vec<Row>>,
         uuid: Uuid,
-        timestamp: T,
+        timestamp: Timestamp,
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        target_read_hold: ReadHold<T>,
+        target_read_hold: ReadHold<Timestamp>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
