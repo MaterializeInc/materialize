@@ -8,7 +8,8 @@
 // by the Apache License, Version 2.0.
 
 import { useAtomValue } from "jotai";
-import * as monaco from "monaco-editor";
+import { useMonaco } from "@monaco-editor/react";
+import type * as monacoEditor from "monaco-editor";
 import { useEffect } from "react";
 
 import { worksheetParseErrorAtom } from "./store";
@@ -19,13 +20,15 @@ import { worksheetParseErrorAtom } from "./store";
  * and clears them when the error is resolved.
  */
 export function useDiagnostics(
-  editorRef: React.RefObject<monaco.editor.IStandaloneCodeEditor | null>,
+  editorRef: React.RefObject<monacoEditor.editor.IStandaloneCodeEditor | null>,
 ) {
   const parseError = useAtomValue(worksheetParseErrorAtom);
+  const monaco = useMonaco();
 
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
+    if (!monaco) return;
     const model = editor.getModel();
     if (!model) return;
 
@@ -43,5 +46,5 @@ export function useDiagnostics(
     } else {
       monaco.editor.setModelMarkers(model, "mz-sql-parser", []);
     }
-  }, [editorRef, parseError]);
+  }, [editorRef, parseError, monaco]);
 }

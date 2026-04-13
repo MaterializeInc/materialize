@@ -7,8 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+import { useMonaco } from "@monaco-editor/react";
 import { useAtomValue } from "jotai";
-import * as monaco from "monaco-editor";
+import type * as monacoEditor from "monaco-editor";
 import { useEffect, useRef } from "react";
 
 import type { StatementInfo } from "./store";
@@ -50,12 +51,13 @@ function codeLensTitle(stmt: StatementInfo, sessionCluster: string): string {
  * SQL, kind, and byte offset.
  */
 export function useCodeLens(
-  editorRef: React.RefObject<monaco.editor.IStandaloneCodeEditor | null>,
+  editorRef: React.RefObject<monacoEditor.editor.IStandaloneCodeEditor | null>,
   onExecute: (sql: string, kind: string, offset: number) => void,
 ) {
   const statements = useAtomValue(worksheetStatementsAtom);
   const session = useAtomValue(worksheetSessionAtom);
-  const disposableRef = useRef<monaco.IDisposable>();
+  const monaco = useMonaco();
+  const disposableRef = useRef<monacoEditor.IDisposable>();
   const onExecuteRef = useRef(onExecute);
   const statementsRef = useRef(statements);
   const clusterRef = useRef(session.cluster);
@@ -71,7 +73,7 @@ export function useCodeLens(
   }, [session.cluster]);
 
   const emitterRef =
-    useRef<monaco.Emitter<monaco.languages.CodeLensProvider>>();
+    useRef<monacoEditor.Emitter<monacoEditor.languages.CodeLensProvider>>();
 
   // Register provider once. It reads from refs, so lenses that persist
   // across re-parses are never removed and re-added. The effect re-runs
@@ -82,6 +84,7 @@ export function useCodeLens(
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor || disposableRef.current) return;
+    if (!monaco) return;
 
     const commandId = editor.addCommand(
       0,
@@ -90,7 +93,7 @@ export function useCodeLens(
     );
     if (commandId == null) return;
 
-    const emitter = new monaco.Emitter<monaco.languages.CodeLensProvider>();
+    const emitter = new monaco.Emitter<monacoEditor.languages.CodeLensProvider>();
     emitterRef.current = emitter;
 
     disposableRef.current = monaco.languages.registerCodeLensProvider("sql", {
@@ -109,7 +112,7 @@ export function useCodeLens(
         };
       },
     });
-  }, [editorRef, statements]);
+  }, [editorRef, statements, monaco]);
 
   // Clean up provider and emitter on unmount only.
   useEffect(() => {
