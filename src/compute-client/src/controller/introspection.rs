@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{Diff, Row, Timestamp};
+use mz_repr::{Diff, Row};
 use mz_storage_client::client::AppendOnlyUpdate;
 use mz_storage_client::controller::{IntrospectionType, StorageController, StorageWriteOp};
 use mz_storage_types::controller::StorageError;
@@ -19,7 +19,7 @@ pub type IntrospectionUpdates = (IntrospectionType, Vec<(Row, Diff)>);
 /// Spawn a task sinking introspection updates produced by the compute controller to storage.
 pub fn spawn_introspection_sink(
     mut rx: mpsc::UnboundedReceiver<IntrospectionUpdates>,
-    storage_controller: &dyn StorageController<Timestamp = Timestamp>,
+    storage_controller: &dyn StorageController,
 ) {
     let sink = IntrospectionSink::new(storage_controller);
 
@@ -34,7 +34,7 @@ pub fn spawn_introspection_sink(
     });
 }
 
-type Notifier = oneshot::Sender<Result<(), StorageError<Timestamp>>>;
+type Notifier = oneshot::Sender<Result<(), StorageError>>;
 type AppendOnlySender = mpsc::UnboundedSender<(Vec<AppendOnlyUpdate>, Notifier)>;
 type DifferentialSender = mpsc::UnboundedSender<(StorageWriteOp, Notifier)>;
 
@@ -60,7 +60,7 @@ struct IntrospectionSink {
 
 impl IntrospectionSink {
     /// Create a new `IntrospectionSink`.
-    pub fn new(storage_controller: &dyn StorageController<Timestamp = Timestamp>) -> Self {
+    pub fn new(storage_controller: &dyn StorageController) -> Self {
         use IntrospectionType::*;
         Self {
             frontiers_tx: storage_controller.differential_introspection_tx(Frontiers),

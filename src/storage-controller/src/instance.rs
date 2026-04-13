@@ -16,7 +16,6 @@ use std::sync::{Arc, atomic};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
-use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::ReplicaId;
@@ -25,7 +24,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::now::NowFn;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
@@ -35,8 +34,7 @@ use mz_storage_client::client::{
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection};
-use timely::order::TotalOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::select;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -54,13 +52,13 @@ use crate::history::CommandHistory;
 /// add more than one replica to instances that have storage objects installed, is illegal and will
 /// lead to panics.
 #[derive(Debug)]
-pub(crate) struct Instance<T> {
+pub(crate) struct Instance {
     /// The workload class of this instance.
     ///
     /// This is currently only used to annotate metrics.
     pub workload_class: Option<String>,
     /// The replicas connected to this storage instance.
-    replicas: BTreeMap<ReplicaId, Replica<T>>,
+    replicas: BTreeMap<ReplicaId, Replica>,
     /// The ingestions currently running on this instance.
     ///
     /// While this is derivable from `history` on demand, keeping a denormalized
@@ -77,7 +75,7 @@ pub(crate) struct Instance<T> {
     active_exports: BTreeMap<GlobalId, ActiveExport>,
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
-    history: CommandHistory<T>,
+    history: CommandHistory,
     /// Metrics tracked for this storage instance.
     metrics: InstanceMetrics,
     /// A function that returns the current time.
@@ -87,7 +85,7 @@ pub(crate) struct Instance<T> {
     /// Responses are tagged with the [`ReplicaId`] of the replica that sent the
     /// response. Responses that don't originate from a replica (e.g. a "paused"
     /// status update, when no replicas are connected) are tagged with `None`.
-    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
 }
 
 #[derive(Debug)]
@@ -102,16 +100,13 @@ struct ActiveExport {
     active_replicas: BTreeSet<ReplicaId>,
 }
 
-impl<T> Instance<T>
-where
-    T: Timestamp + Lattice + TotalOrder + Sync,
-{
+impl Instance {
     /// Creates a new [`Instance`].
     pub fn new(
         workload_class: Option<String>,
         metrics: InstanceMetrics,
         now: NowFn,
-        instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+        instance_response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
     ) -> Self {
         let history = CommandHistory::new(metrics.for_history());
 
@@ -328,7 +323,7 @@ where
     }
 
     /// Sends a command to this storage instance.
-    pub fn send(&mut self, command: StorageCommand<T>) {
+    pub fn send(&mut self, command: StorageCommand) {
         // Record the command so that new replicas can be brought up to speed.
         self.history.push(command.clone());
 
@@ -415,7 +410,7 @@ where
     ///
     /// This does _not_ send commands to replicas, we only record the export
     /// in state and potentially update scheduling decisions.
-    fn absorb_export(&mut self, export: RunSinkCommand<T>) {
+    fn absorb_export(&mut self, export: RunSinkCommand) {
         let existing_export_state = self.active_exports.get_mut(&export.id);
 
         if let Some(export_state) = existing_export_state {
@@ -628,7 +623,7 @@ where
     pub fn get_export_description(
         &self,
         id: &GlobalId,
-    ) -> Option<StorageSinkDesc<CollectionMetadata, T>> {
+    ) -> Option<StorageSinkDesc<CollectionMetadata>> {
         if !self.active_exports.contains_key(id) {
             return None;
         }
@@ -647,7 +642,7 @@ where
     }
 
     /// Updates internal state based on incoming compaction commands.
-    fn absorb_compaction(&mut self, id: GlobalId, frontier: Antichain<T>) {
+    fn absorb_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         tracing::debug!(?self.active_ingestions, ?id, ?frontier, "allow_compaction");
 
         if frontier.is_empty() {
@@ -658,7 +653,7 @@ where
     }
 
     /// Returns the replicas that are actively running the given object (ingestion or export).
-    fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica<T>> + '_> {
+    fn active_replicas(&mut self, id: &GlobalId) -> Box<dyn Iterator<Item = &mut Replica> + '_> {
         if let Some(ingestion_id) = self.ingestion_exports.get(id) {
             match self.active_ingestions.get(ingestion_id) {
                 Some(ingestion) => Box::new(self.replicas.iter_mut().filter_map(
@@ -769,30 +764,27 @@ pub(super) struct ReplicaConfig {
 
 /// State maintained about individual replicas.
 #[derive(Debug)]
-pub struct Replica<T> {
+pub struct Replica {
     /// Replica configuration.
     config: ReplicaConfig,
     /// A sender for commands for the replica.
     ///
     /// If sending to this channel fails, the replica has failed and requires
     /// rehydration.
-    command_tx: mpsc::UnboundedSender<StorageCommand<T>>,
+    command_tx: mpsc::UnboundedSender<StorageCommand>,
     /// A handle to the task that aborts it when the replica is dropped.
     task: AbortOnDropHandle<()>,
     /// Flag reporting whether the replica connection has been established.
     connected: Arc<AtomicBool>,
 }
 
-impl<T> Replica<T>
-where
-    T: Timestamp + Lattice + Sync,
-{
+impl Replica {
     /// Creates a new [`Replica`].
     fn new(
         id: ReplicaId,
         config: ReplicaConfig,
         metrics: ReplicaMetrics,
-        response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+        response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let connected = Arc::new(AtomicBool::new(false));
@@ -819,7 +811,7 @@ where
     }
 
     /// Sends a command to the replica.
-    fn send(&self, command: StorageCommand<T>) {
+    fn send(&self, command: StorageCommand) {
         // Send failures ignored, we'll check for failed replicas separately.
         let _ = self.command_tx.send(command);
     }
@@ -836,11 +828,11 @@ where
     }
 }
 
-type StorageCtpClient<T> = transport::Client<StorageCommand<T>, StorageResponse<T>>;
-type ReplicaClient<T> = Partitioned<StorageCtpClient<T>, StorageCommand<T>, StorageResponse<T>>;
+type StorageCtpClient = transport::Client<StorageCommand, StorageResponse>;
+type ReplicaClient = Partitioned<StorageCtpClient, StorageCommand, StorageResponse>;
 
 /// A task handling communication with a replica.
-struct ReplicaTask<T> {
+struct ReplicaTask {
     /// The ID of the replica.
     replica_id: ReplicaId,
     /// Replica configuration.
@@ -850,15 +842,12 @@ struct ReplicaTask<T> {
     /// Flag to report successful replica connection.
     connected: Arc<AtomicBool>,
     /// A channel upon which commands intended for the replica are delivered.
-    command_rx: mpsc::UnboundedReceiver<StorageCommand<T>>,
+    command_rx: mpsc::UnboundedReceiver<StorageCommand>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse<T>)>,
+    response_tx: mpsc::UnboundedSender<(Option<ReplicaId>, StorageResponse)>,
 }
 
-impl<T> ReplicaTask<T>
-where
-    T: Timestamp + Lattice + Sync,
-{
+impl ReplicaTask {
     /// Runs the replica task.
     async fn run(self) {
         let replica_id = self.replica_id;
@@ -875,7 +864,7 @@ where
     ///
     /// The connection is retried forever (with backoff) and this method returns only after
     /// a connection was successfully established.
-    async fn connect(&self) -> ReplicaClient<T> {
+    async fn connect(&self) -> ReplicaClient {
         let try_connect = async move |retry: RetryState| {
             let version = self.config.build_info.semver_version();
             let client_params = &self.config.grpc_client;
@@ -886,7 +875,7 @@ where
                 .http2_keep_alive_timeout
                 .unwrap_or(Duration::MAX);
 
-            let connect_result = StorageCtpClient::<T>::connect_partitioned(
+            let connect_result = StorageCtpClient::connect_partitioned(
                 self.config.location.ctl_addrs.clone(),
                 version,
                 connect_timeout,
@@ -930,7 +919,7 @@ where
     /// Returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
     /// If no error condition is encountered, the task runs until the controller disconnects from
     /// the command channel, or the task is dropped.
-    async fn run_message_loop(mut self, mut client: ReplicaClient<T>) -> Result<(), anyhow::Error> {
+    async fn run_message_loop(mut self, mut client: ReplicaClient) -> Result<(), anyhow::Error> {
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -966,7 +955,7 @@ where
     ///
     /// Most [`StorageCommand`]s are independent of the target replica, but some contain
     /// replica-specific fields that must be adjusted before sending.
-    fn specialize_command(&self, command: &mut StorageCommand<T>) {
+    fn specialize_command(&self, command: &mut StorageCommand) {
         if let StorageCommand::Hello { nonce } = command {
             *nonce = Uuid::new_v4();
         }

@@ -79,7 +79,7 @@ pub enum DurableCatalogError {
     UniquenessViolation,
     /// A programming error occurred during a [`mz_storage_client::controller::StorageTxn`].
     #[error(transparent)]
-    Storage(StorageError<Timestamp>),
+    Storage(StorageError),
     /// An internal programming error.
     #[error("Internal catalog error: {0}")]
     Internal(String),
@@ -95,8 +95,8 @@ impl DurableCatalogError {
     }
 }
 
-impl From<StorageError<Timestamp>> for DurableCatalogError {
-    fn from(e: StorageError<Timestamp>) -> Self {
+impl From<StorageError> for DurableCatalogError {
+    fn from(e: StorageError) -> Self {
         DurableCatalogError::Storage(e)
     }
 }

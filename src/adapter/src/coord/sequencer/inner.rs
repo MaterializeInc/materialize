@@ -118,7 +118,7 @@ use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
 use crate::{PeekResponseUnary, ReadHolds};
 
 /// A future that resolves to a real-time recency timestamp.
-type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>;
+type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
 mod cluster;
 mod copy_from;

@@ -231,7 +231,7 @@ impl ReplicaMetrics {
     }
 }
 
-impl<T> transport::Metrics<StorageCommand<T>, StorageResponse<T>> for ReplicaMetrics {
+impl transport::Metrics<StorageCommand, StorageResponse> for ReplicaMetrics {
     fn bytes_sent(&mut self, len: usize) {
         self.inner
             .command_message_bytes_total
@@ -244,11 +244,11 @@ impl<T> transport::Metrics<StorageCommand<T>, StorageResponse<T>> for ReplicaMet
             .inc_by(u64::cast_from(len));
     }
 
-    fn message_sent(&mut self, msg: &StorageCommand<T>) {
+    fn message_sent(&mut self, msg: &StorageCommand) {
         self.inner.commands_total.for_command(msg).inc();
     }
 
-    fn message_received(&mut self, msg: &StorageResponse<T>) {
+    fn message_received(&mut self, msg: &StorageResponse) {
         self.inner.responses_total.for_response(msg).inc();
     }
 }
@@ -309,7 +309,7 @@ impl<M> CommandMetrics<M> {
         f(&self.cancel_oneshot_ingestion);
     }
 
-    pub fn for_command<T>(&self, command: &StorageCommand<T>) -> &M {
+    pub fn for_command(&self, command: &StorageCommand) -> &M {
         use StorageCommand::*;
 
         match command {
@@ -350,7 +350,7 @@ impl<M> ResponseMetrics<M> {
         }
     }
 
-    fn for_response<T>(&self, response: &StorageResponse<T>) -> &M {
+    fn for_response(&self, response: &StorageResponse) -> &M {
         use StorageResponse::*;
 
         match response {

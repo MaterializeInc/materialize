@@ -89,11 +89,8 @@ pub mod error;
 pub mod instance_client;
 pub use instance_client::InstanceClient;
 
-pub(crate) type StorageCollections = Arc<
-    dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = Timestamp>
-        + Send
-        + Sync,
->;
+pub(crate) type StorageCollections =
+    Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Responses from the compute controller.
 #[derive(Debug)]
@@ -321,10 +318,7 @@ impl ComputeController {
     ///
     /// This method should be called once the introspection collections have been registered with
     /// the storage controller. It will panic if invoked earlier than that.
-    pub fn start_introspection_sink(
-        &mut self,
-        storage_controller: &dyn StorageController<Timestamp = Timestamp>,
-    ) {
+    pub fn start_introspection_sink(&mut self, storage_controller: &dyn StorageController) {
         if let Some(rx) = self.introspection_rx.take() {
             spawn_introspection_sink(rx, storage_controller);
         }

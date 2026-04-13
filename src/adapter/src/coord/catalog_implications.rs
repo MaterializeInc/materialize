@@ -49,7 +49,7 @@ use mz_ore::instrument;
 use mz_ore::retry::Retry;
 use mz_ore::str::StrExt;
 use mz_ore::task;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector};
 use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
@@ -1056,7 +1056,7 @@ impl Coordinator {
     #[instrument(level = "debug")]
     async fn create_table_collections(
         &mut self,
-        table_collections_to_create: BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
+        table_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
         execution_timestamps_to_set: BTreeSet<StatementLoggingId>,
     ) -> Result<(), AdapterError> {
         // If we have tables, determine the initial validity for the table.
@@ -1101,7 +1101,7 @@ impl Coordinator {
     #[instrument(level = "debug")]
     async fn create_source_collections(
         &mut self,
-        source_collections_to_create: BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
+        source_collections_to_create: BTreeMap<GlobalId, CollectionDescription>,
     ) -> Result<(), AdapterError> {
         let storage_metadata = self.catalog.state().storage_metadata();
 
@@ -1141,7 +1141,7 @@ impl Coordinator {
     async fn handle_create_table(
         &self,
         ctx: &Option<&mut ExecuteContext>,
-        storage_collections_to_create: &mut BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
+        storage_collections_to_create: &mut BTreeMap<GlobalId, CollectionDescription>,
         storage_policies_to_initialize: &mut BTreeMap<CompactionWindow, BTreeSet<GlobalId>>,
         execution_timestamps_to_set: &mut BTreeSet<StatementLoggingId>,
         table_id: CatalogItemId,
@@ -1192,7 +1192,7 @@ impl Coordinator {
                         let global_ingestion_id =
                             self.catalog().get_entry(ingestion_id).latest_global_id();
 
-                        let collection_desc = CollectionDescription::<Timestamp> {
+                        let collection_desc = CollectionDescription {
                             desc: table.desc.latest(),
                             data_source: DataSource::IngestionExport {
                                 ingestion_id: global_ingestion_id,
@@ -1243,7 +1243,7 @@ impl Coordinator {
                         );
                         let desc = table.desc.latest();
 
-                        let collection_desc = CollectionDescription::<Timestamp> {
+                        let collection_desc = CollectionDescription {
                             desc,
                             data_source: DataSource::Webhook,
                             since: None,
@@ -1368,7 +1368,7 @@ impl Coordinator {
     #[instrument(level = "debug")]
     async fn handle_create_source(
         &self,
-        storage_collections_to_create: &mut BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
+        storage_collections_to_create: &mut BTreeMap<GlobalId, CollectionDescription>,
         storage_policies_to_initialize: &mut BTreeMap<CompactionWindow, BTreeSet<GlobalId>>,
         item_id: CatalogItemId,
         source: Source,
@@ -1447,7 +1447,7 @@ impl Coordinator {
 
         storage_collections_to_create.insert(
             source.global_id,
-            CollectionDescription::<Timestamp> {
+            CollectionDescription {
                 desc: source.desc.clone(),
                 data_source,
                 timeline: Some(source.timeline),

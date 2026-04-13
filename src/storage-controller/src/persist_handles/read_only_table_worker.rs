@@ -16,14 +16,13 @@ use std::ops::ControlFlow;
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use mz_persist_client::write::WriteHandle;
-use mz_persist_types::Codec64;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::client::{TableData, Update};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::InvalidUpper;
 use mz_storage_types::sources::SourceData;
 use timely::PartialOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tracing::Span;
 
 use crate::StorageError;
@@ -47,16 +46,14 @@ use crate::persist_handles::{PersistTableWriteCmd, append_work};
 /// writing to tables before the txn-wal system. This code can (again) be
 /// deleted when we switch to using native persist schema migrations to perform
 /// mgirations of built-in tables.
-pub(crate) async fn read_only_mode_table_worker<
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
->(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd<T>)>,
-    txns_handle: WriteHandle<SourceData, (), T, StorageDiff>,
+pub(crate) async fn read_only_mode_table_worker(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<(Span, PersistTableWriteCmd)>,
+    txns_handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
 ) {
     let mut write_handles =
-        BTreeMap::<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>::new();
+        BTreeMap::<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>::new();
 
-    let gen_upper_future = |mut handle: WriteHandle<SourceData, (), T, StorageDiff>| {
+    let gen_upper_future = |mut handle: WriteHandle<SourceData, (), Timestamp, StorageDiff>| {
         let fut = async move {
             let current_upper = handle.shared_upper();
             handle.wait_for_upper_past(&current_upper).await;
@@ -115,13 +112,10 @@ pub(crate) async fn read_only_mode_table_worker<
 }
 
 /// Handles the given commands.
-async fn handle_commands<T>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>,
-    mut commands: VecDeque<(Span, PersistTableWriteCmd<T>)>,
-) -> ControlFlow<String>
-where
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-{
+async fn handle_commands(
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
+    mut commands: VecDeque<(Span, PersistTableWriteCmd)>,
+) -> ControlFlow<String> {
     let mut shutdown = false;
 
     // Accumulated updates and upper frontier.
@@ -189,8 +183,8 @@ where
                             (
                                 span.clone(),
                                 Vec::default(),
-                                Antichain::from_elem(write_ts.clone()),
-                                Antichain::from_elem(T::minimum()),
+                                Antichain::from_elem(write_ts),
+                                Antichain::from_elem(Timestamp::MIN),
                             )
                         });
 
@@ -206,7 +200,7 @@ where
                         TableData::Rows(rows) => {
                             let iter = rows.into_iter().map(|(row, diff)| Update {
                                 row,
-                                timestamp: write_ts.clone(),
+                                timestamp: write_ts,
                                 diff,
                             });
                             itertools::Either::Left(iter)
@@ -220,7 +214,7 @@ where
                         }
                     });
                     updates.extend(updates_with_ts);
-                    old_new_upper.join_assign(&Antichain::from_elem(advance_to.clone()));
+                    old_new_upper.join_assign(&Antichain::from_elem(advance_to));
                 }
                 all_responses.push((ids, tx));
             }
@@ -260,12 +254,10 @@ where
 
 /// Advances the upper of all registered tables (which are only the migrated
 /// builtin tables) to the given `upper`.
-async fn advance_uppers<T>(
-    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), T, StorageDiff>>,
-    upper: Antichain<T>,
-) where
-    T: Timestamp + Lattice + Codec64 + TimestampManipulation,
-{
+async fn advance_uppers(
+    write_handles: &mut BTreeMap<GlobalId, WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
+    upper: Antichain<Timestamp>,
+) {
     let mut all_updates = BTreeMap::default();
 
     for (id, write_handle) in write_handles.iter_mut() {
@@ -279,7 +271,7 @@ async fn advance_uppers<T>(
         let expected_upper = write_handle.fetch_recent_upper().await.to_owned();
 
         // Avoid advancing the upper until the coordinator has a chance to back-fill the shard.
-        if expected_upper.elements() == &[T::minimum()] {
+        if expected_upper.elements() == &[Timestamp::MIN] {
             continue;
         }
 

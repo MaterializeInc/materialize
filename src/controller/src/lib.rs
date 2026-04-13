@@ -146,8 +146,8 @@ pub enum Readiness {
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
 pub struct Controller {
-    pub storage: Box<dyn StorageController<Timestamp = Timestamp>>,
-    pub storage_collections: Arc<dyn StorageCollections<Timestamp = Timestamp> + Send + Sync>,
+    pub storage: Box<dyn StorageController>,
+    pub storage_collections: Arc<dyn StorageCollections + Send + Sync>,
     pub compute: ComputeController,
     /// The clusterd image to use when starting new cluster processes.
     clusterd_image: String,
@@ -622,10 +622,7 @@ impl Controller {
         &self,
         ids: BTreeSet<GlobalId>,
         timeout: Duration,
-    ) -> Result<
-        BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>,
-        StorageError<Timestamp>,
-    > {
+    ) -> Result<BoxFuture<'static, Result<Timestamp, StorageError>>, StorageError> {
         self.storage.real_time_recent_timestamp(ids, timeout).await
     }
 }
@@ -643,7 +640,7 @@ impl Controller {
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        storage_txn: &dyn StorageTxn<Timestamp>,
+        storage_txn: &dyn StorageTxn,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
@@ -668,8 +665,7 @@ impl Controller {
         )
         .await;
 
-        let collections_ctl: Arc<dyn StorageCollections<Timestamp = Timestamp> + Send + Sync> =
-            Arc::new(collections_ctl);
+        let collections_ctl: Arc<dyn StorageCollections + Send + Sync> = Arc::new(collections_ctl);
 
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,

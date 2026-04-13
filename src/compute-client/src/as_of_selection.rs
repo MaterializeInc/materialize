@@ -101,7 +101,7 @@ use tracing::{info, warn};
 pub fn run(
     dataflows: &mut [DataflowDescription<Plan, ()>],
     read_policies: &BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
-    storage_collections: &dyn StorageCollections<Timestamp = Timestamp>,
+    storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
 ) -> BTreeMap<GlobalId, ReadHold<Timestamp>> {
@@ -333,7 +333,7 @@ struct Collection<'a> {
 /// The as-of selection context.
 struct Context<'a> {
     collections: BTreeMap<GlobalId, Collection<'a>>,
-    storage_collections: &'a dyn StorageCollections<Timestamp = Timestamp>,
+    storage_collections: &'a dyn StorageCollections,
     current_time: Timestamp,
 }
 
@@ -341,7 +341,7 @@ impl<'a> Context<'a> {
     /// Initializes an as-of selection context for the given `dataflows`.
     fn new(
         dataflows: &[DataflowDescription<Plan, ()>],
-        storage_collections: &'a dyn StorageCollections<Timestamp = Timestamp>,
+        storage_collections: &'a dyn StorageCollections,
         read_policies: &'a BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
         current_time: Timestamp,
     ) -> Self {
@@ -845,7 +845,6 @@ mod tests {
     use std::collections::BTreeSet;
 
     use async_trait::async_trait;
-    use differential_dataflow::lattice::Lattice;
     use futures::future::BoxFuture;
     use futures::stream::BoxStream;
     use mz_compute_types::dataflows::{IndexDesc, IndexImport};
@@ -855,7 +854,7 @@ mod tests {
     use mz_compute_types::sources::SourceInstanceArguments;
     use mz_compute_types::sources::SourceInstanceDesc;
     use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
-    use mz_persist_types::{Codec64, ShardId};
+    use mz_persist_types::ShardId;
     use mz_repr::{RelationDesc, RelationVersion, Row, SqlRelationType};
     use mz_repr::{ReprRelationType, Timestamp};
     use mz_storage_client::client::TimestamplessUpdateBuilder;
@@ -867,7 +866,6 @@ mod tests {
     use mz_storage_types::parameters::StorageParameters;
     use mz_storage_types::sources::SourceData;
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
-    use timely::progress::Timestamp as TimelyTimestamp;
 
     use super::*;
 
@@ -886,13 +884,11 @@ mod tests {
 
     #[async_trait]
     impl StorageCollections for StorageFrontiers {
-        type Timestamp = Timestamp;
-
         async fn initialize_state(
             &self,
-            _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
+            _txn: &mut (dyn StorageTxn + Send),
             _init_ids: BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
+        ) -> Result<(), StorageError> {
             unimplemented!()
         }
 
@@ -914,7 +910,7 @@ mod tests {
         fn collections_frontiers(
             &self,
             ids: Vec<GlobalId>,
-        ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing> {
+        ) -> Result<Vec<CollectionFrontiers>, CollectionMissing> {
             let mut frontiers = Vec::with_capacity(ids.len());
             for id in ids {
                 let (read, write) = self.0.get(&id).ok_or(CollectionMissing(id))?;
@@ -928,109 +924,88 @@ mod tests {
             Ok(frontiers)
         }
 
-        fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<Self::Timestamp>> {
+        fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers> {
             unimplemented!()
         }
 
-        fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
+        fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError> {
             unimplemented!()
         }
 
         async fn snapshot_stats(
             &self,
             _id: GlobalId,
-            _as_of: Antichain<Self::Timestamp>,
-        ) -> Result<SnapshotStats, StorageError<Self::Timestamp>> {
+            _as_of: Antichain<Timestamp>,
+        ) -> Result<SnapshotStats, StorageError> {
             unimplemented!()
         }
 
         async fn snapshot_parts_stats(
             &self,
             _id: GlobalId,
-            _as_of: Antichain<Self::Timestamp>,
-        ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError<Self::Timestamp>>> {
+            _as_of: Antichain<Timestamp>,
+        ) -> BoxFuture<'static, Result<SnapshotPartsStats, StorageError>> {
             unimplemented!()
         }
 
         fn snapshot(
             &self,
             _id: GlobalId,
-            _as_of: Self::Timestamp,
-        ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError<Self::Timestamp>>>
-        {
+            _as_of: Timestamp,
+        ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError>> {
             unimplemented!()
         }
 
-        async fn snapshot_latest(
-            &self,
-            _id: GlobalId,
-        ) -> Result<Vec<Row>, StorageError<Self::Timestamp>> {
+        async fn snapshot_latest(&self, _id: GlobalId) -> Result<Vec<Row>, StorageError> {
             unimplemented!()
         }
 
         fn snapshot_cursor(
             &self,
             _id: GlobalId,
-            _as_of: Self::Timestamp,
-        ) -> BoxFuture<
-            'static,
-            Result<SnapshotCursor<Self::Timestamp>, StorageError<Self::Timestamp>>,
-        >
-        where
-            Self::Timestamp: TimelyTimestamp + Lattice + Codec64,
-        {
+            _as_of: Timestamp,
+        ) -> BoxFuture<'static, Result<SnapshotCursor, StorageError>> {
             unimplemented!()
         }
 
         fn snapshot_and_stream(
             &self,
             _id: GlobalId,
-            _as_of: Self::Timestamp,
+            _as_of: Timestamp,
         ) -> BoxFuture<
             'static,
-            Result<
-                BoxStream<'static, (SourceData, Self::Timestamp, StorageDiff)>,
-                StorageError<Self::Timestamp>,
-            >,
+            Result<BoxStream<'static, (SourceData, Timestamp, StorageDiff)>, StorageError>,
         > {
             unimplemented!()
         }
 
-        /// Create a [`TimestamplessUpdateBuilder`] that can be used to stage
-        /// updates for the provided [`GlobalId`].
         fn create_update_builder(
             &self,
             _id: GlobalId,
         ) -> BoxFuture<
             'static,
-            Result<
-                TimestamplessUpdateBuilder<SourceData, (), Self::Timestamp, StorageDiff>,
-                StorageError<Self::Timestamp>,
-            >,
-        >
-        where
-            Self::Timestamp: Lattice + Codec64,
-        {
+            Result<TimestamplessUpdateBuilder<SourceData, (), StorageDiff>, StorageError>,
+        > {
             unimplemented!()
         }
 
         async fn prepare_state(
             &self,
-            _txn: &mut (dyn StorageTxn<Self::Timestamp> + Send),
+            _txn: &mut (dyn StorageTxn + Send),
             _ids_to_add: BTreeSet<GlobalId>,
             _ids_to_drop: BTreeSet<GlobalId>,
             _ids_to_register: BTreeMap<GlobalId, ShardId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
+        ) -> Result<(), StorageError> {
             unimplemented!()
         }
 
         async fn create_collections_for_bootstrap(
             &self,
             _storage_metadata: &StorageMetadata,
-            _register_ts: Option<Self::Timestamp>,
-            _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
+            _register_ts: Option<Timestamp>,
+            _collections: Vec<(GlobalId, CollectionDescription)>,
             _migrated_storage_collections: &BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
+        ) -> Result<(), StorageError> {
             unimplemented!()
         }
 
@@ -1040,7 +1015,7 @@ mod tests {
             _new_collection: GlobalId,
             _new_desc: RelationDesc,
             _expected_version: RelationVersion,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
+        ) -> Result<(), StorageError> {
             unimplemented!()
         }
 
@@ -1052,14 +1027,14 @@ mod tests {
             unimplemented!()
         }
 
-        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy<Self::Timestamp>)>) {
+        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>) {
             unimplemented!()
         }
 
         fn acquire_read_holds(
             &self,
             desired_holds: Vec<GlobalId>,
-        ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing> {
+        ) -> Result<Vec<ReadHold<Timestamp>>, CollectionMissing> {
             let mut holds = Vec::with_capacity(desired_holds.len());
             for id in desired_holds {
                 let (read, _write) = self.0.get(&id).ok_or(CollectionMissing(id))?;
