@@ -268,6 +268,10 @@ where
         let snapshot_start = std::time::Instant::now();
         let mut prev_persist_upper = Antichain::from_elem(Timestamp::minimum());
 
+        // Accumulators for rehydration metrics, set as gauges when rehydration completes.
+        let mut rehydration_total: u64 = 0;
+        let mut rehydration_updates: u64 = 0;
+
         // ──────────────────────────────────────────────────────────────────
         // Main operator loop. Each iteration performs four steps:
         //   Step 1: Ingest source data into the batcher.
@@ -347,6 +351,12 @@ where
                     upsert_metrics
                         .rehydration_latency
                         .set(snapshot_start.elapsed().as_secs_f64());
+                    upsert_metrics
+                        .rehydration_total
+                        .set(rehydration_total);
+                    upsert_metrics
+                        .rehydration_updates
+                        .set(rehydration_updates);
                     tracing::info!(
                         worker_id = %source_config.worker_id,
                         source_id = %source_config.id,
@@ -384,7 +394,7 @@ where
                 let remaining_frontier = batcher.frontier().to_owned();
 
                 let mut ineligible = Vec::new();
-                drain_sealed_input(
+                let drain_stats = drain_sealed_input(
                     sealed,
                     &mut ineligible,
                     &mut output_updates,
@@ -392,6 +402,29 @@ where
                     &mut persist_trace,
                     &source_config,
                 );
+
+                upsert_metrics.multi_get_size.inc_by(drain_stats.eligible);
+                upsert_metrics
+                    .multi_get_result_count
+                    .inc_by(drain_stats.result_count);
+                upsert_metrics.multi_put_size.inc_by(drain_stats.output_count);
+                upsert_metrics.upsert_inserts.inc_by(drain_stats.inserts);
+                upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
+                upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
+
+                source_config
+                    .source_statistics
+                    .update_bytes_indexed_by(drain_stats.size_diff);
+                source_config
+                    .source_statistics
+                    .update_records_indexed_by(
+                        drain_stats.inserts as i64 - drain_stats.deletes as i64,
+                    );
+
+                if hydrating {
+                    rehydration_total += drain_stats.inserts;
+                    rehydration_updates += drain_stats.eligible;
+                }
 
                 // Emit output: retractions of old values and insertions of
                 // new values, all at the eligible timestamp.
@@ -446,6 +479,32 @@ where
     )
 }
 
+/// Counts from a single call to [`drain_sealed_input`], used to update metrics.
+struct DrainStats {
+    /// Number of entries looked up in the persist trace (cursor seeks).
+    eligible: u64,
+    /// Number of cursor lookups that found an existing value.
+    result_count: u64,
+    /// New value written with no prior value (insert).
+    inserts: u64,
+    /// New value written over an existing value (update).
+    updates: u64,
+    /// Tombstone (None) applied to an existing value (delete).
+    deletes: u64,
+    /// Total output records emitted (retractions + insertions).
+    output_count: u64,
+    /// Net byte change to indexed state: positive on inserts, negative on deletes.
+    size_diff: i64,
+}
+
+/// Returns the indexed byte size of a [`UpsertValue`].
+fn upsert_value_bytes(val: &UpsertValue) -> i64 {
+    match val {
+        Ok(row) => i64::try_from(row.byte_len()).unwrap_or(i64::MAX),
+        Err(_) => 0,
+    }
+}
+
 /// Process sealed chunks from the batcher. Entries at the persist frontier are
 /// eligible for processing (cursor lookup + output); all others are returned
 /// in `ineligible` for re-stashing.
@@ -458,7 +517,8 @@ fn drain_sealed_input<T, FromTime>(
     persist_upper: &Antichain<T>,
     trace: &mut TraceAgent<ValSpine<UpsertKey, UpsertValue, T, Diff>>,
     source_config: &crate::source::SourceExportCreationConfig,
-) where
+) -> DrainStats
+where
     T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
     FromTime: timely::ExchangeData + Clone + Ord + Sync,
 {
@@ -483,9 +543,26 @@ fn drain_sealed_input<T, FromTime>(
         "draining stash",
     );
 
+    let eligible_count = u64::try_from(eligible.len()).expect("eligible count overflows u64");
+
     if eligible.is_empty() {
-        return;
+        return DrainStats {
+            eligible: 0,
+            result_count: 0,
+            inserts: 0,
+            updates: 0,
+            deletes: 0,
+            output_count: 0,
+            size_diff: 0,
+        };
     }
+
+    let output_before = output.len();
+    let mut result_count: u64 = 0;
+    let mut inserts: u64 = 0;
+    let mut updates: u64 = 0;
+    let mut deletes: u64 = 0;
+    let mut size_diff: i64 = 0;
 
     // Eligible entries are sorted by (key, time) from the batcher.
     // The trace cursor moves forward through keys, matching this order.
@@ -516,19 +593,43 @@ fn drain_sealed_input<T, FromTime>(
             None
         };
 
+        if old_value.is_some() {
+            result_count += 1;
+        }
+
         match upsert_diff.value {
             Some(new_val) => {
+                size_diff += upsert_value_bytes(&new_val);
                 if let Some(old_val) = old_value {
+                    size_diff -= upsert_value_bytes(&old_val);
                     output.push((old_val, ts.clone(), Diff::MINUS_ONE));
+                    updates += 1;
+                } else {
+                    inserts += 1;
                 }
                 output.push((new_val, ts, Diff::ONE));
             }
             None => {
                 if let Some(old_val) = old_value {
+                    size_diff -= upsert_value_bytes(&old_val);
                     output.push((old_val, ts, Diff::MINUS_ONE));
+                    deletes += 1;
                 }
             }
         }
+    }
+
+    let output_count =
+        u64::try_from(output.len() - output_before).expect("output count overflows u64");
+
+    DrainStats {
+        eligible: eligible_count,
+        result_count,
+        inserts,
+        updates,
+        deletes,
+        output_count,
+        size_diff,
     }
 }
 

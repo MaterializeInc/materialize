@@ -346,7 +346,7 @@ where
 }
 
 /// An experimental upsert implementation loosely described in this doc:
-/// https://www.notion.so/materialize/Upsert-V2-Much-Simpler-Boogaloo-31913f48d37b807fa88bdeafc27c02d9?source=copy_link
+/// [Upsert V2 Much Simpler Boogaloo](https://www.notion.so/materialize/Upsert-V2-Much-Simpler-Boogaloo-31913f48d37b807fa88bdeafc27c02d9?source=copy_link)
 ///
 /// Instead of using rocksdb as a state backend, this implementation uses a differential dataflow collection to hold the key state,
 /// and performs consolidation of updates with matching keys and MZ timestamps, using max FromTime to choose winners,
