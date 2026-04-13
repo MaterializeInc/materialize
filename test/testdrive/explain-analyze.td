@@ -171,3 +171,18 @@ operator                     total_elapsed
 "    Arranged l0"  <null>  <null>
 "With l0 = Accumulable GroupAggregate"  <XXX>  2
 "  Stream <XXX>"  <null>  <null>
+
+# regression test for https://github.com/MaterializeInc/database-issues/issues/11293
+> CREATE MATERIALIZED VIEW "it's" AS SELECT SUM(x) FROM t;
+
+> EXPLAIN ANALYZE MEMORY FOR MATERIALIZED VIEW "it's";
+"Returning Union"  <null>  <null>
+"  Unarranged Raw Stream"  <null>  <null>
+"  Map/Filter/Project"  <null>  <null>
+"    Consolidating Union"  <null>  <null>
+"      Constant (1 rows)"  <null>  <null>
+"      Negate Diffs"  <null>  <null>
+"        Arranged l0"  <null>  <null>
+"    Arranged l0"  <null>  <null>
+"With l0 = Accumulable GroupAggregate"  <XXX>  2
+"  Stream <XXX>"  <null>  <null>
