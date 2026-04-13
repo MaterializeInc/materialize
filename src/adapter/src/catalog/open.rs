@@ -701,8 +701,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
+    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 

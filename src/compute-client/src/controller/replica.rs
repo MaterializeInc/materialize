@@ -30,16 +30,16 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tracing::{debug, info, trace, warn};
 use uuid::Uuid;
 
+use crate::controller::ReplicaId;
 use crate::controller::instance::ReplicaResponse;
 use crate::controller::sequential_hydration::SequentialHydration;
-use crate::controller::{ComputeControllerTimestamp, ReplicaId};
 use crate::logging::LoggingConfig;
 use crate::metrics::IntCounter;
 use crate::metrics::ReplicaMetrics;
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::ComputeResponse;
 
-type Client<T> = SequentialHydration<T>;
+type Client = SequentialHydration;
 
 /// Replica-specific configuration.
 #[derive(Clone, Debug)]
@@ -53,9 +53,9 @@ pub(super) struct ReplicaConfig {
 
 /// A client for a replica task.
 #[derive(Debug)]
-pub(super) struct ReplicaClient<T> {
+pub(super) struct ReplicaClient {
     /// A sender for commands for the replica.
-    command_tx: UnboundedSender<ComputeCommand<T>>,
+    command_tx: UnboundedSender<ComputeCommand>,
     /// A handle to the task that aborts it when the replica is dropped.
     ///
     /// If the task is finished, the replica has failed and needs rehydration.
@@ -66,10 +66,7 @@ pub(super) struct ReplicaClient<T> {
     connected: Arc<AtomicBool>,
 }
 
-impl<T> ReplicaClient<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl ReplicaClient {
     pub(super) fn spawn(
         id: ReplicaId,
         build_info: &'static BuildInfo,
@@ -77,7 +74,7 @@ where
         epoch: u64,
         metrics: ReplicaMetrics,
         dyncfg: Arc<ConfigSet>,
-        response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
+        response_tx: InstrumentedUnboundedSender<ReplicaResponse, IntCounter>,
     ) -> Self {
         // Launch a task to handle communication with the replica
         // asynchronously. This isolates the main controller thread from
@@ -110,12 +107,9 @@ where
     }
 }
 
-impl<T> ReplicaClient<T> {
+impl ReplicaClient {
     /// Sends a command to this replica.
-    pub(super) fn send(
-        &self,
-        command: ComputeCommand<T>,
-    ) -> Result<(), SendError<ComputeCommand<T>>> {
+    pub(super) fn send(&self, command: ComputeCommand) -> Result<(), SendError<ComputeCommand>> {
         self.command_tx.send(command).map(|r| {
             self.metrics.inner.command_queue_size.inc();
             r
@@ -133,10 +127,10 @@ impl<T> ReplicaClient<T> {
     }
 }
 
-type ComputeCtpClient<T> = transport::Client<ComputeCommand<T>, ComputeResponse<T>>;
+type ComputeCtpClient = transport::Client<ComputeCommand, ComputeResponse>;
 
 /// Configuration for `replica_task`.
-struct ReplicaTask<T> {
+struct ReplicaTask {
     /// The ID of the replica.
     replica_id: ReplicaId,
     /// Replica configuration.
@@ -144,9 +138,9 @@ struct ReplicaTask<T> {
     /// The build information for this process.
     build_info: &'static BuildInfo,
     /// A channel upon which commands intended for the replica are delivered.
-    command_rx: UnboundedReceiver<ComputeCommand<T>>,
+    command_rx: UnboundedReceiver<ComputeCommand>,
     /// A channel upon which responses from the replica are delivered.
-    response_tx: InstrumentedUnboundedSender<ReplicaResponse<T>, IntCounter>,
+    response_tx: InstrumentedUnboundedSender<ReplicaResponse, IntCounter>,
     /// A number identifying this incarnation of the replica.
     /// The semantics of this don't matter, except that it must strictly increase.
     epoch: u64,
@@ -158,10 +152,7 @@ struct ReplicaTask<T> {
     dyncfg: Arc<ConfigSet>,
 }
 
-impl<T> ReplicaTask<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl ReplicaTask {
     /// Asynchronously forwards commands to and responses from a single replica.
     async fn run(self) {
         let replica_id = self.replica_id;
@@ -178,7 +169,7 @@ where
     ///
     /// The connection is retried forever (with backoff) and this method returns only after
     /// a connection was successfully established.
-    async fn connect(&self) -> Client<T> {
+    async fn connect(&self) -> Client {
         let try_connect = async |retry: RetryState| {
             let version = self.build_info.semver_version();
             let client_params = &self.config.grpc_client;
@@ -188,7 +179,7 @@ where
                 .unwrap_or(Duration::MAX);
 
             let connect_start = Instant::now();
-            let connect_result = ComputeCtpClient::<T>::connect_partitioned(
+            let connect_result = ComputeCtpClient::connect_partitioned(
                 self.config.location.ctl_addrs.clone(),
                 version,
                 connect_timeout,
@@ -236,10 +227,7 @@ where
     /// Returns (with an `Err`) if it encounters an error condition (e.g. the replica disconnects).
     /// If no error condition is encountered, the task runs until the controller disconnects from
     /// the command channel, or the task is dropped.
-    async fn run_message_loop(mut self, mut client: Client<T>) -> Result<(), anyhow::Error>
-    where
-        T: ComputeControllerTimestamp,
-    {
+    async fn run_message_loop(mut self, mut client: Client) -> Result<(), anyhow::Error> {
         loop {
             select! {
                 // Command from controller to forward to replica.
@@ -276,7 +264,7 @@ where
     ///
     /// Most `ComputeCommand`s are independent of the target replica, but some
     /// contain replica-specific fields that must be adjusted before sending.
-    fn specialize_command(&self, command: &mut ComputeCommand<T>) {
+    fn specialize_command(&self, command: &mut ComputeCommand) {
         match command {
             ComputeCommand::Hello { nonce } => {
                 *nonce = Uuid::new_v4();
@@ -293,7 +281,7 @@ where
 
     /// Update task state according to an observed command.
     #[mz_ore::instrument(level = "debug")]
-    fn observe_command(&self, command: &ComputeCommand<T>) {
+    fn observe_command(&self, command: &ComputeCommand) {
         if let ComputeCommand::Peek(peek) = command {
             peek.otel_ctx.attach_as_parent();
         }
@@ -309,7 +297,7 @@ where
 
     /// Update task state according to an observed response.
     #[mz_ore::instrument(level = "debug")]
-    fn observe_response(&self, response: &ComputeResponse<T>) {
+    fn observe_response(&self, response: &ComputeResponse) {
         if let ComputeResponse::PeekResponse(_, _, otel_ctx) = response {
             otel_ctx.attach_as_parent();
         }

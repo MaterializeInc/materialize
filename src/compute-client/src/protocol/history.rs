@@ -24,7 +24,7 @@ use crate::protocol::command::{ComputeCommand, ComputeParameters};
 
 /// TODO(database-issues#7533): Add documentation.
 #[derive(Debug)]
-pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
+pub struct ComputeCommandHistory<M> {
     /// The number of commands at the last time we compacted the history.
     reduced_count: usize,
     /// The sequence of commands that should be applied.
@@ -32,15 +32,14 @@ pub struct ComputeCommandHistory<M, T = mz_repr::Timestamp> {
     /// This list may not be "compact" in that there can be commands that could be optimized
     /// or removed given the context of other commands, for example compaction commands that
     /// can be unified, or dataflows that can be dropped due to allowed compaction.
-    commands: Vec<ComputeCommand<T>>,
+    commands: Vec<ComputeCommand>,
     /// Tracked metrics.
     metrics: HistoryMetrics<M>,
 }
 
-impl<M, T> ComputeCommandHistory<M, T>
+impl<M> ComputeCommandHistory<M>
 where
     M: Borrow<UIntGauge>,
-    T: timely::progress::Timestamp,
 {
     /// TODO(database-issues#7533): Add documentation.
     pub fn new(metrics: HistoryMetrics<M>) -> Self {
@@ -56,7 +55,7 @@ where
     /// Add a command to the history.
     ///
     /// This action will reduce the history every time it doubles.
-    pub fn push(&mut self, command: ComputeCommand<T>) {
+    pub fn push(&mut self, command: ComputeCommand) {
         self.commands.push(command);
 
         if self.commands.len() > 2 * self.reduced_count {
@@ -277,7 +276,7 @@ where
     /// This method should be called after compacting the history to make sure that the dataflow
     /// descriptions do not mention storage collections that don't exist anymore. Its main
     /// purpose is to advance the uppers when connecting a new replica.
-    pub fn update_source_uppers(&mut self, storage_collections: &StorageCollections<T>) {
+    pub fn update_source_uppers(&mut self, storage_collections: &StorageCollections) {
         for command in &mut self.commands {
             if let ComputeCommand::CreateDataflow(dataflow) = command {
                 for (id, import) in dataflow.source_imports.iter_mut() {
@@ -292,7 +291,7 @@ where
     }
 
     /// Iterate through the contained commands.
-    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand<T>> {
+    pub fn iter(&self) -> impl Iterator<Item = &ComputeCommand> {
         self.commands.iter()
     }
 }

@@ -85,12 +85,12 @@ use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
-use mz_repr::{GlobalId, TimestampManipulation};
+use mz_repr::{GlobalId, Timestamp};
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::PartialOrder;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tracing::{info, warn};
 
 /// Runs as-of selection for the given dataflows.
@@ -98,13 +98,13 @@ use tracing::{info, warn};
 /// Assigns the selected as-of to the provided dataflow descriptions and returns a set of
 /// `ReadHold`s that must not be dropped nor downgraded until the dataflows have been installed
 /// with the compute controller.
-pub fn run<T: TimestampManipulation>(
-    dataflows: &mut [DataflowDescription<Plan<T>, (), T>],
-    read_policies: &BTreeMap<GlobalId, ReadPolicy<T>>,
-    storage_collections: &dyn StorageCollections<Timestamp = T>,
-    current_time: T,
+pub fn run(
+    dataflows: &mut [DataflowDescription<Plan, ()>],
+    read_policies: &BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
+    storage_collections: &dyn StorageCollections<Timestamp = Timestamp>,
+    current_time: Timestamp,
     read_only_mode: bool,
-) -> BTreeMap<GlobalId, ReadHold<T>> {
+) -> BTreeMap<GlobalId, ReadHold<Timestamp>> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
     let mut storage_read_holds = BTreeMap::new();
@@ -177,16 +177,16 @@ pub fn run<T: TimestampManipulation>(
 
 /// Bounds for possible as-of values of a dataflow.
 #[derive(Debug)]
-struct AsOfBounds<T> {
-    lower: Antichain<T>,
-    upper: Antichain<T>,
+struct AsOfBounds {
+    lower: Antichain<Timestamp>,
+    upper: Antichain<Timestamp>,
     /// Whether these bounds can still change.
     sealed: bool,
 }
 
-impl<T: Clone> AsOfBounds<T> {
+impl AsOfBounds {
     /// Creates an `AsOfBounds` that only allows the given `frontier`.
-    fn single(frontier: Antichain<T>) -> Self {
+    fn single(frontier: Antichain<Timestamp>) -> Self {
         Self {
             lower: frontier.clone(),
             upper: frontier,
@@ -195,7 +195,7 @@ impl<T: Clone> AsOfBounds<T> {
     }
 
     /// Get the bound of the given type.
-    fn get(&self, type_: BoundType) -> &Antichain<T> {
+    fn get(&self, type_: BoundType) -> &Antichain<Timestamp> {
         match type_ {
             BoundType::Lower => &self.lower,
             BoundType::Upper => &self.upper,
@@ -203,17 +203,17 @@ impl<T: Clone> AsOfBounds<T> {
     }
 }
 
-impl<T: Timestamp> Default for AsOfBounds<T> {
+impl Default for AsOfBounds {
     fn default() -> Self {
         Self {
-            lower: Antichain::from_elem(T::minimum()),
+            lower: Antichain::from_elem(Timestamp::MIN),
             upper: Antichain::new(),
             sealed: false,
         }
     }
 }
 
-impl<T: fmt::Debug> fmt::Display for AsOfBounds<T> {
+impl fmt::Display for AsOfBounds {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -253,19 +253,19 @@ enum ConstraintType {
 
 /// A constraint that can be applied to the `AsOfBounds` of a collection.
 #[derive(Debug)]
-struct Constraint<'a, T> {
+struct Constraint<'a> {
     type_: ConstraintType,
     /// Which bound this constraint applies to.
     bound_type: BoundType,
     /// The frontier by which the bound should be constrained.
-    frontier: &'a Antichain<T>,
+    frontier: &'a Antichain<Timestamp>,
     /// A short description of the reason for applying this constraint.
     ///
     /// Used only for logging.
     reason: &'a str,
 }
 
-impl<T: Timestamp> Constraint<'_, T> {
+impl Constraint<'_> {
     /// Applies this constraint to the given bounds.
     ///
     /// Returns a bool indicating whether the given bounds were changed as a result.
@@ -275,7 +275,7 @@ impl<T: Timestamp> Constraint<'_, T> {
     /// the bounds up/down to the other, depending on the `bound_type`.
     ///
     /// Applying a constraint to sealed bounds is a no-op.
-    fn apply(&self, bounds: &mut AsOfBounds<T>) -> Result<bool, bool> {
+    fn apply(&self, bounds: &mut AsOfBounds) -> Result<bool, bool> {
         if bounds.sealed {
             return Ok(false);
         }
@@ -318,32 +318,32 @@ impl<T: Timestamp> Constraint<'_, T> {
 }
 
 /// State tracked for a compute collection during as-of selection.
-struct Collection<'a, T> {
+struct Collection<'a> {
     storage_inputs: Vec<GlobalId>,
     compute_inputs: Vec<GlobalId>,
-    read_policy: Option<&'a ReadPolicy<T>>,
+    read_policy: Option<&'a ReadPolicy<Timestamp>>,
     /// The currently known as-of bounds.
     ///
     /// Shared between collections exported by the same dataflow.
-    bounds: Rc<RefCell<AsOfBounds<T>>>,
+    bounds: Rc<RefCell<AsOfBounds>>,
     /// Whether this collection is an index.
     is_index: bool,
 }
 
 /// The as-of selection context.
-struct Context<'a, T> {
-    collections: BTreeMap<GlobalId, Collection<'a, T>>,
-    storage_collections: &'a dyn StorageCollections<Timestamp = T>,
-    current_time: T,
+struct Context<'a> {
+    collections: BTreeMap<GlobalId, Collection<'a>>,
+    storage_collections: &'a dyn StorageCollections<Timestamp = Timestamp>,
+    current_time: Timestamp,
 }
 
-impl<'a, T: TimestampManipulation> Context<'a, T> {
+impl<'a> Context<'a> {
     /// Initializes an as-of selection context for the given `dataflows`.
     fn new(
-        dataflows: &[DataflowDescription<Plan<T>, (), T>],
-        storage_collections: &'a dyn StorageCollections<Timestamp = T>,
-        read_policies: &'a BTreeMap<GlobalId, ReadPolicy<T>>,
-        current_time: T,
+        dataflows: &[DataflowDescription<Plan, ()>],
+        storage_collections: &'a dyn StorageCollections<Timestamp = Timestamp>,
+        read_policies: &'a BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
+        current_time: Timestamp,
     ) -> Self {
         // Construct initial collection state for each dataflow export. Dataflows might have their
         // as-ofs already fixed, which we need to take into account when constructing `AsOfBounds`.
@@ -382,7 +382,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// # Panics
     ///
     /// Panics if the identified collection doesn't exist.
-    fn expect_collection(&self, id: GlobalId) -> &Collection<'_, T> {
+    fn expect_collection(&self, id: GlobalId) -> &Collection<'_> {
         self.collections
             .get(&id)
             .unwrap_or_else(|| panic!("collection missing: {id}"))
@@ -391,7 +391,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// Applies the given as-of constraint to the identified collection.
     ///
     /// Returns whether the collection's as-of bounds where changed as a result.
-    fn apply_constraint(&self, id: GlobalId, constraint: Constraint<T>) -> bool {
+    fn apply_constraint(&self, id: GlobalId, constraint: Constraint) -> bool {
         let collection = self.expect_collection(id);
         let mut bounds = collection.bounds.borrow_mut();
         match constraint.apply(&mut bounds) {
@@ -427,7 +427,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// not be able to hydrate successfully.
     fn apply_upstream_storage_constraints(
         &self,
-        storage_read_holds: &BTreeMap<GlobalId, ReadHold<T>>,
+        storage_read_holds: &BTreeMap<GlobalId, ReadHold<Timestamp>>,
     ) {
         // Apply direct constraints from storage inputs.
         for (id, collection) in &self.collections {
@@ -484,12 +484,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
             let upper = if collection_empty {
                 frontiers.read_capabilities
             } else {
-                Antichain::from_iter(
-                    frontiers
-                        .write_frontier
-                        .iter()
-                        .map(|t| t.step_back().unwrap_or_else(T::minimum)),
-                )
+                step_back_frontier(&frontiers.write_frontier)
             };
 
             let constraint = Constraint {
@@ -753,7 +748,7 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     /// We simply use the upper bound here, to maximize the chances of compute reconciliation
     /// succeeding. Choosing the latest possible as-of also minimizes the amount of work the
     /// dataflow has to spend processing historical data from its sources.
-    fn best_as_of(&self, id: GlobalId) -> Antichain<T> {
+    fn best_as_of(&self, id: GlobalId) -> Antichain<Timestamp> {
         if let Some(collection) = self.collections.get(&id) {
             let bounds = collection.bounds.borrow();
             bounds.upper.clone()
@@ -838,10 +833,10 @@ fn fixpoint(mut step: impl FnMut(&mut bool)) {
 ///
 /// This method is saturating: If the frontier contains `T::minimum()` times, these are kept
 /// unchanged.
-fn step_back_frontier<T: TimestampManipulation>(frontier: &Antichain<T>) -> Antichain<T> {
+fn step_back_frontier(frontier: &Antichain<Timestamp>) -> Antichain<Timestamp> {
     frontier
         .iter()
-        .map(|t| t.step_back().unwrap_or_else(T::minimum))
+        .map(|t| t.step_back().unwrap_or(Timestamp::MIN))
         .collect()
 }
 
