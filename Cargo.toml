@@ -484,7 +484,7 @@ sysctl = "0.7.1"
 sysinfo = "0.29.11"
 tabled = "0.20.0"
 tar = "0.4.44"
-tempfile = "3.23.0"
+tempfile = "3.27.0"
 termcolor = "1.4.1"
 thiserror = "2.0.18"
 tiberius = { version = "0.12", default-features = false, features = ["chrono", "native-tls", "sql-browser-tokio", "tds73"] }
