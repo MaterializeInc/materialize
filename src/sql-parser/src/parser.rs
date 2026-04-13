@@ -2644,6 +2644,55 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Parse a single Iceberg partition field: `col`, `day(col)`, or `bucket(N, col)`.
+    fn parse_iceberg_partition_field(&mut self) -> Result<IcebergPartitionField, ParserError> {
+        let ident = self.parse_identifier()?;
+
+        if !self.consume_token(&Token::LParen) {
+            return Ok(IcebergPartitionField {
+                column: ident,
+                transform: IcebergPartitionTransform::Identity,
+            });
+        }
+
+        let name = ident.as_str().to_lowercase();
+        let transform = match name.as_str() {
+            "identity" => IcebergPartitionTransform::Identity,
+            "year" => IcebergPartitionTransform::Year,
+            "month" => IcebergPartitionTransform::Month,
+            "day" => IcebergPartitionTransform::Day,
+            "hour" => IcebergPartitionTransform::Hour,
+            "void" => IcebergPartitionTransform::Void,
+            "bucket" | "truncate" => {
+                let n = self.parse_literal_uint()?;
+                let n = u32::try_from(n).map_err(|_| {
+                    self.error(
+                        self.peek_prev_pos(),
+                        format!("{name} parameter must fit in u32, got {n}"),
+                    )
+                })?;
+                self.expect_token(&Token::Comma)?;
+                if name == "bucket" {
+                    IcebergPartitionTransform::Bucket(n)
+                } else {
+                    IcebergPartitionTransform::Truncate(n)
+                }
+            }
+            other => {
+                return Err(self.error(
+                    self.peek_prev_pos(),
+                    format!(
+                        "unknown Iceberg partition transform '{other}', \
+                         expected identity, year, month, day, hour, void, bucket, or truncate"
+                    ),
+                ));
+            }
+        };
+        let column = self.parse_identifier()?;
+        self.expect_token(&Token::RParen)?;
+        Ok(IcebergPartitionField { column, transform })
+    }
+
     fn parse_kafka_sink_config_option(
         &mut self,
     ) -> Result<KafkaSinkConfigOption<Raw>, ParserError> {
@@ -3854,10 +3903,20 @@ impl<'a> Parser<'a> {
             None
         };
 
+        let partition_by = if self.parse_keywords(&[PARTITION, BY]) {
+            self.expect_token(&Token::LParen)?;
+            let fields = self.parse_comma_separated(Parser::parse_iceberg_partition_field)?;
+            self.expect_token(&Token::RParen)?;
+            Some(fields)
+        } else {
+            None
+        };
+
         Ok(CreateSinkConnection::Iceberg {
             connection,
             aws_connection,
             key,
+            partition_by,
             options,
         })
     }

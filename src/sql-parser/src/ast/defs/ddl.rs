@@ -725,6 +725,72 @@ impl AstDisplay for IcebergSinkMode {
 }
 impl_display!(IcebergSinkMode);
 
+/// An Iceberg partition transform applied to a source column.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum IcebergPartitionTransform {
+    Identity,
+    Year,
+    Month,
+    Day,
+    Hour,
+    Void,
+    Bucket(u32),
+    Truncate(u32),
+}
+
+impl fmt::Display for IcebergPartitionTransform {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Identity => f.write_str("identity"),
+            Self::Year => f.write_str("year"),
+            Self::Month => f.write_str("month"),
+            Self::Day => f.write_str("day"),
+            Self::Hour => f.write_str("hour"),
+            Self::Void => f.write_str("void"),
+            Self::Bucket(_) => f.write_str("bucket"),
+            Self::Truncate(_) => f.write_str("truncate"),
+        }
+    }
+}
+
+/// A single field in a `PARTITION BY` clause for an Iceberg sink.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IcebergPartitionField {
+    pub column: Ident,
+    pub transform: IcebergPartitionTransform,
+}
+
+impl AstDisplay for IcebergPartitionField {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match &self.transform {
+            IcebergPartitionTransform::Identity => {
+                f.write_node(&self.column);
+            }
+            IcebergPartitionTransform::Bucket(n) => {
+                f.write_str("bucket(");
+                f.write_str(&n.to_string());
+                f.write_str(", ");
+                f.write_node(&self.column);
+                f.write_str(")");
+            }
+            IcebergPartitionTransform::Truncate(w) => {
+                f.write_str("truncate(");
+                f.write_str(&w.to_string());
+                f.write_str(", ");
+                f.write_node(&self.column);
+                f.write_str(")");
+            }
+            other => {
+                f.write_str(&other.to_string());
+                f.write_str("(");
+                f.write_node(&self.column);
+                f.write_str(")");
+            }
+        }
+    }
+}
+impl_display!(IcebergPartitionField);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum SubscribeOutput<T: AstInfo> {
     Diffs,
@@ -1563,6 +1629,7 @@ pub enum CreateSinkConnection<T: AstInfo> {
         connection: T::ItemName,
         aws_connection: T::ItemName,
         key: Option<SinkKey>,
+        partition_by: Option<Vec<IcebergPartitionField>>,
         options: Vec<IcebergSinkConfigOption<T>>,
     },
 }
@@ -1596,6 +1663,7 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 connection,
                 aws_connection,
                 key,
+                partition_by,
                 options,
             } => {
                 f.write_str("ICEBERG CATALOG CONNECTION ");
@@ -1610,6 +1678,11 @@ impl<T: AstInfo> AstDisplay for CreateSinkConnection<T> {
                 if let Some(key) = key.as_ref() {
                     f.write_str(" ");
                     f.write_node(key);
+                }
+                if let Some(fields) = partition_by {
+                    f.write_str(" PARTITION BY (");
+                    f.write_node(&display::comma_separated(fields));
+                    f.write_str(")");
                 }
             }
         }

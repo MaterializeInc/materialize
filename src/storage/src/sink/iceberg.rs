@@ -89,8 +89,8 @@ use iceberg::arrow::{
     RecordBatchPartitionSplitter, arrow_schema_to_schema, schema_to_arrow_schema,
 };
 use iceberg::spec::{
-    DataFile, FormatVersion, PartitionSpecRef, Snapshot, StructType, read_data_files_from_avro,
-    write_data_files_to_avro,
+    DataFile, FormatVersion, PartitionSpecRef, Snapshot, StructType, Transform,
+    UnboundPartitionSpec, read_data_files_from_avro, write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
@@ -128,7 +128,10 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::{IcebergSinkConnection, SinkEnvelope, StorageSinkDesc};
+use mz_storage_types::sinks::{
+    IcebergPartitionField, IcebergPartitionTransform, IcebergSinkConnection, SinkEnvelope,
+    StorageSinkDesc,
+};
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
@@ -883,12 +886,51 @@ async fn try_commit_batch(
     }
 }
 
+/// Convert storage partition fields to an Iceberg `UnboundPartitionSpec`.
+fn build_partition_spec(
+    schema: &Schema,
+    partition_by: &[IcebergPartitionField],
+) -> anyhow::Result<UnboundPartitionSpec> {
+    let mut builder = UnboundPartitionSpec::builder();
+    for field in partition_by {
+        let iceberg_field = schema
+            .as_struct()
+            .field_by_name(&field.column_name)
+            .with_context(|| {
+                format!(
+                    "partition column '{}' not found in Iceberg schema",
+                    field.column_name
+                )
+            })?;
+        let target_name = partition_field_name(&field.column_name, &field.transform);
+        let transform: Transform = (&field.transform).into();
+        builder = builder.add_partition_field(iceberg_field.id, target_name, transform)?;
+    }
+    Ok(builder.build())
+}
+
+/// Generate a partition field name (which appears in output paths) similar to what Spark would do.
+fn partition_field_name(column: &str, transform: &IcebergPartitionTransform) -> String {
+    match transform {
+        IcebergPartitionTransform::Identity => column.to_string(),
+        IcebergPartitionTransform::Year => format!("{column}_year"),
+        IcebergPartitionTransform::Month => format!("{column}_month"),
+        IcebergPartitionTransform::Day => format!("{column}_day"),
+        IcebergPartitionTransform::Hour => format!("{column}_hour"),
+        IcebergPartitionTransform::Void => format!("{column}_void"),
+        // Spark uses "{column}_bucket" and "{column}_trunc".
+        IcebergPartitionTransform::Bucket(n) => format!("{column}_bucket_{n}"),
+        IcebergPartitionTransform::Truncate(w) => format!("{column}_truncate_{w}"),
+    }
+}
+
 /// Load an existing Iceberg table or create it if it doesn't exist.
 async fn load_or_create_table(
     catalog: &dyn Catalog,
     namespace: String,
     table_name: String,
     schema: &Schema,
+    partition_by: &[IcebergPartitionField],
 ) -> anyhow::Result<iceberg::table::Table> {
     let namespace_ident = NamespaceIdent::new(namespace.clone());
     let table_ident = TableIdent::new(namespace_ident.clone(), table_name.clone());
@@ -896,8 +938,8 @@ async fn load_or_create_table(
     // Try to load the table first
     match catalog.load_table(&table_ident).await {
         Ok(table) => {
-            // Table exists, return it
             // TODO: Add proper schema evolution/validation to ensure compatibility
+            table_matches_partitions(&table, schema, partition_by)?;
             Ok(table)
         }
         Err(err) => {
@@ -909,12 +951,15 @@ async fn load_or_create_table(
                 // Table doesn't exist, create it
                 // Note: location is not specified, letting the catalog determine the default location
                 // based on its warehouse configuration
+                let partition_spec = if partition_by.is_empty() {
+                    None
+                } else {
+                    Some(build_partition_spec(schema, partition_by)?)
+                };
                 let table_creation = TableCreation::builder()
                     .name(table_name.clone())
                     .schema(schema.clone())
-                    // Use unpartitioned spec by default
-                    // TODO: Consider making partition spec configurable
-                    // .partition_spec(UnboundPartitionSpec::builder().build())
+                    .partition_spec_opt(partition_spec)
                     .build();
 
                 catalog
@@ -932,6 +977,57 @@ async fn load_or_create_table(
             }
         }
     }
+}
+
+/// Validate that the table's partition spec matches what the user specified.
+fn table_matches_partitions(
+    // The table we have (from Iceberg).
+    table: &iceberg::table::Table,
+    // The schema we want (from Materialize).
+    schema: &Schema,
+    // The partition schema we want (also from Materialize).
+    partition_by: &[IcebergPartitionField],
+) -> anyhow::Result<()> {
+    let spec = table.metadata().default_partition_spec();
+    if partition_by.is_empty() {
+        anyhow::ensure!(
+            spec.is_unpartitioned(),
+            "Iceberg table is partitioned but sink has no PARTITION BY clause"
+        );
+        return Ok(());
+    }
+
+    anyhow::ensure!(
+        !spec.is_unpartitioned(),
+        "Iceberg table is unpartitioned but sink specifies PARTITION BY"
+    );
+
+    // Build what we expect and compare field-by-field.
+    let expected = build_partition_spec(schema, partition_by)?;
+    let expected_bound = expected.bind(schema.clone())?;
+    let actual_fields = spec.fields();
+    let expected_fields = expected_bound.fields();
+
+    anyhow::ensure!(
+        actual_fields.len() == expected_fields.len(),
+        "Iceberg table has {} partition fields but sink specifies {}",
+        actual_fields.len(),
+        expected_fields.len(),
+    );
+
+    for (actual, expected) in actual_fields.iter().zip_eq(expected_fields.iter()) {
+        anyhow::ensure!(
+            actual.source_id == expected.source_id && actual.transform == expected.transform,
+            "Iceberg table has partition field {}=(column {}, {:?}), sink specifies (column {}, {:?})",
+            actual.name,
+            actual.source_id,
+            actual.transform,
+            expected.source_id,
+            expected.transform,
+        );
+    }
+
+    Ok(())
 }
 
 /// Find the most recent Materialize frontier from Iceberg snapshots.
@@ -1164,6 +1260,7 @@ where
                 connection.namespace.clone(),
                 connection.table.clone(),
                 initial_schema.as_ref(),
+                &connection.partition_by,
             )
             .await?;
             debug!(
