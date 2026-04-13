@@ -47,7 +47,10 @@ import {
   UtilizationGraph,
 } from "./ClusterOverview/UtilizationGraph";
 import { ClusterParams } from "./ClusterRoutes";
-import { CLUSTERS_FETCH_ERROR_MESSAGE } from "./constants";
+import {
+  CLUSTER_METRICS_UNAVAILABLE_MESSAGE,
+  CLUSTERS_FETCH_ERROR_MESSAGE,
+} from "./constants";
 import LargestMaintainedQueries from "./LargestMaintainedQueries";
 import { useReplicaUtilizationHistory } from "./queries";
 
@@ -127,6 +130,18 @@ const ClusterOverview = () => {
     ? TOTAL_GRAPH_HEIGHT_PX * 2 + GRAPH_SPACING
     : TOTAL_GRAPH_HEIGHT_PX;
 
+  // If there are no metrics at all (rows are all zeros/nulls),
+  // the cluster may be misconfigured (issue with metrics collection),
+  // so we show an error message in that case.
+  const clusterHasNoMetrics =
+    (graphData ?? []).length &&
+    graphData?.every((d) =>
+      d.data.every(
+        (point) =>
+          !point.cpuPercent && !point.memoryPercent && !point.diskPercent,
+      ),
+    );
+
   return (
     <MainContentContainer mt="10">
       <VStack spacing="6">
@@ -180,6 +195,8 @@ const ClusterOverview = () => {
             >
               <Spinner data-testid="loading-spinner" />
             </Flex>
+          ) : clusterHasNoMetrics ? (
+            <ErrorBox message={CLUSTER_METRICS_UNAVAILABLE_MESSAGE} />
           ) : data ? (
             <Grid
               gridTemplateColumns={{
