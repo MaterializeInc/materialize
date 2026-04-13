@@ -6528,7 +6528,7 @@ dependencies = [
 name = "mz-expr-derive-impl"
 version = "0.0.0"
 dependencies = [
- "darling 0.20.11",
+ "darling 0.23.0",
  "insta",
  "mz-ore",
  "prettyplease",

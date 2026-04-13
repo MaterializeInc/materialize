@@ -321,7 +321,7 @@ csv-async = { version = "1.3.1", features = ["tokio"] }
 csv-core = "0.1.13"
 ctor = "0.6.3"
 custom-labels = "0.4.6"
-darling = "0.20.11"
+darling = "0.23.0"
 datadriven = "0.9.0"
 deadpool-postgres = "0.10.3"
 dec = "0.4.9"
