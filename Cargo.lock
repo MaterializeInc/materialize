@@ -1199,7 +1199,7 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-util",
  "itoa",
  "matchit",
@@ -4135,9 +4135,9 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.8.1"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
+checksum = "6299f016b246a94207e63da54dbe807655bf9e00044f73ded42c3ac5305fbcca"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -4150,7 +4150,6 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "pin-utils",
  "smallvec",
  "tokio",
  "want",
@@ -4163,7 +4162,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "527d4d619ca2c2aafa31ec139a3d1d60bf557bf7578a1f20f743637eccd9ca19"
 dependencies = [
  "http 1.4.0",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-util",
  "linked_hash_set",
  "once_cell",
@@ -4183,7 +4182,7 @@ checksum = "2d191583f3da1305256f22463b9bb0471acad48a4e534a5218b9963e9c1f59b2"
 dependencies = [
  "futures-util",
  "http 1.4.0",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-util",
  "rustls",
  "rustls-pki-types",
@@ -4210,7 +4209,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3203a961e5c83b6f5498933e78b6b263e208c197b63e9c6c53cc82ffd3f63793"
 dependencies = [
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-util",
  "pin-project-lite",
  "tokio",
@@ -4238,7 +4237,7 @@ checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
 dependencies = [
  "bytes",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-util",
  "native-tls",
  "tokio",
@@ -4258,7 +4257,7 @@ dependencies = [
  "futures-util",
  "http 1.4.0",
  "http-body 1.0.1",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "ipnet",
  "libc",
  "percent-encoding",
@@ -4810,7 +4809,7 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-openssl",
  "hyper-timeout 0.5.1",
  "hyper-util",
@@ -5456,7 +5455,7 @@ dependencies = [
  "clap",
  "csv",
  "dirs",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "indicatif",
  "maplit",
  "mz-build-info",
@@ -5757,7 +5756,7 @@ dependencies = [
  "domain",
  "futures",
  "humantime",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-openssl",
  "hyper-util",
  "jsonwebtoken",
@@ -5936,7 +5935,7 @@ name = "mz-ccsr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-util",
  "mz-build-tools",
  "mz-ore",
@@ -6041,7 +6040,7 @@ dependencies = [
  "custom-labels",
  "fail",
  "futures",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-util",
  "mz-alloc",
  "mz-alloc-default",
@@ -6349,7 +6348,7 @@ dependencies = [
  "http 1.4.0",
  "http-body-util",
  "humantime",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-openssl",
  "hyper-tls 0.6.0",
  "hyper-util",
@@ -6667,7 +6666,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
@@ -6691,7 +6690,7 @@ dependencies = [
  "axum-extra",
  "headers",
  "http 1.4.0",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "include_dir",
  "mz-ore",
  "prometheus",
@@ -10488,7 +10487,7 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-rustls",
  "hyper-tls 0.6.0",
  "hyper-util",
@@ -10542,7 +10541,7 @@ dependencies = [
  "futures",
  "getrandom 0.2.16",
  "http 1.4.0",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "reqwest",
  "reqwest-middleware",
  "retry-policies",
@@ -12314,7 +12313,7 @@ dependencies = [
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.8.1",
+ "hyper 1.9.0",
  "hyper-timeout 0.5.1",
  "hyper-util",
  "percent-encoding",
