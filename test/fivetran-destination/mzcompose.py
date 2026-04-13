@@ -69,9 +69,11 @@ SERVICES = [
     Testdrive(
         no_reset=True,
         default_timeout="5s",
+        fivetran_destination=True,
+        fivetran_destination_files_path="/share/tmp",
     ),
     FivetranDestination(
-        volumes_extra=["./data:/data"],
+        volumes_extra=["./data:/data", "tmp:/share/tmp"],
     ),
     FivetranDestinationTester(
         destination_host="fivetran-destination",

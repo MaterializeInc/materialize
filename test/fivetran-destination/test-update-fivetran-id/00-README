@@ -1,0 +1,6 @@
+Reproduces a bug where update_files uses column.primary_key directly from the
+protobuf instead of ColumnMetadata::is_primary. This causes _fivetran_id
+(with primary_key=false) to be placed in the SET clause rather than the WHERE
+clause during updates, while replace_files and delete_files correctly treat it
+as a primary key. The result is that updates match too broadly and can modify
+wrong rows when duplicate natural PKs exist with distinct _fivetran_id values.
