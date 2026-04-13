@@ -41,8 +41,12 @@ class SqlServer(Service):
                     *environment_extra,
                 ],
                 "healthcheck": {
-                    "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q 'SELECT 1 FROM msdb.dbo.sysjobs'",
-                    "interval": "1s",
+                    # Verify all system databases are ONLINE before declaring
+                    # healthy. Without this, the container can be marked
+                    # healthy while msdb is still recovering, causing error
+                    # 904 ("cannot be autostarted during server shutdown or
+                    # startup").
+                    "test": f"/opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -P '{sa_password}' -Q \"SET NOCOUNT ON; IF EXISTS (SELECT 1 FROM sys.databases WHERE state_desc != 'ONLINE') RAISERROR('not ready', 16, 1)\"",
                     # Recovering can take a while
                     "start_period": "300s",
                 },
