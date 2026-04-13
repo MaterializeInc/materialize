@@ -110,6 +110,10 @@ impl<T: timely::progress::Timestamp + TotalOrder> CommandHistory<T> {
                 CancelOneshotIngestion(uuid) => {
                     final_oneshot_ingestions.remove(&uuid);
                 }
+                RestartDataflow(_) => {
+                    // RestartDataflow is a transient command; don't replay
+                    // it during reconciliation.
+                }
             }
         }
 

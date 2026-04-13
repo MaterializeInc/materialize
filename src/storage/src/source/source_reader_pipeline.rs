@@ -63,6 +63,7 @@ use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{Semaphore, watch};
 use tokio_stream::wrappers::WatchStream;
+use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate};
@@ -120,6 +121,11 @@ pub struct RawSourceCreationConfig {
     // A semaphore that should be acquired by async operators in order to signal that upstream
     // operators should slow down.
     pub busy_signal: Arc<Semaphore>,
+    /// A cancellation token that upstream source operators should set when they encounter a
+    /// transient error and are about to exit. This prevents the remap operator from minting
+    /// an empty-frontier binding (which would permanently seal the remap shard) when the
+    /// probe channel closes due to the error.
+    pub transient_error_token: CancellationToken,
 }
 
 /// Reduced version of [`RawSourceCreationConfig`] that is used when rendering
@@ -202,6 +208,7 @@ where
         config.clone(),
         probed_upper_rx,
         timestamp_desc,
+        config.transient_error_token.clone(),
     );
     // Need to broadcast the remap changes to all workers.
     let remap_collection = remap_collection.inner.broadcast().as_collection();
@@ -404,6 +411,7 @@ fn remap_operator<G, FromTime>(
     config: RawSourceCreationConfig,
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     remap_relation_desc: RelationDesc,
+    transient_error_token: CancellationToken,
 ) -> (VecCollection<G, FromTime, Diff>, PressOnDropButton)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
@@ -428,6 +436,7 @@ where
         config: _,
         remap_collection_id,
         busy_signal: _,
+        transient_error_token: _,
     } = config;
 
     let read_only_rx = storage_state.read_only_rx.clone();
@@ -503,13 +512,29 @@ where
                 .await
                 .map(|probe| (*probe).clone())
                 .unwrap_or_else(|_| {
-                    Some(Probe {
-                        probe_ts: now_fn().into(),
-                        upstream_frontier: Antichain::new(),
-                    })
+                    // The probe channel closed. Check whether this is due to a transient
+                    // error (token is cancelled) or normal source completion.
+                    if transient_error_token.is_cancelled() {
+                        // A transient error caused the upstream operators to exit.
+                        // We must NOT mint a binding for the empty frontier, as that
+                        // would permanently seal the remap shard. Instead, exit the
+                        // minting loop and drop capabilities at the current position.
+                        // The controller will restart the dataflow.
+                        None
+                    } else {
+                        // Normal completion: the source is done. Mint a final binding
+                        // at the empty frontier to seal the remap shard.
+                        Some(Probe {
+                            probe_ts: now_fn().into(),
+                            upstream_frontier: Antichain::new(),
+                        })
+                    }
                 });
 
-            let probe = new_probe.expect("known to be Some");
+            // If the probe is None, a transient error occurred. Exit without sealing.
+            let Some(probe) = new_probe else {
+                return;
+            };
             prev_probe_ts = Some(probe.probe_ts);
 
             let binding_ts = probe.probe_ts;

@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::collection_mgmt::{
     AppendOnlyIntrospectionConfig, CollectionManagerKind, DifferentialIntrospectionConfig,
@@ -125,6 +125,39 @@ impl PendingOneshotIngestion {
     }
 }
 
+/// Tracks the state of a pending dataflow restart requested by a worker.
+#[derive(Debug)]
+struct RestartState {
+    /// When the halt request was received.
+    requested_at: Instant,
+    /// Number of restart attempts so far for this dataflow.
+    attempt_count: u32,
+    /// How long to wait before the next restart attempt.
+    next_backoff: Duration,
+}
+
+impl RestartState {
+    fn new() -> Self {
+        Self {
+            requested_at: Instant::now(),
+            attempt_count: 0,
+            next_backoff: Duration::from_secs(1),
+        }
+    }
+
+    /// Returns true if enough time has elapsed to attempt a restart.
+    fn ready(&self) -> bool {
+        self.requested_at.elapsed() >= self.next_backoff
+    }
+
+    /// Advance the backoff for the next attempt (exponential, capped at 60s).
+    fn advance_backoff(&mut self) {
+        self.attempt_count += 1;
+        self.requested_at = Instant::now();
+        self.next_backoff = Duration::min(self.next_backoff * 2, Duration::from_secs(60));
+    }
+}
+
 /// A storage controller for a storage instance.
 #[derive(Derivative)]
 #[derivative(Debug)]
@@ -164,6 +197,9 @@ pub struct Controller<T: Timestamp + Lattice + Codec64 + From<EpochMillis> + Tim
     txns_read: TxnsRead<T>,
     txns_metrics: Arc<TxnMetrics>,
     stashed_responses: Vec<(Option<ReplicaId>, StorageResponse<T>)>,
+    /// Dataflows that have requested a restart due to transient errors.
+    /// The controller applies backoff before issuing `RestartDataflow` commands.
+    pending_restarts: BTreeMap<GlobalId, RestartState>,
     /// Channel for sending table handle drops.
     #[derivative(Debug = "ignore")]
     pending_table_handle_drops_tx: mpsc::UnboundedSender<GlobalId>,
@@ -2334,6 +2370,10 @@ where
                     // find something better.
                     match status_update.status {
                         Status::Running => {
+                            // Dataflow is running successfully — clear any
+                            // pending restart state.
+                            self.pending_restarts.remove(&status_update.id);
+
                             let collection = self.collections.get_mut(&status_update.id);
                             match collection {
                                 Some(collection) => {
@@ -2398,6 +2438,18 @@ where
                     }
                     status_updates.push(status_update);
                 }
+                (_replica_id, StorageResponse::HaltRequest { id, reason }) => {
+                    info!(
+                        %id,
+                        %reason,
+                        "Received halt request from worker, scheduling restart with backoff"
+                    );
+                    // Only insert if not already pending — avoid resetting backoff
+                    // on duplicate halt requests for the same dataflow.
+                    self.pending_restarts
+                        .entry(id)
+                        .or_insert_with(RestartState::new);
+                }
                 (_replica_id, StorageResponse::StagedBatches(batches)) => {
                     for (ingestion_id, batches) in batches {
                         match self.pending_oneshot_ingestions.remove(&ingestion_id) {
@@ -2423,6 +2475,38 @@ where
         }
 
         self.record_status_updates(status_updates);
+
+        // Process pending restarts: issue RestartDataflow commands for
+        // dataflows whose backoff has elapsed.
+        let ready_restarts: Vec<GlobalId> = self
+            .pending_restarts
+            .iter()
+            .filter_map(|(id, state)| state.ready().then_some(*id))
+            .collect();
+        for id in ready_restarts {
+            let state = self.pending_restarts.get_mut(&id).expect("known to exist");
+            state.advance_backoff();
+
+            // Find the instance that owns this dataflow and send the restart command.
+            let instance_id = self.collections.get(&id).and_then(|c| match &c.extra_state {
+                CollectionStateExtra::Ingestion(ingestion) => Some(ingestion.instance_id),
+                CollectionStateExtra::Export(export) => Some(export.cluster_id()),
+                CollectionStateExtra::None => None,
+            });
+            if let Some(instance_id) = instance_id {
+                if let Some(instance) = self.instances.get_mut(&instance_id) {
+                    info!(
+                        %id,
+                        attempt = state.attempt_count,
+                        "Issuing RestartDataflow command to worker"
+                    );
+                    instance.send(StorageCommand::RestartDataflow(id));
+                }
+            } else {
+                // Collection no longer tracked; clean up the pending restart.
+                self.pending_restarts.remove(&id);
+            }
+        }
 
         // Process dropped tables in a single batch.
         let mut dropped_table_ids = Vec::new();
@@ -2664,6 +2748,7 @@ where
             instance_response_tx: _,
             instance_response_rx: _,
             persist_warm_task: _,
+            pending_restarts: _,
         } = self;
 
         let collections: BTreeMap<_, _> = collections
@@ -2843,6 +2928,7 @@ where
             txns_read,
             txns_metrics,
             stashed_responses: vec![],
+            pending_restarts: BTreeMap::new(),
             pending_table_handle_drops_tx,
             pending_table_handle_drops_rx,
             pending_oneshot_ingestions: BTreeMap::default(),

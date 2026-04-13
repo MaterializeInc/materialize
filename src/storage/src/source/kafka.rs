@@ -416,6 +416,11 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
             let consumer = match consumer {
                 Ok(consumer) => Arc::new(consumer),
                 Err(e) => {
+                    // Signal transient error before emitting the halting health
+                    // status. This ensures the remap operator will not seal the
+                    // remap shard when the probe channel closes.
+                    config.transient_error_token.cancel();
+
                     let update = HealthStatusUpdate::halting(
                         format!(
                             "failed creating kafka reader consumer: {}",
@@ -449,11 +454,9 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
                             },
                         );
                     }
-                    // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
-                    // Returning would incorrectly present to the remap operator as progress to the
-                    // empty frontier which would be incorrectly recorded to the remap shard.
-                    std::future::pending::<()>().await;
-                    unreachable!("pending future never returns");
+                    // The transient error token is set, so the remap operator
+                    // will not seal the remap shard when this operator exits.
+                    return;
                 }
             };
 
@@ -1615,6 +1618,11 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
         let consumer = match consumer {
             Ok(consumer) => consumer,
             Err(e) => {
+                // Signal transient error before emitting the halting health
+                // status. This ensures the remap operator will not seal the
+                // remap shard when the probe channel closes.
+                config.transient_error_token.cancel();
+
                 let msg = format!(
                     "failed creating kafka metadata consumer: {}",
                     e.display_with_causes()
@@ -1628,11 +1636,9 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
                 let timestamp = (config.now_fn)().into();
                 metadata_output.give(&metadata_cap, (timestamp, error));
 
-                // IMPORTANT: wedge forever until the `SuspendAndRestart` is processed.
-                // Returning would incorrectly present to the remap operator as progress to the
-                // empty frontier which would be incorrectly recorded to the remap shard.
-                std::future::pending::<()>().await;
-                unreachable!("pending future never returns");
+                // The transient error token is set, so the remap operator
+                // will not seal the remap shard when this operator exits.
+                return;
             }
         };
 
