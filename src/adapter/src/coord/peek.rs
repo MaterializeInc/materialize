@@ -89,17 +89,25 @@ pub enum PeekResponseUnary {
 }
 
 #[derive(Clone, Debug)]
-pub struct PeekDataflowPlan<T = mz_repr::Timestamp> {
-    pub(crate) desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+pub struct PeekDataflowPlan {
+    pub(crate) desc: DataflowDescription<
+        mz_compute_types::plan::Plan<mz_repr::Timestamp>,
+        (),
+        mz_repr::Timestamp,
+    >,
     pub(crate) id: GlobalId,
     key: Vec<MirScalarExpr>,
     permutation: Vec<usize>,
     thinned_arity: usize,
 }
 
-impl<T> PeekDataflowPlan<T> {
+impl PeekDataflowPlan {
     pub fn new(
-        desc: DataflowDescription<mz_compute_types::plan::Plan<T>, (), T>,
+        desc: DataflowDescription<
+            mz_compute_types::plan::Plan<mz_repr::Timestamp>,
+            (),
+            mz_repr::Timestamp,
+        >,
         id: GlobalId,
         typ: &SqlRelationType,
     ) -> Self {
@@ -392,10 +400,10 @@ pub struct PlannedPeek {
 
 /// Possible ways in which the coordinator could produce the result for a goal view.
 #[derive(Clone, Debug)]
-pub enum PeekPlan<T = mz_repr::Timestamp> {
+pub enum PeekPlan {
     FastPath(FastPathPlan),
     /// The view must be installed as a dataflow and then read.
-    SlowPath(PeekDataflowPlan<T>),
+    SlowPath(PeekDataflowPlan),
 }
 
 /// Convert `mfp` to an executable, non-temporal plan.
@@ -1224,7 +1232,7 @@ impl crate::coord::Coordinator {
     /// the necessary PlannedPeek structure.)
     pub(crate) async fn implement_slow_path_peek(
         &mut self,
-        dataflow_plan: PeekDataflowPlan<mz_repr::Timestamp>,
+        dataflow_plan: PeekDataflowPlan,
         determination: TimestampDetermination<mz_repr::Timestamp>,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
