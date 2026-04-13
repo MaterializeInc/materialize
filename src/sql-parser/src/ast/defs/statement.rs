@@ -2797,6 +2797,7 @@ impl_display_t!(AlterRetainHistoryStatement);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AlterObjectSwapStatement {
     pub object_type: ObjectType,
+    pub if_exists: bool,
     pub name_a: UnresolvedObjectName,
     pub name_b: Ident,
 }
@@ -2807,6 +2808,9 @@ impl AstDisplay for AlterObjectSwapStatement {
 
         f.write_node(&self.object_type);
         f.write_str(" ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
         f.write_node(&self.name_a);
 
         f.write_str(" SWAP WITH ");
