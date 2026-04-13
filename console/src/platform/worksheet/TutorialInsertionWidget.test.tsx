@@ -83,7 +83,8 @@ describe("TutorialInsertionWidget", () => {
         const { queries: requestQueries }: ExtendedRequest = body;
         if (
           requestQueries.length === 1 &&
-          requestQueries[0].query === `INSERT INTO "known_flippers" VALUES($1)`
+          requestQueries[0].query ===
+            `INSERT INTO "materialize"."public"."known_flippers" VALUES($1)`
         ) {
           return HttpResponse.json({
             results: [
