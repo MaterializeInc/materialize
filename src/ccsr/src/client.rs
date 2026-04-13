@@ -546,7 +546,7 @@ impl From<UnhandledError> for GetSubjectConfigError {
         match err {
             UnhandledError::Transport(err) => GetSubjectConfigError::Transport(err),
             UnhandledError::Api { code, message } => match code {
-                404 => GetSubjectConfigError::SubjectNotFound,
+                40401 => GetSubjectConfigError::SubjectNotFound,
                 40408 => GetSubjectConfigError::SubjectCompatibilityLevelNotSet,
                 _ => GetSubjectConfigError::Server { code, message },
             },
