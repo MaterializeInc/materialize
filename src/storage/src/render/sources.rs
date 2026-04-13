@@ -42,7 +42,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::decode::{render_decode_cdcv2, render_decode_delimited};
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
-use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
+use crate::source::types::{DecodeResult, SourceOutput, SourceRender, SourceTaskOutputs};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::{UpsertKey, UpsertValue};
 
@@ -145,6 +145,130 @@ where
         needed_tokens.extend(extra_tokens);
 
         // Flatten the error collections.
+        let err_collection = match error_collections.len() {
+            0 => err_stream,
+            _ => err_stream.concatenate(error_collections),
+        };
+
+        outputs.insert(export_id, (ok, err_collection));
+
+        health_streams.extend(health_stream.into_iter().map(|s| s.leave()));
+    }
+    (outputs, health_streams, needed_tokens)
+}
+
+/// Renders a source that runs as an async task, communicating via channels.
+///
+/// This parallels [`render_source`] but uses [`source::create_raw_source_from_task`] instead of
+/// [`source::create_raw_source`]. The source's async task is already spawned by the caller and
+/// its channel handles are passed in as `task_outputs`.
+pub fn render_task_source<'g, G, FromTime>(
+    scope: &mut Child<'g, G, mz_repr::Timestamp>,
+    dataflow_debug_name: &String,
+    description: IngestionDescription<CollectionMetadata>,
+    resume_stream: StreamVec<Child<'g, G, mz_repr::Timestamp>, ()>,
+    storage_state: &crate::storage_state::StorageState,
+    base_source_config: RawSourceCreationConfig,
+    task_outputs: SourceTaskOutputs<FromTime>,
+    timestamp_desc: mz_repr::RelationDesc,
+    resume_tx: tokio::sync::watch::Sender<Antichain<FromTime>>,
+) -> (
+    BTreeMap<
+        GlobalId,
+        (
+            VecCollection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
+            VecCollection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
+        ),
+    >,
+    Vec<StreamVec<G, HealthStatusMessage>>,
+    Vec<PressOnDropButton>,
+)
+where
+    G: Scope<Timestamp = ()>,
+    FromTime: SourceTimestamp + Sync,
+{
+    let mut needed_tokens = Vec::new();
+
+    tracing::warn!("render_task_source: ENTERED for {}", base_source_config.id);
+
+    // Rehydration start signal — same pattern as render_source.
+    let (starter, mut start_signal) = tokio::sync::mpsc::channel::<()>(1);
+    #[allow(unused_mut)]
+    let _start_signal = async move {
+        let _ = start_signal.recv().await;
+    };
+
+    // Extract health_rx before passing the rest to create_raw_source_from_task.
+    let SourceTaskOutputs {
+        data_rx,
+        probe_rx,
+        health_rx,
+    } = task_outputs;
+    let task_outputs_for_pipeline = crate::source::types::SourceTaskOutputs {
+        data_rx,
+        probe_rx,
+        health_rx: {
+            // Create a dummy health_rx — health is handled here instead.
+            let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            rx
+        },
+    };
+
+    let (exports, source_tokens) = source::create_raw_source_from_task(
+        scope,
+        storage_state,
+        resume_stream,
+        &base_source_config,
+        task_outputs_for_pipeline,
+        timestamp_desc,
+        resume_tx,
+    );
+
+    needed_tokens.extend(source_tokens);
+
+    // Surface health messages from the task channel as a timely stream.
+    let mut health_builder = mz_timely_util::builder_async::OperatorBuilder::new(
+        "TaskHealthBridge".to_string(),
+        scope.parent.clone(),
+    );
+    let (health_output, health_stream) = health_builder.new_output::<CapacityContainerBuilder<_>>();
+    let health_button = health_builder.build(move |mut caps| async move {
+        let mut health_rx = health_rx;
+        let cap = caps.pop().expect("one capability");
+        while let Some(msg) = health_rx.recv().await {
+            health_output.give(&cap, msg);
+        }
+    });
+    needed_tokens.push(health_button.press_on_drop());
+
+    let mut health_streams: Vec<StreamVec<G, HealthStatusMessage>> = vec![health_stream];
+    health_streams.reserve(exports.len());
+
+    let mut outputs = BTreeMap::new();
+    for (export_id, export) in exports {
+        type CB<C> = CapacityContainerBuilder<C>;
+        let (ok_stream, err_stream) =
+            export.map_fallible::<CB<_>, CB<_>, _, _, _>("export-demux-ok-err", |r| r);
+
+        let mut error_collections = Vec::new();
+
+        let data_config = base_source_config.source_exports[&export_id]
+            .data_config
+            .clone();
+        let (ok, extra_tokens, health_stream) = render_source_stream(
+            scope,
+            dataflow_debug_name,
+            export_id,
+            ok_stream,
+            data_config,
+            &description,
+            &mut error_collections,
+            storage_state,
+            &base_source_config,
+            starter.clone(),
+        );
+        needed_tokens.extend(extra_tokens);
+
         let err_collection = match error_collections.len() {
             0 => err_stream,
             _ => err_stream.concatenate(error_collections),

@@ -20,6 +20,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
 use differential_dataflow::Collection;
+use mz_ore::task::AbortOnDropHandle;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
@@ -29,11 +30,12 @@ use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, ScopeParent, StreamVec};
 use timely::progress::Antichain;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc, watch};
 use tokio_util::sync::PollSemaphore;
 
 use crate::healthcheck::{HealthStatusMessage, StatusNamespace};
 use crate::source::RawSourceCreationConfig;
+use crate::source::channel_reclock::SourceBatch;
 
 /// An update produced by implementors of `SourceRender` that presents an _aggregated_
 /// description of the number of _offset_committed_ and _offset_known_ for the given
@@ -96,6 +98,55 @@ pub trait SourceRender {
         StreamVec<G, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     );
+}
+
+/// The data type sent through the source task's data channel.
+///
+/// Each update carries the export id, the result (message or error), and the original source
+/// timestamp so it can be embedded into [`SourceOutput`] after reclocking.
+pub type SourceTaskUpdate<FromTime> = (GlobalId, Result<SourceMessage, DataflowError>, FromTime);
+
+/// The output channels from a [`SourceTask`].
+///
+/// These are the channel handles the dataflow uses to receive data, probes, and health updates
+/// from the async source task.
+pub struct SourceTaskOutputs<FromTime> {
+    /// Batched source data with frontier updates.
+    pub data_rx: mpsc::UnboundedReceiver<SourceBatch<SourceTaskUpdate<FromTime>, FromTime, Diff>>,
+    /// Upstream frontier probes for driving remap binding minting.
+    pub probe_rx: watch::Receiver<Option<Probe<FromTime>>>,
+    /// Health status updates.
+    pub health_rx: mpsc::UnboundedReceiver<HealthStatusMessage>,
+}
+
+/// The input channels to a [`SourceTask`].
+///
+/// These are the channel handles the source task uses to receive feedback from the dataflow.
+pub struct SourceTaskInputs<FromTime> {
+    /// Resume upper feedback from the dataflow. The source task can use this to:
+    /// 1. Apply backpressure (pause when too far ahead of committed data)
+    /// 2. Acknowledge progress upstream (e.g. PostgreSQL standby status updates)
+    pub resume_rx: watch::Receiver<Antichain<FromTime>>,
+}
+
+/// Describes a source that runs as an async task outside of timely.
+///
+/// Unlike [`SourceRender`] which produces timely collections at `FromTime`, a `SourceTask`
+/// communicates via tokio channels. The timely dataflow only operates at `mz_repr::Timestamp`
+/// — the `FromTime` ↔ `IntoTime` translation happens via [`channel_reclock`](crate::source::channel_reclock).
+pub trait SourceTask {
+    type Time: SourceTimestamp;
+    const STATUS_NAMESPACE: StatusNamespace;
+
+    /// Spawns the source as an async task.
+    ///
+    /// Returns channel handles for the dataflow to connect to and an abort handle that will
+    /// cancel the task when dropped.
+    fn spawn(
+        self,
+        config: RawSourceCreationConfig,
+        resume_rx: watch::Receiver<Antichain<Self::Time>>,
+    ) -> (SourceTaskOutputs<Self::Time>, AbortOnDropHandle<()>);
 }
 
 /// Source-agnostic wrapper for messages. Each source must implement a
