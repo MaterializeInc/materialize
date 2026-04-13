@@ -11,14 +11,13 @@ import { prettyStr } from "@materializeinc/sql-pretty";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { quoteIdentifier } from "~/api/materialize";
+import { apiClient } from "~/api/apiClient";
 import { cancelQuery } from "~/api/materialize/cancelQuery";
-import { MaterializeWebsocket } from "~/api/materialize/MaterializeWebsocket";
-import { type Column, MzDataType } from "~/api/materialize/types";
+import { MzDataType } from "~/api/materialize/types";
 import { useCurrentEnvironmentHttpAddress } from "~/store/environments";
 
+import type { WorkerToMainMessage } from "./executionWorkerTypes";
 import {
-  type QueryResult,
   worksheetCancelAtom,
   worksheetExecuteAtom,
   worksheetExecutionAtom,
@@ -80,7 +79,15 @@ interface SocketState {
 }
 
 /**
- * Manages a WebSocket connection for executing one-shot SQL queries.
+ * Manages a Web Worker that owns a WebSocket connection for executing
+ * one-shot SQL queries.
+ *
+ * Timing is measured inside the worker as time-to-first-response
+ * (send → first `Rows` message) via `performance.now()`, excluding both
+ * main-thread jitter and data transfer time.
+ *
+ * Rows are accumulated in the worker and sent in a single `postMessage`
+ * on `CommandComplete`, avoiding per-row structured clones.
  *
  * Row-returning queries (SELECT, SHOW, etc.) update `worksheetResultAtom`.
  * Other statements (INSERT, CREATE, etc.) update `worksheetInlineResultsAtom`
@@ -98,16 +105,11 @@ export function useExecution() {
   const setInlineResults = useSetAtom(worksheetInlineResultsAtom);
   const setSession = useSetAtom(worksheetSessionAtom);
 
-  const socketRef = useRef<MaterializeWebsocket | null>(null);
+  const workerRef = useRef<Worker | null>(null);
   const sessionRef = useRef(session);
   const connectionIdRef = useRef<string | null>(null);
-  const currentQueryRef = useRef<{
-    kind: string;
-    offset: number;
-    columns: Column[];
-    rows: unknown[][];
-    startTime: number;
-  } | null>(null);
+  /** Tracks the kind and offset of the currently executing statement. */
+  const currentQueryRef = useRef<{ kind: string; offset: number } | null>(null);
 
   const [socketState, setSocketState] = useState<SocketState>({
     readyForQuery: false,
@@ -115,7 +117,7 @@ export function useExecution() {
     isConnected: false,
   });
 
-  // Keep sessionRef in sync so the socket constructor reads current values
+  // Keep sessionRef in sync so the execute callback reads current values
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
@@ -140,193 +142,213 @@ export function useExecution() {
     };
   }, [setExecution, setResult, setInlineResults, setSession, setNotice]);
 
-  // Initialize socket — only recreate when httpAddress changes
+  // Initialize worker — only recreate when httpAddress changes
   useEffect(() => {
     const currentSession = sessionRef.current;
-    const socket = new MaterializeWebsocket({
-      httpAddress,
+    const worker = new Worker(
+      new URL("./execution.worker.ts", import.meta.url),
+      { type: "module" },
+    );
+
+    worker.postMessage({
+      type: "connect",
+      url: `${apiClient.mzWebsocketUrlScheme}://${httpAddress}/api/experimental/sql`,
+      authConfig: apiClient.getWsAuthConfig(),
       sessionVariables: {
         cluster: currentSession.cluster,
         database: currentSession.database,
         search_path: currentSession.searchPath,
       },
-      onMessage: (result) => {
-        const setters = settersRef.current;
-        switch (result.type) {
-          case "BackendKeyData":
-            if (result.payload.conn_id) {
-              connectionIdRef.current = `${result.payload.conn_id}`;
+    });
+
+    worker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
+      const msg = event.data;
+      const setters = settersRef.current;
+
+      switch (msg.type) {
+        case "stateChange":
+          setters.setSocketState((prev) => {
+            if (
+              prev.readyForQuery === msg.readyForQuery &&
+              prev.error === msg.error &&
+              prev.isConnected === msg.isConnected
+            ) {
+              return prev;
             }
-            break;
+            return {
+              readyForQuery: msg.readyForQuery,
+              error: msg.error,
+              isConnected: msg.isConnected,
+            };
+          });
+          break;
 
-          case "CommandStarting":
-            if (result.payload.is_streaming) {
-              setters.setExecution((prev) => {
-                if (prev.status === "running") {
-                  return {
-                    status: "streaming",
-                    statementIndex: prev.statementIndex,
-                  };
-                }
-                return prev;
-              });
-            }
-            break;
+        case "backendKeyData":
+          connectionIdRef.current = `${msg.connId}`;
+          break;
 
-          case "Rows":
-            if (currentQueryRef.current) {
-              currentQueryRef.current.columns = result.payload.columns;
-            }
-            break;
-
-          case "Row":
-            if (currentQueryRef.current) {
-              currentQueryRef.current.rows.push(result.payload);
-            }
-            break;
-
-          case "CommandComplete": {
-            // Skip CommandComplete for SET statements sent as part of
-            // multi-query execution (e.g. SET cluster before EXPLAIN ANALYZE).
-            if (result.payload === "SET" || result.payload === "RESET") break;
-
-            const query = currentQueryRef.current;
-            if (query) {
-              const durationMs = Date.now() - query.startTime;
-              if (SHOW_CREATE_KINDS.has(query.kind)) {
-                const objectName = String(query.rows[0]?.[0] ?? "");
-                const rawSql = String(query.rows[0]?.[1] ?? "");
-                let formattedSql: string;
-                try {
-                  formattedSql = prettyStr(rawSql, 100);
-                } catch {
-                  formattedSql = rawSql;
-                }
-                const queryResult: QueryResult = {
-                  columns: [
-                    {
-                      name: "sql",
-                      type_oid: MzDataType.text,
-                      type_len: -1,
-                      type_mod: -1,
-                    },
-                  ],
-                  rows: [[formattedSql]],
-                  commandComplete: result.payload,
-                  durationMs,
-                  displayMode: "sql",
-                  kind: query.kind,
-                  objectName,
+        case "commandStarting":
+          if (msg.isStreaming) {
+            setters.setExecution((prev) => {
+              if (prev.status === "running") {
+                return {
+                  status: "streaming",
+                  statementIndex: prev.statementIndex,
                 };
-                setters.setResult(queryResult);
-              } else if (TEXT_EXPLAIN_KINDS.has(query.kind)) {
-                const text = query.rows
-                  .map((row) => String(row[0] ?? ""))
-                  .join("\n");
-                const queryResult: QueryResult = {
-                  columns: [
-                    {
-                      name: "text",
-                      type_oid: MzDataType.text,
-                      type_len: -1,
-                      type_mod: -1,
-                    },
-                  ],
-                  rows: [[text]],
-                  commandComplete: result.payload,
-                  durationMs,
-                  displayMode: "text",
-                };
-                setters.setResult(queryResult);
-              } else if (ROW_RETURNING_KINDS.has(query.kind)) {
-                const queryResult: QueryResult = {
-                  columns: query.columns,
-                  rows: query.rows,
-                  commandComplete: result.payload,
-                  durationMs,
-                };
-                setters.setResult(queryResult);
-              } else {
-                setters.setInlineResults((prev) => {
-                  const next = new Map(prev);
-                  next.set(query.offset, {
-                    kind: "success",
-                    message: result.payload,
-                  });
-                  return next;
-                });
               }
-            }
-            break;
+              return prev;
+            });
           }
+          break;
 
-          case "ReadyForQuery":
-            currentQueryRef.current = null;
-            setters.setExecution({ status: "idle" });
-            setters.setNotice(null);
-            break;
+        case "queryResult": {
+          const query = currentQueryRef.current;
+          if (!query) break;
 
-          case "Notice":
-            setters.setNotice(result.payload.message);
-            break;
+          const { durationMs } = msg;
 
-          case "ParameterStatus": {
-            const { name, value } = result.payload;
-            if (name === "cluster") {
-              setters.setSession((prev) => ({ ...prev, cluster: value }));
-            } else if (name === "database") {
-              setters.setSession((prev) => ({ ...prev, database: value }));
-            } else if (name === "search_path") {
-              setters.setSession((prev) => ({ ...prev, searchPath: value }));
+          if (SHOW_CREATE_KINDS.has(query.kind)) {
+            const objectName = String(msg.rows[0]?.[0] ?? "");
+            const rawSql = String(msg.rows[0]?.[1] ?? "");
+            let formattedSql: string;
+            try {
+              formattedSql = prettyStr(rawSql, 100);
+            } catch {
+              formattedSql = rawSql;
             }
-            break;
-          }
-
-          case "Error": {
-            const query = currentQueryRef.current;
-            if (query) {
-              setters.setInlineResults((prev) => {
-                const next = new Map(prev);
-                next.set(query.offset, {
-                  kind: "error",
-                  message: result.payload.message,
-                });
-                return next;
-              });
-            }
-            const errorParts = [result.payload.message];
-            if (result.payload.detail) errorParts.push(result.payload.detail);
-            if (result.payload.hint) errorParts.push(`HINT: ${result.payload.hint}`);
             setters.setResult({
-              columns: [{ name: "error", type_oid: MzDataType.text, type_len: -1, type_mod: -1 }],
-              rows: [[errorParts.join("\n\n")]],
-              commandComplete: "ERROR",
-              durationMs: query ? Date.now() - query.startTime : 0,
+              columns: [
+                {
+                  name: "sql",
+                  type_oid: MzDataType.text,
+                  type_len: -1,
+                  type_mod: -1,
+                },
+              ],
+              rows: [[formattedSql]],
+              commandComplete: msg.commandComplete,
+              durationMs,
+              displayMode: "sql",
+              kind: query.kind,
+              objectName,
+            });
+          } else if (TEXT_EXPLAIN_KINDS.has(query.kind)) {
+            const text = msg.rows.map((row) => String(row[0] ?? "")).join("\n");
+            setters.setResult({
+              columns: [
+                {
+                  name: "text",
+                  type_oid: MzDataType.text,
+                  type_len: -1,
+                  type_mod: -1,
+                },
+              ],
+              rows: [[text]],
+              commandComplete: msg.commandComplete,
+              durationMs,
               displayMode: "text",
             });
-            setters.setExecution({ status: "idle" });
-            currentQueryRef.current = null;
-            break;
+          } else if (ROW_RETURNING_KINDS.has(query.kind)) {
+            setters.setResult({
+              columns: msg.columns,
+              rows: msg.rows,
+              commandComplete: msg.commandComplete,
+              durationMs,
+            });
+          } else {
+            setters.setInlineResults((prev) => {
+              const next = new Map(prev);
+              next.set(query.offset, {
+                kind: "success",
+                message: msg.commandComplete,
+              });
+              return next;
+            });
           }
+          break;
         }
-      },
-    });
 
-    socketRef.current = socket;
-    socket.connect();
+        case "readyForQuery":
+          currentQueryRef.current = null;
+          setters.setExecution({ status: "idle" });
+          setters.setNotice((prev) => (prev === null ? prev : null));
+          break;
 
-    const unsubscribe = socket.onChange(() => {
-      const snapshot = socket.getSnapshot();
-      setSocketState({
-        readyForQuery: snapshot.readyForQuery,
-        error: snapshot.error,
-        isConnected: socket.isConnected(),
+        case "notice":
+          setters.setNotice(msg.message);
+          break;
+
+        case "parameterStatus":
+          if (msg.name === "cluster") {
+            setters.setSession((prev) => ({
+              ...prev,
+              cluster: msg.value,
+            }));
+          } else if (msg.name === "database") {
+            setters.setSession((prev) => ({
+              ...prev,
+              database: msg.value,
+            }));
+          } else if (msg.name === "search_path") {
+            setters.setSession((prev) => ({
+              ...prev,
+              searchPath: msg.value,
+            }));
+          }
+          break;
+
+        case "error": {
+          const query = currentQueryRef.current;
+          if (query) {
+            setters.setInlineResults((prev) => {
+              const next = new Map(prev);
+              next.set(query.offset, {
+                kind: "error",
+                message: msg.error.message,
+              });
+              return next;
+            });
+          }
+          const errorParts = [msg.error.message];
+          if (msg.error.detail) errorParts.push(msg.error.detail);
+          if (msg.error.hint) errorParts.push(`HINT: ${msg.error.hint}`);
+          setters.setResult({
+            columns: [
+              {
+                name: "error",
+                type_oid: MzDataType.text,
+                type_len: -1,
+                type_mod: -1,
+              },
+            ],
+            rows: [[errorParts.join("\n\n")]],
+            commandComplete: "ERROR",
+            durationMs: msg.durationMs,
+            displayMode: "text",
+          });
+          setters.setExecution({ status: "idle" });
+          currentQueryRef.current = null;
+          break;
+        }
+
+        case "setComplete":
+          // SET/RESET wrapper completed — nothing to do on the main thread.
+          break;
+      }
+    };
+
+    worker.onerror = () => {
+      settersRef.current.setSocketState({
+        readyForQuery: false,
+        error: "Worker error",
+        isConnected: false,
       });
-    });
+    };
+
+    workerRef.current = worker;
 
     return () => {
-      unsubscribe();
-      socket.disconnect();
+      worker.terminate();
     };
   }, [httpAddress]);
 
@@ -341,14 +363,14 @@ export function useExecution() {
       offset = 0,
       options?: { cluster?: string; replica?: string },
     ) => {
-      const socket = socketRef.current;
-      if (!socket) return;
+      const worker = workerRef.current;
+      if (!worker) return;
 
       // Clear previous state
-      setInlineResults(new Map());
-      setNotice(null);
+      setInlineResults((prev) => (prev.size === 0 ? prev : new Map()));
+      setNotice((prev) => (prev === null ? prev : null));
 
-      // Cancel-and-replace: cancel running query and wait for the socket
+      // Cancel-and-replace: cancel running query and wait for the worker
       // to become ready before sending the new one.
       if (currentQueryRef.current && connectionIdRef.current) {
         try {
@@ -358,39 +380,33 @@ export function useExecution() {
             cancelQueryQueryKey: ["worksheet-cancel"],
           });
           // Wait for the cancelled query's error/ReadyForQuery to arrive
-          // so the socket is free to accept a new query.
+          // so the worker is free to accept a new query.
           await new Promise<void>((resolve) => {
-            if (socket.getSnapshot().readyForQuery) {
-              resolve();
-              return;
-            }
-            const timeout = setTimeout(() => {
-              unsubscribe();
-              // Socket still busy after 5s — force reconnect
-              connectionIdRef.current = null;
-              socket.connect();
-              resolve();
-            }, 5000);
-            const unsubscribe = socket.onChange(() => {
-              if (socket.getSnapshot().readyForQuery) {
+            const onMessage = (event: MessageEvent<WorkerToMainMessage>) => {
+              if (
+                event.data.type === "stateChange" &&
+                event.data.readyForQuery
+              ) {
+                worker.removeEventListener("message", onMessage);
                 clearTimeout(timeout);
-                unsubscribe();
                 resolve();
               }
-            });
+            };
+            const timeout = setTimeout(() => {
+              worker.removeEventListener("message", onMessage);
+              // Worker still busy after 5s — force reconnect
+              connectionIdRef.current = null;
+              worker.postMessage({ type: "reconnect" });
+              resolve();
+            }, 5000);
+            worker.addEventListener("message", onMessage);
           });
         } catch {
           // Best-effort cancel
         }
       }
 
-      currentQueryRef.current = {
-        kind,
-        offset,
-        columns: [],
-        rows: [],
-        startTime: Date.now(),
-      };
+      currentQueryRef.current = { kind, offset };
 
       setExecution({ status: "running", statementIndex: offset });
 
@@ -411,7 +427,7 @@ export function useExecution() {
       if (restoreCluster) {
         queries.push({ query: `SET cluster = ${restoreCluster}` });
       }
-      socket.send({ queries });
+      worker.postMessage({ type: "send", request: { queries } });
     },
     [setExecution, setInlineResults, setNotice],
   );
@@ -429,14 +445,14 @@ export function useExecution() {
         // pg_cancel_backend failed — fall through to reconnect
       }
     }
-    // Force-reset: disconnect and reconnect the WebSocket, which kills
+    // Force-reset: reconnect the WebSocket inside the worker, which kills
     // the running query server-side.
-    const socket = socketRef.current;
-    if (socket) {
+    const worker = workerRef.current;
+    if (worker) {
       currentQueryRef.current = null;
       setExecution({ status: "idle" });
       setResult(null);
-      socket.connect();
+      worker.postMessage({ type: "reconnect" });
     }
   }, [setExecution, setResult]);
 

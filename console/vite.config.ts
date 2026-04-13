@@ -133,6 +133,9 @@ if (isProd) {
 const devServerProxyPort = process.env.DEV_SERVER_PROXY_PORT ?? 6876;
 
 export default defineConfig({
+  worker: {
+    plugins: () => [wasm()],
+  },
   build: {
     // Converts browserslist format to explicit esbuild browser ranges
     target: browserslistToEsbuild(),
