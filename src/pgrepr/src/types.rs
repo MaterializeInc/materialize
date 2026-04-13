@@ -560,9 +560,8 @@ impl Type {
             postgres_types::Type::NUMERIC => Type::Numeric { constraints: None },
             postgres_types::Type::OID => Type::Oid,
             postgres_types::Type::TEXT => Type::Text,
-            postgres_types::Type::BPCHAR | postgres_types::Type::CHAR => {
-                Type::BpChar { length: None }
-            }
+            postgres_types::Type::BPCHAR => Type::BpChar { length: None },
+            postgres_types::Type::CHAR => Type::Char,
             postgres_types::Type::VARCHAR => Type::VarChar { max_length: None },
             postgres_types::Type::TIME => Type::Time { precision: None },
             postgres_types::Type::TIMETZ => Type::TimeTz { precision: None },
@@ -577,6 +576,7 @@ impl Type {
             postgres_types::Type::BPCHAR_ARRAY => {
                 Type::Array(Box::new(Type::BpChar { length: None }))
             }
+            postgres_types::Type::CHAR_ARRAY => Type::Array(Box::new(Type::Char)),
             postgres_types::Type::DATE_ARRAY => Type::Array(Box::new(Type::Date)),
             postgres_types::Type::FLOAT4_ARRAY => Type::Array(Box::new(Type::Float4)),
             postgres_types::Type::FLOAT8_ARRAY => Type::Array(Box::new(Type::Float8)),
