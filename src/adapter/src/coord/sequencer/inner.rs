@@ -805,6 +805,18 @@ impl Coordinator {
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if plan.if_not_exists => {
+                // Clean up SSH key material if it was persisted, since the
+                // catalog item was not created.
+                if matches!(plan.connection.details, ConnectionDetails::Ssh { .. }) {
+                    if let Err(e) = self.secrets_controller.delete(connection_id).await {
+                        tracing::warn!(
+                            "Dropping SSH secret for existing connection has encountered an error: {}",
+                            e
+                        );
+                    } else {
+                        self.caching_secrets_reader.invalidate(connection_id);
+                    }
+                }
                 ctx.session()
                     .add_notice(AdapterNotice::ObjectAlreadyExists {
                         name: plan.name.item,
@@ -812,7 +824,21 @@ impl Coordinator {
                     });
                 Ok(ExecuteResponse::CreatedConnection)
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                // Clean up SSH key material if it was persisted, since the
+                // catalog item was not created.
+                if matches!(plan.connection.details, ConnectionDetails::Ssh { .. }) {
+                    if let Err(e) = self.secrets_controller.delete(connection_id).await {
+                        tracing::warn!(
+                            "Dropping SSH secret for failed connection has encountered an error: {}",
+                            e
+                        );
+                    } else {
+                        self.caching_secrets_reader.invalidate(connection_id);
+                    }
+                }
+                Err(err)
+            }
         }
     }
 
