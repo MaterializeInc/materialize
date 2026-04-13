@@ -5872,6 +5872,7 @@ impl<'a> Parser<'a> {
 
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
+                    if_exists,
                     name_a: UnresolvedObjectName::Cluster(name),
                     name_b,
                 }))
@@ -6700,6 +6701,7 @@ impl<'a> Parser<'a> {
 
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
+                    if_exists,
                     name_a: name,
                     name_b,
                 }))

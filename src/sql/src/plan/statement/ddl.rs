@@ -6768,6 +6768,7 @@ pub fn plan_alter_schema_swap<F>(
     scx: &mut StatementContext,
     name_a: UnresolvedSchemaName,
     name_b: Ident,
+    if_exists: bool,
     gen_temp_suffix: F,
 ) -> Result<Plan, PlanError>
 where
@@ -6787,7 +6788,19 @@ where
         sql_bail!("cannot swap schemas that are in the ambient database");
     }
 
-    let schema_a = scx.resolve_schema(name_a.clone())?;
+    let schema_a = match scx.resolve_schema(name_a.clone()) {
+        Ok(schema) => schema,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name_a.to_ast_string_simple(),
+                object_type: ObjectType::Schema,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Schema,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
 
     let db_spec = schema_a.database().clone();
     if matches!(db_spec, ResolvedDatabaseSpecifier::Ambient) {
@@ -6918,12 +6931,25 @@ pub fn plan_alter_cluster_swap<F>(
     scx: &mut StatementContext,
     name_a: Ident,
     name_b: Ident,
+    if_exists: bool,
     gen_temp_suffix: F,
 ) -> Result<Plan, PlanError>
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
-    let cluster_a = scx.resolve_cluster(Some(&name_a))?;
+    let cluster_a = match scx.resolve_cluster(Some(&name_a)) {
+        Ok(cluster) => cluster,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name_a.to_ast_string_simple(),
+                object_type: ObjectType::Cluster,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Cluster,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
     let check = |temp_suffix: &str| {
@@ -6996,6 +7022,7 @@ pub fn plan_alter_object_swap(
 
     let AlterObjectSwapStatement {
         object_type,
+        if_exists,
         name_a,
         name_b,
     } = stmt;
@@ -7023,10 +7050,10 @@ pub fn plan_alter_object_swap(
 
     match (object_type, name_a, name_b) {
         (ObjectType::Schema, UnresolvedObjectName::Schema(name_a), name_b) => {
-            plan_alter_schema_swap(scx, name_a, name_b, gen_temp_suffix)
+            plan_alter_schema_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name_a), name_b) => {
-            plan_alter_cluster_swap(scx, name_a, name_b, gen_temp_suffix)
+            plan_alter_cluster_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
         (ObjectType::Schema | ObjectType::Cluster, _, _) => {
             unreachable!("parser ensures name type matches object type")
