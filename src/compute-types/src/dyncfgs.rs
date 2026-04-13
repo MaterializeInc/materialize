@@ -45,6 +45,13 @@ pub const CORRECTION_V2_CHAIN_PROPORTIONALITY: Config<f64> = Config::new(
     "The size factor of subsequent chains in the correction V2 buffer.",
 );
 
+/// The byte size of chunks in the correction V2 buffer.
+pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
+    "compute_correction_v2_chunk_size",
+    8 * 1024,
+    "The byte size of chunks in the correction V2 buffer.",
+);
+
 /// Whether to enable temporal bucketing in compute.
 pub const ENABLE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
@@ -376,6 +383,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
+        .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)

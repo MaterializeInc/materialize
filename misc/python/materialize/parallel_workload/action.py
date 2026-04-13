@@ -1550,6 +1550,11 @@ class FlipFlagsAction(Action):
             "2",
             "3",
         ]
+        self.flags_with_values["compute_correction_v2_chunk_size"] = [
+            "8192",
+            "65536",
+            "1048576",
+        ]
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
         )
