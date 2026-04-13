@@ -638,9 +638,7 @@ impl Catalog {
     /// collections created between versions.
     async fn initialize_storage_state(
         &mut self,
-        storage_collections: &Arc<
-            dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync,
-        >,
+        storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()

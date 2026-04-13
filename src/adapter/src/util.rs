@@ -336,7 +336,7 @@ impl ShouldTerminateGracefully for FenceError {
     }
 }
 
-impl<T> ShouldTerminateGracefully for StorageError<T> {
+impl ShouldTerminateGracefully for StorageError {
     fn should_terminate_gracefully(&self) -> bool {
         match self {
             StorageError::ResourceExhausted(_)

@@ -44,11 +44,8 @@ use crate::statement_logging::{
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
-pub type StorageCollectionsHandle = Arc<
-    dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = Timestamp>
-        + Send
-        + Sync,
->;
+pub type StorageCollectionsHandle =
+    Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug)]

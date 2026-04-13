@@ -717,9 +717,7 @@ async fn upgrade_check(
     for (gid, item_desc) in storage_entries {
         // If a new version adds a BuiltinTable or BuiltinSource, we won't have created the shard
         // yet so there isn't anything to check.
-        let maybe_shard_id = state
-            .storage_metadata()
-            .get_collection_shard::<Timestamp>(gid);
+        let maybe_shard_id = state.storage_metadata().get_collection_shard(gid);
         let shard_id = match maybe_shard_id {
             Ok(shard_id) => shard_id,
             Err(StorageError::IdentifierMissing(_)) => {
