@@ -26,10 +26,10 @@ import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import React, { useCallback, useMemo, useState } from "react";
 
 import ReadOnlyCommandBlock from "~/components/CommandBlock/ReadOnlyCommandBlock";
-import { useAllClusters } from "~/store/allClusters";
 import { CopyButton } from "~/components/copyableComponents";
 import formatRows from "~/components/formatRows";
 import SqlSelectTable, { TablePagination } from "~/components/SqlSelectTable";
+import { useAllClusters } from "~/store/allClusters";
 import type { MaterializeTheme } from "~/theme";
 
 import { PAGE_SIZE } from "./constants";
@@ -55,7 +55,12 @@ export interface ResultsPanelProps {
   /** Closes the results panel entirely. */
   onDismiss: () => void;
   /** Executes a SQL statement through the worksheet WebSocket. */
-  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
+  onExecute: (
+    sql: string,
+    kind: string,
+    offset: number,
+    options?: { cluster?: string; replica?: string },
+  ) => void;
   /** Cancels the currently running query. */
   onCancel: () => void;
 }
@@ -100,14 +105,20 @@ const ResultsPanel = ({
   }
 
   if (result.displayMode === "sql") {
-    return <SqlView result={result} onDismiss={onDismiss} onExecute={onExecute} />;
+    return (
+      <SqlView result={result} onDismiss={onDismiss} onExecute={onExecute} />
+    );
   }
 
   if (result.displayMode === "text") {
-    return <TextView result={result} onDismiss={onDismiss} onExecute={onExecute} />;
+    return (
+      <TextView result={result} onDismiss={onDismiss} onExecute={onExecute} />
+    );
   }
 
-  return <ResultTable result={result} onDismiss={onDismiss} onExecute={onExecute} />;
+  return (
+    <ResultTable result={result} onDismiss={onDismiss} onExecute={onExecute} />
+  );
 };
 
 /** Shown while a query is executing, with a Cancel button. */
@@ -167,10 +178,10 @@ const EXPLAINABLE_KINDS: Record<string, string> = {
 
 /** Maps SHOW CREATE kinds to their EXPLAIN ANALYZE prefix. */
 const ANALYZABLE_KINDS: Record<string, string> = {
-  show_create_materialized_view: "EXPLAIN ANALYZE CPU, MEMORY FOR MATERIALIZED VIEW",
+  show_create_materialized_view:
+    "EXPLAIN ANALYZE CPU, MEMORY FOR MATERIALIZED VIEW",
   show_create_index: "EXPLAIN ANALYZE CPU, MEMORY FOR INDEX",
 };
-
 
 /** Shared SQL/Explain/Analyze toggle for SHOW CREATE results. */
 const SqlExplainToggle = ({
@@ -200,7 +211,11 @@ const SqlExplainToggle = ({
 
   const analyzeButton = (
     <Tooltip
-      label={canAnalyze ? undefined : "Requires superuser or USAGE privilege on the schema"}
+      label={
+        canAnalyze
+          ? undefined
+          : "Requires superuser or USAGE privilege on the schema"
+      }
       placement="top"
       hasArrow
       isDisabled={canAnalyze}
@@ -208,7 +223,9 @@ const SqlExplainToggle = ({
       <Button
         size="xs"
         variant={activeTab === "analyze" ? "solid" : "ghost"}
-        onClick={() => onAnalyzeClick(replicas.length > 1 ? replicas[0].name : undefined)}
+        onClick={() =>
+          onAnalyzeClick(replicas.length > 1 ? replicas[0].name : undefined)
+        }
         borderLeftRadius={0}
         borderRightRadius={replicas.length > 1 ? 0 : undefined}
         isDisabled={!canAnalyze}
@@ -275,7 +292,12 @@ const SqlView = ({
 }: {
   result: QueryResult;
   onDismiss: () => void;
-  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
+  onExecute: (
+    sql: string,
+    kind: string,
+    offset: number,
+    options?: { cluster?: string; replica?: string },
+  ) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const setStashedSqlResult = useSetAtom(worksheetStashedSqlResultAtom);
@@ -375,7 +397,12 @@ const TextView = ({
 }: {
   result: QueryResult;
   onDismiss: () => void;
-  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
+  onExecute: (
+    sql: string,
+    kind: string,
+    offset: number,
+    options?: { cluster?: string; replica?: string },
+  ) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const text = String(result.rows[0]?.[0] ?? "");
@@ -432,7 +459,10 @@ const TextView = ({
     URL.revokeObjectURL(url);
   }, [text]);
 
-  const activeTab = result.kind === "explain_analyze_object" ? "analyze" as const : "explain" as const;
+  const activeTab =
+    result.kind === "explain_analyze_object"
+      ? ("analyze" as const)
+      : ("explain" as const);
 
   return (
     <Box height="100%" overflow="auto">
@@ -497,7 +527,12 @@ const ResultTable = ({
 }: {
   result: QueryResult;
   onDismiss: () => void;
-  onExecute: (sql: string, kind: string, offset: number, options?: { cluster?: string; replica?: string }) => void;
+  onExecute: (
+    sql: string,
+    kind: string,
+    offset: number,
+    options?: { cluster?: string; replica?: string },
+  ) => void;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const [currentPage, setCurrentPage] = useState(0);
