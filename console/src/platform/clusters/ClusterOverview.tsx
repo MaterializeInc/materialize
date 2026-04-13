@@ -138,15 +138,9 @@ const ClusterOverview = () => {
     graphData?.every((d) =>
       d.data.every(
         (point) =>
-          (point.cpuPercent === 0 || point.cpuPercent === null) &&
-          (point.memoryPercent === 0 || point.memoryPercent === null) &&
-          (point.diskPercent === 0 || point.diskPercent === null),
+          !point.cpuPercent && !point.memoryPercent && !point.diskPercent,
       ),
     );
-
-  if (clusterHasNoMetrics) {
-    return <ErrorBox message={CLUSTER_METRICS_UNAVAILABLE_MESSAGE} />;
-  }
 
   return (
     <MainContentContainer mt="10">
@@ -201,6 +195,8 @@ const ClusterOverview = () => {
             >
               <Spinner data-testid="loading-spinner" />
             </Flex>
+          ) : clusterHasNoMetrics ? (
+            <ErrorBox message={CLUSTER_METRICS_UNAVAILABLE_MESSAGE} />
           ) : data ? (
             <Grid
               gridTemplateColumns={{
