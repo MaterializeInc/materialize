@@ -538,7 +538,8 @@ SELECT * FROM ov
                   "forms": {
                     "raw": true,
                     "arranged": []
-                  }
+                  },
+                  "input_has_future_updates": false
                 }
               }
             },
@@ -728,7 +729,8 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                         []
                       ]
                     ]
-                  }
+                  },
+                  "input_has_future_updates": false
                 }
               }
             },
@@ -844,7 +846,8 @@ SELECT * FROM ov
                   "forms": {
                     "raw": true,
                     "arranged": []
-                  }
+                  },
+                  "input_has_future_updates": false
                 }
               }
             },
@@ -1040,7 +1043,8 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                               []
                             ]
                           ]
-                        }
+                        },
+                        "input_has_future_updates": false
                       }
                     }
                   },
@@ -1378,7 +1382,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                     []
                                                   ]
                                                 ]
-                                              }
+                                              },
+                                              "input_has_future_updates": false
                                             }
                                           }
                                         }
@@ -1500,7 +1505,8 @@ SELECT x * 5 FROM cte WHERE x = 5
                               []
                             ]
                           ]
-                        }
+                        },
+                        "input_has_future_updates": false
                       }
                     }
                   },
@@ -2191,7 +2197,8 @@ FROM t
                           "forms": {
                             "raw": true,
                             "arranged": []
-                          }
+                          },
+                          "input_has_future_updates": false
                         }
                       }
                     },
@@ -2614,7 +2621,8 @@ MATERIALIZED VIEW hierarchical_global_mv
                           "forms": {
                             "raw": true,
                             "arranged": []
-                          }
+                          },
+                          "input_has_future_updates": false
                         }
                       }
                     },
@@ -2920,7 +2928,8 @@ SELECT * FROM hierarchical_global
                           "forms": {
                             "raw": true,
                             "arranged": []
-                          }
+                          },
+                          "input_has_future_updates": false
                         }
                       }
                     },
@@ -10046,7 +10055,8 @@ WHERE a = c AND d = e AND b + d > 42
                           ]
                         ]
                       ]
-                    }
+                    },
+                    "input_has_future_updates": false
                   }
                 }
               },
@@ -10107,7 +10117,8 @@ WHERE a = c AND d = e AND b + d > 42
                           []
                         ]
                       ]
-                    }
+                    },
+                    "input_has_future_updates": false
                   }
                 }
               }
@@ -11006,7 +11017,8 @@ WHERE a = c AND d = e AND f = a
                           []
                         ]
                       ]
-                    }
+                    },
+                    "input_has_future_updates": false
                   }
                 }
               },
@@ -11152,7 +11164,8 @@ WHERE a = c AND d = e AND f = a
                           []
                         ]
                       ]
-                    }
+                    },
+                    "input_has_future_updates": false
                   }
                 }
               }
