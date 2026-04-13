@@ -479,7 +479,7 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
 
             // OID
             (Oid, Int32) => Assignment: CastOidToInt32(func::CastOidToInt32),
-            (Oid, Int64) => Assignment: CastOidToInt32(func::CastOidToInt32),
+            (Oid, Int64) => Assignment: CastOidToInt64(func::CastOidToInt64),
             (Oid, String) => Explicit: CastOidToString(func::CastOidToString),
             (Oid, RegClass) => Implicit: CastOidToRegClass(func::CastOidToRegClass),
             (Oid, RegProc) => Implicit: CastOidToRegProc(func::CastOidToRegProc),
