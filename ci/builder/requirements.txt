@@ -69,7 +69,7 @@ shtab==1.8.0
 sqlparse==0.5.5
 toml==0.10.2
 twine==6.2.0
-types-Markdown==3.10.2.20260211
+types-Markdown==3.10.2.20260408
 types-prettytable==3.4.2.6
 types-psutil==7.2.2.20260402
 types-PyMYSQL==1.1.0.20251220
