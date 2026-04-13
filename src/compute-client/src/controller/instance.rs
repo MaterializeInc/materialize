@@ -1155,7 +1155,35 @@ impl Instance {
     /// Remove an existing instance replica, by ID.
     #[mz_ore::instrument(level = "debug")]
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
-        self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+        let replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
+
+        // Before dropping the replica state (and the contained input read holds), log read holds
+        // that are the last line of defense against compaction of a dataflow's storage inputs. If
+        // the corresponding global read hold has already been released, dropping the per-replica
+        // read hold will allow compaction, which can cause the replica to panic trying to install
+        // the dataflow.
+        //
+        // This exists primarily to help diagnose incidents-and-escalations#39.
+        for (collection_id, replica_collection) in &replica.collections {
+            let collection = self.collections.get(collection_id);
+            for replica_hold in &replica_collection.input_read_holds {
+                let input_id = replica_hold.id();
+                let global_hold = collection.and_then(|c| c.storage_dependencies.get(&input_id));
+                let unprotected = global_hold
+                    .is_none_or(|h| PartialOrder::less_than(replica_hold.since(), h.since()));
+                if unprotected {
+                    tracing::warn!(
+                        replica_id = %id,
+                        %collection_id,
+                        %input_id,
+                        replica_hold_since = ?replica_hold.since(),
+                        global_hold_since = ?global_hold.map(|h| h.since()),
+                        "dropping per-replica read hold without equivalent global read hold",
+                    );
+                }
+            }
+        }
+        drop(replica);
 
         // Subscribes targeting this replica either won't be served anymore (if the replica is
         // dropped) or might produce inconsistent output (if the target collection is an
