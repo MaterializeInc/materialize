@@ -339,7 +339,7 @@ enum-iterator = "2.1.0"
 enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 fallible-iterator = "0.2.0"
-fancy-regex = "0.16.2"
+fancy-regex = "0.17.0"
 flate2 = "1.1.9"
 foundationdb = { version = "0.10.0", default-features = false, features = ["embedded-fdb-include", "fdb-7_3"] }
 futures = "0.3.32"
