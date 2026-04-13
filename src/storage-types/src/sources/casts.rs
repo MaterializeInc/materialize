@@ -367,3 +367,294 @@ impl CastFunc {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_expr::EvalError;
+    use mz_repr::adt::char::CharLength;
+    use mz_repr::adt::numeric::NumericMaxScale;
+    use mz_repr::adt::timestamp::TimestampPrecision;
+    use mz_repr::adt::varchar::VarCharMaxLength;
+    use mz_repr::{Datum, RowArena};
+
+    use super::*;
+
+    // Helper: build a CallUnary expression that casts Column(0) with the given func.
+    fn cast_col0(func: CastFunc) -> StorageScalarExpr {
+        StorageScalarExpr::CallUnary(func, Box::new(StorageScalarExpr::Column(0)))
+    }
+
+    // --- Simple scalar casts ---
+
+    #[mz_ore::test]
+    fn test_cast_string_to_bool() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToBool);
+        assert_eq!(
+            expr.eval(&[Datum::String("true")], &arena).unwrap(),
+            Datum::True
+        );
+        assert_eq!(
+            expr.eval(&[Datum::String("false")], &arena).unwrap(),
+            Datum::False
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_int16() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToInt16);
+        assert_eq!(
+            expr.eval(&[Datum::String("32767")], &arena).unwrap(),
+            Datum::Int16(32767)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_int32() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToInt32);
+        assert_eq!(
+            expr.eval(&[Datum::String("42")], &arena).unwrap(),
+            Datum::Int32(42)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_int64() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToInt64);
+        assert_eq!(
+            expr.eval(&[Datum::String("-9000000000")], &arena).unwrap(),
+            Datum::Int64(-9_000_000_000)
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_float32() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToFloat32);
+        let result = expr.eval(&[Datum::String("1.5")], &arena).unwrap();
+        match result {
+            Datum::Float32(f) => assert!((f.into_inner() - 1.5_f32).abs() < f32::EPSILON),
+            other => panic!("expected Float32, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_float64() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToFloat64);
+        // Use 2.5, which is exactly representable in IEEE 754.
+        let result = expr.eval(&[Datum::String("2.5")], &arena).unwrap();
+        match result {
+            Datum::Float64(f) => assert!((f.into_inner() - 2.5_f64).abs() < f64::EPSILON),
+            other => panic!("expected Float64, got {:?}", other),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_date() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToDate);
+        // Parsing should succeed; just verify it's a Date datum.
+        let result = expr.eval(&[Datum::String("2024-01-15")], &arena).unwrap();
+        assert!(matches!(result, Datum::Date(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_uuid() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToUuid);
+        let result = expr
+            .eval(
+                &[Datum::String("a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11")],
+                &arena,
+            )
+            .unwrap();
+        assert!(matches!(result, Datum::Uuid(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_bytes() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToBytes);
+        // "\\x4142" is the hex escape for "AB"
+        let result = expr.eval(&[Datum::String("\\x4142")], &arena).unwrap();
+        assert_eq!(result, Datum::Bytes(&[0x41, 0x42]));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_jsonb() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToJsonb);
+        let result = expr.eval(&[Datum::String("{\"key\": 1}")], &arena).unwrap();
+        // JSONB is stored as a nested datum; just verify it's not null/error.
+        assert!(!result.is_null());
+    }
+
+    // --- Parameterized casts ---
+
+    #[mz_ore::test]
+    fn test_cast_string_to_numeric_no_scale() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToNumeric(None));
+        let result = expr.eval(&[Datum::String("123.456")], &arena).unwrap();
+        assert!(matches!(result, Datum::Numeric(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_numeric_with_scale() {
+        let arena = RowArena::new();
+        let scale = NumericMaxScale::try_from(2_i64).unwrap();
+        let expr = cast_col0(CastFunc::CastStringToNumeric(Some(scale)));
+        // "123.456" rounded to scale 2 => "123.46"
+        let result = expr.eval(&[Datum::String("123.456")], &arena).unwrap();
+        assert!(matches!(result, Datum::Numeric(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_timestamp_no_precision() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToTimestamp(None));
+        let result = expr
+            .eval(&[Datum::String("2024-01-15 12:34:56")], &arena)
+            .unwrap();
+        assert!(matches!(result, Datum::Timestamp(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_timestamp_with_precision() {
+        let arena = RowArena::new();
+        let precision = TimestampPrecision::try_from(0_i64).unwrap();
+        let expr = cast_col0(CastFunc::CastStringToTimestamp(Some(precision)));
+        // Precision 0 truncates sub-second part.
+        let result = expr
+            .eval(&[Datum::String("2024-01-15 12:34:56.789")], &arena)
+            .unwrap();
+        assert!(matches!(result, Datum::Timestamp(_)));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_char_with_length() {
+        let arena = RowArena::new();
+        let length = CharLength::try_from(5_i64).unwrap();
+        let expr = cast_col0(CastFunc::CastStringToChar {
+            length: Some(length),
+            fail_on_len: false,
+        });
+        // format_str_trim stores the trimmed string (no trailing space padding)
+        // in the Datum; padding is only added at display time via format_str_pad.
+        let result = expr.eval(&[Datum::String("hi")], &arena).unwrap();
+        assert_eq!(result, Datum::String("hi"));
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_varchar_with_length() {
+        let arena = RowArena::new();
+        let length = VarCharMaxLength::try_from(3_i64).unwrap();
+        let expr = cast_col0(CastFunc::CastStringToVarChar {
+            length: Some(length),
+            fail_on_len: false,
+        });
+        // "hello" truncated to 3.
+        let result = expr.eval(&[Datum::String("hello")], &arena).unwrap();
+        assert_eq!(result, Datum::String("hel"));
+    }
+
+    // --- Null propagation ---
+
+    #[mz_ore::test]
+    fn test_call_unary_null_propagation() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToInt32);
+        // Null input must propagate to Null output without error.
+        let result = expr.eval(&[Datum::Null], &arena).unwrap();
+        assert_eq!(result, Datum::Null);
+    }
+
+    // --- ErrorIfNull ---
+
+    #[mz_ore::test]
+    fn test_error_if_null_fires_on_null() {
+        let arena = RowArena::new();
+        let expr = StorageScalarExpr::ErrorIfNull(
+            Box::new(StorageScalarExpr::Column(0)),
+            "column must not be null".to_string(),
+        );
+        let err = expr.eval(&[Datum::Null], &arena).unwrap_err();
+        assert!(
+            matches!(err, EvalError::IfNullError(_)),
+            "expected IfNullError, got {:?}",
+            err
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_error_if_null_passes_through_non_null() {
+        let arena = RowArena::new();
+        let expr = StorageScalarExpr::ErrorIfNull(
+            Box::new(StorageScalarExpr::Column(0)),
+            "should not fire".to_string(),
+        );
+        let result = expr.eval(&[Datum::Int32(7)], &arena).unwrap();
+        assert_eq!(result, Datum::Int32(7));
+    }
+
+    // --- Error cases ---
+
+    #[mz_ore::test]
+    fn test_cast_invalid_int32_returns_error() {
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToInt32);
+        let result = expr.eval(&[Datum::String("not_a_number")], &arena);
+        assert!(result.is_err(), "expected error for invalid int32 input");
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_char_fail_on_len() {
+        let arena = RowArena::new();
+        let length = CharLength::try_from(3_i64).unwrap();
+        let expr = cast_col0(CastFunc::CastStringToChar {
+            length: Some(length),
+            fail_on_len: true,
+        });
+        // "toolong" exceeds length 3 and fail_on_len is true.
+        let result = expr.eval(&[Datum::String("toolong")], &arena);
+        assert!(
+            matches!(result, Err(EvalError::StringValueTooLong { .. })),
+            "expected StringValueTooLong, got {:?}",
+            result
+        );
+    }
+
+    // --- Literal ---
+
+    #[mz_ore::test]
+    fn test_literal_unpacks_correctly() {
+        use mz_repr::{ReprColumnType, ReprScalarType, Row};
+        let mut row = Row::default();
+        row.packer().push(Datum::Int32(99));
+        let expr = StorageScalarExpr::Literal(
+            row,
+            ReprColumnType {
+                scalar_type: ReprScalarType::Int32,
+                nullable: false,
+            },
+        );
+        let arena = RowArena::new();
+        let result = expr.eval(&[], &arena).unwrap();
+        assert_eq!(result, Datum::Int32(99));
+    }
+
+    // --- Column ---
+
+    #[mz_ore::test]
+    fn test_column_extracts_correct_datum() {
+        let arena = RowArena::new();
+        let expr = StorageScalarExpr::Column(2);
+        let datums = [Datum::Int32(0), Datum::Int32(1), Datum::Int32(2)];
+        let result = expr.eval(&datums, &arena).unwrap();
+        assert_eq!(result, Datum::Int32(2));
+    }
+}
