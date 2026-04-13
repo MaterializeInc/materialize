@@ -465,13 +465,16 @@ pub fn create_fast_path_plan<T: Timestamp>(
             {
                 if let Some(finishing) = finishing {
                     if group_key.is_empty() && *order_key == finishing.order_by && *offset == 0 {
-                        // The following is roughly `limit >= finishing.limit`, but with Options.
+                        // The following is roughly `limit >= finishing.limit + finishing.offset`,
+                        // but with Options.
                         let finishing_limits_at_least_as_topk = match (limit, finishing.limit) {
                             (None, _) => true,
                             (Some(..), None) => false,
                             (Some(topk_limit), Some(finishing_limit)) => {
                                 if let Some(l) = topk_limit.as_literal_int64() {
-                                    l >= *finishing_limit
+                                    i128::cast_from(l)
+                                        >= i128::cast_from(*finishing_limit)
+                                            + i128::cast_from(finishing.offset)
                                 } else {
                                     false
                                 }
