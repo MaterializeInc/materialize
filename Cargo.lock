@@ -1644,6 +1644,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "btoi"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b5ab9db53bcda568284df0fd39f6eac24ad6f7ba7ff1168b9e76eba6576b976"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "buildid"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5408,7 +5417,7 @@ dependencies = [
  "futures-util",
  "keyed_priority_queue",
  "lru",
- "mysql_common",
+ "mysql_common 0.35.5",
  "native-tls",
  "pem",
  "percent-encoding",
@@ -5434,7 +5443,34 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.11.0",
  "bitvec",
- "btoi",
+ "btoi 0.4.3",
+ "byteorder",
+ "bytes",
+ "crc32fast",
+ "flate2",
+ "getrandom 0.3.3",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "saturating",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "thiserror 2.0.18",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "mysql_common"
+version = "0.37.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bffc2127d4035fa5a614935c663a15a4468e64e798473e0cc21c8df40a607588"
+dependencies = [
+ "base64 0.22.1",
+ "bitflags 2.11.0",
+ "btoi 0.5.0",
  "byteorder",
  "bytes",
  "chrono",
@@ -5451,7 +5487,6 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "uuid",
- "zstd",
 ]
 
 [[package]]
@@ -6898,7 +6933,7 @@ dependencies = [
  "itertools 0.14.0",
  "maplit",
  "mysql_async",
- "mysql_common",
+ "mysql_common 0.37.1",
  "mz-build-tools",
  "mz-cloud-resources",
  "mz-ore",
@@ -8027,7 +8062,7 @@ dependencies = [
  "itertools 0.14.0",
  "maplit",
  "mysql_async",
- "mysql_common",
+ "mysql_common 0.37.1",
  "mz-arrow-util",
  "mz-build-info",
  "mz-ccsr",
