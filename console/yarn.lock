@@ -4028,10 +4028,10 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@sjwiesman/sql-parser@npm:0.0.0-sjwiesman.1":
-  version: 0.0.0-sjwiesman.1
-  resolution: "@sjwiesman/sql-parser@npm:0.0.0-sjwiesman.1"
-  checksum: 10c0/9469ee0716f396c197c49e5aebb637a98503a07cbe7d115920c23eee09299e9f5e6997c7562124331b8d5a23c9fe9aba7e2035daca00fd42d22e2a990219128c
+"@sjwiesman/sql-parser@npm:0.0.0-sjwiesman.2":
+  version: 0.0.0-sjwiesman.2
+  resolution: "@sjwiesman/sql-parser@npm:0.0.0-sjwiesman.2"
+  checksum: 10c0/585fae440603ec9cdc48b5e37a64eb9f00085554cd178414a29e7ed2ce9db2644d6ec76881246b17202cdb18ee10cc82df4a2a73464d21e851873bf11bd9c795
   languageName: node
   linkType: hard
 
@@ -11000,7 +11000,7 @@ __metadata:
     "@segment/analytics-next": "npm:^1.82.0"
     "@sentry/react": "npm:^10.45.0"
     "@sentry/vite-plugin": "npm:^5.1.1"
-    "@sjwiesman/sql-parser": "npm:0.0.0-sjwiesman.1"
+    "@sjwiesman/sql-parser": "npm:0.0.0-sjwiesman.2"
     "@stripe/react-stripe-js": "npm:^5.6.1"
     "@stripe/stripe-js": "npm:^7.1.0"
     "@svgr/babel-plugin-transform-svg-component": "npm:^8.0.0"
