@@ -17,7 +17,7 @@ mz-sql-parser = { path = "../../../../src/sql-parser", default-features = false 
 mz-ore = { path = "../../../../src/ore", default-features = false, features = ["stack", "assert-no-tracing"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.114"
+wasm-bindgen = "0.2.117"
 lol_alloc = "0.4.1"
 
 [package.metadata.wasm-pack.profile.release]
