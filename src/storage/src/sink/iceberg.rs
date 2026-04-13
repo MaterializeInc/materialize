@@ -85,9 +85,11 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use iceberg::ErrorKind;
-use iceberg::arrow::{arrow_schema_to_schema, schema_to_arrow_schema};
+use iceberg::arrow::{
+    RecordBatchPartitionSplitter, arrow_schema_to_schema, schema_to_arrow_schema,
+};
 use iceberg::spec::{
-    DataFile, FormatVersion, Snapshot, StructType, read_data_files_from_avro,
+    DataFile, FormatVersion, PartitionSpecRef, Snapshot, StructType, read_data_files_from_avro,
     write_data_files_to_avro,
 };
 use iceberg::spec::{Schema, SchemaRef};
@@ -106,6 +108,8 @@ use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+use iceberg::writer::partitioning::PartitioningWriter;
+use iceberg::writer::partitioning::fanout_writer::FanoutWriter;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 use itertools::Itertools;
@@ -174,6 +178,8 @@ struct WriterContext {
     /// Generates unique file names with a per-worker UUID suffix.
     file_name_generator: DefaultFileNameGenerator,
     writer_properties: WriterProperties,
+    /// The table's partition spec, used to route writes into per-partition files.
+    partition_spec: PartitionSpecRef,
 }
 
 /// Envelope-specific logic for writing Iceberg data files.
@@ -195,6 +201,39 @@ trait EnvelopeHandler: Send {
     async fn create_writer(&self, is_snapshot: bool) -> anyhow::Result<Box<dyn IcebergWriter>>;
 
     fn row_to_batch(&self, diff_pair: DiffPair<Row>, ts: Timestamp) -> anyhow::Result<RecordBatch>;
+}
+
+/// Wraps a [`FanoutWriter`] to implement [`IcebergWriter`], splitting each
+/// batch by partition key before writing.
+struct PartitionedWriterAdapter<B: IcebergWriterBuilder> {
+    fanout: Option<FanoutWriter<B>>,
+    splitter: RecordBatchPartitionSplitter,
+}
+
+#[async_trait::async_trait]
+impl<B: IcebergWriterBuilder> IcebergWriter for PartitionedWriterAdapter<B> {
+    async fn write(&mut self, batch: RecordBatch) -> iceberg::Result<()> {
+        let fanout = self.fanout.as_mut().ok_or_else(|| {
+            iceberg::Error::new(
+                iceberg::ErrorKind::Unexpected,
+                "Tried writing to closed partitioned writer.",
+            )
+        })?;
+        for (pk, sub_batch) in self.splitter.split(&batch)? {
+            fanout.write(pk, sub_batch).await?;
+        }
+        Ok(())
+    }
+
+    async fn close(&mut self) -> iceberg::Result<Vec<DataFile>> {
+        let fanout = self.fanout.take().ok_or_else(|| {
+            iceberg::Error::new(
+                iceberg::ErrorKind::Unexpected,
+                "Tried closing an already closed partitioned writer.",
+            )
+        })?;
+        fanout.close().await
+    }
 }
 
 struct UpsertEnvelopeHandler {
@@ -313,12 +352,26 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
             builder = builder.with_max_seen_rows(0);
         }
 
-        Ok(Box::new(
-            builder
-                .build(None)
-                .await
-                .context("Failed to create DeltaWriter")?,
-        ))
+        if self.ctx.partition_spec.is_unpartitioned() {
+            let writer: Box<dyn IcebergWriter> = Box::new(
+                builder
+                    .build(None)
+                    .await
+                    .context("Failed to create DeltaWriter")?,
+            );
+            Ok(writer)
+        } else {
+            let splitter = RecordBatchPartitionSplitter::try_new_with_computed_values(
+                Arc::clone(&self.ctx.current_schema),
+                Arc::clone(&self.ctx.partition_spec),
+            )
+            .context("Failed to create partition splitter")?;
+            let writer: Box<dyn IcebergWriter> = Box::new(PartitionedWriterAdapter {
+                fanout: Some(FanoutWriter::new(builder)),
+                splitter,
+            });
+            Ok(writer)
+        }
     }
 
     /// The `__op` column indicates whether each row is an insert (+1) or delete (-1),
@@ -401,12 +454,28 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
             self.ctx.location_generator.clone(),
             self.ctx.file_name_generator.clone(),
         );
-        Ok(Box::new(
-            DataFileWriterBuilder::new(data_rolling_writer)
-                .build(None)
-                .await
-                .context("Failed to create DataFileWriter")?,
-        ))
+        let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
+
+        if self.ctx.partition_spec.is_unpartitioned() {
+            let writer: Box<dyn IcebergWriter> = Box::new(
+                data_writer_builder
+                    .build(None)
+                    .await
+                    .context("Failed to create DataFileWriter")?,
+            );
+            Ok(writer)
+        } else {
+            let splitter = RecordBatchPartitionSplitter::try_new_with_computed_values(
+                Arc::clone(&self.ctx.current_schema),
+                Arc::clone(&self.ctx.partition_spec),
+            )
+            .context("Failed to create partition splitter")?;
+            let writer: Box<dyn IcebergWriter> = Box::new(PartitionedWriterAdapter {
+                fanout: Some(FanoutWriter::new(data_writer_builder)),
+                splitter,
+            });
+            Ok(writer)
+        }
     }
 
     /// Every change is written as a plain data row: the `before` half (if present) gets
@@ -1540,6 +1609,8 @@ where
 
             let writer_properties = WriterProperties::new();
 
+            let partition_spec = Arc::clone(table_metadata.default_partition_spec());
+
             let ctx = WriterContext {
                 arrow_schema,
                 current_schema: Arc::clone(&current_schema),
@@ -1547,6 +1618,7 @@ where
                 location_generator,
                 file_name_generator,
                 writer_properties,
+                partition_spec,
             };
             let handler = H::new(ctx, &connection, &materialize_arrow_schema)?;
 
