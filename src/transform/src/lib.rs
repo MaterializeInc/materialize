@@ -67,6 +67,7 @@ pub mod analysis;
 pub mod canonicalization;
 pub mod canonicalize_mfp;
 pub mod case_literal;
+pub mod coalesce_case;
 pub mod collect_notices;
 pub mod column_knowledge;
 pub mod compound;
@@ -845,6 +846,7 @@ impl Optimizer {
                 transforms: vec![
                     Box::new(EquivalencePropagation::default()),
                     Box::new(fold_constants_fixpoint(true)),
+                    Box::new(coalesce_case::CoalesceCase::default()),
                     Box::new(Demand::default()),
                     // Demand might have introduced dummies, so let's also do a ProjectionPushdown.
                     Box::new(ProjectionPushdown::default()),

@@ -203,6 +203,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_coalesce_case_transform",
+            "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_cast_elimination",
             "true",
             ["true", "false"],

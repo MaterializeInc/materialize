@@ -651,6 +651,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_cast_elimination: Default::default(),
                 enable_case_literal_transform: Default::default(),
                 enable_simplify_quantified_comparisons: Default::default(),
+                enable_coalesce_case_transform: Default::default(),
             },
         })
     }
