@@ -103,6 +103,7 @@ use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
 
 mod builtin_table_updates;
+pub(crate) use builtin_table_updates::ontology::pack_ontology_updates;
 pub(crate) mod consistency;
 mod migrate;
 

@@ -37,7 +37,7 @@ use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::adt::numeric::NumericMaxScale;
 use mz_repr::namespaces::{
     INFORMATION_SCHEMA, MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA, MZ_INTROSPECTION_SCHEMA,
-    MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
+    MZ_ONTOLOGY_SCHEMA, MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
 use mz_repr::{RelationDesc, SqlRelationType, SqlScalarType};
@@ -6188,6 +6188,129 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
             "The ID of the object. Corresponds to `mz_objects.id`.",
         ),
         ("global_id", "The global ID of the object."),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
+// =============================================================================
+// mz_ontology schema: catalog ontology for LLM-assisted diagnostics
+// =============================================================================
+
+pub static MZ_ONTOLOGY_ENTITY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_ontology_entity_types",
+    schema: MZ_ONTOLOGY_SCHEMA,
+    oid: oid::TABLE_MZ_ONTOLOGY_ENTITY_TYPES_OID,
+    desc: RelationDesc::builder()
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("relation", SqlScalarType::String.nullable(false))
+        .with_column("properties", SqlScalarType::Jsonb.nullable(true))
+        .with_column("description", SqlScalarType::String.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "name",
+            "Short entity name used as a key in ontology relationships.",
+        ),
+        (
+            "relation",
+            "Fully qualified system catalog relation (e.g., mz_catalog.mz_tables).",
+        ),
+        ("properties", "JSON metadata including primary key, if any."),
+        (
+            "description",
+            "Human-readable description of this entity type.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_ONTOLOGY_SEMANTIC_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_ontology_semantic_types",
+    schema: MZ_ONTOLOGY_SCHEMA,
+    oid: oid::TABLE_MZ_ONTOLOGY_SEMANTIC_TYPES_OID,
+    desc: RelationDesc::builder()
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("sql_type", SqlScalarType::String.nullable(false))
+        .with_column("description", SqlScalarType::String.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "name",
+            "Semantic type name (e.g., CatalogItemId, GlobalId, RoleId).",
+        ),
+        (
+            "sql_type",
+            "The underlying SQL type (e.g., text, oid, mz_timestamp).",
+        ),
+        (
+            "description",
+            "Detailed description including format, Rust type, and usage notes.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_ONTOLOGY_PROPERTIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_ontology_properties",
+    schema: MZ_ONTOLOGY_SCHEMA,
+    oid: oid::TABLE_MZ_ONTOLOGY_PROPERTIES_OID,
+    desc: RelationDesc::builder()
+        .with_column("entity_type", SqlScalarType::String.nullable(false))
+        .with_column("column_name", SqlScalarType::String.nullable(false))
+        .with_column("semantic_type", SqlScalarType::String.nullable(true))
+        .with_column("description", SqlScalarType::String.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("entity_type", "The entity type this property belongs to."),
+        ("column_name", "The column name in the underlying relation."),
+        (
+            "semantic_type",
+            "The semantic type of this column, if applicable (references mz_ontology_semantic_types.name).",
+        ),
+        (
+            "description",
+            "Human-readable description of the column including FK references.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
+pub static MZ_ONTOLOGY_LINK_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_ontology_link_types",
+    schema: MZ_ONTOLOGY_SCHEMA,
+    oid: oid::TABLE_MZ_ONTOLOGY_LINK_TYPES_OID,
+    desc: RelationDesc::builder()
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("source_entity", SqlScalarType::String.nullable(false))
+        .with_column("target_entity", SqlScalarType::String.nullable(false))
+        .with_column("properties", SqlScalarType::Jsonb.nullable(true))
+        .with_column("description", SqlScalarType::String.nullable(true))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "name",
+            "Relationship name (e.g., in_schema, owned_by, runs_on_cluster).",
+        ),
+        (
+            "source_entity",
+            "The source entity type in this relationship.",
+        ),
+        (
+            "target_entity",
+            "The target entity type in this relationship.",
+        ),
+        (
+            "properties",
+            "JSON metadata including join columns, cardinality, and ID type info.",
+        ),
+        (
+            "description",
+            "Human-readable description of the relationship.",
+        ),
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
@@ -14364,6 +14487,10 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_OBJECT_HISTORY),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
         Builtin::Table(&MZ_OBJECT_GLOBAL_IDS),
+        Builtin::Table(&MZ_ONTOLOGY_ENTITY_TYPES),
+        Builtin::Table(&MZ_ONTOLOGY_SEMANTIC_TYPES),
+        Builtin::Table(&MZ_ONTOLOGY_PROPERTIES),
+        Builtin::Table(&MZ_ONTOLOGY_LINK_TYPES),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),

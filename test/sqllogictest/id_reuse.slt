@@ -20,15 +20,16 @@ CREATE SCHEMA foo
 query TT rowsort
 SELECT id, name FROM mz_schemas
 ----
-s1 mz_catalog
-s2 pg_catalog
-u3 public
-s4 mz_internal
-s5 information_schema
-s6 mz_unsafe
-s7 mz_catalog_unstable
-s8 mz_introspection
-u9 foo
+s1  mz_catalog
+s2  pg_catalog
+s4  mz_internal
+s5  information_schema
+s6  mz_unsafe
+s7  mz_catalog_unstable
+s8  mz_introspection
+s9  mz_ontology
+u10  foo
+u3  public
 
 statement ok
 DROP schema foo
@@ -42,15 +43,16 @@ CREATE schema bar
 query TT rowsort
 SELECT id, name FROM mz_schemas
 ----
-s1 mz_catalog
-s2 pg_catalog
-u3 public
-s4 mz_internal
-s5 information_schema
-s6 mz_unsafe
-s7 mz_catalog_unstable
-s8 mz_introspection
-u10 bar
+s1  mz_catalog
+s2  pg_catalog
+s4  mz_internal
+s5  information_schema
+s6  mz_unsafe
+s7  mz_catalog_unstable
+s8  mz_introspection
+s9  mz_ontology
+u11  bar
+u3  public
 
 statement ok
 CREATE DATABASE foo

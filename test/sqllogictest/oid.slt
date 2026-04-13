@@ -82,6 +82,7 @@ SELECT oid, name FROM mz_schemas WHERE id LIKE 's%' ORDER BY oid
 16660  mz_unsafe
 16972  mz_catalog_unstable
 16973  mz_introspection
+17075  mz_ontology
 
 query TT
 SELECT oid, name FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%' ORDER BY oid
@@ -1182,3 +1183,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17072  mz_builtin_materialized_views
 17073  parse_catalog_create_sql
 17074  redact_sql
+17076  mz_ontology_entity_types
+17077  mz_ontology_semantic_types
+17078  mz_ontology_properties
+17079  mz_ontology_link_types

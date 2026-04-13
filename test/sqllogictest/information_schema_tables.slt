@@ -1100,6 +1100,22 @@ mz_introspection
 mz_scheduling_parks_histogram_raw
 SOURCE
 materialize
+mz_ontology
+mz_ontology_entity_types
+BASE TABLE
+materialize
+mz_ontology
+mz_ontology_link_types
+BASE TABLE
+materialize
+mz_ontology
+mz_ontology_properties
+BASE TABLE
+materialize
+mz_ontology
+mz_ontology_semantic_types
+BASE TABLE
+materialize
 pg_catalog
 pg_aggregate
 VIEW

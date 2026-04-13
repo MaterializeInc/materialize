@@ -25,8 +25,8 @@ use mz_persist_types::ShardId;
 use mz_pgrepr::oid::{
     FIRST_USER_OID, NETWORK_POLICIES_DEFAULT_POLICY_OID, ROLE_PUBLIC_OID,
     SCHEMA_INFORMATION_SCHEMA_OID, SCHEMA_MZ_CATALOG_OID, SCHEMA_MZ_CATALOG_UNSTABLE_OID,
-    SCHEMA_MZ_INTERNAL_OID, SCHEMA_MZ_INTROSPECTION_OID, SCHEMA_MZ_UNSAFE_OID,
-    SCHEMA_PG_CATALOG_OID,
+    SCHEMA_MZ_INTERNAL_OID, SCHEMA_MZ_INTROSPECTION_OID, SCHEMA_MZ_ONTOLOGY_OID,
+    SCHEMA_MZ_UNSAFE_OID, SCHEMA_PG_CATALOG_OID,
 };
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
@@ -103,6 +103,7 @@ const INFORMATION_SCHEMA_ID: u64 = 5;
 pub const MZ_UNSAFE_SCHEMA_ID: u64 = 6;
 pub const MZ_CATALOG_UNSTABLE_SCHEMA_ID: u64 = 7;
 pub const MZ_INTROSPECTION_SCHEMA_ID: u64 = 8;
+pub const MZ_ONTOLOGY_SCHEMA_ID: u64 = 9;
 
 const DEFAULT_ALLOCATOR_ID: u64 = 1;
 
@@ -195,6 +196,14 @@ static MZ_INTROSPECTION_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
     owner_id: MZ_SYSTEM_ROLE_ID,
     privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
 });
+static MZ_ONTOLOGY_SCHEMA: LazyLock<Schema> = LazyLock::new(|| Schema {
+    id: SchemaId::System(MZ_ONTOLOGY_SCHEMA_ID),
+    oid: SCHEMA_MZ_ONTOLOGY_OID,
+    database_id: None,
+    name: "mz_ontology".to_string(),
+    owner_id: MZ_SYSTEM_ROLE_ID,
+    privileges: SYSTEM_SCHEMA_PRIVILEGES.clone(),
+});
 static SYSTEM_SCHEMAS: LazyLock<BTreeMap<&str, &Schema>> = LazyLock::new(|| {
     [
         &*MZ_CATALOG_SCHEMA,
@@ -204,6 +213,7 @@ static SYSTEM_SCHEMAS: LazyLock<BTreeMap<&str, &Schema>> = LazyLock::new(|| {
         &*MZ_UNSAFE_SCHEMA,
         &*MZ_CATALOG_UNSTABLE_SCHEMA,
         &*MZ_INTROSPECTION_SCHEMA,
+        &*MZ_ONTOLOGY_SCHEMA,
     ]
     .into_iter()
     .map(|s| (&*s.name, s))
@@ -239,6 +249,7 @@ pub(crate) async fn initialize(
                 MZ_UNSAFE_SCHEMA_ID,
                 MZ_CATALOG_UNSTABLE_SCHEMA_ID,
                 MZ_INTROSPECTION_SCHEMA_ID,
+                MZ_ONTOLOGY_SCHEMA_ID,
             ])
             .expect("known to be non-empty")
                 + 1,

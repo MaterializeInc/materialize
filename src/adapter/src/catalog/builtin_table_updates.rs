@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 mod notice;
+pub(crate) mod ontology;
 
 use bytesize::ByteSize;
 use ipnet::IpNet;

@@ -18,20 +18,21 @@ CREATE DATABASE other
 query TT rowsort
 SELECT nspname, nspacl FROM pg_catalog.pg_namespace
 ----
-information_schema NULL
-mz_catalog   NULL
+information_schema  NULL
+mz_catalog  NULL
 mz_catalog_unstable  NULL
-mz_unsafe   NULL
 mz_internal  NULL
 mz_introspection  NULL
-other   NULL
-pg_catalog   NULL
-public   NULL
+mz_ontology  NULL
+mz_unsafe  NULL
+other  NULL
+pg_catalog  NULL
+public  NULL
 
 query I
 SELECT COUNT(*) FROM pg_catalog.pg_namespace WHERE nspowner IS NOT NULL
 ----
-9
+10
 
 statement ok
 SET database = other;
@@ -39,16 +40,17 @@ SET database = other;
 query TT rowsort
 SELECT nspname, nspacl FROM pg_catalog.pg_namespace
 ----
-information_schema NULL
-mz_catalog   NULL
+information_schema  NULL
+mz_catalog  NULL
 mz_catalog_unstable  NULL
-mz_unsafe NULL
 mz_internal  NULL
 mz_introspection  NULL
-pg_catalog   NULL
-public   NULL
+mz_ontology  NULL
+mz_unsafe  NULL
+pg_catalog  NULL
+public  NULL
 
 query I
 SELECT COUNT(*) FROM pg_catalog.pg_namespace WHERE nspowner IS NOT NULL
 ----
-8
+9

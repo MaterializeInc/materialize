@@ -2400,6 +2400,13 @@ impl Coordinator {
             ),
         );
 
+        // Populate mz_ontology tables with static catalog ontology data
+        builtin_table_updates.extend(
+            self.catalog()
+                .state()
+                .resolve_builtin_table_updates(crate::catalog::pack_ontology_updates()),
+        );
+
         debug!("startup: coordinator init: bootstrap: initializing migrated builtin tables");
         // When 0dt is enabled, we create new shards for any migrated builtin storage collections.
         // In read-only mode, the migrated builtin tables (which are a subset of migrated builtin

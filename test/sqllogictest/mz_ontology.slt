@@ -1,0 +1,116 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Smoke tests for the mz_ontology schema.
+
+mode cockroach
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+----
+COMPLETE 0
+
+# Verify the four ontology tables exist and have the expected columns.
+
+query TTTT
+SELECT name, relation, properties->>'primary_key', description
+FROM mz_ontology.mz_ontology_entity_types
+WHERE name = 'cluster'
+----
+cluster  mz_catalog.mz_clusters  ["id"]  A␠compute␠cluster␠that␠runs␠dataflows␠for␠sources,␠sinks,␠MVs,␠and␠indexes
+
+query TTT
+SELECT name, sql_type, description
+FROM mz_ontology.mz_ontology_semantic_types
+WHERE name = 'CatalogItemId'
+----
+CatalogItemId  text  SQL-layer␠identifier␠for␠a␠catalog␠object␠(table,␠view,␠MV,␠source,␠sink,␠index,␠connection,␠secret,␠type,␠function).␠Format:␠s{n}/u{n}.␠This␠is␠the␠ID␠users␠see␠in␠mz_objects.id,␠mz_tables.id,␠etc.␠Rust:␠CatalogItemId␠in␠src/repr/src/catalog_item_id.rs
+
+query TTTT
+SELECT entity_type, column_name, semantic_type, description
+FROM mz_ontology.mz_ontology_properties
+WHERE entity_type = 'cluster' AND column_name = 'id'
+----
+cluster  id  ClusterId  Unique␠cluster␠identifier.␠PK.
+
+query TTTTT
+SELECT name, source_entity, target_entity, properties->>'kind', description
+FROM mz_ontology.mz_ontology_link_types
+WHERE name = 'belongs_to_cluster' AND source_entity = 'replica'
+----
+belongs_to_cluster  replica  cluster  foreign_key  A␠replica␠belongs␠to␠exactly␠one␠cluster.␠A␠cluster␠can␠have␠multiple␠replicas.
+
+# Verify basic row counts are in expected ranges.
+
+query B
+SELECT count(*) > 90 FROM mz_ontology.mz_ontology_entity_types
+----
+true
+
+query B
+SELECT count(*) >= 15 FROM mz_ontology.mz_ontology_semantic_types
+----
+true
+
+query B
+SELECT count(*) > 300 FROM mz_ontology.mz_ontology_properties
+----
+true
+
+query B
+SELECT count(*) > 80 FROM mz_ontology.mz_ontology_link_types
+----
+true
+
+# Verify referential integrity: every entity_type in properties exists in entity_types.
+
+query I
+SELECT count(*)
+FROM mz_ontology.mz_ontology_properties p
+WHERE NOT EXISTS (
+    SELECT 1 FROM mz_ontology.mz_ontology_entity_types e
+    WHERE e.name = p.entity_type
+)
+----
+0
+
+# Verify referential integrity: every semantic_type in properties exists in semantic_types.
+
+query I
+SELECT count(*)
+FROM mz_ontology.mz_ontology_properties p
+WHERE p.semantic_type IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM mz_ontology.mz_ontology_semantic_types s
+    WHERE s.name = p.semantic_type
+)
+----
+0
+
+# Verify referential integrity: link type source/target entities exist in entity_types.
+
+query I
+SELECT count(*)
+FROM mz_ontology.mz_ontology_link_types l
+WHERE NOT EXISTS (
+    SELECT 1 FROM mz_ontology.mz_ontology_entity_types e
+    WHERE e.name = l.source_entity
+)
+----
+0
+
+query I
+SELECT count(*)
+FROM mz_ontology.mz_ontology_link_types l
+WHERE NOT EXISTS (
+    SELECT 1 FROM mz_ontology.mz_ontology_entity_types e
+    WHERE e.name = l.target_entity
+)
+----
+0

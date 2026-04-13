@@ -19,6 +19,7 @@ pub const MZ_INTERNAL_SCHEMA: &str = "mz_internal";
 pub const MZ_INTROSPECTION_SCHEMA: &str = "mz_introspection";
 pub const INFORMATION_SCHEMA: &str = "information_schema";
 pub const MZ_UNSAFE_SCHEMA: &str = "mz_unsafe";
+pub const MZ_ONTOLOGY_SCHEMA: &str = "mz_ontology";
 
 pub const SYSTEM_SCHEMAS: &[&str] = &[
     MZ_CATALOG_SCHEMA,
@@ -28,6 +29,7 @@ pub const SYSTEM_SCHEMAS: &[&str] = &[
     MZ_INTROSPECTION_SCHEMA,
     INFORMATION_SCHEMA,
     MZ_UNSAFE_SCHEMA,
+    MZ_ONTOLOGY_SCHEMA,
 ];
 
 pub const UNSTABLE_SCHEMAS: &[&str] = &[
@@ -35,6 +37,7 @@ pub const UNSTABLE_SCHEMAS: &[&str] = &[
     MZ_INTERNAL_SCHEMA,
     MZ_INTROSPECTION_SCHEMA,
     MZ_UNSAFE_SCHEMA,
+    MZ_ONTOLOGY_SCHEMA,
 ];
 
 /// Returns whether `name` identifies is a system schema.

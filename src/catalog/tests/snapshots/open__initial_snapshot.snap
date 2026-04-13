@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
+assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -366,6 +367,51 @@ Snapshot {
             oid: 16973,
         },
         SchemaKey {
+            id: System(
+                9,
+            ),
+        }: SchemaValue {
+            database_id: None,
+            name: "mz_ontology",
+            owner_id: System(
+                1,
+            ),
+            privileges: [
+                MzAclItem {
+                    grantee: Public,
+                    grantor: System(
+                        1,
+                    ),
+                    acl_mode: AclMode {
+                        bitflags: 256,
+                    },
+                },
+                MzAclItem {
+                    grantee: System(
+                        2,
+                    ),
+                    grantor: System(
+                        1,
+                    ),
+                    acl_mode: AclMode {
+                        bitflags: 256,
+                    },
+                },
+                MzAclItem {
+                    grantee: System(
+                        1,
+                    ),
+                    grantor: System(
+                        1,
+                    ),
+                    acl_mode: AclMode {
+                        bitflags: 768,
+                    },
+                },
+            ],
+            oid: 17075,
+        },
+        SchemaKey {
             id: User(
                 3,
             ),
@@ -702,7 +748,7 @@ Snapshot {
         IdAllocKey {
             name: "schema",
         }: IdAllocValue {
-            next_id: 9,
+            next_id: 10,
         },
         IdAllocKey {
             name: "storage_usage",
