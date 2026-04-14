@@ -8,7 +8,31 @@
 // by the Apache License, Version 2.0.
 
 //! Storage-specific scalar expression and cast function types, decoupled from
-//! `MirScalarExpr` to avoid a dependency on the compute layer.
+//! [`mz_expr::MirScalarExpr`] to ensure storage has stable, version-independent
+//! evaluation behavior.
+//!
+//! # Stability contract
+//!
+//! The error variants returned by [`StorageScalarExpr::eval`] and the output
+//! [`Datum`] types produced by each [`CastFunc`] variant **must not change**
+//! across releases. Existing sources rely on deterministic cast behavior: the
+//! same input must always produce the same output (or the same error). Changes
+//! to error variants, error messages, or output types are **breaking changes**
+//! for storage and require a migration.
+//!
+//! The eval implementations delegate to `mz_repr::strconv::parse_*` functions,
+//! which in turn depend on these external crates:
+//!
+//! * `chrono` / `chrono-tz` — date, time, timestamp, timestamptz parsing
+//! * `dec` (decnumber-sys) — numeric parsing and rescaling
+//! * `serde_json` — jsonb parsing
+//! * `uuid` — uuid parsing
+//! * `hex` — bytea hex decoding
+//! * `regex` — float special-value detection (inf, NaN)
+//! * `ordered-float` — float Datum representation
+//!
+//! Version bumps to any of these crates may alter parse behavior and must be
+//! validated against the parity and error snapshot tests in this module.
 
 use std::borrow::Cow;
 
