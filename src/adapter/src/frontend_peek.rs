@@ -1502,7 +1502,7 @@ impl PeekClient {
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
-    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds), AdapterError> {
+    ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         // this is copy-pasted from Coordinator
 
         let isolation_level = session.vars().transaction_isolation();
@@ -1576,7 +1576,7 @@ impl PeekClient {
     fn assert_read_holds_correct(
         read_holds: &ReadHolds,
         execution: &Execution,
-        determination: &TimestampDetermination<Timestamp>,
+        determination: &TimestampDetermination,
         target_cluster_id: ClusterId,
         in_immediate_multi_stmt_txn: bool,
     ) {
@@ -1740,6 +1740,6 @@ enum Execution {
     },
     ExplainPushdown {
         imports: BTreeMap<GlobalId, mz_expr::MapFilterProject>,
-        determination: TimestampDetermination<Timestamp>,
+        determination: TimestampDetermination,
     },
 }

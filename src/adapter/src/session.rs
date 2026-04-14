@@ -578,7 +578,7 @@ impl Session {
     /// ops to `None`, returning the old read timestamp context if
     /// any existed. Must only be used after verifying that no transaction
     /// anomalies will occur if cleared.
-    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext<Timestamp>> {
+    pub fn take_transaction_timestamp_context(&mut self) -> Option<TimestampContext> {
         if let Some(Transaction { ops, .. }) = self.transaction.inner_mut() {
             if let TransactionOps::Peeks { .. } = ops {
                 let ops = std::mem::take(ops);
@@ -599,9 +599,7 @@ impl Session {
     ///
     /// Returns `None` if there is no active transaction, or if the active
     /// transaction is not a read transaction.
-    pub fn get_transaction_timestamp_determination(
-        &self,
-    ) -> Option<TimestampDetermination<Timestamp>> {
+    pub fn get_transaction_timestamp_determination(&self) -> Option<TimestampDetermination> {
         match self.transaction.inner() {
             Some(Transaction {
                 pcx: _,
@@ -1568,7 +1566,7 @@ pub enum TransactionOps {
     /// perform writes.
     Peeks {
         /// The timestamp and timestamp related metadata for the peek.
-        determination: TimestampDetermination<Timestamp>,
+        determination: TimestampDetermination,
         /// The cluster used to execute peeks.
         cluster_id: ClusterId,
         /// Whether this peek needs to be linearized.
@@ -1617,7 +1615,7 @@ pub enum TransactionOps {
 }
 
 impl TransactionOps {
-    fn timestamp_determination(self) -> Option<TimestampDetermination<Timestamp>> {
+    fn timestamp_determination(self) -> Option<TimestampDetermination> {
         match self {
             TransactionOps::Peeks { determination, .. } => Some(determination),
             TransactionOps::None

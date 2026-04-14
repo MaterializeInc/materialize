@@ -385,7 +385,7 @@ impl FastPathPlan {
 #[derive(Debug)]
 pub struct PlannedPeek {
     pub plan: PeekPlan,
-    pub determination: TimestampDetermination<mz_repr::Timestamp>,
+    pub determination: TimestampDetermination,
     pub conn_id: ConnectionId,
     /// The result type _after_ reading out of the "source" and applying any
     /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
@@ -1233,7 +1233,7 @@ impl crate::coord::Coordinator {
     pub(crate) async fn implement_slow_path_peek(
         &mut self,
         dataflow_plan: PeekDataflowPlan,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
+        determination: TimestampDetermination,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,

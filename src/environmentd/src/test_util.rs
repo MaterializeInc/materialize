@@ -1448,7 +1448,7 @@ pub async fn try_get_explain_timestamp(
 pub async fn get_explain_timestamp_determination(
     from_suffix: &str,
     client: &Client,
-) -> Result<TimestampExplanation<mz_repr::Timestamp>, anyhow::Error> {
+) -> Result<TimestampExplanation, anyhow::Error> {
     let row = client
         .query_one(
             &format!("EXPLAIN TIMESTAMP AS JSON FOR SELECT * FROM {from_suffix}"),
