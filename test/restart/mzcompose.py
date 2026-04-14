@@ -444,31 +444,11 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         agents_url = f"http://localhost:{http_port}/api/mcp/agents"
         developer_url = f"http://localhost:{http_port}/api/mcp/developer"
 
-        # Both endpoints should be disabled by default (feature flags default to false).
-        assert requests.post(agents_url, json=mcp_request).status_code == 503
-        assert requests.post(developer_url, json=mcp_request).status_code == 503
-
-        # Enable the agents endpoint individually.
-        c.sql(
-            "ALTER SYSTEM SET enable_mcp_agents = true",
-            port=6877,
-            user="mz_system",
-        )
-
+        # Both endpoints should be enabled by default.
         assert requests.post(agents_url, json=mcp_request).status_code == 200
-        # Developer should still be disabled.
-        assert requests.post(developer_url, json=mcp_request).status_code == 503
-
-        # Enable developer too.
-        c.sql(
-            "ALTER SYSTEM SET enable_mcp_developer = true",
-            port=6877,
-            user="mz_system",
-        )
-
         assert requests.post(developer_url, json=mcp_request).status_code == 200
 
-        # Disable agents again — developer should remain enabled.
+        # Disable the agents endpoint individually.
         c.sql(
             "ALTER SYSTEM SET enable_mcp_agents = false",
             port=6877,
@@ -476,11 +456,31 @@ def workflow_mcp_feature_flags(c: Composition) -> None:
         )
 
         assert requests.post(agents_url, json=mcp_request).status_code == 503
+        # Developer should still be enabled.
         assert requests.post(developer_url, json=mcp_request).status_code == 200
 
-        # Re-enable agents.
+        # Disable developer too.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_developer = false",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
+
+        # Re-enable agents — developer should remain disabled.
         c.sql(
             "ALTER SYSTEM SET enable_mcp_agents = true",
+            port=6877,
+            user="mz_system",
+        )
+
+        assert requests.post(agents_url, json=mcp_request).status_code == 200
+        assert requests.post(developer_url, json=mcp_request).status_code == 503
+
+        # Re-enable developer.
+        c.sql(
+            "ALTER SYSTEM SET enable_mcp_developer = true",
             port=6877,
             user="mz_system",
         )
