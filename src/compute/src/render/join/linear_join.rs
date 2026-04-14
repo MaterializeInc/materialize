@@ -182,27 +182,27 @@ impl YieldSpec {
 }
 
 /// Different forms the streamed data might take.
-enum JoinedFlavor<'scope, TInner>
+enum JoinedFlavor<'scope, T>
 where
-    TInner: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Streamed data as a collection.
-    Collection(VecCollection<'scope, TInner, Row, Diff>),
+    Collection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local arrangement.
-    Local(Arranged<'scope, RowRowAgent<TInner, Diff>>),
+    Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, TInner>>),
+    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
 }
 
-impl<'scope, TInner> Context<'scope, TInner>
+impl<'scope, T> Context<'scope, T>
 where
-    TInner: Lattice + RenderTimestamp,
+    T: Lattice + RenderTimestamp,
 {
     pub(crate) fn render_join(
         &self,
-        inputs: Vec<CollectionBundle<'scope, TInner>>,
+        inputs: Vec<CollectionBundle<'scope, T>>,
         linear_plan: LinearJoinPlan,
-    ) -> CollectionBundle<'scope, TInner> {
+    ) -> CollectionBundle<'scope, T> {
         self.scope.clone().region_named("Join(Linear)", |inner| {
             self.render_join_inner(inputs, linear_plan, inner)
         })
@@ -210,10 +210,10 @@ where
 
     fn render_join_inner(
         &self,
-        inputs: Vec<CollectionBundle<'scope, TInner>>,
+        inputs: Vec<CollectionBundle<'scope, T>>,
         linear_plan: LinearJoinPlan,
-        inner: Scope<'_, TInner>,
-    ) -> CollectionBundle<'scope, TInner> {
+        inner: Scope<'_, T>,
+    ) -> CollectionBundle<'scope, T> {
         // Collect all error streams, and concatenate them at the end.
         let mut errors = Vec::new();
 
@@ -330,8 +330,8 @@ where
     /// version of the join of previous inputs.
     fn differential_join<'s>(
         &self,
-        mut joined: JoinedFlavor<'s, TInner>,
-        lookup_relation: CollectionBundle<'s, TInner>,
+        mut joined: JoinedFlavor<'s, T>,
+        lookup_relation: CollectionBundle<'s, T>,
         LinearStagePlan {
             stream_key,
             stream_thinning,
@@ -339,14 +339,14 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<VecCollection<'s, TInner, DataflowError, Diff>>,
-    ) -> VecCollection<'s, TInner, Row, Diff> {
+        errors: &mut Vec<VecCollection<'s, T, DataflowError, Diff>>,
+    ) -> VecCollection<'s, T, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
             let name = "LinearJoinKeyPreparation";
             let (keyed, errs) = stream
                 .inner
-                .unary_fallible::<ColumnBuilder<((Row, Row), TInner, Diff)>, _, _, _>(
+                .unary_fallible::<ColumnBuilder<((Row, Row), T, Diff)>, _, _, _>(
                     Pipeline,
                     name,
                     |_, _| {
@@ -392,7 +392,7 @@ where
                     RowRowSpine<_, _>,
                 >(
                     ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                        columnar_exchange::<Row, Row, TInner, Diff>,
+                        columnar_exchange::<Row, Row, T, Diff>,
                     ),
                     "JoinStage"
                 );
@@ -467,12 +467,12 @@ where
         next_input: Arranged<'s, Tr2>,
         closure: JoinClosure,
     ) -> (
-        VecCollection<'s, TInner, Row, Diff>,
-        Option<VecCollection<'s, TInner, DataflowError, Diff>>,
+        VecCollection<'s, T, Row, Diff>,
+        Option<VecCollection<'s, T, DataflowError, Diff>>,
     )
     where
-        Tr1: TraceReader<Time = TInner, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = TInner, Diff = Diff>
+        Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
+        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff>
             + Clone
             + 'static,
         for<'a> Tr1::Key<'a>: ToDatumIter,

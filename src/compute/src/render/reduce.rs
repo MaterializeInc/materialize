@@ -59,20 +59,20 @@ use crate::typedefs::{
     RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
-impl<'scope, TInner> Context<'scope, TInner>
+impl<'scope, T> Context<'scope, T>
 where
-    TInner: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: MzTimestamp + Refines<mz_repr::Timestamp>,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(
         &self,
         input_key: Option<Vec<MirScalarExpr>>,
-        input: CollectionBundle<'scope, TInner>,
+        input: CollectionBundle<'scope, T>,
         key_val_plan: KeyValPlan,
         reduce_plan: ReducePlan,
         mfp_after: Option<MapFilterProject>,
-    ) -> CollectionBundle<'scope, TInner> {
+    ) -> CollectionBundle<'scope, T> {
         // Convert `mfp_after` to an actionable plan.
         let mfp_after = mfp_after.map(|m| {
             m.into_plan()
@@ -171,11 +171,11 @@ where
     fn render_reduce_plan<'s>(
         &self,
         plan: ReducePlan,
-        collection: VecCollection<'s, TInner, (Row, Row), Diff>,
-        err_input: VecCollection<'s, TInner, DataflowError, Diff>,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
+        err_input: VecCollection<'s, T, DataflowError, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> CollectionBundle<'s, TInner> {
+    ) -> CollectionBundle<'s, T> {
         let mut errors = Default::default();
         let arrangement =
             self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity, mfp_after);
@@ -192,11 +192,11 @@ where
     fn render_reduce_plan_inner<'s>(
         &self,
         plan: ReducePlan,
-        collection: VecCollection<'s, TInner, (Row, Row), Diff>,
-        errors: &mut Vec<VecCollection<'s, TInner, DataflowError, Diff>>,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
+        errors: &mut Vec<VecCollection<'s, T, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> Arranged<'s, RowRowAgent<TInner, Diff>> {
+    ) -> Arranged<'s, RowRowAgent<T, Diff>> {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
         // not only values (database-issues#6658).
         let arrangement = match plan {
@@ -258,11 +258,11 @@ where
     /// Build the dataflow to compute the set of distinct keys.
     fn build_distinct<'s>(
         &self,
-        collection: VecCollection<'s, TInner, (Row, Row), Diff>,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        Arranged<'s, TraceAgent<RowRowSpine<TInner, Diff>>>,
-        VecCollection<'s, TInner, DataflowError, Diff>,
+        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
+        VecCollection<'s, T, DataflowError, Diff>,
     ) {
         let error_logger = self.error_logger();
 
@@ -337,13 +337,13 @@ where
     /// in the order specified by `aggrs`.
     fn build_basic_aggregates<'s>(
         &self,
-        input: VecCollection<'s, TInner, (Row, Row), Diff>,
+        input: VecCollection<'s, T, (Row, Row), Diff>,
         aggrs: Vec<AggregateExpr>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        RowRowArrangement<'s, TInner>,
-        VecCollection<'s, TInner, DataflowError, Diff>,
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowError, Diff>,
     ) {
         // We are only using this function to render multiple basic aggregates and
         // stitch them together. If that's not true we should complain.
@@ -442,7 +442,7 @@ where
     /// This method also applies distinctness if required.
     fn build_basic_aggregate<'s>(
         &self,
-        input: VecCollection<'s, TInner, (Row, Row), Diff>,
+        input: VecCollection<'s, T, (Row, Row), Diff>,
         index: usize,
         aggr: &AggregateExpr,
         validating: bool,
@@ -450,8 +450,8 @@ where
         mfp_after: Option<SafeMfpPlan>,
         fused_unnest_list: bool,
     ) -> (
-        RowRowArrangement<'s, TInner>,
-        Option<VecCollection<'s, TInner, DataflowError, Diff>>,
+        RowRowArrangement<'s, T>,
+        Option<VecCollection<'s, T, DataflowError, Diff>>,
     ) {
         let AggregateExpr {
             func,
@@ -721,19 +721,19 @@ where
 
     fn build_reduce_inaccumulable_distinct<'s, Bu, Tr>(
         &self,
-        input: VecCollection<'s, TInner, Row, Diff>,
+        input: VecCollection<'s, T, Row, Diff>,
         name_tag: Option<&str>,
     ) -> Arranged<'s, TraceAgent<Tr>>
     where
         Tr: for<'a> Trace<
                 Key<'a> = DatumSeq<'a>,
                 KeyContainer: BatchContainer<Owned = Row>,
-                Time = TInner,
+                Time = T,
                 Diff = Diff,
                 ValOwn: Data + MaybeValidatingRow<(), String>,
             > + 'static,
         Bu: Builder<
-                Time = TInner,
+                Time = T,
                 Input: Container
                            + InternalMerge
                            + ClearContainer
@@ -790,7 +790,7 @@ where
     /// stage.
     fn build_bucketed<'s>(
         &self,
-        input: VecCollection<'s, TInner, (Row, Row), Diff>,
+        input: VecCollection<'s, T, (Row, Row), Diff>,
         BucketedPlan {
             aggr_funcs,
             buckets,
@@ -798,10 +798,10 @@ where
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        RowRowArrangement<'s, TInner>,
-        VecCollection<'s, TInner, DataflowError, Diff>,
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowError, Diff>,
     ) {
-        let mut err_output: Option<VecCollection<'s, TInner, _, _>> = None;
+        let mut err_output: Option<VecCollection<'s, T, _, _>> = None;
         let outer_scope = input.scope();
         let arranged_output = outer_scope
             .clone()
@@ -988,11 +988,11 @@ where
     fn build_bucketed_stage<'s>(
         &self,
         aggr_funcs: &Vec<AggregateFunc>,
-        input: VecCollection<'s, TInner, (Row, Row), Diff>,
+        input: VecCollection<'s, T, (Row, Row), Diff>,
         validating: bool,
     ) -> (
-        VecCollection<'s, TInner, (Row, Row), Diff>,
-        Option<VecCollection<'s, TInner, DataflowError, Diff>>,
+        VecCollection<'s, T, (Row, Row), Diff>,
+        Option<VecCollection<'s, T, DataflowError, Diff>>,
     ) {
         let (input, negated_output, errs) = if validating {
             let (input, reduced) = self
@@ -1044,10 +1044,10 @@ where
     /// with all diffs in the reduction's output negated.
     fn build_bucketed_negated_output<'s, Bu, Tr>(
         &self,
-        input: VecCollection<'s, TInner, (Row, Row), Diff>,
+        input: VecCollection<'s, T, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
     ) -> (
-        Arranged<'s, TraceAgent<RowRowSpine<TInner, Diff>>>,
+        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
         Arranged<'s, TraceAgent<Tr>>,
     )
     where
@@ -1055,11 +1055,11 @@ where
                 Key<'a> = DatumSeq<'a>,
                 KeyContainer: BatchContainer<Owned = Row>,
                 ValOwn: Data + MaybeValidatingRow<Row, Row>,
-                Time = TInner,
+                Time = T,
                 Diff = Diff,
             > + 'static,
         Bu: Builder<
-                Time = TInner,
+                Time = T,
                 Input: Container
                            + InternalMerge
                            + ClearContainer
@@ -1132,15 +1132,15 @@ where
     /// on monotonic inputs.
     fn build_monotonic<'s>(
         &self,
-        collection: VecCollection<'s, TInner, (Row, Row), Diff>,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
         MonotonicPlan {
             aggr_funcs,
             must_consolidate,
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        RowRowArrangement<'s, TInner>,
-        VecCollection<'s, TInner, DataflowError, Diff>,
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowError, Diff>,
     ) {
         let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
@@ -1255,7 +1255,7 @@ where
     /// yield the final aggregate.
     fn build_accumulable<'s>(
         &self,
-        collection: VecCollection<'s, TInner, (Row, Row), Diff>,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
         AccumulablePlan {
             full_aggrs,
             simple_aggrs,
@@ -1264,8 +1264,8 @@ where
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        RowRowArrangement<'s, TInner>,
-        VecCollection<'s, TInner, DataflowError, Diff>,
+        RowRowArrangement<'s, T>,
+        VecCollection<'s, T, DataflowError, Diff>,
     ) {
         let collection_scope = collection.scope();
 
