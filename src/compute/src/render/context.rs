@@ -38,7 +38,6 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::{Scope, StreamVec};
 use timely::progress::operate::FrontierInterest;
-use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
@@ -47,7 +46,7 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter,
     RowRowSpine,
 };
 
@@ -60,7 +59,7 @@ use crate::typedefs::{
 /// Context has a timestamp type `T`, which is the timestamp used by the scope in question.
 pub struct Context<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// The scope within which all managed collections exist.
     ///
@@ -95,7 +94,7 @@ where
 
 impl<'scope, T> Context<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
@@ -141,7 +140,7 @@ where
 
 impl<'scope, T> Context<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Insert a collection bundle by an identifier.
     ///
@@ -189,7 +188,7 @@ where
 
 impl<'scope, T> Context<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
@@ -224,7 +223,7 @@ where
 #[derive(Clone)]
 pub enum ArrangementFlavor<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// A dataflow-local arrangement.
     Local(
@@ -244,7 +243,7 @@ where
 
 impl<'scope, T> ArrangementFlavor<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Presents `self` as a stream of updates.
     ///
@@ -337,7 +336,7 @@ where
 }
 impl<'scope, T> ArrangementFlavor<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> Scope<'scope, T> {
@@ -364,7 +363,7 @@ where
 }
 impl<'scope, T> ArrangementFlavor<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Extracts the arrangement flavor from a region.
     pub fn leave_region<'outer>(
@@ -392,7 +391,7 @@ where
 #[derive(Clone)]
 pub struct CollectionBundle<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     pub collection: Option<(
         VecCollection<'scope, T, Row, Diff>,
@@ -403,7 +402,7 @@ where
 
 impl<'scope, T> CollectionBundle<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
@@ -477,7 +476,7 @@ where
 
 impl<'scope, T> CollectionBundle<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Extracts the collection bundle from a region.
     pub fn leave_region<'outer>(
@@ -502,7 +501,7 @@ where
 
 impl<'scope, T> CollectionBundle<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,

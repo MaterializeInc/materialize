@@ -21,10 +21,9 @@ use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
 use timely::Container;
 use timely::container::PushInto;
-use timely::progress::timestamp::Refines;
-
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
+use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
@@ -85,7 +84,7 @@ pub fn build_threshold_basic<'scope, T>(
     key: Vec<MirScalarExpr>,
 ) -> CollectionBundle<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     let arrangement = input
         .arrangement(&key)
@@ -115,7 +114,7 @@ where
 
 impl<'scope, T> Context<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     pub(crate) fn render_threshold(
         &self,

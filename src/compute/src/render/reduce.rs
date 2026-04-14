@@ -42,7 +42,6 @@ use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::progress::timestamp::Refines;
 use tracing::warn;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
@@ -50,18 +49,18 @@ use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
-use crate::render::{ArrangementFlavor, Pairer};
+use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBatcher, RowValBuilder,
 };
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, KeyBatcher, MzTimestamp, RowErrBuilder, RowErrSpine, RowRowAgent,
+    ErrBatcher, ErrBuilder, KeyBatcher, RowErrBuilder, RowErrSpine, RowRowAgent,
     RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
 impl<'scope, T> Context<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.

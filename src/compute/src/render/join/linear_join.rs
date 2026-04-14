@@ -31,14 +31,12 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
-use timely::progress::timestamp::Refines;
-
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -184,7 +182,7 @@ impl YieldSpec {
 /// Different forms the streamed data might take.
 enum JoinedFlavor<'scope, T>
 where
-    T: MzTimestamp + Refines<mz_repr::Timestamp>,
+    T: RenderTimestamp,
 {
     /// Streamed data as a collection.
     Collection(VecCollection<'scope, T, Row, Diff>),
