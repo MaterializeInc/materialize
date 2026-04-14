@@ -24,10 +24,13 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
         exit 1
     fi
 
-    try uv venv --python 3.10
+    py310_venv="$(mktemp -d)/venv-py310"
+    trap 'rm -rf "$py310_venv"' EXIT
+
+    try uv venv --python 3.10 "$py310_venv"
     try uv pip compile --python-version 3.10 ci/builder/requirements.txt
-    try uv pip install --python 3.10 --requirement ci/builder/requirements.txt
-    try git_files '*.py' | xargs uv run --no-project --python 3.10 -- python -m compileall -q
+    try uv pip install --python "$py310_venv/bin/python" --requirement ci/builder/requirements.txt
+    try git_files '*.py' | xargs "$py310_venv/bin/python" -m compileall -q
 fi
 
 try_status_report

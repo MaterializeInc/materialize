@@ -52,7 +52,11 @@ def main() -> None:
 
 def get_metadata_from_setup_py(path: Path) -> tuple[str, str]:
     distribution = distutils.core.run_setup(str(path / "setup.py"))
-    return distribution.metadata.name, distribution.metadata.version
+    name = distribution.metadata.name
+    version = distribution.metadata.version
+    assert name is not None, f"missing name in {path}/setup.py"
+    assert version is not None, f"missing version in {path}/setup.py"
+    return name, version
 
 
 def get_metadata_from_pyproject(path: Path) -> tuple[str, str]:
