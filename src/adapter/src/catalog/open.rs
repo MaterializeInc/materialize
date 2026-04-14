@@ -29,7 +29,7 @@ use mz_catalog::builtin::{
     BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
     Fingerprint, MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
-use mz_catalog::config::StateConfig;
+use mz_catalog::config::{ClusterReplicaSizeMap, StateConfig};
 use mz_catalog::durable::objects::{
     SystemObjectDescription, SystemObjectMapping, SystemObjectUniqueIdentifier,
 };
@@ -176,7 +176,8 @@ impl Catalog {
                 },
                 helm_chart_version: config.helm_chart_version,
             },
-            cluster_replica_sizes: config.cluster_replica_sizes,
+            // Start empty; populated from durable state updates after builtin sync.
+            cluster_replica_sizes: ClusterReplicaSizeMap(std::collections::BTreeMap::new()),
             availability_zones: config.availability_zones,
             egress_addresses: config.egress_addresses,
             aws_principal_context: config.aws_principal_context,
@@ -228,6 +229,7 @@ impl Catalog {
                 config.boot_ts,
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
+            sync_builtin_cluster_replica_sizes(&mut txn, &config.cluster_replica_sizes)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
             remove_pending_cluster_replicas_migration(&mut txn, config.boot_ts)?;
 
@@ -282,6 +284,7 @@ impl Catalog {
                 | BootstrapStateUpdateKind::SystemConfiguration(_)
                 | BootstrapStateUpdateKind::Cluster(_)
                 | BootstrapStateUpdateKind::NetworkPolicy(_)
+                | BootstrapStateUpdateKind::ClusterReplicaSize(_)
                 | BootstrapStateUpdateKind::ClusterReplica(_) => {
                     pre_item_updates.push(StateUpdate {
                         kind: kind.into(),
@@ -1110,6 +1113,89 @@ fn add_new_remove_old_builtin_roles_migration(
     // Remove old roles.
     let old_roles = durable_roles.values().map(|role| role.id).collect();
     txn.remove_roles(&old_roles)?;
+
+    Ok(())
+}
+
+/// Syncs the builtin cluster replica sizes from the env-var configuration into
+/// the durable catalog. Inserts new sizes, updates changed sizes, and removes
+/// sizes that are no longer in the configuration.
+fn sync_builtin_cluster_replica_sizes(
+    txn: &mut Transaction<'_>,
+    config_sizes: &ClusterReplicaSizeMap,
+) -> Result<(), AdapterError> {
+    use std::collections::BTreeMap;
+
+    use mz_catalog::durable::objects::DurableType;
+
+    // Collect current durable builtin sizes.
+    let durable_sizes: BTreeMap<String, _> = txn
+        .get_cluster_replica_sizes()
+        .filter(|s| s.builtin)
+        .map(|s| (s.name.clone(), s))
+        .collect();
+
+    // Insert or update builtins from config.
+    for (name, allocation) in &config_sizes.0 {
+        if let Some(existing) = durable_sizes.get(name) {
+            // Check if the allocation changed by comparing the durable value
+            // representation (which is Eq-comparable). Reuse the existing ID
+            // so the key stays stable across restarts.
+            let new_size = mz_catalog::durable::ClusterReplicaSize {
+                id: existing.id,
+                name: name.clone(),
+                allocation: allocation.clone(),
+                builtin: true,
+            };
+            let (_, new_value) = DurableType::into_key_value(new_size);
+            let (_, existing_value) = DurableType::into_key_value(existing.clone());
+            if new_value != existing_value {
+                // Retract and reinsert with updated allocation. The reinsertion
+                // will allocate a fresh ID, which is fine — the old one was
+                // only meaningful while the size existed.
+                txn.remove_cluster_replica_size(name)?;
+                txn.insert_cluster_replica_size(name.clone(), allocation.clone(), true)?;
+            }
+        } else {
+            // New builtin size, insert it.
+            txn.insert_cluster_replica_size(name.clone(), allocation.clone(), true)?;
+        }
+    }
+
+    // Remove or disable builtins that are no longer in config.
+    // If a replica still references the size, mark it disabled instead of
+    // deleting to avoid panics in concretize_replica_location.
+    // If no replica references it, delete it outright.
+    let in_use_sizes: std::collections::BTreeSet<String> = txn
+        .get_cluster_replicas()
+        .filter_map(|r| match r.config.location {
+            mz_catalog::durable::ReplicaLocation::Managed { ref size, .. } => Some(size.clone()),
+            mz_catalog::durable::ReplicaLocation::Unmanaged { .. } => None,
+        })
+        .collect();
+
+    for (name, existing) in &durable_sizes {
+        if !config_sizes.0.contains_key(name) {
+            if in_use_sizes.contains(name) {
+                // Still referenced by a replica — keep but disable.
+                warn!(
+                    "builtin cluster replica size '{}' removed from config but still \
+                     in use by a replica; marking as disabled",
+                    name
+                );
+                let mut disabled_allocation = existing.allocation.clone();
+                disabled_allocation.disabled = true;
+                txn.remove_cluster_replica_size(name)?;
+                txn.insert_cluster_replica_size(name.clone(), disabled_allocation, true)?;
+            } else {
+                info!(
+                    "removing builtin cluster replica size '{}' (no longer in config)",
+                    name
+                );
+                txn.remove_cluster_replica_size(name)?;
+            }
+        }
+    }
 
     Ok(())
 }

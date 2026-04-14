@@ -15,15 +15,16 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
     AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
-    ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
-    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    ClusterKey, ClusterReplicaKey, ClusterReplicaSizeKey, ClusterReplicaSizeValue,
+    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, ConfigKey, ConfigValue,
+    DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue, GidMappingKey,
+    GidMappingValue, IdAllocKey, IdAllocValue, IntrospectionSourceIndexCatalogItemId,
+    IntrospectionSourceIndexGlobalId, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    RoleKey, RoleValue, SchemaKey, SchemaValue, ServerConfigurationKey, ServerConfigurationValue,
+    SettingKey, SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemCatalogItemId,
+    SystemGlobalId, SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -629,6 +630,62 @@ impl RustType<proto::NetworkPolicyValue> for NetworkPolicyValue {
             owner_id: proto.owner_id.into_rust()?,
             privileges: proto.privileges.into_rust()?,
             oid: proto.oid,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeKey> for ClusterReplicaSizeKey {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeKey {
+        proto::ClusterReplicaSizeKey {
+            id: self.id.into_proto(),
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeKey) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeKey {
+            id: proto.id.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::ClusterReplicaSizeValue> for ClusterReplicaSizeValue {
+    fn into_proto(&self) -> proto::ClusterReplicaSizeValue {
+        proto::ClusterReplicaSizeValue {
+            name: self.name.clone(),
+            memory_limit: self.memory_limit,
+            memory_request: self.memory_request,
+            cpu_limit: self.cpu_limit,
+            cpu_request: self.cpu_request,
+            disk_limit: self.disk_limit,
+            scale: self.scale,
+            workers: self.workers,
+            credits_per_hour: self.credits_per_hour.clone(),
+            cpu_exclusive: self.cpu_exclusive,
+            is_cc: self.is_cc,
+            swap_enabled: self.swap_enabled,
+            disabled: self.disabled,
+            selectors: self.selectors.clone(),
+            builtin: self.builtin,
+        }
+    }
+
+    fn from_proto(proto: proto::ClusterReplicaSizeValue) -> Result<Self, TryFromProtoError> {
+        Ok(ClusterReplicaSizeValue {
+            name: proto.name,
+            memory_limit: proto.memory_limit,
+            memory_request: proto.memory_request,
+            cpu_limit: proto.cpu_limit,
+            cpu_request: proto.cpu_request,
+            disk_limit: proto.disk_limit,
+            scale: proto.scale,
+            workers: proto.workers,
+            credits_per_hour: proto.credits_per_hour,
+            cpu_exclusive: proto.cpu_exclusive,
+            is_cc: proto.is_cc,
+            swap_enabled: proto.swap_enabled,
+            disabled: proto.disabled,
+            selectors: proto.selectors,
+            builtin: proto.builtin,
         })
     }
 }

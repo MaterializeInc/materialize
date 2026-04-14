@@ -585,6 +585,10 @@ pub enum ExecuteResponse {
     CreatedType,
     /// The requested network policy was created.
     CreatedNetworkPolicy,
+    /// The requested cluster replica size was created.
+    CreatedClusterReplicaSize,
+    /// The requested cluster replica size was dropped.
+    DroppedClusterReplicaSize,
     /// The requested prepared statement was removed.
     Deallocate { all: bool },
     /// The requested cursor was declared.
@@ -751,6 +755,12 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
+            ExecuteResponseKind::CreatedClusterReplicaSize => {
+                Ok(ExecuteResponse::CreatedClusterReplicaSize)
+            }
+            ExecuteResponseKind::DroppedClusterReplicaSize => {
+                Ok(ExecuteResponse::DroppedClusterReplicaSize)
+            }
             ExecuteResponseKind::CreatedContinualTask => Ok(ExecuteResponse::CreatedContinualTask),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
@@ -816,6 +826,8 @@ impl ExecuteResponse {
             CreatedContinualTask { .. } => Some("CREATE CONTINUAL TASK".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
+            CreatedClusterReplicaSize => Some("CREATE CLUSTER REPLICA SIZE".into()),
+            DroppedClusterReplicaSize => Some("DROP CLUSTER REPLICA SIZE".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
@@ -910,6 +922,8 @@ impl ExecuteResponse {
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
             CreateNetworkPolicy => &[CreatedNetworkPolicy],
+            CreateClusterReplicaSize => &[CreatedClusterReplicaSize],
+            DropClusterReplicaSize => &[DroppedClusterReplicaSize],
             Declare => &[DeclaredCursor],
             DiscardTemp => &[DiscardedTemp],
             DiscardAll => &[DiscardedAll],

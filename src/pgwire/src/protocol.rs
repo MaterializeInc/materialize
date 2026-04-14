@@ -2283,6 +2283,8 @@ where
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
             | ExecuteResponse::CreatedNetworkPolicy
+            | ExecuteResponse::CreatedClusterReplicaSize
+            | ExecuteResponse::DroppedClusterReplicaSize
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)

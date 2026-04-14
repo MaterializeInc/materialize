@@ -35,11 +35,11 @@ pub use crate::durable::objects::Snapshot;
 pub use crate::durable::objects::state_update::StateUpdate;
 use crate::durable::objects::state_update::{StateUpdateKindJson, TryIntoStateUpdateKind};
 pub use crate::durable::objects::{
-    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, Comment,
-    Database, DefaultPrivilege, IntrospectionSourceIndex, Item, NetworkPolicy, ReplicaConfig,
-    ReplicaLocation, Role, RoleAuth, Schema, SourceReference, SourceReferences,
-    StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription, SystemObjectMapping,
-    UnfinalizedShard,
+    Cluster, ClusterConfig, ClusterReplica, ClusterReplicaSize, ClusterVariant,
+    ClusterVariantManaged, Comment, Database, DefaultPrivilege, IntrospectionSourceIndex, Item,
+    NetworkPolicy, ReplicaConfig, ReplicaLocation, Role, RoleAuth, Schema, SourceReference,
+    SourceReferences, StorageCollectionMetadata, SystemConfiguration, SystemObjectDescription,
+    SystemObjectMapping, UnfinalizedShard,
 };
 pub use crate::durable::persist::shard_id;
 use crate::durable::persist::{Timestamp, UnopenedPersistCatalogState};
@@ -70,6 +70,8 @@ pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 pub const USER_NETWORK_POLICY_ID_ALLOC_KEY: &str = "user_network_policy";
+pub const USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY: &str = "user_cluster_replica_size";
+pub const SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY: &str = "system_cluster_replica_size";
 pub const OID_ALLOC_KEY: &str = "oid";
 pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 pub const BUILTIN_MIGRATION_SHARD_KEY: &str = "builtin_migration_shard";

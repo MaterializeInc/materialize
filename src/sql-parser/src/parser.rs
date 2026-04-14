@@ -1943,7 +1943,10 @@ impl<'a> Parser<'a> {
                 .map_parser_err(StatementKind::CreateRole)
         } else if self.peek_keyword(CLUSTER) {
             self.next_token();
-            if self.peek_keyword(REPLICA) {
+            if self.peek_keywords(&[REPLICA, SIZE]) {
+                self.parse_create_cluster_replica_size()
+                    .map_parser_err(StatementKind::CreateClusterReplicaSize)
+            } else if self.peek_keyword(REPLICA) {
                 self.parse_create_cluster_replica()
                     .map_parser_err(StatementKind::CreateClusterReplica)
             } else {
@@ -4821,6 +4824,61 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    fn parse_create_cluster_replica_size(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[REPLICA, SIZE])?;
+        let name = self.parse_identifier()?;
+        self.expect_token(&Token::LParen)?;
+        let options = self.parse_comma_separated(Parser::parse_cluster_replica_size_option)?;
+        self.expect_token(&Token::RParen)?;
+        Ok(Statement::CreateClusterReplicaSize(
+            CreateClusterReplicaSizeStatement { name, options },
+        ))
+    }
+
+    fn parse_cluster_replica_size_option(
+        &mut self,
+    ) -> Result<ClusterReplicaSizeOption<Raw>, ParserError> {
+        let name = match self.expect_one_of_keywords(&[
+            WORKERS, SCALE, CREDITS, MEMORY, CPU, DISK, DISABLED, NODE, IS, SWAP,
+        ])? {
+            WORKERS => ClusterReplicaSizeOptionName::Workers,
+            SCALE => ClusterReplicaSizeOptionName::Scale,
+            CREDITS => {
+                self.expect_keywords(&[PER, HOUR])?;
+                ClusterReplicaSizeOptionName::CreditsPerHour
+            }
+            MEMORY => {
+                self.expect_keyword(LIMIT)?;
+                ClusterReplicaSizeOptionName::MemoryLimit
+            }
+            CPU => match self.expect_one_of_keywords(&[LIMIT, EXCLUSIVE])? {
+                LIMIT => ClusterReplicaSizeOptionName::CpuLimit,
+                EXCLUSIVE => ClusterReplicaSizeOptionName::CpuExclusive,
+                _ => unreachable!(),
+            },
+            DISK => {
+                self.expect_keyword(LIMIT)?;
+                ClusterReplicaSizeOptionName::DiskLimit
+            }
+            DISABLED => ClusterReplicaSizeOptionName::Disabled,
+            NODE => {
+                self.expect_keyword(SELECTORS)?;
+                ClusterReplicaSizeOptionName::NodeSelectors
+            }
+            IS => {
+                self.expect_keyword(CC)?;
+                ClusterReplicaSizeOptionName::IsCc
+            }
+            SWAP => {
+                self.expect_keyword(ENABLED)?;
+                ClusterReplicaSizeOptionName::SwapEnabled
+            }
+            _ => unreachable!(),
+        };
+        let value = self.parse_optional_option_value()?;
+        Ok(ClusterReplicaSizeOption { name, value })
+    }
+
     fn parse_if_exists(&mut self) -> Result<bool, ParserError> {
         if self.parse_keyword(IF) {
             self.expect_keyword(EXISTS)?;
@@ -4901,6 +4959,9 @@ impl<'a> Parser<'a> {
         if self.parse_keyword(OWNED) {
             self.parse_drop_owned()
                 .map_parser_err(StatementKind::DropOwned)
+        } else if self.peek_keywords(&[CLUSTER, REPLICA, SIZE]) {
+            self.parse_drop_cluster_replica_size()
+                .map_parser_err(StatementKind::DropClusterReplicaSize)
         } else {
             self.parse_drop_objects()
                 .map_parser_err(StatementKind::DropObjects)
@@ -5029,6 +5090,14 @@ impl<'a> Parser<'a> {
             names,
             cascade: false,
         }))
+    }
+
+    fn parse_drop_cluster_replica_size(&mut self) -> Result<Statement<Raw>, ParserError> {
+        self.expect_keywords(&[CLUSTER, REPLICA, SIZE])?;
+        let name = self.parse_identifier()?;
+        Ok(Statement::DropClusterReplicaSize(
+            DropClusterReplicaSizeStatement { name },
+        ))
     }
 
     fn parse_drop_owned(&mut self) -> Result<Statement<Raw>, ParserError> {

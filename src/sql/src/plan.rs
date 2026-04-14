@@ -41,6 +41,7 @@ use mz_expr::{CollectionPlan, ColumnOrder, MapFilterProject, MirScalarExpr, RowS
 use mz_ore::now::{self, NOW_ZERO};
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::adt::numeric::Numeric;
 use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
@@ -144,6 +145,8 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateContinualTask(CreateContinualTaskPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
+    CreateClusterReplicaSize(CreateClusterReplicaSizePlan),
+    DropClusterReplicaSize(DropClusterReplicaSizePlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
@@ -273,6 +276,8 @@ impl Plan {
             StatementKind::CreateDatabase => &[PlanKind::CreateDatabase],
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
+            StatementKind::CreateClusterReplicaSize => &[PlanKind::CreateClusterReplicaSize],
+            StatementKind::DropClusterReplicaSize => &[PlanKind::DropClusterReplicaSize],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
             StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
@@ -350,6 +355,8 @@ impl Plan {
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
+            Plan::CreateClusterReplicaSize(_) => "create cluster replica size",
+            Plan::DropClusterReplicaSize(_) => "drop cluster replica size",
             Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
@@ -782,6 +789,27 @@ pub struct CreateContinualTaskPlan {
 pub struct CreateNetworkPolicyPlan {
     pub name: String,
     pub rules: Vec<NetworkPolicyRule>,
+}
+
+#[derive(Debug)]
+pub struct CreateClusterReplicaSizePlan {
+    pub name: String,
+    pub workers: usize,
+    pub scale: u16,
+    pub credits_per_hour: Numeric,
+    pub memory_limit: Option<u64>,
+    pub cpu_limit: Option<u64>,
+    pub disk_limit: Option<u64>,
+    pub cpu_exclusive: bool,
+    pub disabled: bool,
+    pub selectors: BTreeMap<String, String>,
+    pub is_cc: bool,
+    pub swap_enabled: bool,
+}
+
+#[derive(Debug)]
+pub struct DropClusterReplicaSizePlan {
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]

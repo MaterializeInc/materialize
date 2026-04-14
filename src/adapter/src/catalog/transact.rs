@@ -165,6 +165,23 @@ pub enum Op {
         name: String,
         owner_id: RoleId,
     },
+    CreateClusterReplicaSize {
+        name: String,
+        workers: usize,
+        scale: u16,
+        credits_per_hour: mz_repr::adt::numeric::Numeric,
+        memory_limit: Option<u64>,
+        cpu_limit: Option<u64>,
+        disk_limit: Option<u64>,
+        cpu_exclusive: bool,
+        disabled: bool,
+        selectors: BTreeMap<String, String>,
+        is_cc: bool,
+        swap_enabled: bool,
+    },
+    DropClusterReplicaSize {
+        name: String,
+    },
     Comment {
         object_id: CommentObjectId,
         sub_component: Option<usize>,
@@ -1659,6 +1676,91 @@ impl Catalog {
                 )?;
 
                 info!("created network policy {name} ({id})");
+            }
+            Op::CreateClusterReplicaSize {
+                name,
+                workers,
+                scale,
+                credits_per_hour,
+                memory_limit,
+                cpu_limit,
+                disk_limit,
+                cpu_exclusive,
+                disabled,
+                selectors,
+                is_cc,
+                swap_enabled,
+            } => {
+                // Build ReplicaAllocation from the fields
+                use mz_orchestrator::{CpuLimit, DiskLimit, MemoryLimit};
+                use std::num::NonZero;
+
+                let allocation = mz_controller::clusters::ReplicaAllocation {
+                    memory_limit: memory_limit.map(|b| MemoryLimit(bytesize::ByteSize(b))),
+                    memory_request: None,
+                    cpu_limit: cpu_limit.map(|n| {
+                        CpuLimit::from_millicpus(usize::try_from(n / 1_000_000).expect("cpu fits"))
+                    }),
+                    cpu_request: None,
+                    disk_limit: disk_limit.map(|b| DiskLimit(bytesize::ByteSize(b))),
+                    scale: NonZero::new(scale).expect("scale must be non-zero"),
+                    workers: NonZero::new(workers).expect("workers must be non-zero"),
+                    credits_per_hour,
+                    cpu_exclusive,
+                    is_cc,
+                    swap_enabled,
+                    disabled,
+                    selectors,
+                };
+                tx.insert_cluster_replica_size(name.clone(), allocation, false)?;
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Create,
+                    mz_audit_log::ObjectType::ClusterReplicaSize,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: name.clone(),
+                        name: name.clone(),
+                    }),
+                )?;
+            }
+            Op::DropClusterReplicaSize { name } => {
+                // Check that it exists and is not builtin
+                let sizes: Vec<_> = tx.get_cluster_replica_sizes().collect();
+                let size = sizes.iter().find(|s| s.name == name);
+                match size {
+                    Some(s) if s.builtin => {
+                        return Err(AdapterError::Catalog(Error::new(
+                            ErrorKind::ReadOnlyClusterReplicaSize(name),
+                        )));
+                    }
+                    Some(_) => {
+                        tx.remove_cluster_replica_size(&name)?;
+                    }
+                    None => {
+                        return Err(AdapterError::PlanError(PlanError::Catalog(
+                            SqlCatalogError::UnknownClusterReplicaSize(name),
+                        )));
+                    }
+                }
+
+                CatalogState::add_to_audit_log(
+                    &state.system_configuration,
+                    oracle_write_ts,
+                    session,
+                    tx,
+                    audit_events,
+                    EventType::Drop,
+                    mz_audit_log::ObjectType::ClusterReplicaSize,
+                    EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                        id: name.clone(),
+                        name: name.clone(),
+                    }),
+                )?;
             }
             Op::Comment {
                 object_id,

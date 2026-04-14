@@ -300,6 +300,9 @@ impl CatalogState {
             StateUpdateKind::NetworkPolicy(network_policy) => {
                 self.apply_network_policy_update(network_policy, diff, retractions);
             }
+            StateUpdateKind::ClusterReplicaSize(size) => {
+                self.apply_cluster_replica_size_update(size, diff, retractions);
+            }
             StateUpdateKind::IntrospectionSourceIndex(introspection_source_index) => {
                 self.apply_introspection_source_index_update(
                     introspection_source_index,
@@ -540,6 +543,25 @@ impl CatalogState {
             diff,
             &mut retractions.network_policies,
         );
+    }
+
+    #[instrument(level = "debug")]
+    fn apply_cluster_replica_size_update(
+        &mut self,
+        size: mz_catalog::durable::ClusterReplicaSize,
+        diff: StateDiff,
+        _retractions: &mut InProgressRetractions,
+    ) {
+        match diff {
+            StateDiff::Addition => {
+                self.cluster_replica_sizes
+                    .0
+                    .insert(size.name, size.allocation);
+            }
+            StateDiff::Retraction => {
+                self.cluster_replica_sizes.0.remove(&size.name);
+            }
+        }
     }
 
     #[instrument(level = "debug")]
@@ -1462,6 +1484,18 @@ impl CatalogState {
                         .expect("could not pack audit log update"),
                 ]
             }
+            StateUpdateKind::ClusterReplicaSize(ref size) => {
+                if size.allocation.disabled {
+                    Vec::new()
+                } else {
+                    CatalogState::pack_replica_size_update(
+                        &size.name,
+                        &size.allocation,
+                        size.builtin,
+                        diff,
+                    )
+                }
+            }
             StateUpdateKind::Database(_)
             | StateUpdateKind::Schema(_)
             | StateUpdateKind::NetworkPolicy(_)
@@ -2039,7 +2073,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | StateUpdateKind::DefaultPrivilege(_)
             | StateUpdateKind::SystemPrivilege(_)
             | StateUpdateKind::SystemConfiguration(_)
-            | StateUpdateKind::NetworkPolicy(_) => push_update(
+            | StateUpdateKind::NetworkPolicy(_)
+            | StateUpdateKind::ClusterReplicaSize(_) => push_update(
                 update,
                 diff,
                 &mut pre_cluster_retractions,
@@ -2405,6 +2440,7 @@ impl ApplyState {
             | SystemConfiguration(_)
             | Cluster(_)
             | NetworkPolicy(_)
+            | ClusterReplicaSize(_)
             | ClusterReplica(_)
             | SourceReferences(_)
             | Comment(_)

@@ -57,6 +57,7 @@ pub enum CollectionType {
     ComputeInstance,
     ComputeIntrospectionSourceIndex,
     ComputeReplicas,
+    ClusterReplicaSize,
     Comments,
     Config,
     Database,
@@ -151,6 +152,14 @@ collection_impl!({
     collection_type: CollectionType::ComputeReplicas,
     trace_field: cluster_replicas,
     update: StateUpdateKind::ClusterReplica,
+});
+collection_impl!({
+    name: ClusterReplicaSizeCollection,
+    key: proto::ClusterReplicaSizeKey,
+    value: proto::ClusterReplicaSizeValue,
+    collection_type: CollectionType::ClusterReplicaSize,
+    trace_field: cluster_replica_sizes,
+    update: StateUpdateKind::ClusterReplicaSize,
 });
 collection_impl!({
     name: CommentCollection,
@@ -332,6 +341,7 @@ pub struct Trace {
     pub clusters: CollectionTrace<ClusterCollection>,
     pub introspection_sources: CollectionTrace<ClusterIntrospectionSourceIndexCollection>,
     pub cluster_replicas: CollectionTrace<ClusterReplicaCollection>,
+    pub cluster_replica_sizes: CollectionTrace<ClusterReplicaSizeCollection>,
     pub comments: CollectionTrace<CommentCollection>,
     pub configs: CollectionTrace<ConfigCollection>,
     pub databases: CollectionTrace<DatabaseCollection>,
@@ -359,6 +369,7 @@ impl Trace {
             clusters: CollectionTrace::new(),
             introspection_sources: CollectionTrace::new(),
             cluster_replicas: CollectionTrace::new(),
+            cluster_replica_sizes: CollectionTrace::new(),
             comments: CollectionTrace::new(),
             configs: CollectionTrace::new(),
             databases: CollectionTrace::new(),
@@ -386,6 +397,7 @@ impl Trace {
             clusters,
             introspection_sources,
             cluster_replicas,
+            cluster_replica_sizes,
             comments,
             configs,
             databases,
@@ -409,6 +421,7 @@ impl Trace {
         clusters.sort();
         introspection_sources.sort();
         cluster_replicas.sort();
+        cluster_replica_sizes.sort();
         comments.sort();
         configs.sort();
         databases.sort();

@@ -317,6 +317,10 @@ mz_cluster_replica_name_history
 VIEW
 materialize
 mz_internal
+mz_cluster_replica_size_details
+BASE TABLE
+materialize
+mz_internal
 mz_cluster_replica_status_history
 SOURCE
 materialize

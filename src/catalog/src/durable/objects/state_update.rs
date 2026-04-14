@@ -141,6 +141,7 @@ impl StateUpdate {
             clusters,
             cluster_replicas,
             network_policies,
+            cluster_replica_sizes,
             introspection_sources,
             id_allocator,
             configs,
@@ -165,6 +166,8 @@ impl StateUpdate {
         let clusters = from_batch(clusters, StateUpdateKind::Cluster);
         let cluster_replicas = from_batch(cluster_replicas, StateUpdateKind::ClusterReplica);
         let network_policies = from_batch(network_policies, StateUpdateKind::NetworkPolicy);
+        let cluster_replica_sizes =
+            from_batch(cluster_replica_sizes, StateUpdateKind::ClusterReplicaSize);
         let introspection_sources = from_batch(
             introspection_sources,
             StateUpdateKind::IntrospectionSourceIndex,
@@ -196,6 +199,7 @@ impl StateUpdate {
             .chain(clusters)
             .chain(cluster_replicas)
             .chain(network_policies)
+            .chain(cluster_replica_sizes)
             .chain(introspection_sources)
             .chain(id_allocators)
             .chain(configs)
@@ -221,6 +225,7 @@ pub enum StateUpdateKind {
     AuditLog(proto::AuditLogKey, ()),
     Cluster(proto::ClusterKey, proto::ClusterValue),
     ClusterReplica(proto::ClusterReplicaKey, proto::ClusterReplicaValue),
+    ClusterReplicaSize(proto::ClusterReplicaSizeKey, proto::ClusterReplicaSizeValue),
     Comment(proto::CommentKey, proto::CommentValue),
     Config(proto::ConfigKey, proto::ConfigValue),
     Database(proto::DatabaseKey, proto::DatabaseValue),
@@ -258,6 +263,7 @@ impl StateUpdateKind {
             StateUpdateKind::AuditLog(_, _) => Some(CollectionType::AuditLog),
             StateUpdateKind::Cluster(_, _) => Some(CollectionType::ComputeInstance),
             StateUpdateKind::ClusterReplica(_, _) => Some(CollectionType::ComputeReplicas),
+            StateUpdateKind::ClusterReplicaSize(_, _) => Some(CollectionType::ClusterReplicaSize),
             StateUpdateKind::Comment(_, _) => Some(CollectionType::Comments),
             StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
@@ -496,6 +502,10 @@ impl TryFrom<&StateUpdateKind> for Option<memory::objects::StateUpdateKind> {
                 let policy = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::NetworkPolicy(policy))
             }
+            StateUpdateKind::ClusterReplicaSize(key, value) => {
+                let size = into_durable(key, value)?;
+                Some(memory::objects::StateUpdateKind::ClusterReplicaSize(size))
+            }
             StateUpdateKind::Role(key, value) => {
                 let role = into_durable(key, value)?;
                 Some(memory::objects::StateUpdateKind::Role(role))
@@ -643,6 +653,9 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             StateUpdateKind::NetworkPolicy(key, value) => {
                 proto::StateUpdateKind::NetworkPolicy(proto::NetworkPolicy { key, value })
             }
+            StateUpdateKind::ClusterReplicaSize(key, value) => {
+                proto::StateUpdateKind::ClusterReplicaSize(proto::ClusterReplicaSize { key, value })
+            }
             StateUpdateKind::Role(key, value) => {
                 proto::StateUpdateKind::Role(proto::Role { key, value })
             }
@@ -762,6 +775,10 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::NetworkPolicy(proto::NetworkPolicy { key, value }) => {
                 StateUpdateKind::NetworkPolicy(key, value)
             }
+            proto::StateUpdateKind::ClusterReplicaSize(proto::ClusterReplicaSize {
+                key,
+                value,
+            }) => StateUpdateKind::ClusterReplicaSize(key, value),
         })
     }
 }

@@ -63,6 +63,7 @@ pub enum Statement<T: AstInfo> {
     CreateRole(CreateRoleStatement),
     CreateCluster(CreateClusterStatement<T>),
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
+    CreateClusterReplicaSize(CreateClusterReplicaSizeStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
@@ -86,6 +87,7 @@ pub enum Statement<T: AstInfo> {
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
     DropOwned(DropOwnedStatement<T>),
+    DropClusterReplicaSize(DropClusterReplicaSizeStatement),
     SetVariable(SetVariableStatement),
     ResetVariable(ResetVariableStatement),
     Show(ShowStatement<T>),
@@ -143,6 +145,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateType(stmt) => f.write_node(stmt),
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
+            Statement::CreateClusterReplicaSize(stmt) => f.write_node(stmt),
             Statement::CreateNetworkPolicy(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterNetworkPolicy(stmt) => f.write_node(stmt),
@@ -165,6 +168,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropOwned(stmt) => f.write_node(stmt),
+            Statement::DropClusterReplicaSize(stmt) => f.write_node(stmt),
             Statement::SetVariable(stmt) => f.write_node(stmt),
             Statement::ResetVariable(stmt) => f.write_node(stmt),
             Statement::Show(stmt) => f.write_node(stmt),
@@ -224,6 +228,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateRole => "create_role",
         StatementKind::CreateCluster => "create_cluster",
         StatementKind::CreateClusterReplica => "create_cluster_replica",
+        StatementKind::CreateClusterReplicaSize => "create_cluster_replica_size",
         StatementKind::CreateSecret => "create_secret",
         StatementKind::CreateNetworkPolicy => "create_network_policy",
         StatementKind::AlterCluster => "alter_cluster",
@@ -249,6 +254,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
         StatementKind::DropOwned => "drop_owned",
+        StatementKind::DropClusterReplicaSize => "drop_cluster_replica_size",
         StatementKind::SetVariable => "set_variable",
         StatementKind::ResetVariable => "reset_variable",
         StatementKind::Show => "show",
@@ -2543,6 +2549,115 @@ impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
     }
 }
 impl_display_t!(CreateClusterReplicaStatement);
+
+/// `CREATE CLUSTER REPLICA SIZE ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateClusterReplicaSizeStatement<T: AstInfo> {
+    /// The name of the replica size.
+    pub name: Ident,
+    /// Any options that were attached, in the order they were presented.
+    pub options: Vec<ClusterReplicaSizeOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateClusterReplicaSizeStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE CLUSTER REPLICA SIZE ");
+        f.write_node(&self.name);
+        f.write_str(" (");
+        f.write_node(&display::comma_separated(&self.options));
+        f.write_str(")");
+    }
+}
+impl_display_t!(CreateClusterReplicaSizeStatement);
+
+/// `DROP CLUSTER REPLICA SIZE <name>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropClusterReplicaSizeStatement {
+    /// The name of the replica size to drop.
+    pub name: Ident,
+}
+
+impl AstDisplay for DropClusterReplicaSizeStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("DROP CLUSTER REPLICA SIZE ");
+        f.write_node(&self.name);
+    }
+}
+impl_display!(DropClusterReplicaSizeStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClusterReplicaSizeOption<T: AstInfo> {
+    pub name: ClusterReplicaSizeOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ClusterReplicaSizeOptionName {
+    /// The `WORKERS` option.
+    Workers,
+    /// The `SCALE` option.
+    Scale,
+    /// The `CREDITS PER HOUR` option.
+    CreditsPerHour,
+    /// The `MEMORY LIMIT` option.
+    MemoryLimit,
+    /// The `CPU LIMIT` option.
+    CpuLimit,
+    /// The `DISK LIMIT` option.
+    DiskLimit,
+    /// The `CPU EXCLUSIVE` option.
+    CpuExclusive,
+    /// The `DISABLED` option.
+    Disabled,
+    /// The `NODE SELECTORS` option (JSON object of key-value node selectors).
+    NodeSelectors,
+    /// The `IS CC` option.
+    IsCc,
+    /// The `SWAP ENABLED` option.
+    SwapEnabled,
+}
+
+impl WithOptionName for ClusterReplicaSizeOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            ClusterReplicaSizeOptionName::Workers
+            | ClusterReplicaSizeOptionName::Scale
+            | ClusterReplicaSizeOptionName::CreditsPerHour
+            | ClusterReplicaSizeOptionName::MemoryLimit
+            | ClusterReplicaSizeOptionName::CpuLimit
+            | ClusterReplicaSizeOptionName::DiskLimit
+            | ClusterReplicaSizeOptionName::CpuExclusive
+            | ClusterReplicaSizeOptionName::Disabled
+            | ClusterReplicaSizeOptionName::NodeSelectors
+            | ClusterReplicaSizeOptionName::IsCc
+            | ClusterReplicaSizeOptionName::SwapEnabled => false,
+        }
+    }
+}
+
+impl AstDisplay for ClusterReplicaSizeOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            ClusterReplicaSizeOptionName::Workers => f.write_str("WORKERS"),
+            ClusterReplicaSizeOptionName::Scale => f.write_str("SCALE"),
+            ClusterReplicaSizeOptionName::CreditsPerHour => f.write_str("CREDITS PER HOUR"),
+            ClusterReplicaSizeOptionName::MemoryLimit => f.write_str("MEMORY LIMIT"),
+            ClusterReplicaSizeOptionName::CpuLimit => f.write_str("CPU LIMIT"),
+            ClusterReplicaSizeOptionName::DiskLimit => f.write_str("DISK LIMIT"),
+            ClusterReplicaSizeOptionName::CpuExclusive => f.write_str("CPU EXCLUSIVE"),
+            ClusterReplicaSizeOptionName::Disabled => f.write_str("DISABLED"),
+            ClusterReplicaSizeOptionName::NodeSelectors => f.write_str("NODE SELECTORS"),
+            ClusterReplicaSizeOptionName::IsCc => f.write_str("IS CC"),
+            ClusterReplicaSizeOptionName::SwapEnabled => f.write_str("SWAP ENABLED"),
+        }
+    }
+}
+impl_display_for_with_option!(ClusterReplicaSizeOption);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ReplicaOptionName {

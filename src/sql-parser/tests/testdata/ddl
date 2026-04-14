@@ -3505,3 +3505,10 @@ DROP NETWORK POLICY if exists q
 DROP NETWORK POLICY IF EXISTS q
 =>
 DropObjects(DropObjectsStatement { object_type: NetworkPolicy, if_exists: true, names: [NetworkPolicy(Ident("q"))], cascade: false })
+
+parse-statement
+CREATE CLUSTER REPLICA SIZE "25cc" (WORKERS = 1, SCALE = 1, CREDITS PER HOUR = '1', MEMORY LIMIT = '4Gb', CPU LIMIT = '1', DISK LIMIT = '30Gb', CPU EXCLUSIVE = false, DISABLED = false)
+----
+CREATE CLUSTER REPLICA SIZE "25cc" (WORKERS = 1, SCALE = 1, CREDITS PER HOUR = '1', MEMORY LIMIT = '4Gb', CPU LIMIT = '1', DISK LIMIT = '30Gb', CPU EXCLUSIVE = false, DISABLED = false)
+=>
+CreateClusterReplicaSize(CreateClusterReplicaSizeStatement { name: Ident("25cc"), options: [ClusterReplicaSizeOption { name: Workers, value: Some(Value(Number("1"))) }, ClusterReplicaSizeOption { name: Scale, value: Some(Value(Number("1"))) }, ClusterReplicaSizeOption { name: CreditsPerHour, value: Some(Value(String("1"))) }, ClusterReplicaSizeOption { name: MemoryLimit, value: Some(Value(String("4Gb"))) }, ClusterReplicaSizeOption { name: CpuLimit, value: Some(Value(String("1"))) }, ClusterReplicaSizeOption { name: DiskLimit, value: Some(Value(String("30Gb"))) }, ClusterReplicaSizeOption { name: CpuExclusive, value: Some(Value(Boolean(false))) }, ClusterReplicaSizeOption { name: Disabled, value: Some(Value(Boolean(false))) }] })

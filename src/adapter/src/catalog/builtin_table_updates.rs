@@ -16,17 +16,18 @@ use mz_audit_log::{EventDetails, EventType, ObjectType, VersionedEvent, Versione
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
-    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_CONTINUAL_TASKS,
-    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
-    MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
-    MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
-    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SECRETS,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_DETAILS,
+    MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS, MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS,
+    MZ_COMMENTS, MZ_CONNECTIONS, MZ_CONTINUAL_TASKS, MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS,
+    MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES,
+    MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES,
+    MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES,
+    MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS,
+    MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH,
+    MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES,
+    MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
@@ -35,6 +36,7 @@ use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func,
     Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
+use mz_controller::clusters::ReplicaAllocation;
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
 };
@@ -1933,32 +1935,65 @@ impl CatalogState {
                 continue;
             }
 
-            // Just invent something when the limits are `None`, which only happens in non-prod
-            // environments (tests, process orchestrator, etc.)
-            let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
-            let MemoryLimit(ByteSize(memory_bytes)) =
-                (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
-            let DiskLimit(ByteSize(disk_bytes)) =
-                (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
-
-            let row = Row::pack_slice(&[
-                size.as_str().into(),
-                u64::cast_from(alloc.scale).into(),
-                u64::cast_from(alloc.workers).into(),
-                cpu_limit.as_nanocpus().into(),
-                memory_bytes.into(),
-                disk_bytes.into(),
-                (alloc.credits_per_hour).into(),
-            ]);
-
-            updates.push(BuiltinTableUpdate::row(
-                &*MZ_CLUSTER_REPLICA_SIZES,
-                row,
+            // The builtin flag isn't available from ClusterReplicaSizeMap; the details
+            // table is populated correctly via state updates in apply.rs which has
+            // access to the full ClusterReplicaSize with the builtin flag.
+            updates.extend(Self::pack_replica_size_update(
+                size,
+                alloc,
+                false,
                 Diff::ONE,
             ));
         }
 
         updates
+    }
+
+    pub fn pack_replica_size_update(
+        size: &str,
+        alloc: &ReplicaAllocation,
+        builtin: bool,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        // Just invent something when the limits are `None`, which only happens in non-prod
+        // environments (tests, process orchestrator, etc.)
+        let cpu_limit = alloc.cpu_limit.unwrap_or(CpuLimit::MAX);
+        let MemoryLimit(ByteSize(memory_bytes)) = (alloc.memory_limit).unwrap_or(MemoryLimit::MAX);
+        let DiskLimit(ByteSize(disk_bytes)) = (alloc.disk_limit).unwrap_or(DiskLimit::ARBITRARY);
+
+        let public_row = Row::pack_slice(&[
+            size.into(),
+            u64::cast_from(alloc.scale).into(),
+            u64::cast_from(alloc.workers).into(),
+            cpu_limit.as_nanocpus().into(),
+            memory_bytes.into(),
+            disk_bytes.into(),
+            (alloc.credits_per_hour).into(),
+        ]);
+
+        let selectors_value =
+            serde_json::to_value(&alloc.selectors).expect("selectors serializable");
+        let selectors_jsonb = Jsonb::from_serde_json(selectors_value).expect("valid jsonb");
+        let details_row = Row::pack_slice(&[
+            size.into(),
+            u64::cast_from(alloc.scale).into(),
+            u64::cast_from(alloc.workers).into(),
+            cpu_limit.as_nanocpus().into(),
+            memory_bytes.into(),
+            disk_bytes.into(),
+            (alloc.credits_per_hour).into(),
+            alloc.cpu_exclusive.into(),
+            alloc.is_cc.into(),
+            alloc.swap_enabled.into(),
+            alloc.disabled.into(),
+            builtin.into(),
+            selectors_jsonb.into_row().into_element(),
+        ]);
+
+        vec![
+            BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZES, public_row, diff),
+            BuiltinTableUpdate::row(&*MZ_CLUSTER_REPLICA_SIZE_DETAILS, details_row, diff),
+        ]
     }
 
     pub fn pack_subscribe_update(

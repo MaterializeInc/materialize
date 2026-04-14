@@ -754,6 +754,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::ClusterReplica(key, value) => {
                         apply(&mut snapshot.cluster_replicas, key, value, diff);
                     }
+                    StateUpdateKind::ClusterReplicaSize(key, value) => {
+                        apply(&mut snapshot.cluster_replica_sizes, key, value, diff);
+                    }
                     StateUpdateKind::Comment(key, value) => {
                         apply(&mut snapshot.comments, key, value, diff);
                     }
@@ -1958,6 +1961,9 @@ impl Trace {
                 StateUpdateKind::Cluster(k, v) => trace.clusters.values.push(((k, v), ts, diff)),
                 StateUpdateKind::ClusterReplica(k, v) => {
                     trace.cluster_replicas.values.push(((k, v), ts, diff))
+                }
+                StateUpdateKind::ClusterReplicaSize(k, v) => {
+                    trace.cluster_replica_sizes.values.push(((k, v), ts, diff))
                 }
                 StateUpdateKind::Comment(k, v) => trace.comments.values.push(((k, v), ts, diff)),
                 StateUpdateKind::Config(k, v) => trace.configs.values.push(((k, v), ts, diff)),

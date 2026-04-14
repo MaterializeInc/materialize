@@ -19,6 +19,7 @@ use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
 use mz_proto::{ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
+use mz_repr::cluster_replica_size_id::ClusterReplicaSizeId;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
@@ -205,6 +206,23 @@ impl RustType<crate::objects::NetworkPolicyId> for NetworkPolicyId {
         let id = match proto {
             crate::objects::NetworkPolicyId::User(id) => NetworkPolicyId::User(id),
             crate::objects::NetworkPolicyId::System(id) => NetworkPolicyId::System(id),
+        };
+        Ok(id)
+    }
+}
+
+impl RustType<crate::objects::ClusterReplicaSizeId> for ClusterReplicaSizeId {
+    fn into_proto(&self) -> crate::objects::ClusterReplicaSizeId {
+        match self {
+            ClusterReplicaSizeId::User(id) => crate::objects::ClusterReplicaSizeId::User(*id),
+            ClusterReplicaSizeId::System(id) => crate::objects::ClusterReplicaSizeId::System(*id),
+        }
+    }
+
+    fn from_proto(proto: crate::objects::ClusterReplicaSizeId) -> Result<Self, TryFromProtoError> {
+        let id = match proto {
+            crate::objects::ClusterReplicaSizeId::User(id) => ClusterReplicaSizeId::User(id),
+            crate::objects::ClusterReplicaSizeId::System(id) => ClusterReplicaSizeId::System(id),
         };
         Ok(id)
     }

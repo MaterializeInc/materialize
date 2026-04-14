@@ -50,11 +50,11 @@ use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
     AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
     ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
-    ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
-    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
+    ClusterReplicaSizeKey, ClusterReplicaSizeValue, ClusterReplicaValue, ClusterValue, CommentKey,
+    CommentValue, Config, ConfigKey, ConfigValue, Database, DatabaseKey, DatabaseValue,
+    DefaultPrivilegesKey, DefaultPrivilegesValue, DurableType, GidMappingKey, GidMappingValue,
+    IdAllocKey, IdAllocValue, IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey,
+    NetworkPolicyValue, ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
     ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
     SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
@@ -65,9 +65,9 @@ use crate::durable::{
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration,
-    USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
-    USER_ROLE_ID_ALLOC_KEY,
+    SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY,
+    Snapshot, SystemConfiguration, USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY, USER_ITEM_ALLOC_KEY,
+    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -100,6 +100,7 @@ pub struct Transaction<'a> {
     source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
     system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
     network_policies: TableTransaction<NetworkPolicyKey, NetworkPolicyValue>,
+    cluster_replica_sizes: TableTransaction<ClusterReplicaSizeKey, ClusterReplicaSizeValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
     unfinalized_shards: TableTransaction<UnfinalizedShardKey, ()>,
@@ -125,6 +126,7 @@ impl<'a> Transaction<'a> {
             comments,
             clusters,
             network_policies,
+            cluster_replica_sizes,
             cluster_replicas,
             introspection_sources,
             id_allocator,
@@ -171,6 +173,10 @@ impl<'a> Transaction<'a> {
             network_policies: TableTransaction::new_with_uniqueness_fn(
                 network_policies,
                 |a: &NetworkPolicyValue, b| a.name == b.name,
+            )?,
+            cluster_replica_sizes: TableTransaction::new_with_uniqueness_fn(
+                cluster_replica_sizes,
+                |a: &ClusterReplicaSizeValue, b| a.name == b.name,
             )?,
             cluster_replicas: TableTransaction::new_with_uniqueness_fn(
                 cluster_replicas,
@@ -1041,6 +1047,7 @@ impl<'a> Transaction<'a> {
             comments: self.comments.current_items_proto(),
             clusters: self.clusters.current_items_proto(),
             network_policies: self.network_policies.current_items_proto(),
+            cluster_replica_sizes: self.cluster_replica_sizes.current_items_proto(),
             cluster_replicas: self.cluster_replicas.current_items_proto(),
             introspection_sources: self.introspection_sources.current_items_proto(),
             id_allocator: self.id_allocator.current_items_proto(),
@@ -2205,6 +2212,68 @@ impl<'a> Transaction<'a> {
             .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
     }
 
+    pub fn get_cluster_replica_sizes(
+        &self,
+    ) -> impl Iterator<Item = super::ClusterReplicaSize> + use<'_> {
+        self.cluster_replica_sizes
+            .items()
+            .into_iter()
+            .map(|(k, v)| DurableType::from_key_value(k.clone(), v.clone()))
+    }
+
+    /// Insert a new cluster replica size, allocating a fresh ID from either the
+    /// user or system allocator depending on the `builtin` flag.
+    pub fn insert_cluster_replica_size(
+        &mut self,
+        name: String,
+        allocation: mz_controller::clusters::ReplicaAllocation,
+        builtin: bool,
+    ) -> Result<mz_repr::cluster_replica_size_id::ClusterReplicaSizeId, CatalogError> {
+        use mz_repr::cluster_replica_size_id::ClusterReplicaSizeId;
+        let raw_id = if builtin {
+            self.get_and_increment_id(SYSTEM_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string())?
+        } else {
+            self.get_and_increment_id(USER_CLUSTER_REPLICA_SIZE_ID_ALLOC_KEY.to_string())?
+        };
+        let id = if builtin {
+            ClusterReplicaSizeId::System(raw_id)
+        } else {
+            ClusterReplicaSizeId::User(raw_id)
+        };
+        let size = super::ClusterReplicaSize {
+            id,
+            name: name.clone(),
+            allocation,
+            builtin,
+        };
+        let (key, value) = DurableType::into_key_value(size);
+        match self.cluster_replica_sizes.insert(key, value, self.op_id) {
+            Ok(_) => Ok(id),
+            Err(_) => Err(SqlCatalogError::ClusterReplicaSizeAlreadyExists(name).into()),
+        }
+    }
+
+    /// Remove a cluster replica size by name.
+    pub fn remove_cluster_replica_size(&mut self, name: &str) -> Result<(), CatalogError> {
+        // Since the key is the ID, we must look up the ID from the name first.
+        let id = self
+            .cluster_replica_sizes
+            .items()
+            .into_iter()
+            .find(|(_, v)| v.name == name)
+            .map(|(k, _)| k.id);
+        let Some(id) = id else {
+            return Err(SqlCatalogError::UnknownClusterReplicaSize(name.to_string()).into());
+        };
+        let key = ClusterReplicaSizeKey { id };
+        let prev = self.cluster_replica_sizes.delete_by_key(key, self.op_id);
+        if prev.is_none() {
+            Err(SqlCatalogError::UnknownClusterReplicaSize(name.to_string()).into())
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn get_system_object_mappings(
         &self,
     ) -> impl Iterator<Item = SystemObjectMapping> + use<'_> {
@@ -2336,6 +2405,7 @@ impl<'a> Transaction<'a> {
             role_auth,
             clusters,
             network_policies,
+            cluster_replica_sizes,
             cluster_replicas,
             introspection_sources,
             system_gid_mapping,
@@ -2399,6 +2469,11 @@ impl<'a> Transaction<'a> {
             .chain(get_collection_op_updates(
                 network_policies,
                 StateUpdateKind::NetworkPolicy,
+                self.op_id,
+            ))
+            .chain(get_collection_op_updates(
+                cluster_replica_sizes,
+                StateUpdateKind::ClusterReplicaSize,
                 self.op_id,
             ))
             .chain(get_collection_op_updates(
@@ -2489,6 +2564,7 @@ impl<'a> Transaction<'a> {
             clusters: self.clusters.pending(),
             cluster_replicas: self.cluster_replicas.pending(),
             network_policies: self.network_policies.pending(),
+            cluster_replica_sizes: self.cluster_replica_sizes.pending(),
             introspection_sources: self.introspection_sources.pending(),
             id_allocator: self.id_allocator.pending(),
             configs: self.configs.pending(),
@@ -2534,6 +2610,7 @@ impl<'a> Transaction<'a> {
             clusters,
             cluster_replicas,
             network_policies,
+            cluster_replica_sizes,
             introspection_sources,
             id_allocator,
             configs,
@@ -2560,6 +2637,7 @@ impl<'a> Transaction<'a> {
         differential_dataflow::consolidation::consolidate_updates(clusters);
         differential_dataflow::consolidation::consolidate_updates(cluster_replicas);
         differential_dataflow::consolidation::consolidate_updates(network_policies);
+        differential_dataflow::consolidation::consolidate_updates(cluster_replica_sizes);
         differential_dataflow::consolidation::consolidate_updates(introspection_sources);
         differential_dataflow::consolidation::consolidate_updates(id_allocator);
         differential_dataflow::consolidation::consolidate_updates(configs);
@@ -2741,6 +2819,11 @@ pub struct TransactionBatch {
     pub(crate) clusters: Vec<(proto::ClusterKey, proto::ClusterValue, Diff)>,
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
     pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
+    pub(crate) cluster_replica_sizes: Vec<(
+        proto::ClusterReplicaSizeKey,
+        proto::ClusterReplicaSizeValue,
+        Diff,
+    )>,
     pub(crate) introspection_sources: Vec<(
         proto::ClusterIntrospectionSourceIndexKey,
         proto::ClusterIntrospectionSourceIndexValue,
@@ -2794,6 +2877,7 @@ impl TransactionBatch {
             clusters,
             cluster_replicas,
             network_policies,
+            cluster_replica_sizes,
             introspection_sources,
             id_allocator,
             configs,
@@ -2818,6 +2902,7 @@ impl TransactionBatch {
             && clusters.is_empty()
             && cluster_replicas.is_empty()
             && network_policies.is_empty()
+            && cluster_replica_sizes.is_empty()
             && introspection_sources.is_empty()
             && id_allocator.is_empty()
             && configs.is_empty()
@@ -2880,6 +2965,7 @@ mod unique_name {
     }
 
     impl_unique_name! {
+        ClusterReplicaSizeValue,
         ClusterReplicaValue,
         ClusterValue,
         DatabaseValue,

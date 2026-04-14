@@ -183,6 +183,8 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 | `heap_bytes`        | [`uint8`]    | Approximate heap (RAM + swap) usage, in bytes.
 | `heap_limit`        | [`uint8`]    | Available heap (RAM + swap) space, in bytes.
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_details -->
+
 ## `mz_cluster_replica_metrics_history`
 
 {{< warn-if-unreleased v0.116 >}}

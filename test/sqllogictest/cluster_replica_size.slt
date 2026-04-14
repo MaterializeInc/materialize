@@ -1,0 +1,120 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Tests for CREATE/DROP CLUSTER REPLICA SIZE.
+
+mode standard
+
+reset-server
+
+# Cannot create cluster replica size without feature flag.
+statement error is not available
+CREATE CLUSTER REPLICA SIZE custom1 (CREDITS PER HOUR = '1', WORKERS = 2, SCALE = 1)
+
+# Enable the feature flag.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_custom_cluster_replica_sizes = on
+----
+COMPLETE 0
+
+# Create a custom cluster replica size.
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA SIZE custom1 (CREDITS PER HOUR = '2', WORKERS = 1, SCALE = 1)
+----
+COMPLETE 0
+
+# Verify the new size appears in mz_cluster_replica_sizes.
+query TI
+SELECT size, workers FROM mz_cluster_replica_sizes WHERE size = 'custom1'
+----
+custom1
+1
+
+# Creating a duplicate size should fail.
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA SIZE custom1 (CREDITS PER HOUR = '3', WORKERS = 1, SCALE = 1)
+----
+db error: ERROR: cluster replica size 'custom1' already exists
+
+# Allow the custom size for use.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET allowed_cluster_replica_sizes = 'custom1'
+----
+COMPLETE 0
+
+# Create a cluster using the custom size.
+statement ok
+CREATE CLUSTER test_cluster REPLICAS (r1 (SIZE 'custom1'))
+
+# Attempting to drop the in-use size should fail.
+simple conn=mz_system,user=mz_system
+DROP CLUSTER REPLICA SIZE custom1
+----
+db error: ERROR: cannot drop cluster replica size 'custom1' because it is in use by an existing replica
+
+# Drop the cluster that uses the size.
+statement ok
+DROP CLUSTER test_cluster
+
+# Now we can drop the size.
+simple conn=mz_system,user=mz_system
+DROP CLUSTER REPLICA SIZE custom1
+----
+COMPLETE 0
+
+# Verify the size is gone.
+query I
+SELECT count(*) FROM mz_cluster_replica_sizes WHERE size = 'custom1'
+----
+0
+
+# Dropping a nonexistent size should fail.
+simple conn=mz_system,user=mz_system
+DROP CLUSTER REPLICA SIZE nonexistent
+----
+db error: ERROR: unknown cluster replica size 'nonexistent'
+
+# Create another custom size with more options.
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA SIZE custom2 (CREDITS PER HOUR = '5', WORKERS = 4, SCALE = 2, MEMORY LIMIT = '4GiB', CPU LIMIT = '0.5', DISK LIMIT = '512MiB')
+----
+COMPLETE 0
+
+# Verify the size properties (4GiB = 4294967296 bytes, 0.5 cores = 500000000 nanocpus).
+query TIIII
+SELECT size, workers, processes, memory_bytes, cpu_nano_cores FROM mz_cluster_replica_sizes WHERE size = 'custom2'
+----
+custom2
+4
+2
+4294967296
+500000000
+
+# Clean up.
+simple conn=mz_system,user=mz_system
+DROP CLUSTER REPLICA SIZE custom2
+----
+COMPLETE 0
+
+# Test millicpus syntax for CPU.
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER REPLICA SIZE custom3 (CREDITS PER HOUR = '1', CPU LIMIT = '250m', MEMORY LIMIT = '1GB')
+----
+COMPLETE 0
+
+query TI
+SELECT size, cpu_nano_cores FROM mz_cluster_replica_sizes WHERE size = 'custom3'
+----
+custom3
+250000000
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER REPLICA SIZE custom3
+----
+COMPLETE 0
