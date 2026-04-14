@@ -658,6 +658,247 @@ mod tests {
         assert_eq!(result, Datum::Int32(2));
     }
 
+    // --- Error snapshot tests: hardcode expected EvalError variants.
+    // These survive after parity tests are removed.
+
+    mod error_snapshots {
+        use mz_expr::EvalError;
+        use mz_repr::strconv::{ParseError, ParseErrorKind};
+        use mz_repr::{Datum, RowArena};
+
+        use super::*;
+
+        fn eval_cast_err(func: CastFunc, input: &str) -> EvalError {
+            let arena = RowArena::new();
+            let expr = StorageScalarExpr::CallUnary(func, Box::new(StorageScalarExpr::Column(0)));
+            expr.eval(&[Datum::String(input)], &arena)
+                .expect_err("expected error")
+        }
+
+        fn parse_err(type_name: &'static str, input: &str) -> EvalError {
+            EvalError::Parse(ParseError {
+                kind: ParseErrorKind::InvalidInputSyntax,
+                type_name: type_name.into(),
+                input: input.into(),
+                details: None,
+            })
+        }
+
+        fn parse_err_with_details(
+            type_name: &'static str,
+            input: &str,
+            details: &str,
+        ) -> EvalError {
+            EvalError::Parse(ParseError {
+                kind: ParseErrorKind::InvalidInputSyntax,
+                type_name: type_name.into(),
+                input: input.into(),
+                details: Some(details.into()),
+            })
+        }
+
+        #[mz_ore::test]
+        fn error_bool() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToBool, "bad"),
+                parse_err("boolean", "bad"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_int16() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToInt16, "bad"),
+                parse_err_with_details("smallint", "bad", "invalid digit found in string"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_int32() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToInt32, "bad"),
+                parse_err_with_details("integer", "bad", "invalid digit found in string"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_int64() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToInt64, "bad"),
+                parse_err_with_details("bigint", "bad", "invalid digit found in string"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_float32() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToFloat32, "bad"),
+                parse_err("real", "bad"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_float64() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToFloat64, "bad"),
+                parse_err("double precision", "bad"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_date() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToDate, "bad"),
+                parse_err_with_details("date", "bad", "YEAR, MONTH, DAY are all required"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_time() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToTime, "bad"),
+                parse_err_with_details("time", "bad", "unknown units bad"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_timestamp() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToTimestamp(None), "bad"),
+                parse_err_with_details("timestamp", "bad", "YEAR, MONTH, DAY are all required"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_timestamptz() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToTimestampTz(None), "bad"),
+                parse_err_with_details(
+                    "timestamp with time zone",
+                    "bad",
+                    "YEAR, MONTH, DAY are all required"
+                ),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_interval() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToInterval, "bad"),
+                parse_err_with_details("interval", "bad", "unknown units bad"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_uuid() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToUuid, "bad"),
+                parse_err_with_details(
+                    "uuid",
+                    "bad",
+                    "invalid length: expected length 32 for simple format, found 3"
+                ),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_numeric() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToNumeric(None), "bad"),
+                parse_err("numeric", "bad"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_bytes() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToBytes, "\\xZZ"),
+                parse_err_with_details("bytea", "\\xZZ", "invalid hexadecimal digit: \"Z\""),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_jsonb() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToJsonb, "{bad"),
+                parse_err_with_details("jsonb", "{bad", "key must be a string at line 1 column 2"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_uint16() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToUint16, "-1"),
+                parse_err_with_details("uint2", "-1", "invalid digit found in string"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_uint32() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToUint32, "-1"),
+                parse_err_with_details("uint4", "-1", "invalid digit found in string"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_uint64() {
+            assert_eq!(
+                eval_cast_err(CastFunc::CastStringToUint64, "-1"),
+                parse_err_with_details("uint8", "-1", "invalid digit found in string"),
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_char_too_long() {
+            let length = mz_repr::adt::char::CharLength::try_from(3_i64).unwrap();
+            assert_eq!(
+                eval_cast_err(
+                    CastFunc::CastStringToChar {
+                        length: Some(length),
+                        fail_on_len: true,
+                    },
+                    "toolong"
+                ),
+                EvalError::StringValueTooLong {
+                    target_type: "character".into(),
+                    length: 3,
+                },
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_varchar_too_long() {
+            let length = mz_repr::adt::varchar::VarCharMaxLength::try_from(3_i64).unwrap();
+            assert_eq!(
+                eval_cast_err(
+                    CastFunc::CastStringToVarChar {
+                        length: Some(length),
+                        fail_on_len: true,
+                    },
+                    "toolong"
+                ),
+                EvalError::StringValueTooLong {
+                    target_type: "character varying".into(),
+                    length: 3,
+                },
+            );
+        }
+
+        #[mz_ore::test]
+        fn error_if_null() {
+            let arena = RowArena::new();
+            let expr = StorageScalarExpr::ErrorIfNull(
+                Box::new(StorageScalarExpr::Column(0)),
+                "col must not be null".to_string(),
+            );
+            assert_eq!(
+                expr.eval(&[Datum::Null], &arena).unwrap_err(),
+                EvalError::IfNullError("col must not be null".into()),
+            );
+        }
+    }
+
     // --- Parity tests: StorageScalarExpr must produce identical results
     // (Ok values and Err variants) as MirScalarExpr for the same inputs.
 
