@@ -47,19 +47,7 @@ def post_mcp(c: Composition, endpoint: str, body: dict) -> requests.Response:
 def workflow_default(c: Composition) -> None:
     c.up("materialized")
 
-    # MCP feature flags default to false; enable them for testing.
-    c.sql(
-        "ALTER SYSTEM SET enable_mcp_agent = true",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
-    c.sql(
-        "ALTER SYSTEM SET enable_mcp_developer = true",
-        user="mz_system",
-        port=6877,
-        print_statement=False,
-    )
+    # MCP feature flags default to true; no explicit enable needed.
 
     with c.test_case("agent_initialize"):
         r = post_mcp(
