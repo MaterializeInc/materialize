@@ -75,9 +75,9 @@ if (appConfig.mode === "cloud") {
     normalizeDepth: 8,
     tracesSampler: (samplingContext) => {
       if (samplingContext.attributes?.polled) {
-        return 0.01;
+        return 0.001;
       } else {
-        return 0.3;
+        return 0.05;
       }
     },
   });
