@@ -75,7 +75,10 @@ function registerSqlLanguage(monacoInstance: Monaco) {
   } as monacoEditor.languages.IMonarchLanguage);
 
   monacoInstance.languages.registerCompletionItemProvider("sql", {
-    provideCompletionItems(model: monacoEditor.editor.ITextModel, position: monacoEditor.Position) {
+    provideCompletionItems(
+      model: monacoEditor.editor.ITextModel,
+      position: monacoEditor.Position,
+    ) {
       const word = model.getWordUntilPosition(position);
       const range = new monacoInstance.Range(
         position.lineNumber,
@@ -100,7 +103,9 @@ const WorksheetEditor = React.forwardRef<
   WorksheetEditorProps
 >(({ onExecute }, ref) => {
   const { colorMode } = useColorMode();
-  const editorRef = useRef<monacoEditor.editor.IStandaloneCodeEditor | null>(null);
+  const editorRef = useRef<monacoEditor.editor.IStandaloneCodeEditor | null>(
+    null,
+  );
   const [content, setContent] = useAtom(worksheetContentAtom);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const { parseContent } = useStatements();

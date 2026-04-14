@@ -93,7 +93,8 @@ export function useCodeLens(
     );
     if (commandId == null) return;
 
-    const emitter = new monaco.Emitter<monacoEditor.languages.CodeLensProvider>();
+    const emitter =
+      new monaco.Emitter<monacoEditor.languages.CodeLensProvider>();
     emitterRef.current = emitter;
 
     disposableRef.current = monaco.languages.registerCodeLensProvider("sql", {

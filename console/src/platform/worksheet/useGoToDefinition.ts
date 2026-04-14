@@ -18,8 +18,8 @@
  * global `allObjects` data and the current session context.
  */
 
-import { useAtomValue, useSetAtom } from "jotai";
 import type { Monaco } from "@monaco-editor/react";
+import { useAtomValue, useSetAtom } from "jotai";
 import type * as monacoEditor from "monaco-editor";
 import React from "react";
 
@@ -152,7 +152,10 @@ export function resolveObject(
  * catalog data and session context without re-registering.
  */
 export function useGoToDefinition(): React.MutableRefObject<
-  (editor: monacoEditor.editor.IStandaloneCodeEditor, monacoInstance: Monaco) => void
+  (
+    editor: monacoEditor.editor.IStandaloneCodeEditor,
+    monacoInstance: Monaco,
+  ) => void
 > {
   const objectsState = useAtomValue(allObjects);
   const session = useAtomValue(worksheetSessionAtom);
@@ -176,13 +179,18 @@ export function useGoToDefinition(): React.MutableRefObject<
   }, [setCatalogDetail, setCatalogVisible]);
 
   const registerRef = React.useRef(
-    (editor: monacoEditor.editor.IStandaloneCodeEditor, monacoInstance: Monaco) => {
+    (
+      editor: monacoEditor.editor.IStandaloneCodeEditor,
+      monacoInstance: Monaco,
+    ) => {
       editor.addAction({
         id: "worksheet.seeDetails",
         label: "See Details",
         contextMenuGroupId: "navigation",
         contextMenuOrder: 1,
-        keybindings: [monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyD],
+        keybindings: [
+          monacoInstance.KeyMod.CtrlCmd | monacoInstance.KeyCode.KeyD,
+        ],
         run: (ed) => {
           const position = ed.getPosition();
           if (!position) return;
