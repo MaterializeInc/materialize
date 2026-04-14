@@ -147,11 +147,11 @@ materialize ""
 
 # ...and also in `\l`
 $ psql-execute command="\l"
-\                                                   List of databases
-    Name     |    Owner    | Encoding | Locale Provider | Collate | Ctype | ICU Locale | ICU Rules | Access privileges
--------------+-------------+----------+-----------------+---------+-------+------------+-----------+-------------------
- d           | materialize | UTF8     | libc            | C       | C     |            |           |
- materialize | mz_system   | UTF8     | libc            | C       | C     |            |           |
+\                                                 List of databases
+    Name     |    Owner    | Encoding | Locale Provider | Collate | Ctype | Locale | ICU Rules | Access privileges
+-------------+-------------+----------+-----------------+---------+-------+--------+-----------+-------------------
+ d           | materialize | UTF8     | libc            | C       | C     |        |           |
+ materialize | mz_system   | UTF8     | libc            | C       | C     |        |           |
 
 
 
@@ -831,19 +831,19 @@ test_table ""
 > CREATE TABLE tester2.test_table (a int)
 
 $ psql-execute command="\dt tester.*"
-\             List of relations
+\              List of tables
  Schema |    Name    | Type  |    Owner
 --------+------------+-------+-------------
  tester | test_table | table | materialize
 
 $ psql-execute command="\dt tester.test_table"
-\             List of relations
+\              List of tables
  Schema |    Name    | Type  |    Owner
 --------+------------+-------+-------------
  tester | test_table | table | materialize
 
 $ psql-execute command="\dt *.test_table"
-\             List of relations
+\               List of tables
  Schema  |    Name    | Type  |    Owner
 ---------+------------+-------+-------------
  tester  | test_table | table | materialize
