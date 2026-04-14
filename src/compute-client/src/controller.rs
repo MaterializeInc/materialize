@@ -428,7 +428,8 @@ impl ComputeController {
         let instance = self.instance(instance_id)?;
 
         // Validation
-        if instance.replicas.is_empty() && !replicas.iter().any(|id| instance.replicas.contains(id))
+        if !instance.replicas.is_empty()
+            && !replicas.iter().any(|id| instance.replicas.contains(id))
         {
             return Err(HydrationCheckBadTarget(replicas).into());
         }
