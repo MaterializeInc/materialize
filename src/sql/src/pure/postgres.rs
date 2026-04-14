@@ -592,12 +592,27 @@ pub(crate) fn generate_column_casts(
             }
         };
 
-        let cast_expr = match pg_type_to_cast_func(scx, &ty)? {
-            // No cast needed (e.g. Text → String identity).
-            None => StorageScalarExpr::Column(i),
-            Some(cast_func) => {
+        let cast_expr = match pg_type_to_cast_func(scx, &ty) {
+            Ok(None) => {
+                // No cast needed (e.g. Text → String identity).
+                StorageScalarExpr::Column(i)
+            }
+            Ok(Some(cast_func)) => {
                 StorageScalarExpr::CallUnary(cast_func, Box::new(StorageScalarExpr::Column(i)))
             }
+            Err(PlanError::TableContainsUningestableTypes { type_, .. }) => {
+                // We expect only reg* types and similar to encounter
+                // this. Users can ingest the data as text if they need
+                // to. This is acceptable because we don't expect the
+                // OIDs from an external PG source to be unilaterally
+                // usable in resolving item names in MZ.
+                return Err(PlanError::TableContainsUningestableTypes {
+                    name: table.name.to_string(),
+                    type_,
+                    column: column.name.to_string(),
+                });
+            }
+            Err(e) => return Err(e),
         };
 
         let cast = if column.nullable {
@@ -629,8 +644,13 @@ fn resolve_pg_type_to_scalar_type(
     crate::plan::query::scalar_type_from_sql(scx, &data_type)
 }
 
-/// Map a PG type to the corresponding `CastFunc` variant. Returns `None` for
-/// types that need no cast (Text → String identity).
+/// Map a PG type to the corresponding `CastFunc` variant. Returns:
+/// - `Ok(Some(func))` for types that need a cast
+/// - `Ok(None)` for types that need no cast (Text → String identity)
+/// - `Err(PlanError::TableContainsUningestableTypes { .. })` for types
+///   that cannot be ingested. The error uses placeholder strings for
+///   table/column name; callers with context should use
+///   `pg_type_to_cast_func_or_uningestable` instead.
 fn pg_type_to_cast_func(
     scx: &StatementContext,
     ty: &mz_pgrepr::Type,
@@ -712,6 +732,8 @@ fn pg_type_to_cast_func(
         Type::Uuid => CastFunc::CastStringToUuid,
         Type::Int2Vector => CastFunc::CastStringToInt2Vector,
         Type::MzTimestamp => CastFunc::CastStringToMzTimestamp,
+        // JSON is ingested as JSONB (same as the old plan_cast path).
+        Type::Json => CastFunc::CastStringToJsonb,
         Type::Array(elem) => {
             let return_ty = resolve_pg_type_to_scalar_type(scx, ty)?;
             let elem_cast = build_element_cast_expr(scx, elem)?;
@@ -744,11 +766,21 @@ fn pg_type_to_cast_func(
                 cast_expr: Box::new(elem_cast),
             }
         }
+        // reg* types require subquery-based casts that storage cannot
+        // evaluate. Users can ingest them as text via TEXT COLUMNS.
+        Type::RegType | Type::RegClass | Type::RegProc => {
+            return Err(PlanError::TableContainsUningestableTypes {
+                name: String::new(),
+                type_: ty.name().to_string(),
+                column: String::new(),
+            });
+        }
         other => {
-            return Err(PlanError::Unstructured(format!(
-                "unsupported PG type for source ingestion: {}",
-                other
-            )));
+            return Err(PlanError::TableContainsUningestableTypes {
+                name: String::new(),
+                type_: other.name().to_string(),
+                column: String::new(),
+            });
         }
     };
     Ok(Some(cast_func))
