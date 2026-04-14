@@ -116,7 +116,7 @@ pub struct Session {
     // on. We express this by gating access with this token.
     #[derivative(Debug = "ignore")]
     qcell_owner: QCellOwner,
-    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle<Timestamp, NowFn<Timestamp>>>,
+    session_oracles: BTreeMap<Timeline, InMemoryTimestampOracle>,
     /// Incremented when session state that is relevant to prepared statement planning changes.
     /// Currently, only changes to `portals` are tracked. Changes to `prepared_statements` don't
     /// need to be tracked, because prepared statements can't depend on other prepared statements.
@@ -879,10 +879,7 @@ impl Session {
 
     /// Ensures that a timestamp oracle exists for `timeline` and returns a mutable reference to
     /// the timestamp oracle.
-    pub fn ensure_timestamp_oracle(
-        &mut self,
-        timeline: Timeline,
-    ) -> &mut InMemoryTimestampOracle<Timestamp, NowFn<Timestamp>> {
+    pub fn ensure_timestamp_oracle(&mut self, timeline: Timeline) -> &mut InMemoryTimestampOracle {
         self.session_oracles.entry(timeline).or_insert_with(|| {
             InMemoryTimestampOracle::new(Timestamp::minimum(), NowFn::from(Timestamp::minimum))
         })
@@ -890,17 +887,12 @@ impl Session {
 
     /// Ensures that a timestamp oracle exists for reads and writes from/to a local input and
     /// returns a mutable reference to the timestamp oracle.
-    pub fn ensure_local_timestamp_oracle(
-        &mut self,
-    ) -> &mut InMemoryTimestampOracle<Timestamp, NowFn<Timestamp>> {
+    pub fn ensure_local_timestamp_oracle(&mut self) -> &mut InMemoryTimestampOracle {
         self.ensure_timestamp_oracle(Timeline::EpochMilliseconds)
     }
 
     /// Returns a reference to the timestamp oracle for `timeline`.
-    pub fn get_timestamp_oracle(
-        &self,
-        timeline: &Timeline,
-    ) -> Option<&InMemoryTimestampOracle<Timestamp, NowFn<Timestamp>>> {
+    pub fn get_timestamp_oracle(&self, timeline: &Timeline) -> Option<&InMemoryTimestampOracle> {
         self.session_oracles.get(timeline)
     }
 
