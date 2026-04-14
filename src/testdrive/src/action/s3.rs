@@ -711,10 +711,7 @@ fn build_parquet_unsorted_map_batch() -> Result<RecordBatch, anyhow::Error> {
 
     let batch = RecordBatch::try_new(
         schema,
-        vec![
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
-            map_array,
-        ],
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])), map_array],
     )
     .context("building record batch")?;
 
