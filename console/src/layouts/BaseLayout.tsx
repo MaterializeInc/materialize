@@ -326,7 +326,9 @@ export const ContextMenu = ({ children }: { children: React.ReactNode }) => {
     <Menu>
       <ContextMenuButton />
       <Portal>
-        <MenuList>{children}</MenuList>
+        <MenuList maxHeight="60vh" overflowY="auto">
+          {children}
+        </MenuList>
       </Portal>
     </Menu>
   );
