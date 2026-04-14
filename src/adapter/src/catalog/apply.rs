@@ -912,6 +912,14 @@ impl CatalogState {
                     MZ_SYSTEM_ROLE_ID,
                 )];
                 acl_items.extend_from_slice(&mv.access);
+
+                let custom_logical_compaction_window = mv.is_retained_metrics_object.then(|| {
+                    self.system_config()
+                        .metrics_retention()
+                        .try_into()
+                        .expect("invalid metrics retention")
+                });
+
                 // Builtin materialized views can't be versioned.
                 let versions = BTreeMap::new();
 
@@ -921,8 +929,8 @@ impl CatalogState {
                         &mv.create_sql(),
                         &versions,
                         None,
-                        false,
-                        None,
+                        mv.is_retained_metrics_object,
+                        custom_logical_compaction_window,
                         local_expression_cache,
                         None,
                     )
