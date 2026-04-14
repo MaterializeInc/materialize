@@ -33,10 +33,7 @@ use crate::logging::compute::LogDataflowErrors;
 use crate::render::context::Context;
 use crate::render::{RenderTimestamp, StartSignal};
 
-impl<'g, T> Context<'g, T>
-where
-    T: RenderTimestamp,
-{
+impl<'g, T: RenderTimestamp> Context<'g, T> {
     /// Export the sink described by `sink` from the rendering context.
     pub(crate) fn export_sink(
         &self,

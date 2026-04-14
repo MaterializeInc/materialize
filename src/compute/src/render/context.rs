@@ -57,10 +57,7 @@ use crate::typedefs::{
 /// arrangements from outside the dataflow.
 ///
 /// Context has a timestamp type `T`, which is the timestamp used by the scope in question.
-pub struct Context<'scope, T>
-where
-    T: RenderTimestamp,
-{
+pub struct Context<'scope, T: RenderTimestamp> {
     /// The scope within which all managed collections exist.
     ///
     /// It is an error to add any collections not contained in this scope.
@@ -92,10 +89,7 @@ where
     pub config_set: Rc<ConfigSet>,
 }
 
-impl<'scope, T> Context<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Creates a new empty Context.
     pub fn for_dataflow_in<Plan>(
         dataflow: &DataflowDescription<Plan, CollectionMetadata>,
@@ -138,10 +132,7 @@ where
     }
 }
 
-impl<'scope, T> Context<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Insert a collection bundle by an identifier.
     ///
     /// This is expected to be used to install external collections (sources, indexes, other views),
@@ -186,10 +177,7 @@ where
     }
 }
 
-impl<'scope, T> Context<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Brings the underlying arrangements and collections into a region.
     pub fn enter_region<'a>(
         &self,
@@ -221,10 +209,7 @@ where
 
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
-pub enum ArrangementFlavor<'scope, T>
-where
-    T: RenderTimestamp,
-{
+pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
     /// A dataflow-local arrangement.
     Local(
         Arranged<'scope, RowRowAgent<T, Diff>>,
@@ -241,10 +226,7 @@ where
     ),
 }
 
-impl<'scope, T> ArrangementFlavor<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// Presents `self` as a stream of updates.
     ///
     /// Deprecated: This function is not fueled and hence risks flattening the whole arrangement.
@@ -334,10 +316,7 @@ where
         }
     }
 }
-impl<'scope, T> ArrangementFlavor<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// The scope containing the collection bundle.
     pub fn scope(&self) -> Scope<'scope, T> {
         match self {
@@ -361,10 +340,7 @@ where
         }
     }
 }
-impl<'scope, T> ArrangementFlavor<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// Extracts the arrangement flavor from a region.
     pub fn leave_region<'outer>(
         &self,
@@ -389,10 +365,7 @@ where
 /// This type maintains the invariant that it does contain at least one valid
 /// source of data, either a collection or at least one arrangement.
 #[derive(Clone)]
-pub struct CollectionBundle<'scope, T>
-where
-    T: RenderTimestamp,
-{
+pub struct CollectionBundle<'scope, T: RenderTimestamp> {
     pub collection: Option<(
         VecCollection<'scope, T, Row, Diff>,
         VecCollection<'scope, T, DataflowError, Diff>,
@@ -400,10 +373,7 @@ where
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<'scope, T>>,
 }
 
-impl<'scope, T> CollectionBundle<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
         oks: VecCollection<'scope, T, Row, Diff>,
@@ -474,10 +444,7 @@ where
     }
 }
 
-impl<'scope, T> CollectionBundle<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Extracts the collection bundle from a region.
     pub fn leave_region<'outer>(
         &self,
@@ -499,10 +466,7 @@ where
     }
 }
 
-impl<'scope, T> CollectionBundle<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Asserts that the arrangement for a specific key
     /// (or the raw collection for no key) exists,
     /// and returns the corresponding collection.
@@ -689,10 +653,7 @@ where
     }
 }
 
-impl<'scope, T> CollectionBundle<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Presents `self` as a stream of updates, having been subjected to `mfp`.
     ///
     /// This operator is able to apply the logic of `mfp` early, which can substantially

@@ -79,13 +79,10 @@ where
 ///
 /// This implementation maintains rows in the output, i.e. all rows that have a count greater than
 /// zero. It returns a [CollectionBundle] populated from a local arrangement.
-pub fn build_threshold_basic<'scope, T>(
+pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
     input: CollectionBundle<'scope, T>,
     key: Vec<MirScalarExpr>,
-) -> CollectionBundle<'scope, T>
-where
-    T: RenderTimestamp,
-{
+) -> CollectionBundle<'scope, T> {
     let arrangement = input
         .arrangement(&key)
         .expect("Arrangement ensured to exist");
@@ -112,10 +109,7 @@ where
     }
 }
 
-impl<'scope, T> Context<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     pub(crate) fn render_threshold(
         &self,
         input: CollectionBundle<'scope, T>,

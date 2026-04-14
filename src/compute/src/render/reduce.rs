@@ -58,10 +58,7 @@ use crate::typedefs::{
     RowRowArrangement, RowRowSpine, RowSpine, RowValSpine,
 };
 
-impl<'scope, T> Context<'scope, T>
-where
-    T: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Renders a `MirRelationExpr::Reduce` using various non-obvious techniques to
     /// minimize worst-case incremental update times and memory footprint.
     pub fn render_reduce(

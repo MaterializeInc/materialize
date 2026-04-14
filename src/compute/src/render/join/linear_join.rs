@@ -180,10 +180,7 @@ impl YieldSpec {
 }
 
 /// Different forms the streamed data might take.
-enum JoinedFlavor<'scope, T>
-where
-    T: RenderTimestamp,
-{
+enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// Streamed data as a collection.
     Collection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local arrangement.
