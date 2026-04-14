@@ -343,6 +343,20 @@ SHOW CREATE CONNECTION "FOO"
 Show(ShowCreateConnection(ShowCreateConnectionStatement { connection_name: Name(UnresolvedItemName([Ident("FOO")])), redacted: false }))
 
 parse-statement
+SHOW CREATE CONNECTION "my-hyphen-conn"
+----
+SHOW CREATE CONNECTION "my-hyphen-conn"
+=>
+Show(ShowCreateConnection(ShowCreateConnectionStatement { connection_name: Name(UnresolvedItemName([Ident("my-hyphen-conn")])), redacted: false }))
+
+parse-statement
+SHOW CREATE TABLE "my-hyphen-table"
+----
+SHOW CREATE TABLE "my-hyphen-table"
+=>
+Show(ShowCreateTable(ShowCreateTableStatement { table_name: Name(UnresolvedItemName([Ident("my-hyphen-table")])), redacted: false }))
+
+parse-statement
 SHOW CREATE TABLE "FOO"
 ----
 SHOW CREATE TABLE "FOO"

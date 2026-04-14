@@ -87,7 +87,7 @@ my-hyphen-conn    kafka    ""
 >[version>=2600700] SHOW CREATE CONNECTION "my-hyphen-conn"
 name   create_sql
 ---------------------------------
-materialize.public.my-hyphen-conn   "CREATE CONNECTION \"materialize\".\"public\".\"my-hyphen-conn\"\nTO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
+materialize.public.my-hyphen-conn   "CREATE CONNECTION materialize.public.\"my-hyphen-conn\"\nTO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
 
 > DROP CONNECTION "my-hyphen-conn"
 
