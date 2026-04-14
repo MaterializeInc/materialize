@@ -31,7 +31,6 @@ use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::allocator::Generic;
 use timely::progress::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
@@ -204,7 +203,7 @@ impl ResponseSender {
 /// holding state that persists across function calls.
 struct Worker<'w> {
     /// The underlying Timely worker.
-    timely_worker: &'w mut TimelyWorker<Generic>,
+    timely_worker: &'w mut TimelyWorker,
     /// The channel over which commands are received.
     command_rx: CommandReceiver,
     /// The channel over which responses are sent.
@@ -234,7 +233,7 @@ impl ClusterSpec for Config {
 
     fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<Generic>,
+        timely_worker: &mut TimelyWorker,
         client_rx: mpsc::UnboundedReceiver<(
             Uuid,
             mpsc::UnboundedReceiver<ComputeCommand>,

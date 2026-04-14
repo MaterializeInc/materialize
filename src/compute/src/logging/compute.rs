@@ -31,7 +31,7 @@ use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::{Scope, StreamVec};
-use timely::scheduling::{Activations, Activator};
+use timely::scheduling::activate::{Activations, Activator};
 use tracing::error;
 use uuid::Uuid;
 
@@ -300,8 +300,8 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read compute log events from.
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
     activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
@@ -468,7 +468,7 @@ where
 
 /// State maintained by the demux operator.
 struct DemuxState {
-    /// Shared activations handle for obtaining activators.
+    /// The timely activations handle.
     activations: Rc<RefCell<Activations>>,
     /// The index of this worker.
     worker_id: usize,
@@ -1427,9 +1427,9 @@ pub(crate) trait LogDataflowErrors {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
 }
 
-impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
+impl<'scope, T, D> LogDataflowErrors for VecCollection<'scope, T, D, Diff>
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
@@ -1448,9 +1448,9 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for StreamVec<G, B>
+impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, B>
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {

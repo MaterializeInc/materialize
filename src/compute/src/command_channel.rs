@@ -30,12 +30,11 @@ use mz_compute_client::protocol::command::ComputeCommand;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_ore::cast::CastFrom;
 use mz_timely_util::scope_label::ScopeExt;
-use timely::communication::allocator::Generic;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
-use timely::scheduling::{Scheduler, SyncActivator};
-use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::scheduling::SyncActivator;
+use timely::worker::Worker as TimelyWorker;
 use uuid::Uuid;
 
 /// A sender pushing commands onto the command channel.
@@ -81,7 +80,7 @@ impl Receiver {
 }
 
 /// Render the command channel dataflow.
-pub fn render(timely_worker: &mut TimelyWorker<Generic>) -> (Sender, Receiver) {
+pub fn render(timely_worker: &mut TimelyWorker) -> (Sender, Receiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
     let activator = Arc::new(Mutex::new(None));
@@ -92,10 +91,10 @@ pub fn render(timely_worker: &mut TimelyWorker<Generic>) -> (Sender, Receiver) {
     timely_worker.dataflow_named::<u64, _, _>("command_channel", {
         let activator = Arc::clone(&activator);
         move |scope| {
-            let scope = &mut scope.with_label();
+            let scope = scope.with_label();
 
             source(scope, "command_channel::source", |cap, info| {
-                let sync_activator = scope.sync_activator_for(info.address.to_vec());
+                let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
                 *activator.lock().expect("poisoned") = Some(sync_activator);
 
                 let worker_id = scope.index();

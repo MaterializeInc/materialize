@@ -341,17 +341,17 @@ async fn estimate_table_block_counts(
 }
 
 /// Renders the snapshot dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
-    mut scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: PgSnapshotMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    StreamVec<G, RewindRequest>,
-    StreamVec<G, Infallible>,
-    StreamVec<G, ReplicationError>,
+    StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, MzOffset, RewindRequest>,
+    StreamVec<'scope, MzOffset, Infallible>,
+    StreamVec<'scope, MzOffset, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("TableReader({})", config.id);

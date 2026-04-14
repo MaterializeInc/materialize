@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use bytesize::ByteSize;
 use differential_dataflow::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
@@ -58,11 +59,9 @@ use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
-use timely::communication::allocator::Generic;
 use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
-use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, span, trace, warn};
@@ -357,7 +356,7 @@ impl ComputeState {
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
 pub(crate) struct ActiveComputeState<'a> {
     /// The underlying Timely worker.
-    pub timely_worker: &'a mut TimelyWorker<Generic>,
+    pub timely_worker: &'a mut TimelyWorker,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
@@ -1165,7 +1164,7 @@ impl PendingPeek {
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
         max_result_size: usize,
-        timely_worker: &TimelyWorker<Generic>,
+        timely_worker: &TimelyWorker,
     ) -> Self {
         let active_worker = {
             // Choose the worker that does the actual peek arbitrarily but consistently.
@@ -1534,7 +1533,7 @@ impl IndexPeek {
     where
         for<'a> Tr: TraceReader<
                 Key<'a>: ToDatumIter + Eq,
-                KeyOwn = Row,
+                KeyContainer: BatchContainer<Owned = Row>,
                 Val<'a>: ToDatumIter,
                 TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
                 DiffGat<'a> = &'a Diff,
@@ -1578,7 +1577,7 @@ impl IndexPeek {
         let mut sort_time_accum = Duration::ZERO;
 
         while let Some(row) = peek_iterator.next() {
-            let row = match row {
+            let row: (Row, _) = match row {
                 Ok(row) => row,
                 Err(err) => return PeekStatus::Ready(PeekResponse::Error(err)),
             };
@@ -1637,9 +1636,13 @@ impl IndexPeek {
                         sort_time_accum += sort_start.elapsed();
                         let dropped = results.drain(max_results..);
                         let dropped_size =
-                            dropped.into_iter().fold(0, |acc: usize, (row, _count)| {
-                                acc.saturating_add(row.byte_len().saturating_add(count_byte_size))
-                            });
+                            dropped
+                                .into_iter()
+                                .fold(0, |acc: usize, (row, _count): (Row, _)| {
+                                    acc.saturating_add(
+                                        row.byte_len().saturating_add(count_byte_size),
+                                    )
+                                });
                         total_size = total_size.saturating_sub(dropped_size);
                     }
                 }

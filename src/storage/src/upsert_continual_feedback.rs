@@ -25,9 +25,9 @@ use mz_timely_util::builder_async::{
 };
 use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::{Capability, CapabilitySet};
-use timely::dataflow::{Scope, StreamVec};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -99,11 +99,11 @@ use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 /// we might be ingesting updates from a partial emission (see above). In either
 /// case, our input might not be consolidated and `consolidate_chunk` is able to
 /// handle that.
-pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
-    input: VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+pub fn upsert_inner<'scope, T, FromTime, F, Fut, US>(
+    input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
-    resume_upper: Antichain<G::Timestamp>,
-    persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
+    resume_upper: Antichain<T>,
+    persist_input: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -112,16 +112,16 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
-    VecCollection<G, Result<Row, DataflowError>, Diff>,
-    StreamVec<G, (Option<GlobalId>, HealthStatusUpdate)>,
-    StreamVec<G, Infallible>,
+    VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<'scope, T, Infallible>,
     PressOnDropButton,
 )
 where
-    G::Timestamp: Refines<mz_repr::Timestamp> + TotalOrder + Sync,
+    T: Timestamp + Refines<mz_repr::Timestamp> + TotalOrder + Sync,
     F: FnOnce() -> Fut + 'static,
     Fut: std::future::Future<Output = US>,
-    US: UpsertStateBackend<G::Timestamp, FromTime>,
+    US: UpsertStateBackend<T, FromTime>,
     FromTime: Debug + timely::ExchangeData + Clone + Ord + Sync,
 {
     let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
@@ -168,7 +168,7 @@ where
         drop(output_cap);
         let mut snapshot_cap = CapabilitySet::from_elem(snapshot_cap);
 
-        let mut state = UpsertState::<_, G::Timestamp, FromTime>::new(
+        let mut state = UpsertState::<_, T, FromTime>::new(
             state_fn().await,
             upsert_shared_metrics,
             &upsert_metrics,
@@ -187,7 +187,7 @@ where
         // order.
         let mut commands_state: indexmap::IndexMap<
             _,
-            upsert_types::UpsertValueAndSize<G::Timestamp, FromTime>,
+            upsert_types::UpsertValueAndSize<T, FromTime>,
         > = indexmap::IndexMap::new();
         let mut multi_get_scratch = Vec::new();
 
@@ -195,7 +195,7 @@ where
         let mut stash = vec![];
         // A capability suitable for emitting any updates based on stash. No capability is held
         // when the stash is empty.
-        let mut stash_cap: Option<Capability<G::Timestamp>> = None;
+        let mut stash_cap: Option<Capability<T>> = None;
         let mut input_upper = Antichain::from_elem(Timestamp::minimum());
         let mut partial_drain_time = None;
 
@@ -217,7 +217,7 @@ where
         // this is true. But with concurrent instances it can happen that an
         // operator that is faster than us makes it so updates get written to
         // persist. And we would then be ingesting them.
-        let mut largest_seen_persist_ts: Option<G::Timestamp> = None;
+        let mut largest_seen_persist_ts: Option<T> = None;
 
         // A buffer for our output.
         let mut output_updates = vec![];
@@ -285,7 +285,7 @@ where
                     // timestamp.
                     {
                         let mut key_ts_diffs: Vec<(
-                            (UpsertKey, G::Timestamp),
+                            (UpsertKey, T),
                             mz_repr::Diff
                         )> = persist_stash
                             .iter()
@@ -325,7 +325,7 @@ where
                             // Make sure our persist source can shut down.
                             persist_token.take();
                             snapshot_cap.downgrade(&[]);
-                            UpsertErrorEmitter::<G>::emit(
+                            UpsertErrorEmitter::<T>::emit(
                                 &mut error_emitter,
                                 "Failed to rehydrate state".to_string(),
                                 e,
@@ -491,7 +491,7 @@ where
                     ?stash,
                     "stashed updates");
 
-                let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
+                let mut min_remaining_time = drain_staged_input::<_, _, _, _>(
                     &mut stash,
                     &mut commands_state,
                     &mut output_updates,
@@ -555,7 +555,7 @@ where
                         ?stash,
                         "stashed updates");
 
-                    let mut min_remaining_time = drain_staged_input::<_, G, _, _, _>(
+                    let mut min_remaining_time = drain_staged_input::<_, _, _, _>(
                         &mut stash,
                         &mut commands_state,
                         &mut output_updates,
@@ -658,7 +658,7 @@ enum DrainStyle<'a, T> {
 /// It is *not* safe to call this function more than once with the same `persist_upper` and a
 /// `ToUpper` drain style. Doing so causes all calls except the first one to base their work on
 /// stale state, since in this drain style no modifications to the state are made.
-async fn drain_staged_input<S, G, T, FromTime, E>(
+async fn drain_staged_input<S, T, FromTime, E>(
     stash: &mut Vec<(T, UpsertKey, Reverse<FromTime>, Option<UpsertValue>)>,
     commands_state: &mut indexmap::IndexMap<UpsertKey, UpsertValueAndSize<T, FromTime>>,
     output_updates: &mut Vec<(UpsertValue, T, Diff)>,
@@ -670,10 +670,9 @@ async fn drain_staged_input<S, G, T, FromTime, E>(
 ) -> Option<T>
 where
     S: UpsertStateBackend<T, FromTime>,
-    G: Scope,
-    T: TotalOrder + timely::ExchangeData + Clone + Debug + Ord + Sync,
+    T: Timestamp + TotalOrder + timely::ExchangeData + Clone + Debug + Ord + Sync,
     FromTime: timely::ExchangeData + Clone + Ord + Sync,
-    E: UpsertErrorEmitter<G>,
+    E: UpsertErrorEmitter<T>,
 {
     let mut min_remaining_time = Antichain::new();
 

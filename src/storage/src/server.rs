@@ -21,7 +21,6 @@ use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
-use timely::communication::allocator::Generic;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -97,7 +96,7 @@ impl ClusterSpec for Config {
 
     fn run_worker(
         &self,
-        timely_worker: &mut TimelyWorker<Generic>,
+        timely_worker: &mut TimelyWorker,
         client_rx: mpsc::UnboundedReceiver<(
             Uuid,
             mpsc::UnboundedReceiver<StorageCommand>,
