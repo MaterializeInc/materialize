@@ -13,11 +13,12 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, LiteralString
+from typing import Any
 
 import psycopg
 import yaml
 from psycopg.sql import SQL, Composable, Composed, Identifier, Literal
+from typing_extensions import LiteralString
 
 
 @contextmanager

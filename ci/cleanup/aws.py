@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import unquote, urlparse
@@ -29,7 +29,7 @@ def clean_up_kinesis() -> None:
             continue
         desc = client.describe_stream(StreamName=stream)
         created_at = desc["StreamDescription"]["StreamCreationTimestamp"]
-        age = datetime.now(UTC) - created_at
+        age = datetime.now(timezone.utc) - created_at
         if age <= MAX_AGE:
             print(f"Skipping stream {stream} whose age is beneath threshold")
             continue
@@ -45,7 +45,7 @@ def clean_up_s3() -> None:
         if not desc["Name"].startswith("testdrive"):
             print("Skipping non-testdrive bucket {}".format(desc["Name"]))
             continue
-        age = datetime.now(UTC) - desc["CreationDate"]
+        age = datetime.now(timezone.utc) - desc["CreationDate"]
         if age <= MAX_AGE:
             print(
                 "Skipping bucket {} whose age is beneath threshold".format(desc["Name"])
@@ -76,7 +76,9 @@ def clean_up_sqs() -> None:
                 QueueUrl=queue, AttributeNames=["All"]
             )
             created_at = int(attributes["Attributes"]["CreatedTimestamp"])
-            age = datetime.now(UTC) - datetime.fromtimestamp(created_at, UTC)
+            age = datetime.now(timezone.utc) - datetime.fromtimestamp(
+                created_at, timezone.utc
+            )
             if age <= MAX_AGE:
                 print(f"Skipping queue {name} whose age is beneath threshold")
                 continue
