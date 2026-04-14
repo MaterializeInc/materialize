@@ -657,4 +657,282 @@ mod tests {
         let result = expr.eval(&datums, &arena).unwrap();
         assert_eq!(result, Datum::Int32(2));
     }
+
+    // --- Parity tests: StorageScalarExpr must produce identical results
+    // (Ok values and Err variants) as MirScalarExpr for the same inputs.
+
+    mod parity {
+        use mz_expr::{MirScalarExpr, UnaryFunc};
+        use mz_repr::{Datum, RowArena};
+
+        use super::*;
+
+        /// Assert both produce structurally equal results for all inputs.
+        fn assert_parity(name: &str, storage_func: CastFunc, mir_func: UnaryFunc, inputs: &[&str]) {
+            let arena = RowArena::new();
+
+            let s_expr =
+                StorageScalarExpr::CallUnary(storage_func, Box::new(StorageScalarExpr::Column(0)));
+            let m_expr = MirScalarExpr::CallUnary {
+                func: mir_func,
+                expr: Box::new(MirScalarExpr::column(0)),
+            };
+
+            for &input in inputs {
+                let s = s_expr.eval(&[Datum::String(input)], &arena);
+                let m = m_expr.eval(&[Datum::String(input)], &arena);
+                assert_eq!(s, m, "{name}: divergent for input {input:?}");
+            }
+            // Also check null propagation.
+            let s = s_expr.eval(&[Datum::Null], &arena);
+            let m = m_expr.eval(&[Datum::Null], &arena);
+            assert_eq!(s, m, "{name}: divergent for Null");
+        }
+
+        #[mz_ore::test]
+        fn parity_bool() {
+            use mz_expr::func::CastStringToBool;
+            assert_parity(
+                "Bool",
+                CastFunc::CastStringToBool,
+                UnaryFunc::CastStringToBool(CastStringToBool),
+                &["true", "false", "t", "f", "yes", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_int16() {
+            use mz_expr::func::CastStringToInt16;
+            assert_parity(
+                "Int16",
+                CastFunc::CastStringToInt16,
+                UnaryFunc::CastStringToInt16(CastStringToInt16),
+                &["42", "-1", "0", "99999", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_int32() {
+            use mz_expr::func::CastStringToInt32;
+            assert_parity(
+                "Int32",
+                CastFunc::CastStringToInt32,
+                UnaryFunc::CastStringToInt32(CastStringToInt32),
+                &["42", "-1", "0", "99999999999", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_int64() {
+            use mz_expr::func::CastStringToInt64;
+            assert_parity(
+                "Int64",
+                CastFunc::CastStringToInt64,
+                UnaryFunc::CastStringToInt64(CastStringToInt64),
+                &["42", "-1", "0", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_float32() {
+            use mz_expr::func::CastStringToFloat32;
+            assert_parity(
+                "Float32",
+                CastFunc::CastStringToFloat32,
+                UnaryFunc::CastStringToFloat32(CastStringToFloat32),
+                &["1.5", "-0.0", "NaN", "inf", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_float64() {
+            use mz_expr::func::CastStringToFloat64;
+            assert_parity(
+                "Float64",
+                CastFunc::CastStringToFloat64,
+                UnaryFunc::CastStringToFloat64(CastStringToFloat64),
+                &["1.5", "-0.0", "NaN", "inf", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_date() {
+            use mz_expr::func::CastStringToDate;
+            assert_parity(
+                "Date",
+                CastFunc::CastStringToDate,
+                UnaryFunc::CastStringToDate(CastStringToDate),
+                &["2023-01-15", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_time() {
+            use mz_expr::func::CastStringToTime;
+            assert_parity(
+                "Time",
+                CastFunc::CastStringToTime,
+                UnaryFunc::CastStringToTime(CastStringToTime),
+                &["12:34:56", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_timestamp() {
+            use mz_expr::func::CastStringToTimestamp;
+            assert_parity(
+                "Timestamp",
+                CastFunc::CastStringToTimestamp(None),
+                UnaryFunc::CastStringToTimestamp(CastStringToTimestamp(None)),
+                &["2023-01-15 12:34:56", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_timestamptz() {
+            use mz_expr::func::CastStringToTimestampTz;
+            assert_parity(
+                "TimestampTz",
+                CastFunc::CastStringToTimestampTz(None),
+                UnaryFunc::CastStringToTimestampTz(CastStringToTimestampTz(None)),
+                &["2023-01-15 12:34:56+00", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_interval() {
+            use mz_expr::func::CastStringToInterval;
+            assert_parity(
+                "Interval",
+                CastFunc::CastStringToInterval,
+                UnaryFunc::CastStringToInterval(CastStringToInterval),
+                &["1 day", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_uuid() {
+            use mz_expr::func::CastStringToUuid;
+            assert_parity(
+                "Uuid",
+                CastFunc::CastStringToUuid,
+                UnaryFunc::CastStringToUuid(CastStringToUuid),
+                &["a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_jsonb() {
+            use mz_expr::func::CastStringToJsonb;
+            assert_parity(
+                "Jsonb",
+                CastFunc::CastStringToJsonb,
+                UnaryFunc::CastStringToJsonb(CastStringToJsonb),
+                &[r#"{"a":1}"#, "true", "42", "{bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_bytes() {
+            use mz_expr::func::CastStringToBytes;
+            assert_parity(
+                "Bytes",
+                CastFunc::CastStringToBytes,
+                UnaryFunc::CastStringToBytes(CastStringToBytes),
+                &["\\xDEADBEEF", "\\x00", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_numeric() {
+            use mz_expr::func::CastStringToNumeric;
+            assert_parity(
+                "Numeric",
+                CastFunc::CastStringToNumeric(None),
+                UnaryFunc::CastStringToNumeric(CastStringToNumeric(None)),
+                &["1.23", "-99.9", "0", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_oid() {
+            use mz_expr::func::CastStringToOid;
+            assert_parity(
+                "Oid",
+                CastFunc::CastStringToOid,
+                UnaryFunc::CastStringToOid(CastStringToOid),
+                &["42", "0", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_uint16() {
+            use mz_expr::func::CastStringToUint16;
+            assert_parity(
+                "Uint16",
+                CastFunc::CastStringToUint16,
+                UnaryFunc::CastStringToUint16(CastStringToUint16),
+                &["42", "0", "-1", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_uint32() {
+            use mz_expr::func::CastStringToUint32;
+            assert_parity(
+                "Uint32",
+                CastFunc::CastStringToUint32,
+                UnaryFunc::CastStringToUint32(CastStringToUint32),
+                &["42", "0", "-1", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_uint64() {
+            use mz_expr::func::CastStringToUint64;
+            assert_parity(
+                "Uint64",
+                CastFunc::CastStringToUint64,
+                UnaryFunc::CastStringToUint64(CastStringToUint64),
+                &["42", "0", "-1", "bad", ""],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_pg_legacy_char() {
+            use mz_expr::func::CastStringToPgLegacyChar;
+            assert_parity(
+                "PgLegacyChar",
+                CastFunc::CastStringToPgLegacyChar,
+                UnaryFunc::CastStringToPgLegacyChar(CastStringToPgLegacyChar),
+                &["a", "", "abc"],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_pg_legacy_name() {
+            use mz_expr::func::CastStringToPgLegacyName;
+            assert_parity(
+                "PgLegacyName",
+                CastFunc::CastStringToPgLegacyName,
+                UnaryFunc::CastStringToPgLegacyName(CastStringToPgLegacyName),
+                &[
+                    "hello",
+                    "",
+                    "a_long_name_that_exceeds_sixty_four_chars_xxxxxxxxxxxxxxxxxxxxxxxx",
+                ],
+            );
+        }
+
+        #[mz_ore::test]
+        fn parity_mz_timestamp() {
+            use mz_expr::func::CastStringToMzTimestamp;
+            assert_parity(
+                "MzTimestamp",
+                CastFunc::CastStringToMzTimestamp,
+                UnaryFunc::CastStringToMzTimestamp(CastStringToMzTimestamp),
+                &["42", "0", "bad", ""],
+            );
+        }
+    }
 }
