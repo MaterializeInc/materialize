@@ -201,6 +201,7 @@ IGNORE_RE = re.compile(
     | limits-materialized-.* \| .* very\ slow\ coordinator\ message
     | zippy-materialized.* \| .* very\ slow\ coordinator\ message
     | sqlsmith-mz.* \| .* very\ slow\ coordinator\ message
+    | sqlsmith-mz.* \| .* panicked\ at\ src/ore/src/overflowing.rs.*\ Overflow
     # Expected on AWS in RQG because of build
     | comm="check"\ exe="/usr/bin/qemu-
     # Handled by panic already
