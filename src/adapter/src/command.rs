@@ -250,7 +250,7 @@ pub enum Command {
 
     ExecuteSlowPathPeek {
         dataflow_plan: Box<PeekDataflowPlan>,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
+        determination: TimestampDetermination,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -342,8 +342,8 @@ pub enum Command {
         session_wall_time: DateTime<Utc>,
         cluster_id: ClusterId,
         id_bundle: CollectionIdBundle,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
-        tx: oneshot::Sender<TimestampExplanation<mz_repr::Timestamp>>,
+        determination: TimestampDetermination,
+        tx: oneshot::Sender<TimestampExplanation>,
     },
 
     /// Statement logging event from frontend peek sequencing.

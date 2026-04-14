@@ -23,7 +23,7 @@ use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
+use timely::progress::{Antichain, Timestamp as _};
 
 use crate::AdapterError;
 use crate::catalog::CatalogState;
@@ -35,7 +35,7 @@ use crate::session::Session;
 
 /// The timeline and timestamp context of a read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum TimestampContext<T> {
+pub enum TimestampContext {
     /// Read is executed in a specific timeline with a specific timestamp.
     TimelineTimestamp {
         timeline: Timeline,
@@ -45,24 +45,24 @@ pub enum TimestampContext<T> {
         /// is further ahead than the oracle timestamp) we have to delay
         /// returning peek results until the timestamp oracle is also
         /// sufficiently advanced.
-        chosen_ts: T,
+        chosen_ts: Timestamp,
         /// The timestamp that would have been chosen for the read by the
         /// (linearized) timestamp oracle). In most cases this will be picked as
         /// the `chosen_ts`.
-        oracle_ts: Option<T>,
+        oracle_ts: Option<Timestamp>,
     },
     /// Read is executed without a timeline or timestamp.
     NoTimestamp,
 }
 
-impl<T: TimestampManipulation> TimestampContext<T> {
+impl TimestampContext {
     /// Creates a `TimestampContext` from a timestamp and `TimelineContext`.
     pub fn from_timeline_context(
-        chosen_ts: T,
-        oracle_ts: Option<T>,
+        chosen_ts: Timestamp,
+        oracle_ts: Option<Timestamp>,
         transaction_timeline: Option<Timeline>,
         timeline_context: &TimelineContext,
-    ) -> TimestampContext<T> {
+    ) -> TimestampContext {
         match timeline_context {
             TimelineContext::TimelineDependent(timeline) => {
                 if let Some(transaction_timeline) = transaction_timeline {
@@ -92,12 +92,12 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     }
 
     /// The timestamp belonging to this context, if one exists.
-    pub fn timestamp(&self) -> Option<&T> {
+    pub fn timestamp(&self) -> Option<&Timestamp> {
         self.timeline_timestamp().map(|tt| tt.1)
     }
 
     /// The timeline and timestamp belonging to this context, if one exists.
-    pub fn timeline_timestamp(&self) -> Option<(&Timeline, &T)> {
+    pub fn timeline_timestamp(&self) -> Option<(&Timeline, &Timestamp)> {
         match self {
             Self::TimelineTimestamp {
                 timeline,
@@ -109,13 +109,13 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     }
 
     /// The timestamp belonging to this context, or a sensible default if one does not exists.
-    pub fn timestamp_or_default(&self) -> T {
+    pub fn timestamp_or_default(&self) -> Timestamp {
         match self {
             Self::TimelineTimestamp { chosen_ts, .. } => chosen_ts.clone(),
             // Anything without a timestamp is given the maximum possible timestamp to indicate
             // that they have been closed up until the end of time. This allows us to SUBSCRIBE to
             // static views.
-            Self::NoTimestamp => T::maximum(),
+            Self::NoTimestamp => Timestamp::maximum(),
         }
     }
 
@@ -125,7 +125,7 @@ impl<T: TimestampManipulation> TimestampContext<T> {
     }
 
     /// Converts this `TimestampContext` to an `Antichain`.
-    pub fn antichain(&self) -> Antichain<T> {
+    pub fn antichain(&self) -> Antichain<Timestamp> {
         Antichain::from_elem(self.timestamp_or_default())
     }
 }
@@ -180,10 +180,10 @@ impl TimestampProvider for Coordinator {
 /// A timestamp determination, which includes the timestamp, constraints, and session oracle read
 /// timestamp.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RawTimestampDetermination<T> {
-    pub timestamp: T,
+pub struct RawTimestampDetermination {
+    pub timestamp: Timestamp,
     pub constraints: Constraints,
-    pub session_oracle_read_ts: Option<T>,
+    pub session_oracle_read_ts: Option<Timestamp>,
 }
 
 #[async_trait(?Send)]
@@ -252,7 +252,7 @@ pub trait TimestampProvider {
         isolation_level: &IsolationLevel,
         timeline: &Option<Timeline>,
         largest_not_in_advance_of_upper: Timestamp,
-    ) -> Result<RawTimestampDetermination<Timestamp>, AdapterError> {
+    ) -> Result<RawTimestampDetermination, AdapterError> {
         use constraints::{Constraints, Preference, Reason};
 
         let mut session_oracle_read_ts = None;
@@ -443,7 +443,7 @@ pub trait TimestampProvider {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
-    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds), AdapterError> {
+    ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
         let read_holds = self.acquire_read_holds(id_bundle);
@@ -474,7 +474,7 @@ pub trait TimestampProvider {
         isolation_level: &IsolationLevel,
         read_holds: ReadHolds,
         upper: Antichain<Timestamp>,
-    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds), AdapterError> {
+    ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let timeline = Self::get_timeline(timeline_context);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
         let since = read_holds.least_valid_read();
@@ -607,7 +607,7 @@ impl Coordinator {
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
-    ) -> Result<(TimestampDetermination<mz_repr::Timestamp>, ReadHolds), AdapterError> {
+    ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
         let (det, read_holds) = self.determine_timestamp_for(
             session,
@@ -683,27 +683,27 @@ impl Coordinator {
 
 /// Information used when determining the timestamp for a query.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TimestampDetermination<T> {
+pub struct TimestampDetermination {
     /// The chosen timestamp context from `determine_timestamp`.
-    pub timestamp_context: TimestampContext<T>,
+    pub timestamp_context: TimestampContext,
     /// The read frontier of all involved sources.
-    pub since: Antichain<T>,
+    pub since: Antichain<Timestamp>,
     /// The write frontier of all involved sources.
-    pub upper: Antichain<T>,
+    pub upper: Antichain<Timestamp>,
     /// The largest timestamp not in advance of upper.
-    pub largest_not_in_advance_of_upper: T,
+    pub largest_not_in_advance_of_upper: Timestamp,
     /// The value of the timeline's oracle timestamp, if used.
-    pub oracle_read_ts: Option<T>,
+    pub oracle_read_ts: Option<Timestamp>,
     /// The value of the session local timestamp's oracle timestamp, if used.
-    pub session_oracle_read_ts: Option<T>,
+    pub session_oracle_read_ts: Option<Timestamp>,
     /// The value of the real time recency timestamp, if used.
-    pub real_time_recency_ts: Option<T>,
+    pub real_time_recency_ts: Option<Timestamp>,
     /// The constraints used by the constraint based solver.
     /// See the [`constraints`] module for more information.
     pub constraints: Constraints,
 }
 
-impl<T: TimestampManipulation> TimestampDetermination<T> {
+impl TimestampDetermination {
     pub fn respond_immediately(&self) -> bool {
         match &self.timestamp_context {
             TimestampContext::TimelineTimestamp { chosen_ts, .. } => {
@@ -716,11 +716,11 @@ impl<T: TimestampManipulation> TimestampDetermination<T> {
 
 /// Information used when determining the timestamp for a query.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TimestampExplanation<T> {
+pub struct TimestampExplanation {
     /// The chosen timestamp from `determine_timestamp`.
-    pub determination: TimestampDetermination<T>,
+    pub determination: TimestampDetermination,
     /// Details about each source.
-    pub sources: Vec<TimestampSource<T>>,
+    pub sources: Vec<TimestampSource>,
     /// Wall time of first statement executed in this transaction
     pub session_wall_time: DateTime<Utc>,
     /// Cached value of determination.respond_immediately()
@@ -728,10 +728,10 @@ pub struct TimestampExplanation<T> {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TimestampSource<T> {
+pub struct TimestampSource {
     pub name: String,
-    pub read_frontier: Vec<T>,
-    pub write_frontier: Vec<T>,
+    pub read_frontier: Vec<Timestamp>,
+    pub write_frontier: Vec<Timestamp>,
 }
 
 pub trait DisplayableInTimeline {
@@ -777,9 +777,7 @@ where
     }
 }
 
-impl<T: fmt::Display + fmt::Debug + DisplayableInTimeline + TimestampManipulation> fmt::Display
-    for TimestampExplanation<T>
-{
+impl fmt::Display for TimestampExplanation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let timeline = self.determination.timestamp_context.timeline();
         writeln!(

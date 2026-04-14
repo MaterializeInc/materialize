@@ -145,7 +145,7 @@ pub struct LocalMirPlan<T = Unresolved> {
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
 pub struct Resolved<'s> {
-    timestamp_ctx: TimestampContext<Timestamp>,
+    timestamp_ctx: TimestampContext,
     stats: Box<dyn StatisticsOracle>,
     session: &'s dyn SessionMetadata,
 }
@@ -206,7 +206,7 @@ impl LocalMirPlan<Unresolved> {
     /// required for the next stage.
     pub fn resolve(
         self,
-        timestamp_ctx: TimestampContext<Timestamp>,
+        timestamp_ctx: TimestampContext,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved<'_>> {
