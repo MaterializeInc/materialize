@@ -21,7 +21,7 @@ use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
 use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
-use timely::dataflow::{Scope, Stream, StreamVec};
+use timely::dataflow::{Stream, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
 use timely::{ContainerBuilder, ExchangeData, PartialOrder};
@@ -31,38 +31,41 @@ use crate::typedefs::MzData;
 /// Sort outstanding updates into a [`BucketChain`], and reveal data not in advance of the input
 /// frontier. Retains a capability at the last input frontier to retain the right to produce data
 /// at times between the last input frontier and the current input frontier.
-pub trait TemporalBucketing<G: Scope, O> {
+pub trait TemporalBucketing<'scope, T: Timestamp, O> {
     /// Construct a new stream that stores updates into a [`BucketChain`] and reveals data
     /// not in advance of the frontier. Data that is within `threshold` distance of the input
     /// frontier or the `as_of` is passed through without being stored in the chain.
     fn bucket<CB>(
         self,
-        as_of: Antichain<G::Timestamp>,
-        threshold: <G::Timestamp as Timestamp>::Summary,
-    ) -> Stream<G, CB::Container>
+        as_of: Antichain<T>,
+        threshold: T::Summary,
+    ) -> Stream<'scope, T, CB::Container>
     where
         CB: ContainerBuilder + PushInto<O>;
 }
 
 /// Implementation for streams in scopes where timestamps define a total order.
-impl<G, D> TemporalBucketing<G, (D, G::Timestamp, mz_repr::Diff)>
-    for StreamVec<G, (D, G::Timestamp, mz_repr::Diff)>
+impl<'scope, T, D> TemporalBucketing<'scope, T, (D, T, mz_repr::Diff)>
+    for StreamVec<'scope, T, (D, T, mz_repr::Diff)>
 where
-    G: Scope<Timestamp: ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice>,
+    T: Timestamp + ExchangeData + MzData + BucketTimestamp + TotalOrder + Lattice,
     D: ExchangeData + MzData + Ord + Clone + std::fmt::Debug + Hashable,
 {
     fn bucket<CB>(
         self,
-        as_of: Antichain<G::Timestamp>,
-        threshold: <G::Timestamp as Timestamp>::Summary,
-    ) -> Stream<G, CB::Container>
+        as_of: Antichain<T>,
+        threshold: T::Summary,
+    ) -> Stream<'scope, T, CB::Container>
     where
-        CB: ContainerBuilder + PushInto<(D, G::Timestamp, mz_repr::Diff)>,
+        CB: ContainerBuilder + PushInto<(D, T, mz_repr::Diff)>,
     {
         let scope = self.scope();
-        let logger = scope.logger_for("differential/arrange").map(Into::into);
+        let logger = scope
+            .worker()
+            .logger_for("differential/arrange")
+            .map(Into::into);
 
-        let pact = Exchange::new(|(d, _, _): &(D, G::Timestamp, mz_repr::Diff)| d.hashed().into());
+        let pact = Exchange::new(|(d, _, _): &(D, T, mz_repr::Diff)| d.hashed().into());
         self.unary_frontier::<CB, _, _, _>(pact, "Temporal delay", |cap, info| {
             let mut chain = BucketChain::new(MergeBatcherWrapper::new(logger, info.global_id));
             let activator = scope.activator_for(info.address);

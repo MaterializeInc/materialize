@@ -326,8 +326,8 @@ datadriven = "0.9.0"
 deadpool-postgres = "0.10.3"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.22.0"
-differential-dogs3 = "0.22.0"
+differential-dataflow = "0.23.0"
+differential-dogs3 = "0.23.0"
 digest = "0.10.7"
 dirs = "6.0.0"
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
@@ -491,7 +491,7 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.6", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.28.1"
+timely = "0.29.0"
 tokio = { version = "1.49.0", features = ["full", "test-util"] }
 tokio-metrics = "0.4.9"
 tokio-native-tls = "0.3.1"

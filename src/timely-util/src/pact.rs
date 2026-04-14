@@ -21,7 +21,7 @@ use timely::dataflow::channels::pact::{LogPuller, LogPusher, ParallelizationCont
 use timely::dataflow::channels::{ContainerBytes, Message};
 use timely::logging::TimelyLogger;
 use timely::progress::Timestamp;
-use timely::worker::AsWorker;
+use timely::worker::Worker;
 use timely::{Container, ExchangeData};
 
 /// A connection that distributes containers to all workers in a round-robin fashion
@@ -36,22 +36,22 @@ where
     type Pusher = DistributePusher<LogPusher<Box<dyn Push<Message<T, C>>>>>;
     type Puller = LogPuller<Box<dyn Pull<Message<T, C>>>>;
 
-    fn connect<A: AsWorker>(
+    fn connect(
         self,
-        allocator: &mut A,
+        worker: &Worker,
         identifier: usize,
         address: Rc<[usize]>,
         logging: Option<TimelyLogger>,
     ) -> (Self::Pusher, Self::Puller) {
-        let (senders, receiver) = allocator.allocate::<Message<T, C>>(identifier, address);
+        let (senders, receiver) = worker.allocate::<Message<T, C>>(identifier, address);
         let senders = senders
             .into_iter()
             .enumerate()
-            .map(|(i, x)| LogPusher::new(x, allocator.index(), i, identifier, logging.clone()))
+            .map(|(i, x)| LogPusher::new(x, worker.index(), i, identifier, logging.clone()))
             .collect::<Vec<_>>();
         (
             DistributePusher::new(senders),
-            LogPuller::new(receiver, allocator.index(), identifier, logging.clone()),
+            LogPuller::new(receiver, worker.index(), identifier, logging.clone()),
         )
     }
 }

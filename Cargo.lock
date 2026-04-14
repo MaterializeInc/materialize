@@ -2809,9 +2809,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dataflow"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abd918bb469138bd91b37b8655e6797007e8739b01a37befe3557a2886ccf249"
+checksum = "d842a3e5e50bcd08a7f247c01a41cb057fde0c16f3865772682bff2edef5f40a"
 dependencies = [
  "columnar",
  "columnation",
@@ -2824,9 +2824,9 @@ dependencies = [
 
 [[package]]
 name = "differential-dogs3"
-version = "0.22.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bb740ff7581db800a085a24439cf9a895d0cd1096e05cde28ddd1da05a21644"
+checksum = "8665214a200212ff3bb3009da66cf0807a666ea2d722ff1816b27430f3e9c9d4"
 dependencies = [
  "differential-dataflow",
  "serde",
@@ -11999,9 +11999,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.28.1"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62d864267fb295f25c51741a3af4bf2d9d43b65d0ce24c9349b4734ae677ab1a"
+checksum = "5cdba58f1357fd65576620166d88afb7911b0d4f83b97c0624b03797e85ef4e9"
 dependencies = [
  "bincode",
  "byteorder",
@@ -12019,15 +12019,15 @@ dependencies = [
 
 [[package]]
 name = "timely_bytes"
-version = "0.28.1"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18f23a0d67d58c5e33b1d2e1405f153302eaed97b03b019eaadc506078b0d9b3"
+checksum = "beb91e9fc11841c4b07af1c95cea20470aaf144d6b412daddf63593cd8e7df50"
 
 [[package]]
 name = "timely_communication"
-version = "0.28.1"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dfca21d938082bdd981b2e68dbbcc84c5d1a3540b9cb186f70e3280f75f5366"
+checksum = "f9efbf4f3899dc9905b780ec3646920022de3323086cc05ba84f4ffaad9a80c8"
 dependencies = [
  "byteorder",
  "columnar",
@@ -12040,15 +12040,15 @@ dependencies = [
 
 [[package]]
 name = "timely_container"
-version = "0.28.1"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59d871973712d029dc403809a06bd33134f4e91c2da9d86b7476b946d64db1e7"
+checksum = "e39eed4292e8e49f341c3d6cdfc8c43431634676a42dc8021cfd67e939c129a9"
 
 [[package]]
 name = "timely_logging"
-version = "0.28.1"
+version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7071ee1e8c0e4d0e97041819a114ca037f197616691039845973b88138fa0b78"
+checksum = "11ef86afa8b06f1bfa6e088b87909592a14622189f91ae4b5a49e76ac10ab73c"
 dependencies = [
  "timely_container",
 ]

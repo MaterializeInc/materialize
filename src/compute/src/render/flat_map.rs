@@ -9,6 +9,8 @@
 
 use std::collections::VecDeque;
 
+use crate::render::DataflowError;
+use crate::render::context::{CollectionBundle, Context};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
 use mz_expr::MfpPlan;
@@ -16,29 +18,21 @@ use mz_expr::{MapFilterProject, MirScalarExpr, TableFunc};
 use mz_repr::{DatumVec, RowArena, SharedRow};
 use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 
-use crate::render::DataflowError;
-use crate::render::context::{CollectionBundle, Context};
-
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
+impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.
     pub fn render_flat_map(
         &self,
         input_key: Option<Vec<MirScalarExpr>>,
-        input: CollectionBundle<G>,
+        input: CollectionBundle<'scope, T>,
         exprs: Vec<MirScalarExpr>,
         func: TableFunc,
         mfp: MapFilterProject,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, T> {
         let until = self.until.clone();
         let mfp_plan = mfp.into_plan().expect("MapFilterProject planning failed");
         let (ok_collection, err_collection) =

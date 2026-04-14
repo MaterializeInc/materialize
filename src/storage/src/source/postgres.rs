@@ -124,16 +124,19 @@ impl SourceRender for PostgresSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<MzOffset>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
+        StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.

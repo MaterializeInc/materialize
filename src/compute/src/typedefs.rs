@@ -11,6 +11,8 @@
 
 #![allow(dead_code, missing_docs)]
 
+use crate::row_spine::RowValBuilder;
+use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -20,10 +22,6 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
-use timely::dataflow::ScopeParent;
-
-use crate::row_spine::RowValBuilder;
-use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
@@ -91,15 +89,15 @@ pub type KeyEnter<K, T, R, TEnter> = TraceEnter<TraceFrontier<KeyAgent<K, T, R>>
 
 // Row specialized spines and agents.
 pub type RowValAgent<V, T, R> = TraceAgent<RowValSpine<V, T, R>>;
-pub type RowValArrangement<S, V> = Arranged<S, RowValAgent<V, <S as ScopeParent>::Timestamp, Diff>>;
+pub type RowValArrangement<'scope, T, V> = Arranged<'scope, RowValAgent<V, T, Diff>>;
 pub type RowValEnter<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, T, R>>, TEnter>;
 // Row specialized spines and agents.
 pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
-pub type RowRowArrangement<S> = Arranged<S, RowRowAgent<<S as ScopeParent>::Timestamp, Diff>>;
+pub type RowRowArrangement<'scope, T> = Arranged<'scope, RowRowAgent<T, Diff>>;
 pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
 // Row specialized spines and agents.
 pub type RowAgent<T, R> = TraceAgent<RowSpine<T, R>>;
-pub type RowArrangement<S> = Arranged<S, RowAgent<<S as ScopeParent>::Timestamp, Diff>>;
+pub type RowArrangement<'scope, T> = Arranged<'scope, RowAgent<T, Diff>>;
 pub type RowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowAgent<T, R>>, TEnter>;
 
 // Error specialized spines and agents.

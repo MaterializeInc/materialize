@@ -13,6 +13,10 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::extensions::arrange::MzArrangeCore;
+use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
+use crate::row_spine::RowRowBuilder;
+use crate::typedefs::RowRowSpine;
 use mz_compute_types::dyncfgs::COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL;
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::{CastFrom, CastLossy};
@@ -28,11 +32,6 @@ use timely::dataflow::channels::pact::ExchangeCore;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
-use crate::extensions::arrange::MzArrangeCore;
-use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::RowRowSpine;
-
 /// The return type of [`construct`].
 pub(super) struct Return {
     /// Collections to export.
@@ -45,8 +44,8 @@ type SnapshotKey = (String, Vec<(String, String)>);
 type SnapshotValue = (f64, &'static str, String);
 
 /// Constructs the logging dataflow fragment for Prometheus metrics.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    scope: G,
+pub(super) fn construct(
+    scope: Scope<'_, Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     metrics_registry: MetricsRegistry,
     now: Instant,

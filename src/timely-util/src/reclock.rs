@@ -181,7 +181,6 @@ use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolida
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::capture::Event;
@@ -198,30 +197,30 @@ use timely::progress::{Antichain, Timestamp};
 /// In order for the operator to read the `source` collection a `Pusher` is returned which can be
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
-pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: VecCollection<G, FromTime, Overflowing<i64>>,
-    as_of: Antichain<G::Timestamp>,
+pub fn reclock<'scope, D, FromTime, IntoTime, R>(
+    remap_collection: VecCollection<'scope, IntoTime, FromTime, Overflowing<i64>>,
+    as_of: Antichain<IntoTime>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
-    VecCollection<G, D, R>,
+    VecCollection<'scope, IntoTime, D, R>,
 )
 where
-    G: Scope<Timestamp = IntoTime>,
     D: ExchangeData,
     FromTime: Timestamp,
     IntoTime: Timestamp + Lattice + TotalOrder,
     R: Semigroup + 'static,
 {
-    let mut scope = remap_collection.scope();
+    let scope = remap_collection.scope();
     let mut builder = OperatorBuilder::new("Reclock".into(), scope.clone());
     // Here we create a channel that can be used to send data from a foreign scope into this
     // operator. The channel is associated with this operator's address so that it is activated
     // every time events are available for consumption. This mechanism is similar to Timely's input
     // handles where data can be introduced into a timely scope from an exogenous source.
     let info = builder.operator_info();
-    let channel_id = scope.new_identifier();
-    let (pusher, mut events) =
-        scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
+    let channel_id = scope.worker().new_identifier();
+    let (pusher, mut events) = scope
+        .worker()
+        .pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
     let mut remap_input = builder.new_input(remap_collection.inner, Pipeline);
     let (output, reclocked) = builder.new_output();
@@ -586,7 +585,7 @@ mod test {
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
     use serde::{Deserialize, Serialize};
-    use timely::communication::allocator::Thread;
+
     use timely::dataflow::operators::capture::{Event, Extract};
     use timely::dataflow::operators::vec::UnorderedInput;
     use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
@@ -625,7 +624,7 @@ mod test {
         FromTime: Timestamp + Refines<()>,
         D: ExchangeData,
         F: FnOnce(
-                &mut Worker<Thread>,
+                &mut Worker,
                 BindingHandle<FromTime>,
                 DataHandle<D, FromTime>,
                 ReclockedStream<D>,
@@ -661,7 +660,7 @@ mod test {
 
     /// Steps the worker four times which is the required number of times for both data and
     /// frontier updates to propagate across the two scopes and into the probing channels.
-    fn step(worker: &mut Worker<Thread>) {
+    fn step(worker: &mut Worker) {
         for _ in 0..4 {
             worker.step();
         }
