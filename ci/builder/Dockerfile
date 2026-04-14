@@ -10,7 +10,7 @@
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self
 # contained and use other Docker images.
-FROM ubuntu:noble-20260610 AS ci-builder-min
+FROM ubuntu:resolute-20260627 AS ci-builder-min
 
 WORKDIR /workdir
 
@@ -46,7 +46,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gnupg2 \
     pigz \
     python3 \
-    python3.12-venv \
+    python3-venv \
     zstd \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
@@ -140,12 +140,12 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     gnupg2 \
     jq \
     lcov \
-    libc6-dbg \
+    libc-dbg \
     libclang-common-18-dev \
     libclang-dev \
     libclang-rt-18-dev \
     libpq-dev \
-    libxml2 \
+    libxml2-16 \
     lld \
     llvm \
     make \
@@ -172,7 +172,7 @@ COPY apt-llvm.asc .
 
 RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
     && rm apt-llvm.asc \
-    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
+    && echo "deb [signed-by=/etc/apt/keyrings/apt-llvm.gpg] http://apt.llvm.org/resolute/ llvm-toolchain-resolute-22 main" > /etc/apt/sources.list.d/apt-llvm.list \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     clang-22 \
