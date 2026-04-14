@@ -5157,6 +5157,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_table_from_source(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if self.parse_keyword(TEMP) || self.parse_keyword(TEMPORARY) {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "temporary tables FROM SOURCE are not supported"
+            );
+        }
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_item_name()?;
