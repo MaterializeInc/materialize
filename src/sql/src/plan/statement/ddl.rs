@@ -6816,14 +6816,15 @@ where
     // Generate a temporary name we can swap schema_a to.
     //
     // 'check' returns if the temp schema name would be valid.
+    const SCHEMA_SWAP_PREFIX: &str = "mz_schema_swap_";
     let check = |temp_suffix: &str| {
-        let mut temp_name = ident!("mz_schema_swap_");
+        let mut temp_name = ident!(SCHEMA_SWAP_PREFIX);
         temp_name.append_lossy(temp_suffix);
         scx.resolve_schema_in_database(&db_spec, &temp_name)
             .is_err()
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("mz_schema_swap_{temp_suffix}");
+    let name_temp = format!("{SCHEMA_SWAP_PREFIX}{temp_suffix}");
 
     Ok(Plan::AlterSchemaSwap(AlterSchemaSwapPlan {
         schema_a_spec: (*schema_a.database(), *schema_a.id()),
@@ -6952,8 +6953,9 @@ where
     };
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
+    const CLUSTER_SWAP_PREFIX: &str = "mz_cluster_swap_";
     let check = |temp_suffix: &str| {
-        let mut temp_name = ident!("mz_schema_swap_");
+        let mut temp_name = ident!(CLUSTER_SWAP_PREFIX);
         temp_name.append_lossy(temp_suffix);
         match scx.catalog.resolve_cluster(Some(temp_name.as_str())) {
             // Temp name does not exist, so we can use it.
@@ -6963,7 +6965,7 @@ where
         }
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("mz_cluster_swap_{temp_suffix}");
+    let name_temp = format!("{CLUSTER_SWAP_PREFIX}{temp_suffix}");
 
     Ok(Plan::AlterClusterSwap(AlterClusterSwapPlan {
         id_a: cluster_a.id(),
