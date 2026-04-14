@@ -22,7 +22,6 @@ use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
 use mz_storage_operators::persist_source;
 use mz_storage_operators::persist_source::Subtime;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::dyncfgs;
 use mz_storage_types::errors::{
     DataflowError, DecodeError, EnvelopeError, UpsertError, UpsertNullKeyError, UpsertValueError,
 };
@@ -353,22 +352,14 @@ where
                     // rehydration processing the `persist_source` input above.
                     needed_tokens.push(upsert_token);
 
-                    // If configured, delay raw sources until we rehydrate the upsert
-                    // source. Otherwise, drop the token, unblocking the sources at the
-                    // end rendering.
-                    if dyncfgs::DELAY_SOURCES_PAST_REHYDRATION
-                        .get(storage_state.storage_configuration.config_set())
-                    {
-                        crate::upsert::rehydration_finished(
-                            scope.clone(),
-                            base_source_config,
-                            rehydrated_token,
-                            refine_antichain(&resume_upper),
-                            snapshot_progress.clone(),
-                        );
-                    } else {
-                        drop(rehydrated_token)
-                    };
+                    // Delay raw sources until we rehydrate the upsert source.
+                    crate::upsert::rehydration_finished(
+                        scope.clone(),
+                        base_source_config,
+                        rehydrated_token,
+                        refine_antichain(&resume_upper),
+                        snapshot_progress.clone(),
+                    );
 
                     // If backpressure from persist is enabled, we connect the upsert operator's
                     // snapshot progress to the persist source feedback handle.

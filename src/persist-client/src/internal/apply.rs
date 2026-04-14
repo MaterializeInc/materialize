@@ -32,7 +32,7 @@ use crate::internal::state_versions::{EncodedRollup, StateVersions};
 use crate::internal::trace::FueledMergeReq;
 use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
-use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
+use crate::rpc::PubSubSender;
 use crate::schema::SchemaCache;
 use crate::{Diagnostics, PersistConfig, ShardId, cfg};
 use differential_dataflow::difference::Monoid;
@@ -383,9 +383,7 @@ where
                     cmd.succeeded.inc();
                     self.shard_metrics.cmd_succeeded.inc();
                     self.update_state(new_state);
-                    if PUBSUB_PUSH_DIFF_ENABLED.get(&self.cfg) {
-                        self.pubsub_sender.push_diff(&self.shard_id, &diff);
-                    }
+                    self.pubsub_sender.push_diff(&self.shard_id, &diff);
                     return Ok((diff.seqno, Ok(res), maintenance));
                 }
                 ApplyCmdResult::SkippedStateTransition((seqno, err, maintenance)) => {

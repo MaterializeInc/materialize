@@ -1851,12 +1851,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_multi_worker_storage_persist_sink,
-        desc: "multi-worker storage persist sink",
-        default: true,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_persist_streaming_snapshot_and_fetch,
         desc: "use the new streaming consolidate for snapshot_and_fetch",
         default: false,

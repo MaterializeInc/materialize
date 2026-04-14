@@ -26,16 +26,6 @@ pub const CLUSTER_SHUTDOWN_GRACE_PERIOD: Config<Duration> = Config::new(
 
 // Flow control
 
-/// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
-/// Configuration for basic hydration backpressure.
-pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
-    "storage_dataflow_delay_sources_past_rehydration",
-    // This was original `false`, but it is not enabled everywhere.
-    true,
-    "Whether or not to delay sources producing values in some scenarios \
-        (namely, upsert) till after rehydration is finished",
-);
-
 /// Whether storage dataflows should suspend execution while downstream operators are still
 /// processing data.
 pub const SUSPENDABLE_SOURCES: Config<bool> = Config::new(
@@ -321,7 +311,6 @@ pub const STATISTICS_RETENTION_DURATION: Config<Duration> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&CLUSTER_SHUTDOWN_GRACE_PERIOD)
-        .add(&DELAY_SOURCES_PAST_REHYDRATION)
         .add(&ENFORCE_EXTERNAL_ADDRESSES)
         .add(&KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS)
         .add(&KAFKA_CLIENT_ID_ENRICHMENT_RULES)

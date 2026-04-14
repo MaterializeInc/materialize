@@ -54,22 +54,6 @@ use crate::internal::service::{
 };
 use crate::metrics::Metrics;
 
-/// Determines whether PubSub clients should connect to the PubSub server.
-pub(crate) const PUBSUB_CLIENT_ENABLED: Config<bool> = Config::new(
-    "persist_pubsub_client_enabled",
-    true,
-    "Whether to connect to the Persist PubSub service.",
-);
-
-/// For connected clients, determines whether to push state diffs to the PubSub
-/// server. For the server, determines whether to broadcast state diffs to
-/// subscribed clients.
-pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
-    "persist_pubsub_push_diff_enabled",
-    true,
-    "Whether to push state diffs to Persist PubSub.",
-);
-
 /// For connected clients, determines whether to push state diffs to the PubSub
 /// server. For the server, determines whether to broadcast state diffs to
 /// subscribed clients.
@@ -292,11 +276,6 @@ impl GrpcPubSubClient {
             let sender = Arc::clone(&sender);
             metrics.pubsub_client.grpc_connection.connected.set(0);
 
-            if !PUBSUB_CLIENT_ENABLED.get(&config.persist_cfg) {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-
             // add a bit of backoff when reconnecting after some network/server failure
             if is_first_connection_attempt {
                 is_first_connection_attempt = false;
@@ -443,10 +422,6 @@ impl GrpcPubSubClient {
         metrics: &Metrics,
     ) -> Result<(), Error> {
         loop {
-            if !PUBSUB_CLIENT_ENABLED.get(&config.persist_cfg) {
-                return Ok(());
-            }
-
             debug!("awaiting next pubsub response");
             match responses.next().await {
                 Some(Ok(message)) => {
@@ -1168,9 +1143,7 @@ impl proto_persist_pub_sub_server::ProtoPersistPubSub for PersistGrpcPubSubServe
                                 seqno: req.seqno.into_rust().expect("valid seqno"),
                                 data: req.diff.clone(),
                             };
-                            if PUBSUB_PUSH_DIFF_ENABLED.get(&cfg) {
-                                connection.push_diff(&shard_id, &diff);
-                            }
+                            connection.push_diff(&shard_id, &diff);
                         }
                         Some(proto_pub_sub_message::Message::Subscribe(diff)) => {
                             let shard_id = diff.shard_id.parse().expect("valid shard id");
@@ -1466,7 +1439,7 @@ mod grpc {
     use crate::internal::service::proto_pub_sub_message::Message;
     use crate::metrics::Metrics;
     use crate::rpc::{
-        GrpcPubSubClient, PUBSUB_CLIENT_ENABLED, PUBSUB_RECONNECT_BACKOFF, PersistGrpcPubSubServer,
+        GrpcPubSubClient, PUBSUB_RECONNECT_BACKOFF, PersistGrpcPubSubServer,
         PersistPubSubClient, PersistPubSubClientConfig, PubSubState,
     };
 
@@ -1874,7 +1847,6 @@ mod grpc {
         let cfg = PersistConfig::new_for_tests();
 
         let mut updates = ConfigUpdates::default();
-        updates.add(&PUBSUB_CLIENT_ENABLED, true);
         updates.add(&PUBSUB_RECONNECT_BACKOFF, Duration::ZERO);
         cfg.apply_from(&updates);
 

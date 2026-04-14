@@ -45,7 +45,6 @@ SERVICES = [
         ],
         additional_system_parameter_defaults={
             "unsafe_enable_unorchestrated_cluster_replicas": "true",
-            "storage_dataflow_delay_sources_past_rehydration": "true",
             "memory_limiter_interval": "0",
         },
         environment_extra=materialized_environment_extra,
@@ -183,7 +182,6 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
                     # Enabling shrinking buffers
                     "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
                     "storage_shrink_upsert_unused_buffers_by_ratio": "4",
@@ -214,7 +212,6 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
                     # Enabling shrinking buffers
                     "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
                     "storage_shrink_upsert_unused_buffers_by_ratio": "4",
@@ -247,7 +244,6 @@ def workflow_rehydration(c: Composition) -> None:
                     "storage_dataflow_max_inflight_bytes": "1",
                     "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
                     "storage_dataflow_max_inflight_bytes_disk_only": "false",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
                 },
                 environment_extra=materialized_environment_extra,
                 default_replication_factor=2,
@@ -354,9 +350,6 @@ def workflow_incident_49(c: Composition) -> None:
         (
             "with DISK",
             Materialized(
-                additional_system_parameter_defaults={
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
-                },
                 environment_extra=materialized_environment_extra,
                 default_replication_factor=2,
             ),
@@ -364,9 +357,6 @@ def workflow_incident_49(c: Composition) -> None:
         (
             "without DISK",
             Materialized(
-                additional_system_parameter_defaults={
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
-                },
                 environment_extra=materialized_environment_extra,
                 default_replication_factor=2,
             ),
@@ -620,7 +610,6 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
             ],
             additional_system_parameter_defaults={
                 "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                "storage_dataflow_delay_sources_past_rehydration": "true",
                 "memory_limiter_interval": "0",
             },
             environment_extra=materialized_environment_extra,

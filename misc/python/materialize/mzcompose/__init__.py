@@ -93,7 +93,6 @@ def get_minimal_system_parameters(
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
-        "enable_multi_worker_storage_persist_sink": "true",
         "enable_multi_replica_sources": "true",
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
@@ -308,12 +307,6 @@ def get_variable_system_parameters(
             ["65536", "262144", "1048576", "4194304"],
         ),
         VariableSystemParameter(
-            "persist_pubsub_client_enabled", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_pubsub_push_diff_enabled", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
             "persist_record_compactions", "true", ["true", "false"]
         ),
         VariableSystemParameter(
@@ -471,7 +464,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
-    "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",
     "lgalloc_local_buffer_bytes",
@@ -496,7 +488,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_logical_backpressure_inflight_slack",
     "persist_fetch_semaphore_cost_adjustment",
     "persist_fetch_semaphore_permit_adjustment",
-    "persist_optimize_ignored_data_fetch",
     "persist_pubsub_same_process_delegate_enabled",
     "persist_pubsub_connect_attempt_timeout",
     "persist_pubsub_request_timeout",
@@ -520,7 +511,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "crdb_keepalives_interval",
     "crdb_keepalives_retries",
     "persist_use_critical_since_txn",
-    "use_global_txn_cache_source",
     "persist_batch_builder_max_outstanding_parts",
     "persist_compaction_heuristic_min_inputs",
     "persist_compaction_heuristic_min_parts",
@@ -573,7 +563,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_txns_data_shard_retryer_multiplier",
     "persist_txns_data_shard_retryer_clamp",
     "storage_cluster_shutdown_grace_period",
-    "storage_dataflow_delay_sources_past_rehydration",
     "storage_dataflow_suspendable_sources",
     "storage_downgrade_since_during_finalization",
     "replica_metrics_history_retention_interval",
