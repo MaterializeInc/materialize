@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/controller/sequential_hydration.rs
-revision: e757b4d11b
+revision: f4f99cbc37
 ---
 
 # mz-compute-client::controller::sequential_hydration

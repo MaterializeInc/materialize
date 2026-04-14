@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: 1e050fdd07
+revision: e28be51f38
 ---
 
 # mz-sql-parser::ast::defs::statement

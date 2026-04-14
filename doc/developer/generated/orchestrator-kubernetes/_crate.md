@@ -1,6 +1,6 @@
 ---
 source: src/orchestrator-kubernetes/src/lib.rs
-revision: b1c657d28e
+revision: 117286ee15
 ---
 
 # mz-orchestrator-kubernetes

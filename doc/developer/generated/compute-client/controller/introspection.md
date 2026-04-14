@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/controller/introspection.rs
-revision: 7eb0cd86f7
+revision: 00cc513fa5
 ---
 
 # mz-compute-client::controller::introspection

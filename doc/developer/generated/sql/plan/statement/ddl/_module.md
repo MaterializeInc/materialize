@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 0c2379c49c
+revision: e28be51f38
 ---
 
 # mz-sql::plan::statement::ddl

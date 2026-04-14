@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/webhook.rs
-revision: db271c31b1
+revision: 00cc513fa5
 ---
 
 # environmentd::http::webhook
