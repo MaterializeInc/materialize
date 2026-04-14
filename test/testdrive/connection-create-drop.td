@@ -76,6 +76,24 @@ materialize.public.testconn   "CREATE CONNECTION materialize.public.testconn\nTO
 
 > DROP CONNECTION testconn
 
+# Test that connections with hyphens in the name work correctly
+> CREATE CONNECTION "my-hyphen-conn" TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT)
+
+> SHOW CONNECTIONS
+my-hyphen-conn    kafka    ""
+
+>[version<2600700] SHOW CREATE CONNECTION "my-hyphen-conn"
+name   create_sql
+---------------------------------
+materialize.public."my-hyphen-conn"   "CREATE CONNECTION materialize.public.\"my-hyphen-conn\" TO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
+
+>[version>=2600700] SHOW CREATE CONNECTION "my-hyphen-conn"
+name   create_sql
+---------------------------------
+materialize.public."my-hyphen-conn"   "CREATE CONNECTION materialize.public.\"my-hyphen-conn\"\nTO KAFKA (BROKER = '${testdrive.kafka-addr}', SECURITY PROTOCOL = plaintext);"
+
+> DROP CONNECTION "my-hyphen-conn"
+
 > CREATE CONNECTION progress_override TO KAFKA (
     BROKER '${testdrive.kafka-addr}',
     PROGRESS TOPIC 'override_topic',

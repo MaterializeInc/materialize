@@ -92,9 +92,14 @@ impl FullItemName {
 impl fmt::Display for FullItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
-            write!(f, "{}.", database)?;
+            write!(f, "{}.", Ident::new_unchecked(database))?;
         }
-        write!(f, "{}.{}", self.schema, self.item)
+        write!(
+            f,
+            "{}.{}",
+            Ident::new_unchecked(&self.schema),
+            Ident::new_unchecked(&self.item)
+        )
     }
 }
 
@@ -163,12 +168,12 @@ impl PartialItemName {
 impl fmt::Display for PartialItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
-            write!(f, "{}.", database)?;
+            write!(f, "{}.", Ident::new_unchecked(database))?;
         }
         if let Some(schema) = &self.schema {
-            write!(f, "{}.", schema)?;
+            write!(f, "{}.", Ident::new_unchecked(schema))?;
         }
-        write!(f, "{}", self.item)
+        write!(f, "{}", Ident::new_unchecked(&self.item))
     }
 }
 
@@ -233,9 +238,9 @@ pub struct FullSchemaName {
 impl fmt::Display for FullSchemaName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
-            write!(f, "{}.", database)?;
+            write!(f, "{}.", Ident::new_unchecked(database))?;
         }
-        write!(f, "{}", self.schema)
+        write!(f, "{}", Ident::new_unchecked(&self.schema))
     }
 }
 
@@ -268,9 +273,9 @@ pub struct PartialSchemaName {
 impl fmt::Display for PartialSchemaName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
-            write!(f, "{}.", database)?;
+            write!(f, "{}.", Ident::new_unchecked(database))?;
         }
-        write!(f, "{}", self.schema)
+        write!(f, "{}", Ident::new_unchecked(&self.schema))
     }
 }
 
@@ -298,7 +303,7 @@ impl fmt::Display for RawDatabaseSpecifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Ambient => f.write_str("<none>"),
-            Self::Name(name) => f.write_str(name),
+            Self::Name(name) => write!(f, "{}", Ident::new_unchecked(name)),
         }
     }
 }
