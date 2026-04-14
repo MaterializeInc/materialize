@@ -2445,7 +2445,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
-        read_holds: Option<ReadHolds<Timestamp>>,
+        read_holds: Option<ReadHolds>,
         imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
     ) {
         let fut = self

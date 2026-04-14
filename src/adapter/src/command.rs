@@ -238,13 +238,13 @@ pub enum Command {
 
     GetTransactionReadHoldsBundle {
         conn_id: ConnectionId,
-        tx: oneshot::Sender<Option<ReadHolds<mz_repr::Timestamp>>>,
+        tx: oneshot::Sender<Option<ReadHolds>>,
     },
 
     /// _Merges_ the given read holds into the given connection's stored transaction read holds.
     StoreTransactionReadHolds {
         conn_id: ConnectionId,
-        read_holds: ReadHolds<mz_repr::Timestamp>,
+        read_holds: ReadHolds,
         tx: oneshot::Sender<()>,
     },
 
@@ -272,7 +272,7 @@ pub enum Command {
         replica_id: Option<ReplicaId>,
         conn_id: ConnectionId,
         session_uuid: Uuid,
-        read_holds: ReadHolds<mz_repr::Timestamp>,
+        read_holds: ReadHolds,
         plan: plan::SubscribePlan,
         statement_logging_id: Option<StatementLoggingId>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,

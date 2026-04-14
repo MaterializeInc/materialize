@@ -168,7 +168,7 @@ impl TimestampProvider for Coordinator {
             .expect("missing collections")
     }
 
-    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<Timestamp> {
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         self.acquire_read_holds(id_bundle)
     }
 
@@ -244,7 +244,7 @@ pub trait TimestampProvider {
     /// session_oracle_read_ts.
     fn determine_timestamp_via_constraints(
         session: &Session,
-        read_holds: &ReadHolds<Timestamp>,
+        read_holds: &ReadHolds,
         id_bundle: &CollectionIdBundle,
         when: &QueryWhen,
         oracle_read_ts: Option<Timestamp>,
@@ -443,7 +443,7 @@ pub trait TimestampProvider {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
-    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds), AdapterError> {
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
         let read_holds = self.acquire_read_holds(id_bundle);
@@ -472,9 +472,9 @@ pub trait TimestampProvider {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
-        read_holds: ReadHolds<Timestamp>,
+        read_holds: ReadHolds,
         upper: Antichain<Timestamp>,
-    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds<Timestamp>), AdapterError> {
+    ) -> Result<(TimestampDetermination<Timestamp>, ReadHolds), AdapterError> {
         let timeline = Self::get_timeline(timeline_context);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
         let since = read_holds.least_valid_read();
@@ -535,7 +535,7 @@ pub trait TimestampProvider {
 
     /// Acquires [ReadHolds], for the given `id_bundle` at the earliest possible
     /// times.
-    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<mz_repr::Timestamp>;
+    fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds;
 
     /// The smallest common valid write frontier among the specified collections.
     ///
@@ -607,13 +607,7 @@ impl Coordinator {
         timeline_context: &TimelineContext,
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<mz_repr::Timestamp>,
-    ) -> Result<
-        (
-            TimestampDetermination<mz_repr::Timestamp>,
-            ReadHolds<mz_repr::Timestamp>,
-        ),
-        AdapterError,
-    > {
+    ) -> Result<(TimestampDetermination<mz_repr::Timestamp>, ReadHolds), AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
         let (det, read_holds) = self.determine_timestamp_for(
             session,

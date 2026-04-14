@@ -27,7 +27,7 @@ use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::Timestamp as _;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -40,13 +40,13 @@ use crate::util::ResultExt;
 /// that read frontiers cannot advance past the held time as long as they exist.
 /// Dropping a [`ReadHolds`] also drops the [`ReadHold`] tokens within and
 /// relinquishes the associated read capabilities.
-#[derive(Debug, Clone)]
-pub struct ReadHolds<T: TimelyTimestamp> {
-    pub storage_holds: BTreeMap<GlobalId, ReadHold<T>>,
-    pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold<T>>,
+#[derive(Debug, Default, Clone)]
+pub struct ReadHolds {
+    pub storage_holds: BTreeMap<GlobalId, ReadHold<Timestamp>>,
+    pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold<Timestamp>>,
 }
 
-impl<T: TimelyTimestamp> ReadHolds<T> {
+impl ReadHolds {
     /// Return empty `ReadHolds`.
     pub fn new() -> Self {
         ReadHolds {
@@ -84,7 +84,7 @@ impl<T: TimelyTimestamp> ReadHolds<T> {
     }
 
     /// Downgrade the contained [`ReadHold`]s to the given time.
-    pub fn downgrade(&mut self, time: T) {
+    pub fn downgrade(&mut self, time: Timestamp) {
         let frontier = Antichain::from_elem(time);
         for hold in self.storage_holds.values_mut() {
             let _ = hold.try_downgrade(frontier.clone());
@@ -103,7 +103,7 @@ impl<T: TimelyTimestamp> ReadHolds<T> {
     }
 
     /// Returns a new ReadHolds containing only the holds for collections in `id_bundle`.
-    pub fn subset(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<T> {
+    pub fn subset(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         let mut result = ReadHolds::new();
 
         for id in &id_bundle.storage_ids {
@@ -126,9 +126,9 @@ impl<T: TimelyTimestamp> ReadHolds<T> {
     }
 }
 
-impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
-    pub fn least_valid_read(&self) -> Antichain<T> {
-        let mut since = Antichain::from_elem(T::minimum());
+impl ReadHolds {
+    pub fn least_valid_read(&self) -> Antichain<Timestamp> {
+        let mut since = Antichain::from_elem(Timestamp::minimum());
         for hold in self.storage_holds.values() {
             since.join_assign(hold.since());
         }
@@ -146,7 +146,7 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
     /// _at least_ held back to the reported frontier by this read hold.
     ///
     /// This method is not meant to be fast, use wisely!
-    pub fn since(&self, desired_id: &GlobalId) -> Antichain<T> {
+    pub fn since(&self, desired_id: &GlobalId) -> Antichain<Timestamp> {
         let mut since = Antichain::new();
 
         if let Some(hold) = self.storage_holds.get(desired_id) {
@@ -205,12 +205,6 @@ impl<T: TimelyTimestamp + Lattice> ReadHolds<T> {
             let prev = self.compute_holds.insert(id, other_hold);
             assert!(prev.is_none(), "duplicate compute read hold: {id:?}");
         }
-    }
-}
-
-impl<T: TimelyTimestamp> Default for ReadHolds<T> {
-    fn default() -> Self {
-        ReadHolds::new()
     }
 }
 
@@ -375,10 +369,7 @@ impl crate::coord::Coordinator {
     ///
     /// Will panic if any of the referenced collections in `id_bundle` don't
     /// exist.
-    pub(crate) fn acquire_read_holds(
-        &self,
-        id_bundle: &CollectionIdBundle,
-    ) -> ReadHolds<Timestamp> {
+    pub(crate) fn acquire_read_holds(&self, id_bundle: &CollectionIdBundle) -> ReadHolds {
         let mut read_holds = ReadHolds::new();
 
         let desired_storage_holds = id_bundle.storage_ids.iter().map(|id| *id).collect_vec();
@@ -417,7 +408,7 @@ impl crate::coord::Coordinator {
     pub(crate) fn store_transaction_read_holds(
         &mut self,
         conn_id: ConnectionId,
-        read_holds: ReadHolds<Timestamp>,
+        read_holds: ReadHolds,
     ) {
         use std::collections::btree_map::Entry;
 
