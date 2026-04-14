@@ -382,10 +382,17 @@ impl Blob for AzureBlob {
         match blob.get_properties().await {
             Ok(props) => {
                 let size = usize::cast_from(props.blob.properties.content_length);
-                blob.delete()
-                    .await
-                    .map_err(|e| ExternalError::from(e.context("azure blob delete error")))?;
-                Ok(Some(size))
+                match blob.delete().await {
+                    Ok(_) => Ok(Some(size)),
+                    Err(e) => {
+                        if let Some(e) = e.as_http_error() {
+                            if e.status() == StatusCode::NotFound {
+                                return Ok(None);
+                            }
+                        }
+                        Err(ExternalError::from(e.context("azure blob delete error")))
+                    }
+                }
             }
             Err(e) => {
                 if let Some(e) = e.as_http_error() {
