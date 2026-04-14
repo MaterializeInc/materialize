@@ -13,16 +13,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use columnation::Columnation;
 use differential_dataflow::Data;
 use differential_dataflow::difference::Abelian;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
+use differential_dataflow::trace::implementations::{BatchContainer, LayoutExt};
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
+use mz_timely_util::columnation::ColumnationStack;
 use timely::Container;
 use timely::container::PushInto;
-
-use columnation::Columnation;
-use differential_dataflow::trace::implementations::{BatchContainer, LayoutExt};
-use mz_timely_util::columnation::ColumnationStack;
 
 use crate::extensions::arrange::ArrangementSize;
 

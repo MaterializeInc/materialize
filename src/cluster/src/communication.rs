@@ -162,9 +162,7 @@ where
         }
     }
 
-    // Choose the intra-process allocator flavor up front. With the new
-    // timely API this is a runtime choice rather than a `P: PeerBuilder`
-    // generic threaded through the bring-up path.
+    // Choose the intra-process allocator flavor up front.
     let process_allocators = if enable_zero_copy_binary {
         ProcessBuilder::new_bytes_vector(workers, refill.clone())
     } else {

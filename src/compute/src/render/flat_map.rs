@@ -9,8 +9,6 @@
 
 use std::collections::VecDeque;
 
-use crate::render::DataflowError;
-use crate::render::context::{CollectionBundle, Context};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use mz_compute_types::dyncfgs::COMPUTE_FLAT_MAP_FUEL;
 use mz_expr::MfpPlan;
@@ -22,6 +20,9 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
+
+use crate::render::DataflowError;
+use crate::render::context::{CollectionBundle, Context};
 
 impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
     /// Applies a `TableFunc` to every row, followed by an `mfp`.

@@ -260,8 +260,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
     ) -> (
         VecCollection<'s, T, Row, Diff>,
         VecCollection<'s, T, DataflowError, Diff>,
-    )
-where {
+    ) {
         let pairer = Pairer::new(1);
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut collection = collection.map({
@@ -391,8 +390,7 @@ where {
     ) -> (
         VecCollection<'s, T, (Row, Row), Diff>,
         Option<VecCollection<'s, T, DataflowError, Diff>>,
-    )
-where {
+    ) {
         // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
         // applying `modulus`.
         let input = collection.map(move |(hash_key, row)| {
@@ -454,8 +452,7 @@ where {
     ) -> (
         VecCollection<'s, T, Row, Diff>,
         VecCollection<'s, T, DataflowError, Diff>,
-    )
-where {
+    ) {
         // We can place our rows directly into the diff field, and only keep the relevant one
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction. We start by mapping the group key along with the row and consolidating

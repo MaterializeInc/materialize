@@ -585,7 +585,6 @@ mod test {
     use differential_dataflow::consolidation;
     use differential_dataflow::input::{Input, InputSession};
     use serde::{Deserialize, Serialize};
-
     use timely::dataflow::operators::capture::{Event, Extract};
     use timely::dataflow::operators::vec::UnorderedInput;
     use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;

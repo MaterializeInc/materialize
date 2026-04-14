@@ -476,8 +476,7 @@ mod mint {
         DescsStream<'s>,
         SharedSinkFrontier,
         PressOnDropButton,
-    )
-where {
+    ) {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
         let worker_count = scope.peers();
@@ -751,8 +750,7 @@ mod write {
         persist: PersistStreams<'s>,
         descs: DescsStream<'s>,
         worker_config: Rc<ConfigSet>,
-    ) -> (BatchesStream<'s>, PressOnDropButton)
-where {
+    ) -> (BatchesStream<'s>, PressOnDropButton) {
         let scope = desired.ok.scope();
         let worker_id = scope.index();
 
@@ -1124,8 +1122,7 @@ mod append {
         persist_api: PersistApi,
         descs: DescsStream<'s>,
         batches: BatchesStream<'s>,
-    ) -> PressOnDropButton
-where {
+    ) -> PressOnDropButton {
         let scope = descs.scope();
         let worker_id = scope.index();
 

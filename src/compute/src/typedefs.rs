@@ -11,8 +11,6 @@
 
 #![allow(dead_code, missing_docs)]
 
-use crate::row_spine::RowValBuilder;
-use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 use columnar::{Container, Ref};
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::TraceAgent;
@@ -22,6 +20,9 @@ use differential_dataflow::trace::wrappers::frontier::TraceFrontier;
 use mz_repr::Diff;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
+
+use crate::row_spine::RowValBuilder;
+use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};

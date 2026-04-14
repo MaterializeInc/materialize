@@ -175,8 +175,7 @@ where
         err_input: VecCollection<'s, TInner, DataflowError, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> CollectionBundle<'s, TInner>
-where {
+    ) -> CollectionBundle<'s, TInner> {
         let mut errors = Default::default();
         let arrangement =
             self.render_reduce_plan_inner(plan, collection, &mut errors, key_arity, mfp_after);
@@ -197,8 +196,7 @@ where {
         errors: &mut Vec<VecCollection<'s, TInner, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> Arranged<'s, RowRowAgent<TInner, Diff>>
-where {
+    ) -> Arranged<'s, RowRowAgent<TInner, Diff>> {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
         // not only values (database-issues#6658).
         let arrangement = match plan {
@@ -265,8 +263,7 @@ where {
     ) -> (
         Arranged<'s, TraceAgent<RowRowSpine<TInner, Diff>>>,
         VecCollection<'s, TInner, DataflowError, Diff>,
-    )
-where {
+    ) {
         let error_logger = self.error_logger();
 
         // Allocations for the two closures.
@@ -347,8 +344,7 @@ where {
     ) -> (
         RowRowArrangement<'s, TInner>,
         VecCollection<'s, TInner, DataflowError, Diff>,
-    )
-where {
+    ) {
         // We are only using this function to render multiple basic aggregates and
         // stitch them together. If that's not true we should complain.
         if aggrs.len() <= 1 {
@@ -456,8 +452,7 @@ where {
     ) -> (
         RowRowArrangement<'s, TInner>,
         Option<VecCollection<'s, TInner, DataflowError, Diff>>,
-    )
-where {
+    ) {
         let AggregateExpr {
             func,
             expr: _,
@@ -805,8 +800,7 @@ where {
     ) -> (
         RowRowArrangement<'s, TInner>,
         VecCollection<'s, TInner, DataflowError, Diff>,
-    )
-where {
+    ) {
         let mut err_output: Option<VecCollection<'s, TInner, _, _>> = None;
         let outer_scope = input.scope();
         let arranged_output = outer_scope
@@ -999,8 +993,7 @@ where {
     ) -> (
         VecCollection<'s, TInner, (Row, Row), Diff>,
         Option<VecCollection<'s, TInner, DataflowError, Diff>>,
-    )
-where {
+    ) {
         let (input, negated_output, errs) = if validating {
             let (input, reduced) = self
                 .build_bucketed_negated_output::<
@@ -1148,8 +1141,7 @@ where {
     ) -> (
         RowRowArrangement<'s, TInner>,
         VecCollection<'s, TInner, DataflowError, Diff>,
-    )
-where {
+    ) {
         let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
         let collection = collection
@@ -1274,8 +1266,7 @@ where {
     ) -> (
         RowRowArrangement<'s, TInner>,
         VecCollection<'s, TInner, DataflowError, Diff>,
-    )
-where {
+    ) {
         let collection_scope = collection.scope();
 
         // we must have called this function with something to reduce

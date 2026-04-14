@@ -10,13 +10,6 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::logging::compute::{
-    ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
-    ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
-};
-use crate::typedefs::{
-    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
-};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
@@ -29,6 +22,14 @@ use timely::dataflow::Stream;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Timestamp;
+
+use crate::logging::compute::{
+    ArrangementHeapAllocations, ArrangementHeapCapacity, ArrangementHeapSize,
+    ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
+};
+use crate::typedefs::{
+    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
+};
 
 /// Extension trait to arrange data.
 pub trait MzArrange<'scope>: MzArrangeCore<'scope> {

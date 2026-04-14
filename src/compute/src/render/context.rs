@@ -13,15 +13,6 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use crate::compute_state::ComputeState;
-use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
-use crate::render::errors::ErrorLogger;
-use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::row_spine::{DatumSeq, RowRowBuilder};
-use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
-    RowRowSpine,
-};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
@@ -50,16 +41,23 @@ use timely::progress::operate::FrontierInterest;
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 
+use crate::compute_state::ComputeState;
+use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::render::errors::ErrorLogger;
+use crate::render::{LinearJoinSpec, RenderTimestamp};
+use crate::row_spine::{DatumSeq, RowRowBuilder};
+use crate::typedefs::{
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, MzTimestamp, RowRowAgent, RowRowEnter,
+    RowRowSpine,
+};
+
 /// Dataflow-local collections and arrangements.
 ///
 /// A context means to wrap available data assets and present them in an easy-to-use manner.
 /// These assets include dataflow-local collections and arrangements, as well as imported
 /// arrangements from outside the dataflow.
 ///
-/// Context has two timestamp types, `TInner` and `T`, where the
-/// former must refine the latter. The former is the timestamp used by the scope in question,
-/// and the latter is the timestamp of imported traces. The two may be different in the case
-/// of regions or iteration.
+/// Context has a timestamp type `TInner`, which is the timestamp used by the scope in question.
 pub struct Context<'scope, TInner>
 where
     TInner: MzTimestamp + Refines<mz_repr::Timestamp>,
