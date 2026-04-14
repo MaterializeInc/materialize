@@ -32,7 +32,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
-use crate::ast::display::{AstDisplay, AstFormatter};
+use crate::ast::display::{AstDisplay, AstFormatter, escaped_identifier};
 use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
@@ -92,13 +92,13 @@ impl FullItemName {
 impl fmt::Display for FullItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
-            write!(f, "{}.", Ident::new_unchecked(database))?;
+            write!(f, "{}.", escaped_identifier(database))?;
         }
         write!(
             f,
             "{}.{}",
-            Ident::new_unchecked(&self.schema),
-            Ident::new_unchecked(&self.item)
+            escaped_identifier(&self.schema),
+            escaped_identifier(&self.item)
         )
     }
 }
@@ -168,12 +168,12 @@ impl PartialItemName {
 impl fmt::Display for PartialItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
-            write!(f, "{}.", Ident::new_unchecked(database))?;
+            write!(f, "{}.", escaped_identifier(database))?;
         }
         if let Some(schema) = &self.schema {
-            write!(f, "{}.", Ident::new_unchecked(schema))?;
+            write!(f, "{}.", escaped_identifier(schema))?;
         }
-        write!(f, "{}", Ident::new_unchecked(&self.item))
+        write!(f, "{}", escaped_identifier(&self.item))
     }
 }
 
@@ -238,9 +238,9 @@ pub struct FullSchemaName {
 impl fmt::Display for FullSchemaName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
-            write!(f, "{}.", Ident::new_unchecked(database))?;
+            write!(f, "{}.", escaped_identifier(database))?;
         }
-        write!(f, "{}", Ident::new_unchecked(&self.schema))
+        write!(f, "{}", escaped_identifier(&self.schema))
     }
 }
 
@@ -273,9 +273,9 @@ pub struct PartialSchemaName {
 impl fmt::Display for PartialSchemaName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
-            write!(f, "{}.", Ident::new_unchecked(database))?;
+            write!(f, "{}.", escaped_identifier(database))?;
         }
-        write!(f, "{}", Ident::new_unchecked(&self.schema))
+        write!(f, "{}", escaped_identifier(&self.schema))
     }
 }
 
@@ -303,7 +303,7 @@ impl fmt::Display for RawDatabaseSpecifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Ambient => f.write_str("<none>"),
-            Self::Name(name) => write!(f, "{}", Ident::new_unchecked(name)),
+            Self::Name(name) => write!(f, "{}", escaped_identifier(name)),
         }
     }
 }
