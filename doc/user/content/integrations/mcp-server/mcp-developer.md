@@ -13,8 +13,8 @@ menu:
 
 Materialize provides a built-in [Model Context Protocol
 (MCP)](https://modelcontextprotocol.io/) endpoint for troubleshooting and
-observability. Connect an MCP-compatible AI agent (such as Claude Code, Claude
-Desktop, or Cursor) and ask natural language questions like:
+observability. The MCP interface is served directly by the database; no sidecar
+process or external server is required.
 
 | Question | What the agent does |
 |----------|---------------------|
@@ -25,11 +25,6 @@ Desktop, or Cursor) and ask natural language questions like:
 | **What's the health of my environment?** | Checks replica statuses, source and sink health, and resource utilization. |
 | **What can I optimize to save costs?** | Queries the index advisor for materialized views that can be dematerialized and indexes that can be dropped. |
 
-The agent translates these questions into the appropriate system catalog
-queries, runs them via the `query_system_catalog` tool, and synthesizes the
-results. The MCP interface is served directly by the database; no sidecar
-process or external server is required.
-
 ## Overview
 
 **Endpoint:** `/api/mcp/developer`
@@ -38,6 +33,11 @@ process or external server is required.
 - Uses [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over HTTP POST
 (default port 6876).
 - Supports the MCP `initialize`, `tools/list`, and `tools/call` methods.
+
+You can connect an MCP-compatible AI agent (such as Claude Code, Claude Desktop,
+or Cursor) to this endpoint. The agent translates natural language questions into
+the appropriate system catalog queries, runs them via the `query_system_catalog`
+tool, and synthesizes the results.
 
 ## Connect to the MCP server
 

@@ -20,22 +20,22 @@ endpoint:
 | `enable_mcp_developer` | `true` | Enable or disable the `/api/mcp/developer` endpoint. When the endpoint is disabled, requests return HTTP 503 (Service Unavailable). |
 | `mcp_max_response_size` | `1000000` | Maximum response size in bytes. Queries exceeding this limit return an error. |
 
-## Example: Enable the endpoint
+## Disabling the endpoint
 
-To enable the `/api/mcp/developer` endpoint:
+The developer endpoint is enabled by default. To disable it:
 
 {{< tabs >}}
 
 {{< tab "Cloud" >}}
 
 Contact [Materialize support](https://materialize.com/docs/support/) to
-enable/disable the MCP developer endpoint for your environment.
+disable the MCP developer endpoint for your environment.
 
 {{< /tab >}}
 
 {{< tab "Self-Managed" >}}
 
-Enable the endpoint using one of these methods:
+Disable the endpoint using one of these methods:
 
 **Option 1: Configuration file**
 
@@ -44,7 +44,7 @@ Set the parameter in your
 
 ```yaml
 system_parameters:
-  enable_mcp_developer: "true"
+  enable_mcp_developer: "false"
 ```
 
 **Option 2: Terraform**
@@ -53,7 +53,7 @@ Set the parameter via the [Materialize Terraform module](https://github.com/Mate
 
 ```hcl
 system_parameters = {
-  enable_mcp_developer = "true"
+  enable_mcp_developer = "false"
 }
 ```
 
@@ -62,7 +62,7 @@ system_parameters = {
 Connect as `mz_system` and run:
 
 ```mzsql
-ALTER SYSTEM SET enable_mcp_developer = true;
+ALTER SYSTEM SET enable_mcp_developer = false;
 ```
 
 {{< note >}}
