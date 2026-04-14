@@ -21,6 +21,7 @@ use mz_expr::MirScalarExpr;
 use mz_repr::Diff;
 use timely::Container;
 use timely::container::PushInto;
+
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::RenderTimestamp;

@@ -31,6 +31,7 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
+
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
@@ -467,9 +468,7 @@ where
     )
     where
         Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
-        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff>
-            + Clone
-            + 'static,
+        Tr2: for<'a> TraceReader<Key<'a> = Tr1::Key<'a>, Time = T, Diff = Diff> + Clone + 'static,
         for<'a> Tr1::Key<'a>: ToDatumIter,
         for<'a> Tr1::Val<'a>: ToDatumIter,
         for<'a> Tr2::Val<'a>: ToDatumIter,

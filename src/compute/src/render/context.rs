@@ -46,8 +46,7 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter,
-    RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -302,14 +301,12 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks =
-                    CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks =
-                    CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
@@ -342,10 +339,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
 }
 impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     /// Extracts the arrangement flavor from a region.
-    pub fn leave_region<'outer>(
-        &self,
-        outer: Scope<'outer, T>,
-    ) -> ArrangementFlavor<'outer, T> {
+    pub fn leave_region<'outer>(&self, outer: Scope<'outer, T>) -> ArrangementFlavor<'outer, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
                 oks.clone().leave_region(outer),
@@ -424,10 +418,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     }
 
     /// Brings the collection bundle into a region.
-    pub fn enter_region<'inner>(
-        &self,
-        region: Scope<'inner, T>,
-    ) -> CollectionBundle<'inner, T> {
+    pub fn enter_region<'inner>(&self, region: Scope<'inner, T>) -> CollectionBundle<'inner, T> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
                 (
@@ -446,10 +437,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Extracts the collection bundle from a region.
-    pub fn leave_region<'outer>(
-        &self,
-        outer: Scope<'outer, T>,
-    ) -> CollectionBundle<'outer, T> {
+    pub fn leave_region<'outer>(&self, outer: Scope<'outer, T>) -> CollectionBundle<'outer, T> {
         CollectionBundle {
             collection: self.collection.as_ref().map(|(oks, errs)| {
                 (
