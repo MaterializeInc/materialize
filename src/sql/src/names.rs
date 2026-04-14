@@ -32,7 +32,7 @@ use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
-use crate::ast::display::{AstDisplay, AstFormatter, escaped_identifier};
+use crate::ast::display::{AstDisplay, AstFormatter};
 use crate::ast::fold::{Fold, FoldNode};
 use crate::ast::visit::{Visit, VisitNode};
 use crate::ast::visit_mut::VisitMut;
@@ -92,14 +92,9 @@ impl FullItemName {
 impl fmt::Display for FullItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
-            write!(f, "{}.", escaped_identifier(database))?;
+            write!(f, "{}.", database)?;
         }
-        write!(
-            f,
-            "{}.{}",
-            escaped_identifier(&self.schema),
-            escaped_identifier(&self.item)
-        )
+        write!(f, "{}.{}", self.schema, self.item)
     }
 }
 
@@ -168,12 +163,12 @@ impl PartialItemName {
 impl fmt::Display for PartialItemName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
-            write!(f, "{}.", escaped_identifier(database))?;
+            write!(f, "{}.", database)?;
         }
         if let Some(schema) = &self.schema {
-            write!(f, "{}.", escaped_identifier(schema))?;
+            write!(f, "{}.", schema)?;
         }
-        write!(f, "{}", escaped_identifier(&self.item))
+        write!(f, "{}", self.item)
     }
 }
 
@@ -238,9 +233,9 @@ pub struct FullSchemaName {
 impl fmt::Display for FullSchemaName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let RawDatabaseSpecifier::Name(database) = &self.database {
-            write!(f, "{}.", escaped_identifier(database))?;
+            write!(f, "{}.", database)?;
         }
-        write!(f, "{}", escaped_identifier(&self.schema))
+        write!(f, "{}", self.schema)
     }
 }
 
@@ -273,9 +268,9 @@ pub struct PartialSchemaName {
 impl fmt::Display for PartialSchemaName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if let Some(database) = &self.database {
-            write!(f, "{}.", escaped_identifier(database))?;
+            write!(f, "{}.", database)?;
         }
-        write!(f, "{}", escaped_identifier(&self.schema))
+        write!(f, "{}", self.schema)
     }
 }
 
@@ -303,7 +298,7 @@ impl fmt::Display for RawDatabaseSpecifier {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::Ambient => f.write_str("<none>"),
-            Self::Name(name) => write!(f, "{}", escaped_identifier(name)),
+            Self::Name(name) => f.write_str(name),
         }
     }
 }
