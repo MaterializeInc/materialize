@@ -351,12 +351,8 @@ where
                     upsert_metrics
                         .rehydration_latency
                         .set(snapshot_start.elapsed().as_secs_f64());
-                    upsert_metrics
-                        .rehydration_total
-                        .set(rehydration_total);
-                    upsert_metrics
-                        .rehydration_updates
-                        .set(rehydration_updates);
+                    upsert_metrics.rehydration_total.set(rehydration_total);
+                    upsert_metrics.rehydration_updates.set(rehydration_updates);
                     tracing::info!(
                         worker_id = %source_config.worker_id,
                         source_id = %source_config.id,
@@ -407,7 +403,9 @@ where
                 upsert_metrics
                     .multi_get_result_count
                     .inc_by(drain_stats.result_count);
-                upsert_metrics.multi_put_size.inc_by(drain_stats.output_count);
+                upsert_metrics
+                    .multi_put_size
+                    .inc_by(drain_stats.output_count);
                 upsert_metrics.upsert_inserts.inc_by(drain_stats.inserts);
                 upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
                 upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
@@ -415,11 +413,21 @@ where
                 source_config
                     .source_statistics
                     .update_bytes_indexed_by(drain_stats.size_diff);
-                source_config
-                    .source_statistics
-                    .update_records_indexed_by(
-                        drain_stats.inserts as i64 - drain_stats.deletes as i64,
-                    );
+                source_config.source_statistics.update_records_indexed_by(
+                    drain_stats.inserts as i64 - drain_stats.deletes as i64,
+                );
+                tracing::info!(
+                    worker_id = %source_config.worker_id,
+                    source_id = %source_config.id,
+                    eligible = drain_stats.eligible,
+                    result_count = drain_stats.result_count,
+                    inserts = drain_stats.inserts,
+                    updates = drain_stats.updates,
+                    deletes = drain_stats.deletes,
+                    output_count = drain_stats.output_count,
+                    size_diff = drain_stats.size_diff,
+                    "drained sealed input",
+                );
 
                 if hydrating {
                     rehydration_total += drain_stats.inserts;

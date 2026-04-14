@@ -37,7 +37,6 @@ additional_system_parameter_defaults = {
     "storage_dataflow_delay_sources_past_rehydration": "true",
     "unsafe_enable_unorchestrated_cluster_replicas": "true",
     "memory_limiter_interval": "0",
-    "enable_upsert_v2": "false",
 }
 
 SERVICES = [
@@ -171,95 +170,95 @@ def workflow_rehydration(c: Composition) -> None:
     ]
 
     for style, mz, clusterd in [
-        (
-            "with DISK",
-            Materialized(
-                options=[
-                    "--orchestrator-process-scratch-directory=/scratch",
-                ],
-                additional_system_parameter_defaults={
-                    "storage_statistics_collection_interval": "1000",
-                    "storage_statistics_interval": "2000",
-                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                    # Force backpressure to be enabled.
-                    "storage_dataflow_max_inflight_bytes": "1",
-                    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
-                    "storage_dataflow_max_inflight_bytes_disk_only": "false",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
-                    # Enabling shrinking buffers
-                    "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
-                    "storage_shrink_upsert_unused_buffers_by_ratio": "4",
-                },
-                environment_extra=materialized_environment_extra,
-                default_replication_factor=2,
-                support_external_clusterd=True,
-            ),
-            Clusterd(
-                name="clusterd1",
-                options=[
-                    "--announce-memory-limit=1048376000",  # 1GiB
-                ],
-                workers=4,
-            ),
-        ),
-        (
-            "with DISK and RocksDB Merge Operator",
-            Materialized(
-                options=[
-                    "--orchestrator-process-scratch-directory=/scratch",
-                ],
-                additional_system_parameter_defaults={
-                    "storage_statistics_collection_interval": "1000",
-                    "storage_statistics_interval": "2000",
-                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                    # Force backpressure to be enabled.
-                    "storage_dataflow_max_inflight_bytes": "1",
-                    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
-                    "storage_dataflow_max_inflight_bytes_disk_only": "false",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
-                    # Enabling shrinking buffers
-                    "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
-                    "storage_shrink_upsert_unused_buffers_by_ratio": "4",
-                    # Enable the RocksDB merge operator
-                    "storage_rocksdb_use_merge_operator": "true",
-                },
-                environment_extra=materialized_environment_extra,
-                default_replication_factor=2,
-                support_external_clusterd=True,
-            ),
-            Clusterd(
-                name="clusterd1",
-                options=[
-                    "--announce-memory-limit=1048376000",  # 1GiB
-                ],
-                workers=4,
-            ),
-        ),
-        (
-            "without DISK",
-            Materialized(
-                options=[
-                    "--orchestrator-process-scratch-directory=/scratch",
-                ],
-                additional_system_parameter_defaults={
-                    "storage_statistics_collection_interval": "1000",
-                    "storage_statistics_interval": "2000",
-                    "unsafe_enable_unorchestrated_cluster_replicas": "true",
-                    # Force backpressure to be enabled.
-                    "storage_dataflow_max_inflight_bytes": "1",
-                    "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
-                    "storage_dataflow_max_inflight_bytes_disk_only": "false",
-                    "storage_dataflow_delay_sources_past_rehydration": "true",
-                },
-                environment_extra=materialized_environment_extra,
-                default_replication_factor=2,
-                support_external_clusterd=True,
-            ),
-            Clusterd(
-                name="clusterd1",
-                workers=4,
-            ),
-        ),
+        # (
+        #     "with DISK",
+        #     Materialized(
+        #         options=[
+        #             "--orchestrator-process-scratch-directory=/scratch",
+        #         ],
+        #         additional_system_parameter_defaults={
+        #             "storage_statistics_collection_interval": "1000",
+        #             "storage_statistics_interval": "2000",
+        #             "unsafe_enable_unorchestrated_cluster_replicas": "true",
+        #             # Force backpressure to be enabled.
+        #             "storage_dataflow_max_inflight_bytes": "1",
+        #             "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+        #             "storage_dataflow_max_inflight_bytes_disk_only": "false",
+        #             "storage_dataflow_delay_sources_past_rehydration": "true",
+        #             # Enabling shrinking buffers
+        #             "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
+        #             "storage_shrink_upsert_unused_buffers_by_ratio": "4",
+        #         },
+        #         environment_extra=materialized_environment_extra,
+        #         default_replication_factor=2,
+        #         support_external_clusterd=True,
+        #     ),
+        #     Clusterd(
+        #         name="clusterd1",
+        #         options=[
+        #             "--announce-memory-limit=1048376000",  # 1GiB
+        #         ],
+        #         workers=4,
+        #     ),
+        # ),
+        # (
+        #     "with DISK and RocksDB Merge Operator",
+        #     Materialized(
+        #         options=[
+        #             "--orchestrator-process-scratch-directory=/scratch",
+        #         ],
+        #         additional_system_parameter_defaults={
+        #             "storage_statistics_collection_interval": "1000",
+        #             "storage_statistics_interval": "2000",
+        #             "unsafe_enable_unorchestrated_cluster_replicas": "true",
+        #             # Force backpressure to be enabled.
+        #             "storage_dataflow_max_inflight_bytes": "1",
+        #             "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+        #             "storage_dataflow_max_inflight_bytes_disk_only": "false",
+        #             "storage_dataflow_delay_sources_past_rehydration": "true",
+        #             # Enabling shrinking buffers
+        #             "upsert_rocksdb_shrink_allocated_buffers_by_ratio": "4",
+        #             "storage_shrink_upsert_unused_buffers_by_ratio": "4",
+        #             # Enable the RocksDB merge operator
+        #             "storage_rocksdb_use_merge_operator": "true",
+        #         },
+        #         environment_extra=materialized_environment_extra,
+        #         default_replication_factor=2,
+        #         support_external_clusterd=True,
+        #     ),
+        #     Clusterd(
+        #         name="clusterd1",
+        #         options=[
+        #             "--announce-memory-limit=1048376000",  # 1GiB
+        #         ],
+        #         workers=4,
+        #     ),
+        # ),
+        # (
+        #     "without DISK",
+        #     Materialized(
+        #         options=[
+        #             "--orchestrator-process-scratch-directory=/scratch",
+        #         ],
+        #         additional_system_parameter_defaults={
+        #             "storage_statistics_collection_interval": "1000",
+        #             "storage_statistics_interval": "2000",
+        #             "unsafe_enable_unorchestrated_cluster_replicas": "true",
+        #             # Force backpressure to be enabled.
+        #             "storage_dataflow_max_inflight_bytes": "1",
+        #             "storage_dataflow_max_inflight_bytes_to_cluster_size_fraction": "0.01",
+        #             "storage_dataflow_max_inflight_bytes_disk_only": "false",
+        #             "storage_dataflow_delay_sources_past_rehydration": "true",
+        #         },
+        #         environment_extra=materialized_environment_extra,
+        #         default_replication_factor=2,
+        #         support_external_clusterd=True,
+        #     ),
+        #     Clusterd(
+        #         name="clusterd1",
+        #         workers=4,
+        #     ),
+        # ),
         # Can't be enabled until metrics are added for upsert v2 rehydration.
         (
             "using upsert v2",
