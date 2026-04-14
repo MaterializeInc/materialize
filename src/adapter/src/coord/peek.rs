@@ -49,7 +49,7 @@ use mz_repr::{
 };
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
@@ -436,8 +436,8 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_fast_path_plan<T: Timestamp>(
-    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
+pub fn create_fast_path_plan(
+    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr>,
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
