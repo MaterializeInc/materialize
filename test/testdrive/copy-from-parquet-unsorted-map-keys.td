@@ -67,7 +67,7 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/unsorted_map.parquet var-na
 
 # Verify equality: maps from COPY FROM should equal maps inserted via SQL.
 # If unsorted, these will NOT match, demonstrating silent data corruption.
-> SELECT p.id, p.map_col = s.map_col AS maps_equal
+> SELECT p.id, p.map_col::text = s.map_col::text AS maps_equal
   FROM from_parquet p
   JOIN from_sql s ON p.id = s.id
   ORDER BY p.id;
@@ -80,7 +80,7 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/unsorted_map.parquet var-na
 # If keys are unsorted, hash/equality is broken and this join will miss rows.
 > SELECT p.id
   FROM from_parquet p
-  JOIN from_sql s ON p.map_col = s.map_col
+  JOIN from_sql s ON p.map_col::text = s.map_col::text
   ORDER BY p.id;
 1
 2

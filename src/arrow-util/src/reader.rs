@@ -25,6 +25,7 @@ use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
 use chrono::{DateTime, NaiveTime};
 use dec::OrderedDecimal;
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -831,10 +832,13 @@ impl ColReader {
                 let start: usize = offsets[idx].try_into().context("map start offset")?;
                 let end: usize = offsets[idx + 1].try_into().context("map end offset")?;
 
+                let kv_sorted = (start..end)
+                    .map(|i| (keys.value(i), i))
+                    .sorted_by_key(|(k, _)| *k);
                 packer
                     .push_dict_with(|packer| {
-                        for i in start..end {
-                            packer.push(Datum::String(keys.value(i)));
+                        for (key, i) in kv_sorted {
+                            packer.push(Datum::String(key));
                             values.read(i, packer)?;
                         }
                         Ok::<_, anyhow::Error>(())
