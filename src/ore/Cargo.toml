@@ -19,7 +19,12 @@ anyhow = { workspace = true, optional = true }
 # Exceptions: `either` (zero deps, quasi-stdlib) and `zeroize` (zero runtime
 # deps, security-critical — must be available unconditionally so that
 # `ore::secure` types are always accessible without feature-flag opt-in).
+# aws-lc-rs is the crypto backend. default-features=false avoids pulling in
+# aws-lc-sys unconditionally; the `crypto` or `fips` features select which
+# C library to link (aws-lc-sys vs aws-lc-fips-sys).
+aws-lc-rs = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
+rustls = { workspace = true, features = ["aws_lc_rs"], optional = true, default-features = false }
 bytemuck = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 chrono = { workspace = true, optional = true }
@@ -144,6 +149,13 @@ assert-no-tracing = []
 assert = ["assert-no-tracing", "ctor", "tracing"]
 proptest = ["dep:proptest", "proptest-derive"]
 overflowing = ["assert"]
+# `crypto` enables the aws-lc-rs crypto backend in standard (non-FIPS) mode.
+# `fips` is a marker feature for FIPS 140-3 builds. It does NOT activate
+# aws-lc-rs/fips at the Cargo level to avoid duplicate symbol conflicts with
+# `crypto` under --all-features. Actual FIPS builds must pass
+# --cfg=aws_lc_fips or use the dedicated FIPS build profile (SEC-260).
+crypto = ["aws-lc-rs", "rustls", "ctor"]
+fips = ["crypto"]
 
 [[test]]
 name = "future"
