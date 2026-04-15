@@ -88,7 +88,7 @@ pin-project.workspace = true
 postgres = { workspace = true, optional = true }
 postgres-openssl = { workspace = true, optional = true }
 prometheus.workspace = true
-rdkafka-sys.workspace = true
+rdkafka-sys = { workspace = true, features = ["cmake-build", "ssl-awslc", "libz-static", "zstd"] }
 rand.workspace = true
 regex = { workspace = true, optional = true }
 reqwest.workspace = true
@@ -139,7 +139,7 @@ postgres-protocol.workspace = true
 postgres_array.workspace = true
 predicates.workspace = true
 proptest.workspace = true
-rdkafka.workspace = true
+rdkafka = { workspace = true, features = ["cmake-build", "ssl-awslc", "libz-static", "zstd"] }
 reqwest.workspace = true
 serde_json.workspace = true
 serde_urlencoded.workspace = true
