@@ -33,3 +33,7 @@ Never regenerate the entire Cargo.lock. When adding or changing dependencies:
 * **Updating a specific crate**: use `cargo update -p <crate>` (optionally `--precise <version>`).
 * **Never run bare `cargo update`** — it bumps every semver-compatible dep in the workspace, causing unrelated breakage from transitive dependency changes.
 * **If the lock file was regenerated**, diff it before committing (`git diff Cargo.lock | grep '^[+-]version'`) and pin back any unintended bumps with `cargo update -p <crate> --precise <old-version>`.
+
+### Licensing
+
+Two files control license policy and **must be kept in sync**: `deny.toml` (`[licenses].allow`) and `about.toml` (`accepted`). When a new dependency introduces a license not already allowed, add the SPDX identifier to both files.

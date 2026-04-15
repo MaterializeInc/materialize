@@ -270,6 +270,7 @@ allow = [
     "OpenSSL",
     "Zlib",
     "Unicode-3.0",
+    "Unicode-DFS-2016",
 ]
 # copyleft is denied by default
 private = { ignore = true }
