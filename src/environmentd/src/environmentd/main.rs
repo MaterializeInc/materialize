@@ -1103,6 +1103,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 secrets_controller,
                 cloud_resource_controller,
                 system_dyncfgs,
+                idle_when_fenced_out: matches!(args.orchestrator, OrchestratorKind::Kubernetes),
                 // Storage options.
                 storage_usage_collection_interval: args.storage_usage_collection_interval_sec,
                 storage_usage_retention_period: args.storage_usage_retention_period,
