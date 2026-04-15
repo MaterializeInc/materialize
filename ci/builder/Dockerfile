@@ -400,7 +400,7 @@ RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
 
 # Stage 3: Build a lightweight CI Builder image for console/playwright jobs.
-FROM ubuntu:noble-20250529 AS ci-builder-console
+FROM ubuntu:noble-20260324 AS ci-builder-console
 
 ARG ARCH_GCC
 ARG ARCH_GO
