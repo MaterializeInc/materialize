@@ -136,7 +136,6 @@ use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
 use mz_timely_util::columnation::ColumnationStack;
 use timely::PartialOrder;
-use timely::container::SizableContainer;
 use timely::progress::Antichain;
 
 use crate::sink::correction::{Logging, SizeMetrics};
@@ -637,7 +636,7 @@ impl<D: Data> Chain<D> {
         debug_assert!(self.can_accept(update));
 
         match self.chunks.last_mut() {
-            Some(c) if !c.at_capacity() => c.push(update),
+            Some(c) if c.len() < self.chunk_capacity => c.push(update),
             Some(_) | None => {
                 let chunk = Chunk::from_update(update, self.chunk_capacity);
                 self.push_chunk(chunk);
@@ -1051,11 +1050,6 @@ impl<D: Data> Chunk<D> {
     /// Return the number of updates in the chunk.
     fn len(&self) -> usize {
         self.data.len()
-    }
-
-    /// Return whether the chunk is at capacity.
-    fn at_capacity(&self) -> bool {
-        self.data.at_capacity()
     }
 
     /// Return the update at the given index.
