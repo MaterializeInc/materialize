@@ -6233,7 +6233,6 @@ dependencies = [
  "mz-server-core",
  "mz-sql-parser",
  "mz-tls-util",
- "postgres-openssl",
  "regex",
  "reqwest",
  "serde",
@@ -6664,6 +6663,7 @@ name = "mz-frontegg-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "axum-extra",
  "base64 0.22.1",
@@ -6673,7 +6673,6 @@ dependencies = [
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
- "openssl",
  "reqwest",
  "serde",
  "serde_json",
@@ -6933,11 +6932,11 @@ name = "mz-oidc-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "axum",
  "base64 0.22.1",
  "jsonwebtoken",
  "mz-ore",
- "openssl",
  "reqwest",
  "serde",
  "serde_json",

@@ -18,6 +18,7 @@ use std::future::IntoFuture;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
+use aws_lc_rs::signature::KeyPair as _;
 use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
@@ -25,8 +26,6 @@ use base64::Engine;
 use jsonwebtoken::{EncodingKey, Header, encode};
 use mz_ore::now::NowFn;
 use mz_ore::task::JoinHandle;
-use openssl::pkey::{PKey, Private};
-use openssl::rsa::Rsa;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
@@ -140,8 +139,11 @@ impl OidcMockServer {
         let encoding_key_typed = EncodingKey::from_rsa_pem(encoding_key.as_bytes())?;
 
         // Parse the private key PEM to extract RSA components for JWKS.
-        let pkey = PKey::private_key_from_pem(encoding_key.as_bytes())?;
-        let rsa = pkey.rsa().expect("pkey should be RSA");
+        // Try PKCS#8 first (BEGIN PRIVATE KEY), then PKCS#1 (BEGIN RSA PRIVATE KEY).
+        let der = pem_to_der(&encoding_key);
+        let rsa_key = aws_lc_rs::rsa::KeyPair::from_pkcs8(&der)
+            .or_else(|_| aws_lc_rs::rsa::KeyPair::from_der(&der))
+            .map_err(|e| anyhow::anyhow!("failed to parse RSA key: {e}"))?;
 
         let addr = match addr {
             Some(addr) => Cow::Borrowed(addr),
@@ -153,9 +155,11 @@ impl OidcMockServer {
         });
         let issuer = format!("http://{}", listener.local_addr().unwrap());
 
-        // Extract RSA public key components from the decoding key
-        // We need to serialize the public key to get n and e values
-        let jwk = create_jwk(&kid, &rsa);
+        // Extract RSA public key components for JWKS.
+        // PublicKey::as_ref() gives PKCS#1 RSAPublicKey DER.
+        let public_key_der = rsa_key.public_key().as_ref();
+        let (n, e) = parse_rsa_public_key_der(public_key_der);
+        let jwk = create_jwk(&kid, &n, &e);
 
         let context = Arc::new(OidcMockContext {
             issuer: issuer.clone(),
@@ -251,12 +255,9 @@ async fn handle_openid_config(
     })
 }
 
-/// Creates a JWK from RSA key components.
-fn create_jwk(kid: &str, rsa: &Rsa<Private>) -> Jwk {
+/// Creates a JWK from RSA public key components.
+fn create_jwk(kid: &str, n: &[u8], e: &[u8]) -> Jwk {
     let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let n = rsa.n().to_vec();
-    let e = rsa.e().to_vec();
-
     Jwk {
         kty: "RSA".to_string(),
         kid: kid.to_string(),
@@ -265,4 +266,59 @@ fn create_jwk(kid: &str, rsa: &Rsa<Private>) -> Jwk {
         n: engine.encode(n),
         e: engine.encode(e),
     }
+}
+
+/// Strips PEM headers/footers and base64-decodes to DER bytes.
+fn pem_to_der(pem: &str) -> Vec<u8> {
+    let b64: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("valid base64 in PEM")
+}
+
+/// Parses a PKCS#1 RSAPublicKey DER (RFC 8017) to extract (n, e).
+///
+/// Format: SEQUENCE { INTEGER n, INTEGER e }
+fn parse_rsa_public_key_der(der: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut pos = 0;
+
+    // Read a DER length field.
+    let read_len = |data: &[u8], pos: &mut usize| -> usize {
+        let b = data[*pos];
+        *pos += 1;
+        if b < 0x80 {
+            usize::from(b)
+        } else {
+            let n = usize::from(b & 0x7f);
+            let mut len = 0usize;
+            for _ in 0..n {
+                len = (len << 8) | usize::from(data[*pos]);
+                *pos += 1;
+            }
+            len
+        }
+    };
+
+    // Read an INTEGER, stripping the leading zero sign byte if present.
+    let read_integer = |data: &[u8], pos: &mut usize| -> Vec<u8> {
+        assert_eq!(data[*pos], 0x02, "expected INTEGER tag");
+        *pos += 1;
+        let len = read_len(data, pos);
+        let mut value = &data[*pos..*pos + len];
+        *pos += len;
+        // Strip leading zero byte used for positive sign in DER.
+        if value.first() == Some(&0) && value.len() > 1 {
+            value = &value[1..];
+        }
+        value.to_vec()
+    };
+
+    // Outer SEQUENCE.
+    assert_eq!(der[pos], 0x30, "expected SEQUENCE tag");
+    pos += 1;
+    let _seq_len = read_len(der, &mut pos);
+
+    let n = read_integer(der, &mut pos);
+    let e = read_integer(der, &mut pos);
+    (n, e)
 }
