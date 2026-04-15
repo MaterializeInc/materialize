@@ -509,6 +509,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn test_cast_string_to_jsonb() {
         let arena = RowArena::new();
         let expr = cast_col0(CastFunc::CastStringToJsonb);
@@ -520,6 +521,7 @@ mod tests {
     // --- Parameterized casts ---
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn test_cast_string_to_numeric_no_scale() {
         let arena = RowArena::new();
         let expr = cast_col0(CastFunc::CastStringToNumeric(None));
@@ -528,6 +530,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn test_cast_string_to_numeric_with_scale() {
         let arena = RowArena::new();
         let scale = NumericMaxScale::try_from(2_i64).unwrap();
@@ -826,6 +829,7 @@ mod tests {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn error_numeric() {
             assert_eq!(
                 eval_cast_err(CastFunc::CastStringToNumeric(None), "bad"),
@@ -1087,6 +1091,7 @@ mod tests {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn parity_jsonb() {
             use mz_expr::func::CastStringToJsonb;
             assert_parity(
@@ -1109,6 +1114,7 @@ mod tests {
         }
 
         #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn parity_numeric() {
             use mz_expr::func::CastStringToNumeric;
             assert_parity(
