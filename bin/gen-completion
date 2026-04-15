@@ -32,12 +32,25 @@ python_autocompletions=(scratch mzcompose)
 
 . misc/shlib/shlib.bash
 
+# GNU sed is required for the multi-line sed expressions used below.
+# On macOS, the default sed is BSD sed, which has incompatible syntax.
+if command_exists gsed; then
+    SED="gsed"
+elif sed --version 2>/dev/null | grep -q "GNU sed"; then
+    SED="sed"
+else
+    echo -e "lint: $(red fatal:) GNU sed is required but not found" >&2
+    echo -e "hint: on macOS, install it with: brew install gnu-sed" >&2
+    exit 1
+fi
+
 case "$cmd" in
     generate)
         for name in "${python_autocompletions[@]}"; do
           for shell in "${supported_shells[@]}"; do
             mkdir -p "$directory"/../misc/completions/"$shell"
-            "$directory"/pyactivate -m materialize.cli."$name" completion "$shell" | sed -e 's/[[:space:]]*$//' -e :a -e '/^\n*$/{$d;N;ba}' > "$directory"/../misc/completions/"$shell"/_"$name"
+            # shellcheck disable=SC2016
+            "$directory"/pyactivate -m materialize.cli."$name" completion "$shell" | "$SED" -e 's/[[:space:]]*$//' -e :a -e '/^\n*$/{$d;N;ba}' > "$directory"/../misc/completions/"$shell"/_"$name"
           done
         done
         ;;
@@ -54,7 +67,8 @@ case "$cmd" in
               exit 1
             fi
 
-            latest=$("$directory"/pyactivate -m materialize.cli."$name" completion "$shell" | sed -e 's/[[:space:]]*$//' -e :a -e '/^\n*$/{$d;N;ba}' | "$shasum")
+            # shellcheck disable=SC2016
+            latest=$("$directory"/pyactivate -m materialize.cli."$name" completion "$shell" | "$SED" -e 's/[[:space:]]*$//' -e :a -e '/^\n*$/{$d;N;ba}' | "$shasum")
             existing=$("$shasum" < "$directory"/../misc/completions/"$shell"/_"$name")
 
             if [[ "$latest" != "$existing" ]]; then

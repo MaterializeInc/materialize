@@ -270,7 +270,7 @@ arrayvec = "0.7.6"
 arrow = { version = "57", default-features = false }
 arrow-ipc = "57"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
-assert_cmd = "2.1.2"
+assert_cmd = "2.2.0"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
@@ -301,7 +301,7 @@ bytefmt = "0.1.7"
 bytemuck = { version = "1.23.1", features = ["latest_stable_rust"] }
 byteorder = "1.5"
 bytes = "1.11.1"
-bytesize = "2.1.0"
+bytesize = "2.3.1"
 cc = "1.2.59"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
@@ -326,8 +326,8 @@ datadriven = "0.9.0"
 deadpool-postgres = "0.10.3"
 dec = "0.4.9"
 derivative = "2.2.0"
-differential-dataflow = "0.22.0"
-differential-dogs3 = "0.22.0"
+differential-dataflow = "0.23.0"
+differential-dogs3 = "0.23.0"
 digest = "0.10.7"
 dirs = "6.0.0"
 domain = { version = "0.11.1", default-features = false, features = ["resolv"] }
@@ -376,7 +376,7 @@ jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 junit-report = "0.8.3"
 k8s-controller = "0.10.0"
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
-kube = { version = "3.0.1", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
+kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 launchdarkly-server-sdk = { version = "2.6.2", default-features = false }
 lgalloc = "0.6.0"
 libc = "0.2.184"
@@ -491,7 +491,7 @@ tiberius = { version = "0.12", default-features = false, features = ["chrono", "
 tikv-jemalloc-ctl = { version = "0.6", features = ["stats", "use_std"] }
 tikv-jemallocator = { version = "0.6", features = ["background_threads", "profiling", "stats", "unprefixed_malloc_on_supported_platforms"] }
 time = "0.3.17"
-timely = "0.28.1"
+timely = "0.29.0"
 tokio = { version = "1.49.0", features = ["full", "test-util"] }
 tokio-metrics = "0.4.9"
 tokio-native-tls = "0.3.1"

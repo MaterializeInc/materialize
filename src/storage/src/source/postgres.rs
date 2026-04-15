@@ -86,7 +86,7 @@ use std::time::Duration;
 
 use differential_dataflow::AsCollection;
 use itertools::Itertools as _;
-use mz_expr::{EvalError, MirScalarExpr};
+use mz_expr::EvalError;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -95,6 +95,7 @@ use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_sql_parser::ast::Ident;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_types::errors::{DataflowError, SourceError, SourceErrorDetails};
+use mz_storage_types::sources::casts::StorageScalarExpr;
 use mz_storage_types::sources::postgres::CastType;
 use mz_storage_types::sources::{
     MzOffset, PostgresSourceConnection, SourceExport, SourceExportDetails, SourceTimestamp,
@@ -124,16 +125,19 @@ impl SourceRender for PostgresSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = MzOffset>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, MzOffset>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<MzOffset>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, MzOffset, HealthStatusMessage>,
+        StreamVec<'scope, MzOffset, Probe<MzOffset>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting into a per-table map.
@@ -274,7 +278,7 @@ struct SourceOutputInfo {
     /// is recalculated every time we observe an upstream schema change. On dataflow initialization
     /// this field is None since we haven't yet observed any schemas.
     projection: Option<Vec<usize>>,
-    casts: Vec<(CastType, MirScalarExpr)>,
+    casts: Vec<(CastType, StorageScalarExpr)>,
     resume_upper: Antichain<MzOffset>,
     export_id: GlobalId,
 }
@@ -494,7 +498,7 @@ fn verify_schema(
 
 /// Casts a text row into the target types
 fn cast_row(
-    casts: &[(CastType, MirScalarExpr)],
+    casts: &[(CastType, StorageScalarExpr)],
     datums: &[Datum<'_>],
     row: &mut Row,
 ) -> Result<(), DefiniteError> {

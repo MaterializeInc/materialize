@@ -478,7 +478,7 @@ impl Coordinator {
         replica_id: Option<ReplicaId>,
         conn_id: ConnectionId,
         session_uuid: Uuid,
-        read_holds: ReadHolds<mz_repr::Timestamp>,
+        read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let sink_id = df_desc.sink_id();

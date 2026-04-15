@@ -42,6 +42,20 @@ pub trait Bucket: Sized {
     fn split(self, timestamp: &Self::Timestamp, fuel: &mut i64) -> (Self, Self);
 }
 
+/// A `[start, end)` range where `end` is `None` when the bucket covers the rest of the domain.
+pub struct BucketRange<T> {
+    /// The lower bound (inclusive).
+    pub start: T,
+    end: Option<T>,
+}
+
+impl<T: PartialOrd> BucketRange<T> {
+    /// Returns `true` if the range contains the given value.
+    pub fn contains(&self, time: &T) -> bool {
+        *time >= self.start && self.end.as_ref().is_none_or(|end| *time < *end)
+    }
+}
+
 /// A sorted list of buckets, representing data bucketed by timestamp.
 ///
 /// Bucket chains support three main APIs: finding buckets for a given timestamp, peeling
@@ -80,18 +94,17 @@ impl<S: Bucket> BucketChain<S> {
     }
 
     /// Find the time range for the bucket that contains data for time `timestamp`.
-    /// Returns a range of the lower (inclusive) and upper (exclusive) time bound of the bucket,
-    /// or `None` if there is no bucket for the requested time. Only times that haven't
-    /// been peeled can still be found.
+    /// Returns `None` if there is no bucket for the requested time.
+    /// Only times that haven't been peeled can still be found.
     ///
     /// The bounds are only valid until the next call to `peel` or `restore`.
     #[inline]
-    pub fn range_of(&self, timestamp: &S::Timestamp) -> Option<std::ops::Range<S::Timestamp>> {
+    pub fn range_of(&self, timestamp: &S::Timestamp) -> Option<BucketRange<S::Timestamp>> {
         let (time, (bits, _)) = self.content.range(..=timestamp).next_back()?;
-        let top = time
-            .advance_by_power_of_two(bits.saturating_sub(1))
-            .expect("must exist");
-        Some(time.clone()..top)
+        Some(BucketRange {
+            start: time.clone(),
+            end: time.advance_by_power_of_two(*bits),
+        })
     }
 
     /// Find the bucket that contains data for time `timestamp`. Returns a reference to the bucket,
@@ -323,5 +336,13 @@ mod tests {
             let mut fuel = 1000;
             chain.restore(&mut fuel);
         }
+    }
+
+    #[mz_ore::test]
+    fn test_range_of() {
+        let chain = BucketChain::new(TestStorage::<u8> { inner: vec![] });
+        let range = chain.range_of(&0).unwrap();
+        assert!(range.contains(&0));
+        assert!(range.contains(&255));
     }
 }

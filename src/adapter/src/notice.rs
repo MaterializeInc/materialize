@@ -79,7 +79,7 @@ pub enum AdapterNotice {
         name: String,
     },
     QueryTimestamp {
-        explanation: TimestampExplanation<mz_repr::Timestamp>,
+        explanation: TimestampExplanation,
     },
     EqualSubscribeBounds {
         bound: mz_repr::Timestamp,

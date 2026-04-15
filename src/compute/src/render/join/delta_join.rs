@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dyncfgs::ENABLE_HALF_JOIN2;
@@ -31,32 +32,26 @@ use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::operators::generic::Session;
 use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
-use timely::progress::timestamp::Refines;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-{
+impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
     ///
     /// The join is followed by the application of `map_filter_project`, whose
     /// implementation will be pushed in to the join pipeline if at all possible.
     pub fn render_delta_join(
         &self,
-        inputs: Vec<CollectionBundle<G>>,
+        inputs: Vec<CollectionBundle<'scope, T>>,
         join_plan: DeltaJoinPlan,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, T> {
         // We create a new region to contain the dataflow paths for the delta join.
         let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
             // Collects error streams for the ambient scope.
@@ -296,9 +291,9 @@ where
 
                     inner_errs.push(
                         differential_dataflow::collection::concatenate(region, region_errs)
-                            .leave_region(),
+                            .leave_region(inner),
                     );
-                    update_stream.leave_region()
+                    update_stream.leave_region(inner)
                 });
 
                 join_results.push(path_results);
@@ -306,8 +301,10 @@ where
 
             // Concatenate the results of each delta query as the accumulated results.
             (
-                differential_dataflow::collection::concatenate(inner, join_results).leave_region(),
-                differential_dataflow::collection::concatenate(inner, inner_errs).leave_region(),
+                differential_dataflow::collection::concatenate(inner, join_results)
+                    .leave_region(self.scope),
+                differential_dataflow::collection::concatenate(inner, inner_errs)
+                    .leave_region(self.scope),
             )
         });
         CollectionBundle::from_collections(oks, errs)
@@ -324,24 +321,25 @@ where
 /// the time of the update. This operator may manipulate `time` as part of this pair, but will not manipulate
 /// the time of the update. This is crucial for correctness, as the total order on times of updates is used
 /// to ensure that any two updates are matched at most once.
-fn build_halfjoin<G, Tr, CF>(
-    updates: VecCollection<G, (Row, G::Timestamp), Diff>,
-    trace: Arranged<G, Tr>,
+fn build_halfjoin<'scope, T, Tr, CF>(
+    updates: VecCollection<'scope, T, (Row, T), Diff>,
+    trace: Arranged<'scope, Tr>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
     comparison: CF,
     closure: JoinClosure,
     config_set: Rc<ConfigSet>,
 ) -> (
-    VecCollection<G, (Row, G::Timestamp), Diff>,
-    VecCollection<G, DataflowError, Diff>,
+    VecCollection<'scope, T, (Row, T), Diff>,
+    VecCollection<'scope, T, DataflowError, Diff>,
 )
 where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-    Tr: TraceReader<KeyOwn = Row, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    T: RenderTimestamp,
+    Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
+        + Clone
+        + 'static,
     for<'a> Tr::Val<'a>: ToDatumIter,
-    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
 {
     let use_half_join2 = ENABLE_HALF_JOIN2.get(&config_set);
 
@@ -378,23 +376,24 @@ where
 }
 
 /// `half_join2` implementation (less-quadratic, new default).
-fn build_halfjoin2<G, Tr, CF>(
-    updates: VecCollection<G, (Row, Row, G::Timestamp), Diff>,
-    trace: Arranged<G, Tr>,
+fn build_halfjoin2<'scope, T, Tr, CF>(
+    updates: VecCollection<'scope, T, (Row, Row, T), Diff>,
+    trace: Arranged<'scope, Tr>,
     comparison: CF,
     closure: JoinClosure,
     mut datums: DatumVec,
-    errs: VecCollection<G, DataflowError, Diff>,
+    errs: VecCollection<'scope, T, DataflowError, Diff>,
 ) -> (
-    VecCollection<G, (Row, G::Timestamp), Diff>,
-    VecCollection<G, DataflowError, Diff>,
+    VecCollection<'scope, T, (Row, T), Diff>,
+    VecCollection<'scope, T, DataflowError, Diff>,
 )
 where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-    Tr: TraceReader<KeyOwn = Row, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    T: RenderTimestamp,
+    Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
+        + Clone
+        + 'static,
     for<'a> Tr::Val<'a>: ToDatumIter,
-    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
 {
     type CB<C> = CapacityContainerBuilder<C>;
 
@@ -485,23 +484,24 @@ where
 }
 
 /// Original `half_join` implementation (fallback).
-fn build_halfjoin1<G, Tr, CF>(
-    updates: VecCollection<G, (Row, Row, G::Timestamp), Diff>,
-    trace: Arranged<G, Tr>,
+fn build_halfjoin1<'scope, T, Tr, CF>(
+    updates: VecCollection<'scope, T, (Row, Row, T), Diff>,
+    trace: Arranged<'scope, Tr>,
     comparison: CF,
     closure: JoinClosure,
     mut datums: DatumVec,
-    errs: VecCollection<G, DataflowError, Diff>,
+    errs: VecCollection<'scope, T, DataflowError, Diff>,
 ) -> (
-    VecCollection<G, (Row, G::Timestamp), Diff>,
-    VecCollection<G, DataflowError, Diff>,
+    VecCollection<'scope, T, (Row, T), Diff>,
+    VecCollection<'scope, T, DataflowError, Diff>,
 )
 where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-    Tr: TraceReader<KeyOwn = Row, Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    T: RenderTimestamp,
+    Tr: TraceReader<KeyContainer: BatchContainer<Owned = Row>, Time = T, Diff = Diff>
+        + Clone
+        + 'static,
     for<'a> Tr::Val<'a>: ToDatumIter,
-    CF: Fn(Tr::TimeGat<'_>, &G::Timestamp) -> bool + 'static,
+    CF: Fn(Tr::TimeGat<'_>, &T) -> bool + 'static,
 {
     type CB<C> = CapacityContainerBuilder<C>;
 
@@ -514,7 +514,7 @@ where
             },
             comparison,
             |_timer, count| count > 1_000_000,
-            move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
+            move |session: &mut Session<'_, '_, T, CB<Vec<_>>, _>,
                   key,
                   stream_row: &Row,
                   lookup_row,
@@ -557,7 +557,7 @@ where
             },
             comparison,
             |_timer, count| count > 1_000_000,
-            move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
+            move |session: &mut Session<'_, '_, T, CB<Vec<_>>, _>,
                   key,
                   stream_row: &Row,
                   lookup_row,
@@ -597,26 +597,25 @@ where
 /// At start-up time only the delta path for the first relation sees updates, since any updates fed to the
 /// other delta paths would be discarded anyway due to the tie-breaking logic that avoids double-counting
 /// updates happening at the same time on different relations.
-fn build_update_stream<G, Tr>(
-    trace: Arranged<G, Tr>,
+fn build_update_stream<'scope, T, Tr>(
+    trace: Arranged<'scope, Tr>,
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
 ) -> (
-    VecCollection<G, Row, Diff>,
-    VecCollection<G, DataflowError, Diff>,
+    VecCollection<'scope, T, Row, Diff>,
+    VecCollection<'scope, T, DataflowError, Diff>,
 )
 where
-    G: Scope,
-    G::Timestamp: RenderTimestamp,
-    for<'a, 'b> &'a G::Timestamp: PartialEq<Tr::TimeGat<'b>>,
-    Tr: for<'a> TraceReader<Time = G::Timestamp, Diff = Diff> + Clone + 'static,
+    T: RenderTimestamp,
+    for<'a, 'b> &'a T: PartialEq<Tr::TimeGat<'b>>,
+    Tr: for<'a> TraceReader<Time = T, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: ToDatumIter,
     for<'a> Tr::Val<'a>: ToDatumIter,
 {
     let mut inner_as_of = Antichain::new();
     for event_time in as_of.elements().iter() {
-        inner_as_of.insert(<G::Timestamp>::to_inner(event_time.clone()));
+        inner_as_of.insert(<T>::to_inner(event_time.clone()));
     }
 
     let (ok_stream, err_stream) =

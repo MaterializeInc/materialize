@@ -57,6 +57,7 @@ use crate::errors::{DataflowError, ProtoDataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::sql_server::SqlServerSourceExportDetails;
 
+pub mod casts;
 pub mod encoding;
 pub mod envelope;
 pub mod kafka;

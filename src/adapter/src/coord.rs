@@ -645,7 +645,7 @@ pub struct PeekStageOptimize {
     source_ids: BTreeSet<GlobalId>,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
+    determination: TimestampDetermination,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
@@ -660,7 +660,7 @@ pub struct PeekStageFinish {
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
+    determination: TimestampDetermination,
     cluster_id: ComputeInstanceId,
     finishing: RowSetFinishing,
     /// When present, an optimizer trace to be used for emitting a plan insights
@@ -692,7 +692,7 @@ pub struct PeekStageExplainPlan {
 #[derive(Debug)]
 pub struct PeekStageExplainPushdown {
     validity: PlanValidity,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
+    determination: TimestampDetermination,
     imports: BTreeMap<GlobalId, MapFilterProject>,
 }
 
@@ -1020,7 +1020,7 @@ pub struct IntrospectionSubscribeTimestampOptimizeLir {
 pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
-    read_holds: ReadHolds<Timestamp>,
+    read_holds: ReadHolds,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }
@@ -1309,7 +1309,7 @@ pub struct PendingReadTxn {
     /// The transaction type
     txn: PendingRead,
     /// The timestamp context of the transaction.
-    timestamp_context: TimestampContext<mz_repr::Timestamp>,
+    timestamp_context: TimestampContext,
     /// When we created this pending txn, when the transaction ends. Only used for metrics.
     created: Instant,
     /// Number of times we requeued the processing of this pending read txn.
@@ -1322,7 +1322,7 @@ pub struct PendingReadTxn {
 
 impl PendingReadTxn {
     /// Return the timestamp context of the pending read transaction.
-    pub fn timestamp_context(&self) -> &TimestampContext<mz_repr::Timestamp> {
+    pub fn timestamp_context(&self) -> &TimestampContext {
         &self.timestamp_context
     }
 
@@ -1855,7 +1855,7 @@ pub struct Coordinator {
     /// For each transaction, the read holds taken to support any performed reads.
     ///
     /// Upon completing a transaction, these read holds should be dropped.
-    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
+    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -4960,7 +4960,7 @@ pub struct AlterSinkReadyContext {
     otel_ctx: OpenTelemetryContext,
     plan: AlterSinkPlan,
     plan_validity: PlanValidity,
-    read_hold: ReadHolds<Timestamp>,
+    read_hold: ReadHolds,
 }
 
 impl AlterSinkReadyContext {

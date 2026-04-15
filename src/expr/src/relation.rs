@@ -2491,7 +2491,8 @@ impl AggregateExpr {
     /// Returns whether the expression has a constant result.
     pub fn is_constant(&self) -> bool {
         match self.func {
-            AggregateFunc::MaxInt16
+            AggregateFunc::MaxNumeric
+            | AggregateFunc::MaxInt16
             | AggregateFunc::MaxInt32
             | AggregateFunc::MaxInt64
             | AggregateFunc::MaxUInt16
@@ -2505,6 +2506,9 @@ impl AggregateExpr {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxTime
+            | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
             | AggregateFunc::MinInt64
@@ -2519,11 +2523,36 @@ impl AggregateExpr {
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
+            | AggregateFunc::MinTime
             | AggregateFunc::Any
             | AggregateFunc::All
             | AggregateFunc::Dummy => self.expr.is_literal(),
             AggregateFunc::Count => self.expr.is_literal_null(),
-            _ => self.expr.is_literal_err(),
+            AggregateFunc::SumInt16
+            | AggregateFunc::SumInt32
+            | AggregateFunc::SumInt64
+            | AggregateFunc::SumUInt16
+            | AggregateFunc::SumUInt32
+            | AggregateFunc::SumUInt64
+            | AggregateFunc::SumFloat32
+            | AggregateFunc::SumFloat64
+            | AggregateFunc::SumNumeric
+            | AggregateFunc::JsonbAgg { .. }
+            | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::MapAgg { .. }
+            | AggregateFunc::ArrayConcat { .. }
+            | AggregateFunc::ListConcat { .. }
+            | AggregateFunc::StringAgg { .. }
+            | AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
+            | AggregateFunc::DenseRank { .. }
+            | AggregateFunc::LagLead { .. }
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::FusedValueWindowFunc { .. }
+            | AggregateFunc::WindowAggregate { .. }
+            | AggregateFunc::FusedWindowAggregate { .. } => self.expr.is_literal_err(),
         }
     }
 

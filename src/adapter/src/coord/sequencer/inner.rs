@@ -2135,7 +2135,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         action: EndTransactionAction,
-    ) -> Result<(Option<TransactionOps<Timestamp>>, Option<WriteLocks>), AdapterError> {
+    ) -> Result<(Option<TransactionOps>, Option<WriteLocks>), AdapterError> {
         let txn = self.clear_transaction(ctx.session_mut()).await;
 
         if let EndTransactionAction::Commit = action {
@@ -2445,7 +2445,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
-        read_holds: Option<ReadHolds<Timestamp>>,
+        read_holds: Option<ReadHolds>,
         imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
     ) {
         let fut = self
@@ -3958,6 +3958,10 @@ impl Coordinator {
                         });
 
                         // Drop all text / exclude columns that are not currently referred to.
+                        // SQL Server text/exclude column refs are 3-part (schema.table.col),
+                        // which truncate to 2-part (schema.table). But external references
+                        // are 3-part (database.schema.table). Use suffix matching since
+                        // a SQL Server source connects to a single database.
                         let column_referenced =
                             |column_qualified_reference: &UnresolvedItemName| {
                                 mz_ore::soft_assert_eq_or_log!(
@@ -3967,7 +3971,7 @@ impl Coordinator {
                                 );
                                 let mut table = column_qualified_reference.clone();
                                 table.0.truncate(2);
-                                curr_references.contains(&table)
+                                curr_references.iter().any(|r| r.0.ends_with(&table.0))
                             };
                         text_columns.retain(column_referenced);
                         exclude_columns.retain(column_referenced);

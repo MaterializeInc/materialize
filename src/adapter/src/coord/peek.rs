@@ -49,7 +49,7 @@ use mz_repr::{
 };
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
@@ -385,7 +385,7 @@ impl FastPathPlan {
 #[derive(Debug)]
 pub struct PlannedPeek {
     pub plan: PeekPlan,
-    pub determination: TimestampDetermination<mz_repr::Timestamp>,
+    pub determination: TimestampDetermination,
     pub conn_id: ConnectionId,
     /// The result type _after_ reading out of the "source" and applying any
     /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
@@ -436,8 +436,8 @@ fn permute_oneshot_mfp_around_index(
 /// If the optimized plan is a `Constant` or a `Get` of a maintained arrangement,
 /// we can avoid building a dataflow (and either just return the results, or peek
 /// out of the arrangement, respectively).
-pub fn create_fast_path_plan<T: Timestamp>(
-    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr, (), T>,
+pub fn create_fast_path_plan(
+    dataflow_plan: &mut DataflowDescription<OptimizedMirRelationExpr>,
     view_id: GlobalId,
     finishing: Option<&RowSetFinishing>,
     persist_fast_path_limit: usize,
@@ -1233,7 +1233,7 @@ impl crate::coord::Coordinator {
     pub(crate) async fn implement_slow_path_peek(
         &mut self,
         dataflow_plan: PeekDataflowPlan,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
+        determination: TimestampDetermination,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,

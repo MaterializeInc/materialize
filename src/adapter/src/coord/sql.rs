@@ -200,10 +200,7 @@ impl Coordinator {
 
     /// Handle removing in-progress transaction state regardless of the end action
     /// of the transaction.
-    pub(crate) async fn clear_transaction(
-        &mut self,
-        session: &mut Session,
-    ) -> TransactionStatus<mz_repr::Timestamp> {
+    pub(crate) async fn clear_transaction(&mut self, session: &mut Session) -> TransactionStatus {
         // This function is *usually* called when transactions end, but it can fail to be called in
         // some cases (for example if the session's role id was dropped, then we return early and
         // don't go through the normal sequence_end_transaction path). The `Command::Commit` handler

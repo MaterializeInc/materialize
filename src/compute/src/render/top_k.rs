@@ -20,6 +20,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
@@ -35,12 +36,11 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
-use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Operator;
 
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
-use crate::extensions::reduce::MzReduce;
+use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
@@ -50,20 +50,17 @@ use crate::row_spine::{
 use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
-impl<G> Context<G>
-where
-    G: Scope,
-    G::Timestamp: crate::render::RenderTimestamp,
-{
+impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
     pub(crate) fn render_topk(
         &self,
-        input: CollectionBundle<G>,
+        input: CollectionBundle<'scope, T>,
         top_k_plan: TopKPlan,
-    ) -> CollectionBundle<G> {
+    ) -> CollectionBundle<'scope, T> {
         let (ok_input, err_input) = input.as_specific_collection(None, &self.config_set);
 
         // We create a new region to compartmentalize the topk logic.
-        let (ok_result, err_collection) = ok_input.scope().region_named("TopK", |inner| {
+        let outer_scope = ok_input.scope();
+        let (ok_result, err_collection) = outer_scope.clone().region_named("TopK", |inner| {
             let ok_input = ok_input.enter_region(inner);
             let mut err_collection = err_input.enter_region(inner);
 
@@ -134,7 +131,7 @@ where
 
                     // Map the group key along with the row and consolidate if required to do so.
                     let mut datum_vec = mz_repr::DatumVec::new();
-                    let mut ok_scope = ok_input.scope();
+                    let ok_scope = ok_input.scope();
                     let collection = ok_input
                         .map(move |row| {
                             let group_row = {
@@ -188,8 +185,8 @@ where
                     // stage.
                     let delay = std::time::Duration::from_secs(10);
                     let (retractions_var, retractions) = SemigroupVariable::new(
-                        &mut ok_scope,
-                        <G::Timestamp as crate::render::RenderTimestamp>::system_delay(
+                        ok_scope,
+                        <T as crate::render::RenderTimestamp>::system_delay(
                             delay.try_into().expect("must fit"),
                         ),
                     );
@@ -241,16 +238,19 @@ where
             };
 
             // Extract the results from the region.
-            (ok_result.leave_region(), err_collection.leave_region())
+            (
+                ok_result.leave_region(outer_scope),
+                err_collection.leave_region(outer_scope),
+            )
         });
 
         CollectionBundle::from_collections(ok_result, err_collection)
     }
 
     /// Constructs a TopK dataflow subgraph.
-    fn build_topk<S>(
+    fn build_topk<'s>(
         &self,
-        collection: VecCollection<S, Row, Diff>,
+        collection: VecCollection<'s, T, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
@@ -258,12 +258,9 @@ where
         arity: usize,
         buckets: Vec<u64>,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        VecCollection<'s, T, Row, Diff>,
+        VecCollection<'s, T, DataflowError, Diff>,
+    ) {
         let pairer = Pairer::new(1);
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut collection = collection.map({
@@ -279,7 +276,7 @@ where
         });
 
         let mut validating = true;
-        let mut err_collection: Option<VecCollection<S, _, _>> = None;
+        let mut err_collection: Option<VecCollection<'s, T, _, _>> = None;
 
         if let Some(mut limit) = limit.clone() {
             // We may need a new `limit` that reflects the addition of `offset`.
@@ -381,9 +378,9 @@ where
     /// ```
     /// There are additional map/flat_map operators as well as error demuxing operators, but we're
     /// omitting them here for the sake of simplicity.
-    fn build_topk_stage<S>(
+    fn build_topk_stage<'s>(
         &self,
-        collection: VecCollection<S, (Row, Row), Diff>,
+        collection: VecCollection<'s, T, (Row, Row), Diff>,
         order_key: Vec<mz_expr::ColumnOrder>,
         modulus: u64,
         offset: usize,
@@ -391,12 +388,9 @@ where
         arity: usize,
         validating: bool,
     ) -> (
-        VecCollection<S, (Row, Row), Diff>,
-        Option<VecCollection<S, DataflowError, Diff>>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        VecCollection<'s, T, (Row, Row), Diff>,
+        Option<VecCollection<'s, T, DataflowError, Diff>>,
+    ) {
         // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
         // applying `modulus`.
         let input = collection.map(move |(hash_key, row)| {
@@ -410,7 +404,7 @@ where
         let (input, oks, errs) = if validating {
             // Build topk stage, produce errors for invalid multiplicities.
             let (input, stage) = build_topk_negated_stage::<
-                S,
+                T,
                 RowValBuilder<_, _, _>,
                 RowValSpine<Result<Row, Row>, _, _>,
             >(&input, order_key, offset, limit, arity);
@@ -437,7 +431,7 @@ where
         } else {
             // Build non-validating topk stage.
             let (input, stage) =
-                build_topk_negated_stage::<S, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                build_topk_negated_stage::<T, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                     &input, order_key, offset, limit, arity,
                 );
             // Turn arrangement into collection.
@@ -449,19 +443,16 @@ where
         (oks.concat(input), errs)
     }
 
-    fn render_top1_monotonic<S>(
+    fn render_top1_monotonic<'s>(
         &self,
-        collection: VecCollection<S, Row, Diff>,
+        collection: VecCollection<'s, T, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         must_consolidate: bool,
     ) -> (
-        VecCollection<S, Row, Diff>,
-        VecCollection<S, DataflowError, Diff>,
-    )
-    where
-        S: Scope<Timestamp = G::Timestamp>,
-    {
+        VecCollection<'s, T, Row, Diff>,
+        VecCollection<'s, T, DataflowError, Diff>,
+    ) {
         // We can place our rows directly into the diff field, and only keep the relevant one
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical
         // reduction. We start by mapping the group key along with the row and consolidating
@@ -527,32 +518,34 @@ where
 /// Returns two arrangements:
 /// * The arranged input data without modifications, and
 /// * the maintained negated output data.
-fn build_topk_negated_stage<G, Bu, Tr>(
-    input: &VecCollection<G, (Row, Row), Diff>,
+fn build_topk_negated_stage<'s, T, Bu, Tr>(
+    input: &VecCollection<'s, T, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
 ) -> (
-    Arranged<G, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
-    Arranged<G, TraceAgent<Tr>>,
+    Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
+    Arranged<'s, TraceAgent<Tr>>,
 )
 where
-    G: Scope,
-    G::Timestamp: MzTimestamp,
+    T: MzTimestamp,
     Bu: Builder<
-            Time = G::Timestamp,
-            Input: Container + InternalMerge + PushInto<((Row, Tr::ValOwn), G::Timestamp, Diff)>,
+            Time = T,
+            Input: Container
+                       + InternalMerge
+                       + ClearContainer
+                       + PushInto<((Row, Tr::ValOwn), T, Diff)>,
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<
             Key<'a> = DatumSeq<'a>,
-            KeyOwn = Row,
+            KeyContainer: BatchContainer<Owned = Row>,
             ValOwn: Data + MaybeValidatingRow<Row, Row>,
-            Time = G::Timestamp,
+            Time = T,
             Diff = Diff,
         > + 'static,
-    Arranged<G, TraceAgent<Tr>>: ArrangementSize,
+    Arranged<'s, TraceAgent<Tr>>: ArrangementSize,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
 
@@ -679,14 +672,13 @@ where
     (arranged, reduced)
 }
 
-fn render_intra_ts_thinning<S>(
-    collection: VecCollection<S, (Row, Row), Diff>,
+fn render_intra_ts_thinning<'s, T>(
+    collection: VecCollection<'s, T, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     limit: mz_expr::MirScalarExpr,
-) -> VecCollection<S, (Row, Row), Diff>
+) -> VecCollection<'s, T, (Row, Row), Diff>
 where
-    S: Scope,
-    S::Timestamp: Lattice,
+    T: timely::progress::Timestamp + Lattice,
 {
     let mut datum_vec = mz_repr::DatumVec::new();
 

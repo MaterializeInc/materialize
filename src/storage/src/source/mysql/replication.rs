@@ -99,16 +99,16 @@ static REPLICATION_SERVER_ID_OFFSET: u32 = 524000;
 
 /// Renders the replication dataflow. See the module documentation for more
 /// information.
-pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, GtidPartition>,
     config: RawSourceCreationConfig,
     connection: MySqlSourceConnection,
     source_outputs: Vec<SourceOutputInfo>,
-    rewind_stream: StreamVec<G, RewindRequest>,
+    rewind_stream: StreamVec<'scope, GtidPartition, RewindRequest>,
     metrics: MySqlSourceMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    StreamVec<G, ReplicationError>,
+    StackedCollection<'scope, GtidPartition, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, GtidPartition, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("MySqlReplicationReader({})", config.id);

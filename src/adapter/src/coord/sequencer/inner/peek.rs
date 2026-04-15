@@ -1073,7 +1073,7 @@ impl Coordinator {
         source_ids: &BTreeSet<GlobalId>,
         real_time_recency_ts: Option<Timestamp>,
         requires_linearization: RequireLinearization,
-    ) -> Result<TimestampDetermination<Timestamp>, AdapterError> {
+    ) -> Result<TimestampDetermination, AdapterError> {
         let in_immediate_multi_stmt_txn = session.transaction().in_immediate_multi_stmt_txn(when);
         let timedomain_bundle;
 

@@ -220,8 +220,8 @@ impl Coordinator {
         session_wall_time: DateTime<Utc>,
         cluster_id: ClusterId,
         id_bundle: &CollectionIdBundle,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
-    ) -> TimestampExplanation<mz_repr::Timestamp> {
+        determination: TimestampDetermination,
+    ) -> TimestampExplanation {
         let mut sources = Vec::new();
         {
             let storage_ids = id_bundle.storage_ids.iter().cloned().collect_vec();
