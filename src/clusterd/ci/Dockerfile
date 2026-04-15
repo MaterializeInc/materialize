@@ -7,10 +7,12 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-MZFROM prod-base
+MZFROM openssh-static AS openssh
 
-COPY clusterd entrypoint.sh /usr/local/bin/
+MZFROM distroless-prod-base
 
-USER materialize
+COPY clusterd /usr/local/bin/
+COPY --from=openssh /output/ssh /usr/bin/ssh
 
-ENTRYPOINT ["tini", "--", "entrypoint.sh"]
+# tini (from distroless-prod-base) is PID 1 so ssh tunnel subprocesses get reaped.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/clusterd"]
