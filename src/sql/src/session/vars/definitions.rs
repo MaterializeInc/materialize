@@ -2262,6 +2262,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_simplify_quantified_comparisons,
+        desc: "Allow the optimizer to simplify quantified comparisons in JOIN ON clauses into semi/anti-join EXISTS form during HIR-to-MIR lowering.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2286,6 +2292,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
             enable_cast_elimination: vars.enable_cast_elimination(),
             enable_case_literal_transform: vars.enable_case_literal_transform(),
+            enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
         }
     }
 }
@@ -2327,6 +2334,7 @@ mod tests {
             enable_fast_path_plan_insights,
             enable_cast_elimination,
             enable_case_literal_transform,
+            enable_simplify_quantified_comparisons,
         } = false_features;
 
         let mut vars = SystemVars::new();
@@ -2356,6 +2364,7 @@ mod tests {
         set_var!(enable_fast_path_plan_insights);
         set_var!(enable_cast_elimination);
         set_var!(enable_case_literal_transform);
+        set_var!(enable_simplify_quantified_comparisons);
 
         // Enable for item parsing, then ensure we still get the same optimizer features.
         vars.enable_for_item_parsing();

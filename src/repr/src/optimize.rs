@@ -134,6 +134,8 @@ optimizer_feature_flags!({
     enable_cast_elimination: bool,
     // See the feature flag of the same name.
     enable_case_literal_transform: bool,
+    // See the feature flag of the same name.
+    enable_simplify_quantified_comparisons: bool,
 });
 
 /// A trait used to implement layered config construction.
