@@ -41,3 +41,5 @@ prompts:
   cluster:
     hint: 'dev cluster'
     default: 'quickstart'
+  options:
+    hint: 'overrides the PostgreSQL `options` connection parameter'
