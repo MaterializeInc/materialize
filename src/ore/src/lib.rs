@@ -37,6 +37,9 @@ pub mod channel;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub mod collections;
+#[cfg_attr(nightly_doc_features, doc(cfg(feature = "crypto")))]
+#[cfg(feature = "crypto")]
+pub mod crypto;
 pub mod env;
 pub mod error;
 pub mod fmt;
