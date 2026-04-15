@@ -11,12 +11,16 @@
 
 use itertools::Itertools;
 use mz_ore::collections::CollectionExt;
+use mz_ore::iter::IteratorExt;
 use mz_pgrepr::oid;
+use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SqlScalarType};
 use mz_sql::ast::Statement;
 use mz_sql::ast::display::{AstDisplay, escaped_string_literal};
-use mz_sql::catalog::NameReference;
+use mz_sql::catalog::{NameReference, ObjectType};
+use mz_sql::rbac;
+use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
 use crate::builtin::{Builtin, BuiltinMaterializedView, BuiltinView, PUBLIC_SELECT};
 
@@ -41,6 +45,7 @@ pub(super) fn builtins(
 fn make_builtin_materialized_views<'a>(
     iter: impl Iterator<Item = &'a BuiltinMaterializedView>,
 ) -> BuiltinView {
+    let owner_priv = rbac::owner_privilege(ObjectType::MaterializedView, MZ_SYSTEM_ROLE_ID);
     let values = iter
         .map(|mv| {
             let stmt = mz_sql::parse::parse(&mv.create_sql())
@@ -57,19 +62,11 @@ fn make_builtin_materialized_views<'a>(
             let create_sql = escaped_string_literal(&create_sql);
 
             let cluster_name = stmt.in_cluster.expect("builtin MV has cluster");
-
-            let mut privs = mv.access.iter().map(|acl| {
-                let mode = acl.acl_mode.explode().join(",");
-                format!(
-                    "mz_internal.make_mz_aclitem('{}', '{}', '{}')",
-                    acl.grantee, acl.grantor, mode
-                )
-            });
-            let priv_array = format!("ARRAY[{}]", privs.join(","));
+            let privileges = make_privileges_sql(&mv.access, &owner_priv);
 
             format!(
                 "({}::oid, '{}', '{}', '{}', {}, {}, {})",
-                mv.oid, mv.schema, mv.name, cluster_name, definition, priv_array, create_sql
+                mv.oid, mv.schema, mv.name, cluster_name, definition, privileges, create_sql
             )
         })
         .join(",");
@@ -103,4 +100,17 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, pr
         sql: Box::leak(sql.into_boxed_str()),
         access: vec![PUBLIC_SELECT],
     }
+}
+
+/// Convert the given list of [`MzAclItem`] to the equivalent SQL syntax.
+fn make_privileges_sql(privs: &[MzAclItem], owner_priv: &MzAclItem) -> String {
+    let privs = privs.iter().chain_one(owner_priv);
+    let mut parts = privs.map(|acl| {
+        let mode = acl.acl_mode.explode().join(",");
+        format!(
+            "mz_internal.make_mz_aclitem('{}', '{}', '{}')",
+            acl.grantee, acl.grantor, mode
+        )
+    });
+    format!("ARRAY[{}]", parts.join(","))
 }
