@@ -128,6 +128,18 @@ skip = [
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
+    # aws-lc-rs
+    { name = "untrusted", version = "0.7.1" },
+    # Pulled in by rustls ecosystem
+    { name = "base64", version = "0.21.7" },
+    { name = "core-foundation", version = "0.9.3" },
+    { name = "getrandom", version = "0.3.4" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "security-framework", version = "2.10.0" },
+    { name = "toml_datetime", version = "0.6.11" },
+    { name = "toml_edit", version = "0.22.27" },
+    { name = "webpki-roots", version = "0.26.11" },
+    { name = "winnow", version = "0.7.15" },
 ]
 
 [[bans.deny]]
@@ -176,6 +188,7 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    "hyper-rustls",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "native-tls",
@@ -188,6 +201,7 @@ wrappers = [
     "rdkafka",
     "reqsign",
     "reqwest",
+    "rustls",
     "tokio-postgres",
     "tokio-tungstenite",
     "tracing-log",
@@ -197,10 +211,8 @@ wrappers = [
     "zopfli",
 ]
 
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
-[[bans.deny]]
-name = "rustls"
+# FIPS 140-3 compliance: migrating to rustls + aws-lc-rs as the single crypto
+# backend. The rustls ban has been removed; see doc/developer/openssl-to-rustls-migration.md.
 
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.

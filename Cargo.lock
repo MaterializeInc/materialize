@@ -1265,8 +1265,7 @@ dependencies = [
 [[package]]
 name = "azure_core"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b552ad43a45a746461ec3d3a51dfb6466b4759209414b439c165eb6a6b7729e"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1295,8 +1294,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88ddd80344317c40c04b603807b63a5cefa532f1b43522e72f480a988141f744"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "async-lock",
  "async-process",
@@ -1316,8 +1314,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59f838159f4d29cb400a14d9d757578ba495ae64feb07a7516bf9e4415127126"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "RustyXML",
  "async-lock",
@@ -1335,8 +1332,7 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97e83c3636ae86d9a6a7962b2112e3b19eb3903915c50ce06ff54ff0a2e6a7e4"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -1356,8 +1352,7 @@ dependencies = [
 [[package]]
 name = "azure_svc_blobstorage"
 version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e6c6f20c5611b885ba94c7bae5e02849a267381aecb8aee577e8c35ff4064c6"
+source = "git+https://github.com/MaterializeInc/azure-sdk-for-rust.git?branch=mz%2Fenable-reqwest-rustls-no-provider#cb4696ed0bbc195ec6e635fc8902a7a4bd0704c3"
 dependencies = [
  "azure_core",
  "bytes",
@@ -7089,6 +7084,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "aws-lc-rs",
  "bytemuck",
  "bytes",
  "chrono",
@@ -7126,6 +7122,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "rand 0.9.3",
+ "rustls",
  "scopeguard",
  "sentry",
  "sentry-panic",
@@ -10788,6 +10785,7 @@ version = "0.23.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47796c98c480fce5406ef69d1c76378375492c3b0a0de587be0c1d9feb12f395"
 dependencies = [
+ "aws-lc-rs",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",
@@ -10810,6 +10808,7 @@ version = "0.102.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
 dependencies = [
+ "aws-lc-rs",
  "ring",
  "rustls-pki-types",
  "untrusted 0.9.0",

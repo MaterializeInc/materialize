@@ -205,6 +205,7 @@ use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
     StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
 };
+use crate::telemetry::SegmentClient;
 use crate::util::{ClientTransmitter, ResultExt, sort_topological};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
@@ -1161,7 +1162,7 @@ pub struct Config {
     pub storage_usage_client: StorageUsageClient,
     pub storage_usage_collection_interval: Duration,
     pub storage_usage_retention_period: Option<Duration>,
-    pub segment_client: Option<mz_segment::Client>,
+    pub segment_client: SegmentClient,
     pub egress_addresses: Vec<IpNet>,
     pub remote_system_parameters: Option<BTreeMap<String, String>>,
     pub aws_account_id: Option<String>,
@@ -1927,7 +1928,7 @@ pub struct Coordinator {
 
     /// Segment analytics client.
     #[derivative(Debug = "ignore")]
-    segment_client: Option<mz_segment::Client>,
+    segment_client: SegmentClient,
 
     /// Coordinator metrics.
     metrics: Metrics,

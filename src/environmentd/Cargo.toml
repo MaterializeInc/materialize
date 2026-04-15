@@ -61,7 +61,7 @@ mz-metrics = { path = "../metrics" }
 mz-orchestrator = { path = "../orchestrator" }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes" }
 mz-orchestrator-process = { path = "../orchestrator-process" }
-mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
+mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features = false }
 mz-orchestratord = { path = "../orchestratord", default-features = false }
 mz-ore = { path = "../ore", features = ["async", "panic", "process", "tracing", "id_gen"] }
 mz-persist-client = { path = "../persist-client" }
@@ -71,9 +71,9 @@ mz-pgwire-common = { path = "../pgwire-common" }
 mz-prof-http = { path = "../prof-http" }
 mz-repr = { path = "../repr" }
 mz-secrets = { path = "../secrets" }
-mz-segment = { path = "../segment" }
+mz-segment = { path = "../segment", optional = true }
 mz-server-core = { path = "../server-core" }
-mz-service = { path = "../service" }
+mz-service = { path = "../service", default-features = false }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
@@ -94,7 +94,7 @@ regex = { workspace = true, optional = true }
 reqwest.workspace = true
 rlimit.workspace = true
 semver.workspace = true
-sentry-tracing.workspace = true
+sentry-tracing = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 shell-words.workspace = true
@@ -153,7 +153,7 @@ cc.workspace = true
 mz-npm = { path = "../npm" }
 
 [features]
-default = ["tokio-console", "mz-alloc-default"]
+default = ["tokio-console", "mz-alloc-default", "telemetry"]
 # When enabled, static assets for the web UI are loaded from disk on every HTTP
 # request rather than compiled into the binary. This vastly speeds up the
 # iteration cycle when developing the web UI.
@@ -170,11 +170,15 @@ test = [
     "mz-frontegg-mock",
     "tracing-capture",
     "mz-orchestrator-tracing/capture",
+    "mz-orchestrator-tracing/sentry",
+    "dep:sentry-tracing",
 ]
 tokio-console = [
     "mz-ore/tokio-console",
     "mz-orchestrator-tracing/tokio-console",
 ]
+# Third-party telemetry SDKs. Disabled in FIPS builds.
+telemetry = ["dep:mz-segment", "dep:sentry-tracing", "mz-adapter/telemetry", "mz-orchestrator-tracing/sentry", "mz-service/sentry"]
 foundationdb = ["mz-adapter/foundationdb", "mz-persist-client/foundationdb"]
 
 [package.metadata.cargo-udeps.ignore]

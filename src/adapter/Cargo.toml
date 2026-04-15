@@ -31,7 +31,7 @@ http.workspace = true
 hyper-tls = "0.5.0"
 ipnet.workspace = true
 itertools.workspace = true
-launchdarkly-server-sdk.workspace = true
+launchdarkly-server-sdk = { workspace = true, optional = true }
 maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
@@ -63,7 +63,7 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-rocksdb-types = { path = "../rocksdb-types" }
 mz-secrets = { path = "../secrets" }
-mz-segment = { path = "../segment" }
+mz-segment = { path = "../segment", optional = true }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
@@ -112,5 +112,8 @@ name = "catalog"
 harness = false
 
 [features]
-default = []
+default = ["telemetry"]
+# Third-party telemetry and feature-flag SDKs. Disabled in FIPS builds to
+# exclude non-compliant crypto dependencies from the binary.
+telemetry = ["dep:launchdarkly-server-sdk", "dep:mz-segment"]
 foundationdb = ["mz-timestamp-oracle/foundationdb"]
