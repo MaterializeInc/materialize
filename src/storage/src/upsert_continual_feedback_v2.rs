@@ -85,7 +85,7 @@ use std::convert::Infallible;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Capability, CapabilitySet};
+use timely::dataflow::operators::{Capability, CapabilitySet, Exchange as _};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
@@ -209,6 +209,20 @@ where
         };
         Some((UpsertKey::from_value(value_ref, &key_indices), value))
     });
+    let persist_keyed = persist_keyed
+        .inner
+        // The arrangement already exchanges by key, but we want to do it earlier so that we can
+        // inspect the stream properly for source statistics.
+        .exchange(move |((key, _), _, _)| UpsertKey::hashed(key))
+        .as_collection()
+        .inspect(move |((_, row), _, diff)| {
+            source_config
+                .source_statistics
+                .update_records_indexed_by(diff.into_inner());
+            source_config.source_statistics.update_bytes_indexed_by(
+                row.as_ref().map_or(0, |r| r.byte_len() as i64) * diff.into_inner(),
+            );
+        });
     let persist_arranged = persist_keyed.arrange_by_key();
     let mut persist_trace = persist_arranged.trace.clone();
 
@@ -219,7 +233,7 @@ where
     let (persist_probe, _persist_probe_stream) = persist_arranged.stream.probe();
 
     // ── Build the async processing operator ─────────────────────────────
-    let mut builder = AsyncOperatorBuilder::new("Upsert".to_string(), input.scope());
+    let mut builder = AsyncOperatorBuilder::new("Upsert V2".to_string(), input.scope());
 
     let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (_snapshot_handle, snapshot_stream) =
@@ -396,7 +410,8 @@ where
                     &mut output_updates,
                     &persist_upper,
                     &mut persist_trace,
-                    &source_config,
+                    &source_config.worker_id,
+                    &source_config.id,
                 );
 
                 upsert_metrics.multi_get_size.inc_by(drain_stats.eligible);
@@ -409,25 +424,6 @@ where
                 upsert_metrics.upsert_inserts.inc_by(drain_stats.inserts);
                 upsert_metrics.upsert_updates.inc_by(drain_stats.updates);
                 upsert_metrics.upsert_deletes.inc_by(drain_stats.deletes);
-
-                source_config
-                    .source_statistics
-                    .update_bytes_indexed_by(drain_stats.size_diff);
-                source_config.source_statistics.update_records_indexed_by(
-                    drain_stats.inserts as i64 - drain_stats.deletes as i64,
-                );
-                tracing::info!(
-                    worker_id = %source_config.worker_id,
-                    source_id = %source_config.id,
-                    eligible = drain_stats.eligible,
-                    result_count = drain_stats.result_count,
-                    inserts = drain_stats.inserts,
-                    updates = drain_stats.updates,
-                    deletes = drain_stats.deletes,
-                    output_count = drain_stats.output_count,
-                    size_diff = drain_stats.size_diff,
-                    "drained sealed input",
-                );
 
                 if hydrating {
                     rehydration_total += drain_stats.inserts;
@@ -501,16 +497,6 @@ struct DrainStats {
     deletes: u64,
     /// Total output records emitted (retractions + insertions).
     output_count: u64,
-    /// Net byte change to indexed state: positive on inserts, negative on deletes.
-    size_diff: i64,
-}
-
-/// Returns the indexed byte size of a [`UpsertValue`].
-fn upsert_value_bytes(val: &UpsertValue) -> i64 {
-    match val {
-        Ok(row) => i64::try_from(row.byte_len()).unwrap_or(i64::MAX),
-        Err(_) => 0,
-    }
 }
 
 /// Process sealed chunks from the batcher. Entries at the persist frontier are
@@ -524,7 +510,8 @@ fn drain_sealed_input<T, FromTime>(
     output: &mut Vec<(UpsertValue, T, Diff)>,
     persist_upper: &Antichain<T>,
     trace: &mut TraceAgent<ValSpine<UpsertKey, UpsertValue, T, Diff>>,
-    source_config: &crate::source::SourceExportCreationConfig,
+    worker_id: &usize,
+    source_id: &GlobalId,
 ) -> DrainStats
 where
     T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
@@ -544,8 +531,8 @@ where
     }
 
     tracing::debug!(
-        worker_id = %source_config.worker_id,
-        source_id = %source_config.id,
+        worker_id = %worker_id,
+        source_id = %source_id,
         ineligible = ineligible.len(),
         eligible = eligible.len(),
         "draining stash",
@@ -561,7 +548,6 @@ where
             updates: 0,
             deletes: 0,
             output_count: 0,
-            size_diff: 0,
         };
     }
 
@@ -570,7 +556,6 @@ where
     let mut inserts: u64 = 0;
     let mut updates: u64 = 0;
     let mut deletes: u64 = 0;
-    let mut size_diff: i64 = 0;
 
     // Eligible entries are sorted by (key, time) from the batcher.
     // The trace cursor moves forward through keys, matching this order.
@@ -607,9 +592,7 @@ where
 
         match upsert_diff.value {
             Some(new_val) => {
-                size_diff += upsert_value_bytes(&new_val);
                 if let Some(old_val) = old_value {
-                    size_diff -= upsert_value_bytes(&old_val);
                     output.push((old_val, ts.clone(), Diff::MINUS_ONE));
                     updates += 1;
                 } else {
@@ -619,7 +602,6 @@ where
             }
             None => {
                 if let Some(old_val) = old_value {
-                    size_diff -= upsert_value_bytes(&old_val);
                     output.push((old_val, ts, Diff::MINUS_ONE));
                     deletes += 1;
                 }
@@ -637,7 +619,6 @@ where
         updates,
         deletes,
         output_count,
-        size_diff,
     }
 }
 
