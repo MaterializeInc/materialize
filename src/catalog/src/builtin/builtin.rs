@@ -22,7 +22,9 @@ use mz_sql::catalog::{NameReference, ObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
-use crate::builtin::{Builtin, BuiltinMaterializedView, BuiltinView, PUBLIC_SELECT};
+use crate::builtin::{
+    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinView, PUBLIC_SELECT,
+};
 
 /// Generate builtin views reporting the given builtins.
 ///
@@ -30,16 +32,74 @@ use crate::builtin::{Builtin, BuiltinMaterializedView, BuiltinView, PUBLIC_SELEC
 pub(super) fn builtins(
     builtin_items: &[Builtin<NameReference>],
 ) -> impl Iterator<Item = Builtin<NameReference>> {
+    let source_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Source(x) => Some(*x),
+        _ => None,
+    });
+    let log_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Log(x) => Some(*x),
+        _ => None,
+    });
     let mv_iter = builtin_items.iter().filter_map(|b| match b {
         Builtin::MaterializedView(x) => Some(*x),
         _ => None,
     });
+
+    let sources = make_builtin_sources(source_iter, log_iter);
     let materialized_views = make_builtin_materialized_views(mv_iter);
 
-    [materialized_views].into_iter().map(|v| {
+    [sources, materialized_views].into_iter().map(|v| {
         let static_ref = Box::leak(Box::new(v));
         Builtin::View(static_ref)
     })
+}
+
+fn make_builtin_sources(
+    source_iter: impl Iterator<Item = &'static BuiltinSource>,
+    log_iter: impl Iterator<Item = &'static BuiltinLog>,
+) -> BuiltinView {
+    let owner_priv = rbac::owner_privilege(ObjectType::Source, MZ_SYSTEM_ROLE_ID);
+    let source_values = source_iter.map(|src| {
+        let privileges = make_privileges_sql(&src.access, &owner_priv);
+        format!(
+            "({}::oid, '{}', '{}', 'source', {})",
+            src.oid, src.schema, src.name, privileges
+        )
+    });
+    let log_values = log_iter.map(|log| {
+        let privileges = make_privileges_sql(&log.access, &owner_priv);
+        format!(
+            "({}::oid, '{}', '{}', 'log', {})",
+            log.oid, log.schema, log.name, privileges
+        )
+    });
+    let values = source_values.chain(log_values).join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, type, privileges
+FROM (VALUES {values}) AS v(oid, schema_name, name, type, privileges)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_sources",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_SOURCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+    }
 }
 
 fn make_builtin_materialized_views<'a>(

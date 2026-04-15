@@ -217,6 +217,11 @@ mz_builtin_materialized_views  name
 mz_builtin_materialized_views  oid
 mz_builtin_materialized_views  privileges
 mz_builtin_materialized_views  schema_name
+mz_builtin_sources  name
+mz_builtin_sources  oid
+mz_builtin_sources  privileges
+mz_builtin_sources  schema_name
+mz_builtin_sources  type
 mz_catalog_raw  data
 mz_cluster_deployment_lineage  cluster_id
 mz_cluster_deployment_lineage  cluster_name
