@@ -19,7 +19,6 @@ bincode.workspace = true
 bytemuck.workspace = true
 columnar.workspace = true
 columnation.workspace = true
-custom-labels.workspace = true
 differential-dataflow.workspace = true
 either.workspace = true
 futures-util.workspace = true

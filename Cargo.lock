@@ -8391,7 +8391,6 @@ dependencies = [
  "columnar",
  "columnation",
  "criterion",
- "custom-labels",
  "differential-dataflow",
  "either",
  "futures-util",
