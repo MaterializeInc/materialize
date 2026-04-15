@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 async-compression.workspace = true
+aws-lc-rs.workspace = true
 bytes.workspace = true
 clap = { workspace = true, features = ["env"] }
 csv-async.workspace = true
@@ -19,20 +20,20 @@ itertools.workspace = true
 mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = false }
 mz-pgrepr = { path = "../pgrepr", default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
-openssl.workspace = true
-postgres-openssl.workspace = true
 postgres-protocol.workspace = true
+rustls = { workspace = true, features = ["aws_lc_rs", "std"], default-features = false }
+rustls-pki-types = { workspace = true, features = ["std"] }
 prost.workspace = true
 prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 socket2.workspace = true
 thiserror.workspace = true
 tonic.workspace = true
 tonic-prost.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
+tokio-rustls.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
 tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true
@@ -46,6 +47,7 @@ insta.workspace = true
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build.workspace = true
 reqwest.workspace = true
+rustls = { workspace = true, features = ["aws_lc_rs"], default-features = false }
 tonic-prost-build.workspace = true
 
 [features]

@@ -85,7 +85,7 @@ semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_plain.workspace = true
-sha2.workspace = true
+aws-lc-rs.workspace = true
 smallvec = { workspace = true, features = ["union"] }
 static_assertions.workspace = true
 timely.workspace = true
