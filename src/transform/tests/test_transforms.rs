@@ -245,7 +245,7 @@ fn handle_apply(
         }
         "coalesce_case" => {
             use mz_transform::coalesce_case::CoalesceCase;
-            let transform =  CoalesceCase;
+            let transform = CoalesceCase;
             apply_transform(transform, catalog, input)
         }
         "threshold_elision" => {

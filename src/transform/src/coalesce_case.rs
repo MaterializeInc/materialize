@@ -139,10 +139,7 @@ impl CoalesceCase {
                             .chain(exprs.iter().cloned())
                             .collect(),
                     );
-                    let t = MirScalarExpr::call_variadic(
-                        VariadicFunc::Coalesce(Coalesce),
-                        exprs,
-                    );
+                    let t = MirScalarExpr::call_variadic(VariadicFunc::Coalesce(Coalesce), exprs);
                     *expr = cond.take().if_then_else(t, f);
                 } else if els.is_literal_null() {
                     let MirScalarExpr::If {
