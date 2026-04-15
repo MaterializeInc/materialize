@@ -7135,6 +7135,7 @@ dependencies = [
  "tokio",
  "tokio-native-tls",
  "tokio-openssl",
+ "tokio-rustls",
  "tokio-test",
  "tonic",
  "tracing",
@@ -7421,8 +7422,8 @@ dependencies = [
  "mz-ore",
  "mz-server-core",
  "tokio",
- "tokio-openssl",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 
@@ -8432,12 +8433,12 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "mz-ore",
- "openssl",
- "openssl-sys",
- "postgres-openssl",
+ "rustls",
+ "rustls-pki-types",
  "thiserror 2.0.18",
  "tokio",
  "tokio-postgres",
+ "tokio-rustls",
  "tracing",
 ]
 

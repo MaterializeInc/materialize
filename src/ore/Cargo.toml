@@ -60,6 +60,7 @@ sentry-panic = { workspace = true, optional = true }
 serde.workspace = true
 tokio = { workspace = true, optional = true }
 tokio-openssl = { workspace = true, optional = true }
+tokio-rustls = { workspace = true, optional = true, default-features = false }
 thiserror.workspace = true
 tracing-capture = { workspace = true, optional = true }
 # TODO(guswynn): determine, when, if ever, we can remove `tracing-log`
@@ -110,6 +111,7 @@ async = [
     "openssl",
     "tokio/tracing",
     "tokio-openssl",
+    "tokio-rustls",
     "tokio",
     "dep:tracing",
 ]
