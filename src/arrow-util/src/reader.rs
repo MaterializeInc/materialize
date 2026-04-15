@@ -832,6 +832,9 @@ impl ColReader {
                 let start: usize = offsets[idx].try_into().context("map start offset")?;
                 let end: usize = offsets[idx + 1].try_into().context("map end offset")?;
 
+                // Arrow's MapArray doesn't guarantee that keys are in sorted order, but Materialize's
+                // Datum::Map does, so we need to sort the keys here before packing them, or else
+                // many assumptions will break.
                 let kv_sorted = (start..end)
                     .map(|i| (keys.value(i), i))
                     .sorted_by_key(|(k, _)| *k);
