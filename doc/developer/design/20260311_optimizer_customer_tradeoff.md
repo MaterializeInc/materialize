@@ -37,8 +37,8 @@ Moreover, it's not clear how to use mztrail in a self-managed context.
 There are two closely related but not identical problems:
  1. **`our-bad`** MZ optimizer changed and it broke on redeploy.
  2. **`your-bad`** You changed something and it broke in staging.
-We are addressing the `our-bad` case exclusively.
-It is very important that we solve the "optimizer image" problem (you should be able to write SQL to get the good dataflow) and the "optimizer discontinuity" problem (you should be able to make small changes and not experience discontinuous performance).
+We are addressing the **`our-bad`** case exclusively.
+It is very important that we solve the "optimizer image" problem (you should be able to write SQL to get the good dataflow) and the "optimizer discontinuity" problem (you should be able to make small changes and not experience discontinuous performance, part of **`your-bad`**)---at some point, but not with this.
 
 
 ## Weighing Alternatives
@@ -65,13 +65,10 @@ Cons:
   - Code duplication. (Somewhat mitigated by `git subtree`.)
   - We do not know what kind of support window we will want, and may get backed into things we end up disliking.
   - Coarse-grained offramp: you can change versions, but that's it.
-  - Coarse-grained application: regressions are typically local, even
-    within a customer. So optimizer versions may not cut it fine enough---it may be just one query on the cluster that needs a different optimizer.
+  - Coarse-grained application: regressions are typically local, even within a customer. So optimizer versions may not cut it fine enough---it may be just one query on the cluster that needs a different optimizer.
   - Engineering burden of refactor.
   - Engineering burden of backporting.
-  - Punts on but doesn't resolve issues with release qualification.
-
-NB
+  - Punts on release qualification.
 
 ### `feature-flags`
 
@@ -102,6 +99,7 @@ Cons:
   - LIR is a not currently stored anywhere (but is a stable interface between MIR and rendering). DDIR does not actually exist.
   - Once we are committed, may be hard to back out of. (Mitigation: deploy this is as an unstable feature with a customer partner.)
   - More durable state.
+  - Need to manage migrations for LIR. (Mitigation: best effort.)
 
 ### `query-hints`
 
@@ -123,7 +121,7 @@ Cons:
 ## Solution Proposal
 
 We propose using **`plan-pinning`**.
-The ability to pin plans solves exactly the **`our-bad`** problem.
+The ability to pin plans _exactly_ solves the **`our-bad`** problem.
 It's also superior to the alternatives.
 We see it as superior to **`feature-flags`** because we can work more flexibly (change types!) with less uncertainy (known configs!).
 (Feature flags will of course continue to exist!)
@@ -134,7 +132,7 @@ Why have we changed our minds?
 
 `**optimizer-versions**` overfits to particular engineering challenges (wanting to make certain AST changes).
 But recent work on repr types has shown that we can change the tires while the car is moving---we simply have to be careful.
-It has a high engineering burden up front and promises a high maintenance burden in the future.
+Versioning the optimizer has a high engineering burden up front and promises a high maintenance burden in the future.
 Refactoring to have a clean optimizer crate is a good idea, but versioning is a heavyweight way to achieve what could be a lightweight goal.
 
 The balance tips further in **`plan-pinning`**'s favor when we consider that pinned plans are not merely a useful way for customers to have more confidence in Materialize, they are a way to help us identify clusters that are candidates for autoscaling and immediate incident escalation---production clusters.
@@ -151,18 +149,18 @@ ALTER CLUSTER foo UNFREEZE;
 ```
 
 We will store the LIR for all of the dataflows on `foo`, and automatically use those LIR plans on reboot.
+These plans will be stored in the catalog.
 No changes can be made to `foo`: no new dataflows, no removals.
 It will not be part of this work, but it seems sensible to limit other actions on frozen clusters, e.g., you many only run fast-path `SELECT`s and `SUBSCRIBE`s (with the possible exception of queries that touch introspection sources).
 
-### Why at the cluster level?
+### What is the SLA?
 
-We propose freezing at the cluster level.
-The environment and organization level is far too coarse.
-Going finer, the replica and dataflow levels are too fine---freezing these but not the rest of the cluster seems like a recipe for a mismatch with dependencies.
+Our pinning will start off as "best effort".
+At any point, we may simply throw up our hands and replan.
+Users should be notified if pinned plans are replanned, but it should not necessarily rise to the level of pinging an on-call engineer---say, an escalation rather than an incident.
+A possible success metric for plan pinning (beyond e.g., overall usage/number of pinned plans) is how _few_ replans are forced to occur.
 
-## Open questions
-
-### What _can_ change?
+### What can change?
 
 Suppose we have the following dependency diagram, where `S` means "source", `V` means "view", `MV` means "materialized view", and `C` means cluster:
 
@@ -187,49 +185,108 @@ What about `MV1` (which is read from persist)?
 What about `S1`?
 We don't need to fix opinions permanently on these questions up front, but we will need to _have_ opinions to start.
 
-One sensible possibility (**`frozen-deps`**) is that you can only freeze things whose dependencies are frozen.
-That is, if `C3` is frozen, then `C1` and `C2` must also be frozen.
-Changes to `V2` might be allowed, with a warning that these changes will not affect downstream frozen objects (which we could then name).
-In this world, we would likely want a `COPY CLUSTER foo TO bar` DDL command, that creates a copied cluster that could then be safely altered.
-This approach makes it hard to make changes to upstream clusters.
+As a first cut, it seems safe to say:
+ 1. Frozen clusters block `DROP ... CASCADE` and must be unfrozen first.
+ 2. Anything but `V2` may change in business logic; schema alterations have to be additive (cf. `ALTER MATERIALIZED VIEW`).
+That is, we would treat persist as a barrier: a frozen cluster will block changes to things it depends on that are not persisted.
+If `S1` or `MV1` change by altering a computation (but not its type) or by adding a new column, that should be fine (though we may need to generate an intermediate dataflow to project out the new column, since we will not want to change the pinned LIR plan of `MV2`).
 
-Another sensible possibility (**`mv-split`**) is that `MV` dependencies can be changed in schema-compatible ways---we'll read from persist anyway---but views like `V2` could not.
-This is more flexible than **`frozen-deps`**, but may be harder to explain to customers who don't fully grok the difference between materialized and unmaterialized views.
-Would source dependencies also be changeable in schema-compatible ways?
+It is important for us and for customers to know how things would be replanned if clusters were unfrozen.
+In the long term, we will want to know which plans are pinned and how far those pins have drifted from what we would output.
+It is merely engineering for us to know about drift in cloud---replan, emitting a diff of the new plan and the pinned one to store---but less so in self-managed.
+(These diffs will not address the question of "which MZ changes caused the plan changes", though, and we will only get information at release time.
+A proactive, Mztrail-like thing would help as well.)
+We would want to make `mz-debug` aware of frozen clusters.
+Some kind of `COPY CLUSTER` comand may help users experiment: copy a frozen cluster, unfreeze it, find a new plan you like, freeze _that_, and then green/blue the new one into place.
 
-What else might we do? What is the workflow for making changes? Something blue/green-ish or `ALTER MV`-ish seems appropriate.
+### Why at the cluster level?
 
-And finally: what is the MVP version?
-
-### How will users know what would be different?
-
-With a pinned plan, users might not know what would happen if they made changes.
-As users pin plans, we may not know how our changes would affect definitions on frozen clusters, since we won't be replanning.
-
-One sensible possibility is to always replan at a release (and save plans in, say, Snowflake), but to not deploy when clusters are frozen.
-This will not address the question of "which MZ changes caused the plan changes", though, and it will only give us information at release time.
-(Mztrail-like things would help.)
+We propose freezing at the cluster level.
+The environment and organization level is far too coarse.
+The replica and dataflow levels are too fine---freezing these but not the rest of the cluster seems like a recipe for confusion (two replicas on the same cluster with different plans? multiple versions of dependencies?).
 
 ### How does LIR change?
 
 LIR is the interface between the optimizer and rendering.
 While "stable", it's not persisted and has a purely internal contract.
 
-It has a large surface---`MirScalarExpr`, `AggregateFunc`, `TableFunc`, `Row`, etc.---and any changes across that surface could cause a pinned plan to no longer be runnable.
-What is the best way to write down LIR?
-We _had_ protobuf, but (a) we ripped it out and (b) it's migration story is simple but sometimes wrong.
-Something like `bincode` offers a straightforward serialization format, but no support for migration.
-An option (proposed by Claude during some research): `serde_reflection` with a schema registry for relevant types.
-We would:
+LIR has a large surface---`MirScalarExpr` (and with it, `UnaryFunc`, `BinaryFunc`, `VariadicFunc`, and `UnmaterializableFunc`), `AggregateExpr` and `AggregateFunc`, `TableFunc`, `Row`, etc.---and any changes across that surface could cause a pinned plan to no longer be runnable.
+It would be unwise to freeze things as they are in place: there is no support for migrations, and `MirScalarExpr` and the various `*Func` would be locked in time.
+Worse still, several of these `*Func` types reference external types, like `regex::Regex`---if we froze these things, upgrading the `regex` crate would break pinned plans and/or force a migration.
 
- - Use `serde_reflection` to build a `Registry` at when testing `compute-types` (where `plan.rs`/LIR lives).
- - Serialize the `Registry` to YAML/JSON and commit it as `schema.yaml`.
- - In CI, we regenerate `schema.yaml` from the current types and diff to see what changed.
- - We can identify changes that are permissible (e.g., addition of a field with default).
+We propose the following shift:
 
-When we want to make a breaking change, we will likely have to customize deserialization to support a migration.
-This will be painful the first time.
-It will be less painful if we bake in version numbers up front.
+ - Generate `Lir` versions of the various `*Func`s. This will require a preparatory PR to improve the associated macros, but should not be too complex (even though it generates a fair bit of code; we can engineer that code to point to common implementations of `eval`, so we won't get major code duplication). We will likely want to fold this in to work that parameterizes type holding `*Func`s to hold _either_ `Sql*Type` or `Repr*Type`.
+ - Write `LirScalarExpr`, which omits `CallUnmaterializable` (because it should be resolved before LIR).
+ - Ensure that we only serialize the MZ-controlled bits. Wherever `Lir*Func` would include an external structure, ensure we store the information that lets us regenerate that structure using `#[serde(default=...)]` (e.g., store the original regex string, not the `regex::Regex` value).
+ - Add a version number to top-level `LIR`.
+ - Use `serde_reflection` to generate a schema (using `Registry`) that lives in the repo. Any change in LIR serialization will yield a schema change. We can programmatically require migrations/LIR version bumps for certain kinds of schema changes.
+   + We _must_ eventually tolerate schema changes like new LIR operators, new `*Func`s, new fields on existing structures, or pins will break too often.
 
 LIR will be stored in the catalog.
+
+## Open questions
+
+### What is the concrete syntax?
+
+We should pick ergonomic, sensible DDL syntax for this.
+How will users interact with it in DBT, etc.?
+
+### How do alterations work?
+
+Consider the dependency diagram above (["What can change?"](#what-can-change)).
+What are the pragmatics of making changes to `S1` and `MV1`?
+These changes could be changes to business logic or the addition of a column.
+
+- What does the workflow look like for changes to business logic upstream? _Should be fine._
+- What about additive schema changes? _Should be fine._
+- What about changes to a hypothetical `MV3` what depends on `MV2`? _Should be fine._
+
+Suppose the logic in `MV2` is broken.
+What is the workflow for fixing that?
+_Any_ change to `MV2` will lead to replanning, and there is no possibility of "spot" fixes.
+How do we communicate to customers that pinning is "best effort"?
+
+### What is the serialization format for LIR?
+
+Based on ad hoc, not particularly well informed research:
+
+| Format      | Compactness | Evolution     |
+| :------     | :---------- | :------------ |
+| bincode     | +++         | none          |
+| JSON        | ---         | roll your own |
+| MessagePack | ++          | roll your own |
+| CBOR        | +           | roll your own |
+| protobuf    | ~           | theirs        |
+
+MessagePack seems like a strong possibility, but "roll your own" as a migration/evolution story is not my favorite.
+In addition to our schema registry management, we would need some kind of lint to ensure the serde annotations were correct for MessagePack (i.e., defaults are required on new struct fields, or we'll break at runtime when reading old data). Having some kind of CI test that reads a broad variety of pinned plans through an upgrade would help.
+
+Protobuf has a natural form of evolution, but it is not clear that it aligns with _ours_.
+We will likely end up maintaining protobuf wrappers by hand, which is a bad combination of "their weird defaults" and "roll your own".
+
+As an MVP, bincode is fine: we check the version number, and don't use pinned plans if anything changed. The downside is that improving that level of "best effort" to something better is moderately complex.
+
+Another alternative is explicitly versioned LIR enums, where we use version numbers to dispatch and manually write migrations between formats.
+This would allow us to use `bincode`, but would mean far more migrations: any change at all would force one.
+In this case, we would want good tooling to generate migrations and keep migration code to a minimum.
+
+### Where does LIR live in the catalog?
+
 It could go in `CatalogPlans` (all currently keyed by global ID), in `CatalogState` (alongside per-cluster metadata), or as a sidecar (like the `ExpressionCacheHandle`).
+This part of the catalog seems to be in flux, but `CatalogState` seems right---plans for frozen clusters should be stored alongside those clusters.
+That is, whether or not a cluster is frozen is not a boolean---it's an `Option<FrozenLirPlans>`, with `Some(...)` holding the plans.
+
+### What happens when we move to DDIR?
+
+A nice property of plan pinning is that we're always free to go lower.
+Currently, a pinned LIR plan will render directly.
+If we rearchitect things to convert that LIR plan to DDIR, that will be "transparent" to the pinned plan (if we do a good job).
+If we later decide to save the DDIR rather than LIR, that will be as transparent as the original move was.
+
+### What happens to `EXPLAIN OPTIMIZED PLAN` for pinned LIR plans?
+
+Right now, I believe only Gábor uses `EXPLAIN OPTIMIZED PLAN`.
+But in the event someone would like to see MIR for a pinner LIR plan, we would simply not have it.
+We _could_ store a cached version, either a text (with fixed options) or as some kind of structure---though our aim was to _not_ have to serialize MIR.
+I think the best approach here is to improve the default LIR-based `EXPLAIN PLAN` enough so that Gábor stops using `EXPLAIN OPTIMIZED PLAN`.
