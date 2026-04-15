@@ -89,5 +89,5 @@ pyarrow-stubs==20.0.0.20251215
 pyarrow==23.0.0
 minio==7.2.15
 zstandard==0.25.0
-build==1.4.2
+build==1.4.3
 hatchling==1.29.0
