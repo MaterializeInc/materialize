@@ -1,0 +1,39 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+name: CI Trigger Link
+
+on:
+  # pull_request_target runs with the base branch's GITHUB_TOKEN (write
+  # access), even for fork PRs. This is safe ONLY because the workflow posts a
+  # static status link and never checks out or executes PR code. Do NOT add
+  # steps that checkout, build, or run code from the PR — that would let a
+  # malicious fork PR execute arbitrary code with write permissions to this repo.
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [opened, synchronize]
+
+permissions:
+  statuses: write
+
+jobs:
+  post-link:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post CI trigger link
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.payload.pull_request.head.sha,
+              state: 'success',
+              target_url: `https://ci.dev.materialize.com/trigger/${context.payload.pull_request.number}`,
+              description: 'Trigger additional CI runs for this PR',
+              context: 'Additional Nightly/CI'
+            });
