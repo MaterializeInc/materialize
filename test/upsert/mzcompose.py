@@ -114,48 +114,55 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
         volumes_extra=["mzdata:/mzdata"],
     )
 
-    materialized = Materialized(
-        default_size=args.default_size,
-        options=[
-            "--orchestrator-process-scratch-directory=/scratch",
-        ],
-        environment_extra=materialized_environment_extra,
-        default_replication_factor=2,
-        support_external_clusterd=True,
-    )
+    for variant, extra_system_params in [
+        ("default", None),
+        ("upsert-v2", {"enable_upsert_v2": "true"}),
+    ]:
+        materialized = Materialized(
+            default_size=args.default_size,
+            options=[
+                "--orchestrator-process-scratch-directory=/scratch",
+            ],
+            additional_system_parameter_defaults=extra_system_params,
+            environment_extra=materialized_environment_extra,
+            default_replication_factor=2,
+            support_external_clusterd=True,
+        )
 
-    with c.override(testdrive, materialized):
-        c.rm("testdrive")
-        c.up(*dependencies)
+        print(f"Running testdrive workflow [{variant}]")
+        with c.override(testdrive, materialized):
+            c.rm("testdrive")
+            c.down(destroy_volumes=True)
+            c.up(*dependencies)
 
-        if args.replicas > 1:
-            c.sql("DROP CLUSTER quickstart")
-            # Make sure a replica named 'r1' always exists
-            replica_names = [
-                "r1" if replica_id == 0 else f"replica{replica_id}"
-                for replica_id in range(0, args.replicas)
-            ]
-            replica_string = ",".join(
-                f"{replica_name} (SIZE '{materialized.default_replica_size}')"
-                for replica_name in replica_names
-            )
-            c.sql(f"CREATE CLUSTER quickstart REPLICAS ({replica_string})")
+            if args.replicas > 1:
+                c.sql("DROP CLUSTER quickstart")
+                # Make sure a replica named 'r1' always exists
+                replica_names = [
+                    "r1" if replica_id == 0 else f"replica{replica_id}"
+                    for replica_id in range(0, args.replicas)
+                ]
+                replica_string = ",".join(
+                    f"{replica_name} (SIZE '{materialized.default_replica_size}')"
+                    for replica_name in replica_names
+                )
+                c.sql(f"CREATE CLUSTER quickstart REPLICAS ({replica_string})")
 
-        junit_report = ci_util.junit_report_filename(c.name)
+            junit_report = ci_util.junit_report_filename(c.name)
 
-        def process(file: str) -> None:
-            c.run_testdrive_files(
-                f"--junit-report={junit_report}",
-                f"--var=replicas={args.replicas}",
-                f"--var=default-replica-size={materialized.default_replica_size}",
-                f"--var=default-storage-size={materialized.default_storage_size}",
-                file,
-            )
-            # Uploading successful junit files wastes time and contains no useful information
-            os.remove(MZ_ROOT / "test" / "upsert" / junit_report)
+            def process(file: str) -> None:
+                c.run_testdrive_files(
+                    f"--junit-report={junit_report}",
+                    f"--var=replicas={args.replicas}",
+                    f"--var=default-replica-size={materialized.default_replica_size}",
+                    f"--var=default-storage-size={materialized.default_storage_size}",
+                    file,
+                )
+                # Uploading successful junit files wastes time and contains no useful information
+                os.remove(MZ_ROOT / "test" / "upsert" / junit_report)
 
-        c.test_parts(args.files, process)
-        c.sanity_restart_mz()
+            c.test_parts(args.files, process)
+            c.sanity_restart_mz()
 
 
 def workflow_rehydration(c: Composition) -> None:
