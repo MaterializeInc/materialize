@@ -1203,15 +1203,23 @@ fn generate_rbac_requirements(
                     ..Default::default()
                 }
             }
-            // Roles are allowed to change their own password.
-            plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.password.is_some() && role_id == *id =>
-            {
-                RbacRequirements::default()
-            }
+            // Roles are allowed to change their own password, but only if
+            // password is the sole attribute being changed.
+            plan::PlannedAlterRoleOption::Attributes(plan::PlannedRoleAttributes {
+                password,
+                // scram_iterations and nopassword are password-related, so
+                // they're fine to change alongside the password.
+                scram_iterations: _,
+                nopassword: _,
+                // superuser is already handled by the match arm above, so it
+                // will always be None here.
+                superuser: None,
+                inherit: None,
+                login: None,
+            }) if password.is_some() && role_id == *id => RbacRequirements::default(),
             // But no one elses...
             plan::PlannedAlterRoleOption::Attributes(attributes)
-                if attributes.password.is_some() =>
+                if attributes.password.is_some() && role_id != *id =>
             {
                 RbacRequirements {
                     superuser_action: Some("alter password of role".to_string()),
