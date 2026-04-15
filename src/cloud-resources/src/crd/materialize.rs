@@ -655,7 +655,7 @@ pub mod v1alpha1 {
     }
 }
 
-fn parse_image_ref(image_ref: &str) -> Option<Version> {
+pub fn parse_image_ref(image_ref: &str) -> Option<Version> {
     image_ref
         .rsplit_once(':')
         .and_then(|(_repo, tag)| tag.strip_prefix('v'))
