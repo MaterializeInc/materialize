@@ -85,8 +85,7 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  cooldown:
-    default-days: 3
+  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -101,8 +100,7 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  cooldown:
-    default-days: 3
+  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -117,8 +115,7 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
-  cooldown:
-    default-days: 3
+  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
