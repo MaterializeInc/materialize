@@ -316,6 +316,7 @@ impl PartitionedComputeState {
                                     keep.push(keep_coll);
                                 }
                             }
+                            tracked.stashed_result_size = keep.iter().map(|c| c.byte_len()).sum();
                             tracked.stashed_updates = Ok(keep);
                             Ok(ship)
                         }
