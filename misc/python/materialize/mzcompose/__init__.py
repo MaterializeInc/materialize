@@ -169,6 +169,11 @@ def get_variable_system_parameters(
             ["2", "3"],
         ),
         VariableSystemParameter(
+            "compute_correction_v2_chunk_size",
+            "8192",
+            ["8192", "65536", "1048576"],
+        ),
+        VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
             "134217728",
             ["1048576", "4194304", "16777216", "67108864"],
