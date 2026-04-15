@@ -16,9 +16,9 @@ use mz_ore::soft_assert_eq_or_log;
 
 use crate::{TransformCtx, TransformError};
 
-/// Replace operators on constant collections with constant collections.
+/// Push `COALESCE` into `CASE WHEN` as possible.
 #[derive(Debug)]
-pub struct CoalesceCase {}
+pub struct CoalesceCase;
 
 impl Default for CoalesceCase {
     fn default() -> Self {
@@ -28,13 +28,13 @@ impl Default for CoalesceCase {
 
 impl crate::Transform for CoalesceCase {
     fn name(&self) -> &'static str {
-        "FoldConstants"
+        "CoalesceCase"
     }
 
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
-        fields(path.segment = "fold_constants")
+        fields(path.segment = "coalesce_case")
     )]
     fn actually_perform_transform(
         &self,
@@ -101,7 +101,8 @@ impl CoalesceCase {
     }
 
     fn rewrite_scalar(&self, expr: &mut MirScalarExpr) -> Result<(), TransformError> {
-        expr.visit_mut_post(&mut |e| self.try_combine_coalesce_case(e))
+        // Visiting in pre-order means that when we push a `COALESCE` down, we'll keep pushing if the `CASE` chain continues.
+        expr.visit_mut_pre(&mut |e| self.try_combine_coalesce_case(e))
             .map_err(TransformError::from)
     }
 
@@ -113,7 +114,7 @@ impl CoalesceCase {
     fn try_combine_coalesce_case(&self, expr: &mut MirScalarExpr) {
         // COALESCE(CASE WHEN e_cond THEN NULL ELSE e_else END, ...)
         // ->
-        // CASE WHEN e_cond THEN COALESCE(...) ELSE e_else END
+        // CASE WHEN e_cond THEN COALESCE(...) ELSE COALESCE(e_else, ...) END
         //
         // ... and flipped
         expr.flatten_associative();
@@ -131,14 +132,18 @@ impl CoalesceCase {
                     else {
                         unreachable!();
                     };
-                    *expr = MirScalarExpr::if_then_else(
-                        cond.take(),
-                        MirScalarExpr::CallVariadic {
-                            func: VariadicFunc::Coalesce(Coalesce),
-                            exprs: std::mem::take(exprs),
-                        },
-                        els.take(),
+                    let exprs = std::mem::take(exprs);
+                    let f = MirScalarExpr::call_variadic(
+                        VariadicFunc::Coalesce(Coalesce),
+                        std::iter::once(els.take())
+                            .chain(exprs.iter().cloned())
+                            .collect(),
                     );
+                    let t = MirScalarExpr::call_variadic(
+                        VariadicFunc::Coalesce(Coalesce),
+                        exprs,
+                    );
+                    *expr = cond.take().if_then_else(t, f);
                 } else if els.is_literal_null() {
                     let MirScalarExpr::If {
                         mut cond,
@@ -148,14 +153,15 @@ impl CoalesceCase {
                     else {
                         unreachable!();
                     };
-                    *expr = MirScalarExpr::if_then_else(
-                        cond.take(),
-                        then.take(),
-                        MirScalarExpr::CallVariadic {
-                            func: VariadicFunc::Coalesce(Coalesce),
-                            exprs: std::mem::take(exprs),
-                        },
+                    let exprs = std::mem::take(exprs);
+                    let t = MirScalarExpr::call_variadic(
+                        VariadicFunc::Coalesce(Coalesce),
+                        std::iter::once(then.take())
+                            .chain(exprs.iter().cloned())
+                            .collect(),
                     );
+                    let f = MirScalarExpr::call_variadic(VariadicFunc::Coalesce(Coalesce), exprs);
+                    *expr = cond.take().if_then_else(t, f);
                 }
             }
         }

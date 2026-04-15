@@ -243,6 +243,11 @@ fn handle_apply(
             let transform = CaseLiteralTransform;
             apply_transform(transform, catalog, input)
         }
+        "coalesce_case" => {
+            use mz_transform::coalesce_case::CoalesceCase;
+            let transform =  CoalesceCase;
+            apply_transform(transform, catalog, input)
+        }
         "threshold_elision" => {
             use mz_transform::threshold_elision::ThresholdElision;
             let transform = ThresholdElision;
