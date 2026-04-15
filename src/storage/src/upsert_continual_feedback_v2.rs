@@ -172,6 +172,7 @@ impl<D, T: Timestamp> Builder for CapturingBuilder<D, T> {
 ///   1. **Source input** — upsert commands from the external source.
 ///   2. **Persist input** — feedback of the operator's own output, read back
 ///      from persist.  Arranged into a trace for cursor-based lookups.
+#[allow(clippy::disallowed_methods)]
 pub fn upsert_inner<'scope, T, FromTime>(
     input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
