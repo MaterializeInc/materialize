@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/flat_map.rs
-revision: e79a6d96d9
+revision: b0fa98e931
 ---
 
 # mz-compute::render::flat_map

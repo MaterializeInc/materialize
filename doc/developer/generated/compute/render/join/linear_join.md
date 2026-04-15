@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/join/linear_join.rs
-revision: 84bda5baa0
+revision: 52f2de096d
 ---
 
 # mz-compute::render::join::linear_join

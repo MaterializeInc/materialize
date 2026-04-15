@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_peek.rs
-revision: 2982634c0d
+revision: bce428d203
 ---
 
 # adapter::frontend_peek

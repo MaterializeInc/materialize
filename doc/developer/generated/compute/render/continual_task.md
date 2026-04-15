@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/continual_task.rs
-revision: c642b63c77
+revision: b0fa98e931
 ---
 
 # mz-compute::render::continual_task

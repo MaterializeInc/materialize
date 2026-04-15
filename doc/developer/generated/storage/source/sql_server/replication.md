@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/sql_server/replication.rs
-revision: f498b6e141
+revision: b0fa98e931
 ---
 
 # mz-storage::source::sql_server::replication

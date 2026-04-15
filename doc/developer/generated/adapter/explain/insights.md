@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/explain/insights.rs
-revision: 2a6ac3ab4c
+revision: bce428d203
 ---
 
 # adapter::explain::insights

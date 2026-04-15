@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/replay.rs
-revision: e79a6d96d9
+revision: b0fa98e931
 ---
 
 # timely-util::replay

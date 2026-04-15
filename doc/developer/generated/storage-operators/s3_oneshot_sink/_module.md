@@ -1,6 +1,6 @@
 ---
 source: src/storage-operators/src/s3_oneshot_sink.rs
-revision: f498b6e141
+revision: b0fa98e931
 ---
 
 # storage-operators::s3_oneshot_sink

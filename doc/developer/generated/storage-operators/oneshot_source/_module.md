@@ -1,6 +1,6 @@
 ---
 source: src/storage-operators/src/oneshot_source.rs
-revision: 8089fa9c25
+revision: b0fa98e931
 ---
 
 # storage-operators::oneshot_source

@@ -1,9 +1,9 @@
 ---
 source: src/adapter/src/coord/read_policy.rs
-revision: d7c2126b4a
+revision: fcc110b5fe
 ---
 
 # adapter::coord::read_policy
 
-Manages compaction read policies for collections: `ReadHolds` is an RAII handle that reserves a timestamp lower bound for a set of collections, preventing their `since` from advancing past the held timestamp; releasing the handle allows compaction to proceed.
-`ReadPolicyManager` tracks all active read holds per collection and computes the effective `since` that must be maintained; it is consulted by the coordinator when advancing compaction frontiers.
+Manages compaction read policies for collections: `ReadHolds` is an RAII handle that bundles a set of `ReadHold` tokens (one per storage or compute collection), preventing their `since` from advancing past the held timestamp; dropping the handle relinquishes the read capabilities.
+`Coordinator` methods in this module (`initialize_read_policies`, `update_storage_read_policies`, `update_compute_read_policies`, `acquire_read_holds`) install and update read policies on the storage and compute controllers.

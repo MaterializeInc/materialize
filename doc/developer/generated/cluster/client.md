@@ -1,6 +1,6 @@
 ---
 source: src/cluster/src/client.rs
-revision: 3ac449b444
+revision: b0fa98e931
 ---
 
 # client
