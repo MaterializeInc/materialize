@@ -7454,8 +7454,6 @@ dependencies = [
  "mz-ssh-util",
  "mz-tls-util",
  "openssh",
- "openssl",
- "postgres-openssl",
  "postgres_array",
  "proptest",
  "proptest-derive",
