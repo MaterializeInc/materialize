@@ -211,8 +211,8 @@ where
     });
     let persist_keyed = persist_keyed
         .inner
-        // The arrangement already exchanges by key, but we want to do it earlier so that we can
-        // inspect the stream properly for source statistics.
+        // The arrangement already implicitly exchanges by key, so this is redundant, but we want to
+        // do it earlier so that we can inspect the stream properly for source statistics.
         .exchange(move |((key, _), _, _)| UpsertKey::hashed(key))
         .as_collection()
         .inspect(move |((_, row), _, diff)| {
@@ -220,7 +220,7 @@ where
                 .source_statistics
                 .update_records_indexed_by(diff.into_inner());
             source_config.source_statistics.update_bytes_indexed_by(
-                row.as_ref().map_or(0, |r| r.byte_len() as i64) * diff.into_inner(),
+                row.as_ref().map_or(0, |r| r.byte_len().try_into().unwrap()) * diff.into_inner(),
             );
         });
     let persist_arranged = persist_keyed.arrange_by_key();
