@@ -1546,6 +1546,10 @@ class FlipFlagsAction(Action):
             "1024",
         ]
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["compute_correction_v2_chain_proportionality"] = [
+            "2",
+            "3",
+        ]
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
         )

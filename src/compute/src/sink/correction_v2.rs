@@ -49,12 +49,12 @@
 //!       (c, 3, +1) |              |
 //! ```
 //!
-//! The "chain invariant" states that each chain has at least [`CHAIN_PROPORTIONALITY`] times as
+//! The "chain invariant" states that each chain has at least `chain_proportionality` times as
 //! many chunks as the next one. This means that chain sizes will often be powers of
-//! `CHAIN_PROPORTIONALITY`, but they don't have to be. For example, for a proportionality of 2,
+//! `chain_proportionality`, but they don't have to be. For example, for a proportionality of 2,
 //! the chain sizes `[11, 5, 2, 1]` would satisfy the chain invariant.
 //!
-//! Choosing the `CHAIN_PROPORTIONALITY` value allows tuning the trade-off between memory and CPU
+//! Choosing the `chain_proportionality` value allows tuning the trade-off between memory and CPU
 //! resources required to maintain corrections. A higher proportionality forces more frequent chain
 //! merges, and therefore consolidation, reducing memory usage but increasing CPU usage.
 //!
@@ -131,6 +131,7 @@ use std::rc::Rc;
 
 use columnation::Columnation;
 use differential_dataflow::trace::implementations::BatchContainer;
+use mz_ore::cast::CastLossy;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
 use mz_timely_util::columnation::ColumnationStack;
@@ -139,9 +140,6 @@ use timely::container::SizableContainer;
 use timely::progress::Antichain;
 
 use crate::sink::correction::{Logging, SizeMetrics};
-
-/// Determines the size factor of subsequent chains required by the chain invariant.
-const CHAIN_PROPORTIONALITY: usize = 3;
 
 /// Convenient alias for use in data trait bounds.
 pub trait Data: differential_dataflow::Data + Columnation {}
@@ -159,6 +157,8 @@ pub(super) struct CorrectionV2<D: Data> {
     stage: Stage<D>,
     /// The frontier by which all contained times are advanced.
     since: Antichain<Timestamp>,
+    /// The size factor of subsequent chains required by the chain invariant.
+    chain_proportionality: f64,
 
     /// Total count of updates in the correction buffer.
     ///
@@ -182,11 +182,13 @@ impl<D: Data> CorrectionV2<D> {
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
         logging: Option<Logging>,
+        chain_proportionality: f64,
     ) -> Self {
         Self {
             chains: Default::default(),
             stage: Stage::new(logging.clone()),
             since: Antichain::from_elem(Timestamp::MIN),
+            chain_proportionality,
             prev_update_count: 0,
             prev_size: Default::default(),
             metrics,
@@ -237,8 +239,13 @@ impl<D: Data> CorrectionV2<D> {
             self.chains.push(chain);
 
             // Restore the chain invariant.
+            let prop = self.chain_proportionality;
             let merge_needed = |chains: &[Chain<_>]| match chains {
-                [.., prev, last] => last.len() * CHAIN_PROPORTIONALITY > prev.len(),
+                [.., prev, last] => {
+                    let last_len = f64::cast_lossy(last.len());
+                    let prev_len = f64::cast_lossy(prev.len());
+                    last_len * prop > prev_len
+                }
                 _ => false,
             };
 
@@ -329,7 +336,9 @@ impl<D: Data> CorrectionV2<D> {
         while i > 0 {
             let needs_merge = self.chains.get(i).is_some_and(|a| {
                 let b = &self.chains[i - 1];
-                a.len() * CHAIN_PROPORTIONALITY > b.len()
+                let a_len = f64::cast_lossy(a.len());
+                let b_len = f64::cast_lossy(b.len());
+                a_len * self.chain_proportionality > b_len
             });
             if needs_merge {
                 let a = self.chains.remove(i);

@@ -38,6 +38,13 @@ pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "Whether compute should use the new MV sink correction buffer implementation.",
 );
 
+/// The size factor of subsequent chains in the correction V2 buffer.
+pub const CORRECTION_V2_CHAIN_PROPORTIONALITY: Config<f64> = Config::new(
+    "compute_correction_v2_chain_proportionality",
+    3.0,
+    "The size factor of subsequent chains in the correction V2 buffer.",
+);
+
 /// Whether to enable temporal bucketing in compute.
 pub const ENABLE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
@@ -368,6 +375,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_HALF_JOIN2)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_CORRECTION_V2)
+        .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&ENABLE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
         .add(&LINEAR_JOIN_YIELDING)
