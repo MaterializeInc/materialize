@@ -402,6 +402,7 @@ impl Coordinator {
                     update_metrics_retention = true;
                     update_secrets_caching_config = true;
                     update_cluster_scheduling_config = true;
+                    update_metrics_config = true;
                     update_http_config = true;
                     update_advance_timelines_interval = true;
                 }

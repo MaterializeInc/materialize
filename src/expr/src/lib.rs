@@ -41,9 +41,9 @@ pub use relation::func::{
 pub use relation::join_input_mapper::JoinInputMapper;
 pub use relation::{
     AccessStrategy, AggregateExpr, CollectionPlan, ColumnOrder, JoinImplementation,
-    JoinInputCharacteristics, LetRecLimit, MirRelationExpr, RECURSION_LIMIT, RowSetFinishing,
-    RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits, canonicalize,
-    compare_columns, non_nullable_columns,
+    JoinInputCharacteristics, LetRecLimit, MirRelationExpr, RECURSION_LIMIT, RowComparator,
+    RowSetFinishing, RowSetFinishingIncremental, WindowFrame, WindowFrameBound, WindowFrameUnits,
+    canonicalize, compare_columns, non_nullable_columns,
 };
 pub use scalar::func::{self, BinaryFunc, UnaryFunc, UnmaterializableFunc, VariadicFunc};
 pub use scalar::{

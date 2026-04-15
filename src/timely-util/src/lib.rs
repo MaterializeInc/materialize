@@ -20,6 +20,7 @@ pub mod antichain;
 pub mod builder_async;
 pub mod capture;
 pub mod columnar;
+pub mod columnation;
 pub mod containers;
 pub mod operator;
 pub mod order;

@@ -19,7 +19,10 @@ use std::rc::Rc;
 use differential_dataflow::consolidation::{consolidate, consolidate_updates};
 use differential_dataflow::logging::{BatchEvent, DropEvent};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{CONSOLIDATING_VEC_GROWTH_DAMPENER, ENABLE_CORRECTION_V2};
+use mz_compute_types::dyncfgs::{
+    CONSOLIDATING_VEC_GROWTH_DAMPENER, CORRECTION_V2_CHAIN_PROPORTIONALITY,
+    CORRECTION_V2_CHUNK_SIZE, ENABLE_CORRECTION_V2,
+};
 use mz_dyncfg::ConfigSet;
 use mz_ore::iter::IteratorExt;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
@@ -54,7 +57,15 @@ impl<D: Data> Correction<D> {
         config: &ConfigSet,
     ) -> Self {
         if ENABLE_CORRECTION_V2.get(config) {
-            Self::V2(CorrectionV2::new(metrics, worker_metrics, logging))
+            let prop = CORRECTION_V2_CHAIN_PROPORTIONALITY.get(config);
+            let chunk_size = CORRECTION_V2_CHUNK_SIZE.get(config);
+            Self::V2(CorrectionV2::new(
+                metrics,
+                worker_metrics,
+                logging,
+                prop,
+                chunk_size,
+            ))
         } else {
             let growth_dampener = CONSOLIDATING_VEC_GROWTH_DAMPENER.get(config);
             Self::V1(CorrectionV1::new(metrics, worker_metrics, growth_dampener))

@@ -179,6 +179,22 @@ pub fn parse_data_type(sql: &str) -> Result<RawDataType, ParserError> {
     }
 }
 
+/// Parses a SQL item name (e.g. `"db"."schema"."table"` or `my_view`).
+pub fn parse_item_name(sql: &str) -> Result<UnresolvedItemName, ParserError> {
+    let tokens = lexer::lex(sql)?;
+    let mut parser = Parser::new(sql, tokens);
+    let name = parser.parse_item_name()?;
+    if parser.next_token().is_some() {
+        parser_err!(
+            parser,
+            parser.peek_prev_pos(),
+            "extra token after item name"
+        )
+    } else {
+        Ok(name)
+    }
+}
+
 /// Parses a string containing a comma-separated list of identifiers and
 /// returns their underlying string values.
 ///
@@ -2410,8 +2426,10 @@ impl<'a> Parser<'a> {
     fn parse_iceberg_sink_mode(&mut self) -> Result<IcebergSinkMode, ParserError> {
         if self.parse_keyword(UPSERT) {
             Ok(IcebergSinkMode::Upsert)
+        } else if self.parse_keyword(APPEND) {
+            Ok(IcebergSinkMode::Append)
         } else {
-            self.expected(self.peek_pos(), "UPSERT", self.peek_token())
+            self.expected(self.peek_pos(), "UPSERT, APPEND", self.peek_token())
         }
     }
 
@@ -5139,6 +5157,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_table_from_source(&mut self) -> Result<Statement<Raw>, ParserError> {
+        if self.parse_keyword(TEMP) || self.parse_keyword(TEMPORARY) {
+            return parser_err!(
+                self,
+                self.peek_prev_pos(),
+                "temporary tables FROM SOURCE are not supported"
+            );
+        }
         self.expect_keyword(TABLE)?;
         let if_not_exists = self.parse_if_not_exists()?;
         let table_name = self.parse_item_name()?;
@@ -5854,6 +5879,7 @@ impl<'a> Parser<'a> {
 
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
+                    if_exists,
                     name_a: UnresolvedObjectName::Cluster(name),
                     name_b,
                 }))
@@ -6682,6 +6708,7 @@ impl<'a> Parser<'a> {
 
                 Ok(Statement::AlterObjectSwap(AlterObjectSwapStatement {
                     object_type,
+                    if_exists,
                     name_a: name,
                     name_b,
                 }))

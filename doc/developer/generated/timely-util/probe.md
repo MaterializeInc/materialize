@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/probe.rs
-revision: e79a6d96d9
+revision: b0fa98e931
 ---
 
 # timely-util::probe

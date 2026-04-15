@@ -13,13 +13,13 @@
 //!
 //! ## Endpoints
 //!
-//! - `/api/mcp/agents` - User data products for customer AI agents
-//! - `/api/mcp/observatory` - System catalog (`mz_*`) for troubleshooting
+//! - `/api/mcp/agent` - User data products for customer AI agents
+//! - `/api/mcp/developer` - System catalog (`mz_*`) for troubleshooting
 //!
 //! ## Tools
 //!
-//! **Agents:** `get_data_products`, `get_data_product_details`, `query`
-//! **Observatory:** `query_system_catalog`
+//! **Agent:** `get_data_products`, `get_data_product_details`, `read_data_product`, `query`
+//! **Developer:** `query_system_catalog`
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
@@ -28,16 +28,17 @@ use std::time::Duration;
 use anyhow::anyhow;
 use axum::Json;
 use axum::response::IntoResponse;
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
 use mz_adapter_types::dyncfgs::{
-    ENABLE_MCP_AGENTS, ENABLE_MCP_AGENTS_QUERY_TOOL, ENABLE_MCP_OBSERVATORY, MCP_MAX_RESPONSE_SIZE,
+    ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER, MCP_MAX_RESPONSE_SIZE,
 };
 use mz_repr::namespaces::{self, SYSTEM_SCHEMAS};
 use mz_sql::parse::parse;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql_parser::ast::display::escaped_string_literal;
+use mz_sql_parser::ast::display::{AstDisplay, escaped_string_literal};
 use mz_sql_parser::ast::visit::{self, Visit};
 use mz_sql_parser::ast::{Raw, RawItemName};
+use mz_sql_parser::parser::parse_item_name;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thiserror::Error;
@@ -47,6 +48,13 @@ use crate::http::AuthedClient;
 use crate::http::sql::{SqlRequest, SqlResponse, SqlResult, execute_request};
 
 // To add a new tool: add entry to tools/list, add handler function, add dispatch case.
+
+/// JSON-RPC protocol version used in all MCP requests and responses.
+const JSONRPC_VERSION: &str = "2.0";
+
+/// MCP protocol version returned in the `initialize` response.
+/// Spec: <https://modelcontextprotocol.io/specification/2025-11-25>
+const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// Maximum time an MCP tool call can run before the HTTP response is returned.
 /// Note: this returns a clean JSON-RPC error to the caller, but the underlying
@@ -171,13 +179,13 @@ struct ClientInfo {
 #[serde(tag = "name", content = "arguments")]
 #[serde(rename_all = "snake_case")]
 enum ToolsCallParams {
-    // Agents endpoint tools
+    // Agent endpoint tools
     // Uses an ignored empty struct so MCP clients sending `"arguments": {}` can deserialize.
     GetDataProducts(#[serde(default)] ()),
     GetDataProductDetails(GetDataProductDetailsParams),
     ReadDataProduct(ReadDataProductParams),
     Query(QueryParams),
-    // Observatory endpoint tools
+    // Developer endpoint tools
     QuerySystemCatalog(QuerySystemCatalogParams),
 }
 
@@ -250,6 +258,8 @@ struct InitializeResult {
     capabilities: Capabilities,
     #[serde(rename = "serverInfo")]
     server_info: ServerInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    instructions: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -271,14 +281,42 @@ struct ToolsListResult {
 #[derive(Debug, Serialize)]
 struct ToolDefinition {
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
     description: String,
     #[serde(rename = "inputSchema")]
     input_schema: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    annotations: Option<ToolAnnotations>,
 }
+
+/// MCP 2025-11-25 tool annotations that describe tool behavior.
+/// These hints help clients make trust and safety decisions.
+#[derive(Debug, Serialize)]
+struct ToolAnnotations {
+    #[serde(rename = "readOnlyHint", skip_serializing_if = "Option::is_none")]
+    read_only_hint: Option<bool>,
+    #[serde(rename = "destructiveHint", skip_serializing_if = "Option::is_none")]
+    destructive_hint: Option<bool>,
+    #[serde(rename = "idempotentHint", skip_serializing_if = "Option::is_none")]
+    idempotent_hint: Option<bool>,
+    #[serde(rename = "openWorldHint", skip_serializing_if = "Option::is_none")]
+    open_world_hint: Option<bool>,
+}
+
+/// Annotations for all MCP tools: read-only, non-destructive, idempotent.
+const READ_ONLY_ANNOTATIONS: ToolAnnotations = ToolAnnotations {
+    read_only_hint: Some(true),
+    destructive_hint: Some(false),
+    idempotent_hint: Some(true),
+    open_world_hint: Some(false),
+};
 
 #[derive(Debug, Serialize)]
 struct ToolContentResult {
     content: Vec<ContentBlock>,
+    #[serde(rename = "isError")]
+    is_error: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -318,33 +356,85 @@ impl From<McpRequestError> for McpError {
 
 #[derive(Debug, Clone, Copy)]
 enum McpEndpointType {
-    Agents,
-    Observatory,
+    Agent,
+    Developer,
 }
 
 impl std::fmt::Display for McpEndpointType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            McpEndpointType::Agents => write!(f, "agents"),
-            McpEndpointType::Observatory => write!(f, "observatory"),
+            McpEndpointType::Agent => write!(f, "agent"),
+            McpEndpointType::Developer => write!(f, "developer"),
         }
     }
 }
 
-/// Agents endpoint: exposes user data products.
-pub async fn handle_mcp_agents(
-    client: AuthedClient,
-    Json(request): Json<McpRequest>,
-) -> impl IntoResponse {
-    handle_mcp_request(client, request, McpEndpointType::Agents).await
+/// MCP 2025-11-25 requires servers to return 405 for GET requests
+/// on endpoints that only support POST.
+pub async fn handle_mcp_method_not_allowed() -> impl IntoResponse {
+    StatusCode::METHOD_NOT_ALLOWED
 }
 
-/// Observatory endpoint: exposes system catalog (mz_*) only.
-pub async fn handle_mcp_observatory(
+/// Agent endpoint: exposes user data products.
+pub async fn handle_mcp_agent(
+    headers: HeaderMap,
     client: AuthedClient,
-    Json(request): Json<McpRequest>,
-) -> impl IntoResponse {
-    handle_mcp_request(client, request, McpEndpointType::Observatory).await
+    Json(body): Json<McpRequest>,
+) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers) {
+        return resp;
+    }
+    handle_mcp_request(client, body, McpEndpointType::Agent)
+        .await
+        .into_response()
+}
+
+/// Developer endpoint: exposes system catalog (mz_*) only.
+pub async fn handle_mcp_developer(
+    headers: HeaderMap,
+    client: AuthedClient,
+    Json(body): Json<McpRequest>,
+) -> axum::response::Response {
+    if let Some(resp) = validate_origin(&headers) {
+        return resp;
+    }
+    handle_mcp_request(client, body, McpEndpointType::Developer)
+        .await
+        .into_response()
+}
+
+/// Validates the Origin header to prevent DNS rebinding attacks (MCP 2025-11-25).
+/// Returns Some(403) if the Origin is present but doesn't match the Host.
+/// Returns None if the Origin is absent (non-browser client) or valid.
+fn validate_origin(headers: &HeaderMap) -> Option<axum::response::Response> {
+    let origin = match headers.get(http::header::ORIGIN) {
+        Some(o) => o,
+        None => return None, // No Origin header = non-browser client, allow
+    };
+
+    let host = headers
+        .get(http::header::HOST)
+        .and_then(|h| h.to_str().ok());
+
+    let origin_str = origin.to_str().ok().unwrap_or("");
+
+    // Extract host portion from Origin (strip scheme)
+    let origin_host = origin_str
+        .strip_prefix("https://")
+        .or_else(|| origin_str.strip_prefix("http://"))
+        .unwrap_or(origin_str);
+
+    match host {
+        Some(h) if h == origin_host => None, // Origin matches Host
+        _ => {
+            warn!(
+                origin = origin_str,
+                host = ?host,
+                "MCP request rejected: Origin does not match Host",
+            );
+            Some(StatusCode::FORBIDDEN.into_response())
+        }
+    }
 }
 
 async fn handle_mcp_request(
@@ -356,15 +446,15 @@ async fn handle_mcp_request(
     let catalog = client.client.catalog_snapshot("mcp").await;
     let dyncfgs = catalog.system_config().dyncfgs();
     let enabled = match endpoint_type {
-        McpEndpointType::Agents => ENABLE_MCP_AGENTS.get(dyncfgs),
-        McpEndpointType::Observatory => ENABLE_MCP_OBSERVATORY.get(dyncfgs),
+        McpEndpointType::Agent => ENABLE_MCP_AGENT.get(dyncfgs),
+        McpEndpointType::Developer => ENABLE_MCP_DEVELOPER.get(dyncfgs),
     };
     if !enabled {
         debug!(endpoint = %endpoint_type, "MCP endpoint disabled by feature flag");
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
 
-    let query_tool_enabled = ENABLE_MCP_AGENTS_QUERY_TOOL.get(dyncfgs);
+    let query_tool_enabled = ENABLE_MCP_AGENT_QUERY_TOOL.get(dyncfgs);
     let max_response_size = MCP_MAX_RESPONSE_SIZE.get(dyncfgs);
 
     let user = client.client.session().user().name.clone();
@@ -407,11 +497,11 @@ async fn handle_mcp_request(
         Err(_elapsed) => {
             warn!(
                 endpoint = %endpoint_type,
-                "MCP request timed out after {:?}",
-                MCP_REQUEST_TIMEOUT,
+                timeout = ?MCP_REQUEST_TIMEOUT,
+                "MCP request timed out",
             );
             McpResponse {
-                jsonrpc: "2.0".to_string(),
+                jsonrpc: JSONRPC_VERSION.to_string(),
                 id: request_id,
                 result: None,
                 error: Some(
@@ -449,7 +539,7 @@ async fn handle_mcp_request_inner(
 
     match result {
         Ok(result_value) => McpResponse {
-            jsonrpc: "2.0".to_string(),
+            jsonrpc: JSONRPC_VERSION.to_string(),
             id: request_id,
             result: Some(result_value),
             error: None,
@@ -463,7 +553,7 @@ async fn handle_mcp_request_inner(
                 warn!(error = %e, method = %request.method, "MCP method execution failed");
             }
             McpResponse {
-                jsonrpc: "2.0".to_string(),
+                jsonrpc: JSONRPC_VERSION.to_string(),
                 id: request_id,
                 result: None,
                 error: Some(e.into()),
@@ -480,7 +570,7 @@ async fn handle_mcp_method(
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     // Validate JSON-RPC version
-    if request.jsonrpc != "2.0" {
+    if request.jsonrpc != JSONRPC_VERSION {
         return Err(McpRequestError::InvalidJsonRpcVersion);
     }
 
@@ -513,12 +603,13 @@ async fn handle_mcp_method(
 
 async fn handle_initialize(endpoint_type: McpEndpointType) -> Result<McpResult, McpRequestError> {
     Ok(McpResult::Initialize(InitializeResult {
-        protocol_version: "2024-11-05".to_string(),
+        protocol_version: MCP_PROTOCOL_VERSION.to_string(),
         capabilities: Capabilities { tools: json!({}) },
         server_info: ServerInfo {
             name: format!("materialize-mcp-{}", endpoint_type),
             version: env!("CARGO_PKG_VERSION").to_string(),
         },
+        instructions: None,
     }))
 }
 
@@ -530,19 +621,22 @@ async fn handle_tools_list(
     let size_hint = format!("Response limit: {} MB.", max_response_size / 1_000_000);
 
     let tools = match endpoint_type {
-        McpEndpointType::Agents => {
+        McpEndpointType::Agent => {
             let mut tools = vec![
                 ToolDefinition {
                     name: "get_data_products".to_string(),
+                    title: Some("List Data Products".to_string()),
                     description: "Discover all available real-time data views (data products) that represent business entities like customers, orders, products, etc. Each data product provides fresh, queryable data with defined schemas. Use this first to see what data is available before querying specific information.".to_string(),
                     input_schema: json!({
                         "type": "object",
                         "properties": {},
                         "required": []
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
                 ToolDefinition {
                     name: "get_data_product_details".to_string(),
+                    title: Some("Get Data Product Details".to_string()),
                     description: "Get the complete schema and structure of a specific data product. This shows you exactly what fields are available, their types, and what data you can query. Use this after finding a data product from get_data_products() to understand how to query it.".to_string(),
                     input_schema: json!({
                         "type": "object",
@@ -554,9 +648,11 @@ async fn handle_tools_list(
                         },
                         "required": ["name"]
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
                 ToolDefinition {
                     name: "read_data_product".to_string(),
+                    title: Some("Read Data Product".to_string()),
                     description: format!("Read rows from a specific data product. Returns up to `limit` rows (default 500, max 1000). The data product must exist in the catalog (use get_data_products() to discover available products). Use this to retrieve actual data from a known data product. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
@@ -577,11 +673,13 @@ async fn handle_tools_list(
                         },
                         "required": ["name"]
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 },
             ];
             if query_tool_enabled {
                 tools.push(ToolDefinition {
                     name: "query".to_string(),
+                    title: Some("Query Data Products".to_string()),
                     description: format!("Execute SQL queries against real-time data products to retrieve current business information. Use standard PostgreSQL syntax. You can JOIN multiple data products together, but ONLY if they are all hosted on the same cluster. Always specify the cluster parameter from the data product details. This provides fresh, up-to-date results from materialized views. {size_hint}"),
                     input_schema: json!({
                         "type": "object",
@@ -597,13 +695,15 @@ async fn handle_tools_list(
                         },
                         "required": ["cluster", "sql_query"]
                     }),
+                    annotations: Some(READ_ONLY_ANNOTATIONS),
                 });
             }
             tools
         }
-        McpEndpointType::Observatory => {
+        McpEndpointType::Developer => {
             vec![ToolDefinition {
                 name: "query_system_catalog".to_string(),
+                title: Some("Query System Catalog".to_string()),
                 description: concat!(
                     "Query Materialize system catalog tables for troubleshooting and observability. ",
                     "Only mz_*, pg_catalog, and information_schema tables are accessible.\n\n",
@@ -625,6 +725,7 @@ async fn handle_tools_list(
                     },
                     "required": ["sql_query"]
                 }),
+                annotations: Some(READ_ONLY_ANNOTATIONS),
             }]
         }
     };
@@ -640,13 +741,13 @@ async fn handle_tools_call(
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     match (endpoint_type, params) {
-        (McpEndpointType::Agents, ToolsCallParams::GetDataProducts(_)) => {
+        (McpEndpointType::Agent, ToolsCallParams::GetDataProducts(_)) => {
             get_data_products(client, max_response_size).await
         }
-        (McpEndpointType::Agents, ToolsCallParams::GetDataProductDetails(p)) => {
+        (McpEndpointType::Agent, ToolsCallParams::GetDataProductDetails(p)) => {
             get_data_product_details(client, &p.name, max_response_size).await
         }
-        (McpEndpointType::Agents, ToolsCallParams::ReadDataProduct(p)) => {
+        (McpEndpointType::Agent, ToolsCallParams::ReadDataProduct(p)) => {
             read_data_product(
                 client,
                 &p.name,
@@ -656,15 +757,15 @@ async fn handle_tools_call(
             )
             .await
         }
-        (McpEndpointType::Agents, ToolsCallParams::Query(_)) if !query_tool_enabled => {
+        (McpEndpointType::Agent, ToolsCallParams::Query(_)) if !query_tool_enabled => {
             Err(McpRequestError::ToolNotFound(
                 "query tool is not available. Use get_data_products, get_data_product_details, and read_data_product instead.".to_string(),
             ))
         }
-        (McpEndpointType::Agents, ToolsCallParams::Query(p)) => {
+        (McpEndpointType::Agent, ToolsCallParams::Query(p)) => {
             execute_query(client, &p.cluster, &p.sql_query, max_response_size).await
         }
-        (McpEndpointType::Observatory, ToolsCallParams::QuerySystemCatalog(p)) => {
+        (McpEndpointType::Developer, ToolsCallParams::QuerySystemCatalog(p)) => {
             query_system_catalog(client, &p.sql_query, max_response_size).await
         }
         // Tool called on wrong endpoint
@@ -736,6 +837,7 @@ fn format_rows_response(
             content_type: "text".to_string(),
             text,
         }],
+        is_error: false,
     }))
 }
 
@@ -768,6 +870,33 @@ async fn get_data_product_details(
     format_rows_response(rows, max_response_size)
 }
 
+/// Parses a data product name and returns it safely quoted for SQL interpolation.
+///
+/// Uses the SQL parser to validate the name as an `UnresolvedItemName`, then
+/// formats it with `FormatMode::Stable` so every identifier part is
+/// double-quoted with proper escaping. This prevents SQL injection regardless
+/// of the input.
+fn safe_data_product_name(name: &str) -> Result<String, McpRequestError> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(McpRequestError::QueryValidationFailed(
+            "Data product name cannot be empty".to_string(),
+        ));
+    }
+
+    let parsed = parse_item_name(name).map_err(|_| {
+        McpRequestError::QueryValidationFailed(format!(
+            "Invalid data product name: {}. Expected a valid object name, \
+             e.g. '\"database\".\"schema\".\"name\"' or 'my_view'",
+            name
+        ))
+    })?;
+
+    // Stable formatting forces all identifiers to be double-quoted,
+    // so SQL keywords and special characters cannot escape.
+    Ok(parsed.to_ast_string_stable())
+}
+
 /// Read rows from a data product. Issues a single read-only query.
 ///
 /// When `cluster_override` is provided, sets the cluster explicitly.
@@ -783,6 +912,9 @@ async fn read_data_product(
     max_response_size: usize,
 ) -> Result<McpResult, McpRequestError> {
     debug!(name = %name, limit = limit, cluster_override = ?cluster_override, "Executing read_data_product");
+
+    // Parse and safely quote the name for SQL interpolation.
+    let safe_name = safe_data_product_name(name)?;
 
     // Lightweight existence check: verify the data product is visible in the
     // catalog before running the read query. This gives a clean DataProductNotFound
@@ -806,11 +938,11 @@ async fn read_data_product(
         Some(cluster) => format!(
             "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}; COMMIT;",
             escaped_string_literal(cluster),
-            name,
+            safe_name,
             clamped_limit,
         ),
         // Single statement — skip explicit transaction for better performance.
-        None => format!("SELECT * FROM {} LIMIT {}", name, clamped_limit),
+        None => format!("SELECT * FROM {} LIMIT {}", safe_name, clamped_limit),
     };
 
     let rows = execute_sql(client, &read_query).await?;
@@ -958,7 +1090,7 @@ impl<'ast> Visit<'ast, Raw> for TableReferenceCollector {
 /// For SELECT statements, all table references must be in system schemas
 /// (from `SYSTEM_SCHEMAS`, excluding `mz_unsafe`), and at least one system
 /// table must be referenced (constant queries like `SELECT 1` are rejected
-/// to prevent misuse of the observatory endpoint for arbitrary computation).
+/// to prevent misuse of the developer endpoint for arbitrary computation).
 /// SHOW and EXPLAIN statements are allowed without table references.
 fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
     // Parse the SQL to validate it
@@ -1357,7 +1489,7 @@ mod tests {
 
     #[mz_ore::test]
     fn test_validate_system_catalog_query_rejects_constant_queries() {
-        // SELECT without any table reference should be rejected — the observatory
+        // SELECT without any table reference should be rejected — the developer
         // endpoint is for system catalog queries, not arbitrary computation.
         assert!(
             validate_system_catalog_query("SELECT 1").is_err(),
@@ -1423,8 +1555,8 @@ mod tests {
     // ── Query tool feature flag tests ──────────────────────────────────────
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_agents_query_tool_disabled() {
-        let result = handle_tools_list(McpEndpointType::Agents, false, 1_000_000)
+    async fn test_tools_list_agent_query_tool_disabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, false, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1450,8 +1582,8 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_agents_query_tool_enabled() {
-        let result = handle_tools_list(McpEndpointType::Agents, true, 1_000_000)
+    async fn test_tools_list_agent_query_tool_enabled() {
+        let result = handle_tools_list(McpEndpointType::Agent, true, 1_000_000)
             .await
             .unwrap();
         let McpResult::ToolsList(list) = result else {
@@ -1477,10 +1609,10 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn test_tools_list_observatory_unaffected_by_query_flag() {
-        // Observatory endpoint should not be affected by the query tool flag
+    async fn test_tools_list_developer_unaffected_by_query_flag() {
+        // Developer endpoint should not be affected by the query tool flag
         for flag in [true, false] {
-            let result = handle_tools_list(McpEndpointType::Observatory, flag, 1_000_000)
+            let result = handle_tools_list(McpEndpointType::Developer, flag, 1_000_000)
                 .await
                 .unwrap();
             let McpResult::ToolsList(list) = result else {
@@ -1489,55 +1621,89 @@ mod tests {
             let tool_names: Vec<&str> = list.tools.iter().map(|t| t.name.as_str()).collect();
             assert!(
                 tool_names.contains(&"query_system_catalog"),
-                "query_system_catalog should always be present on observatory"
+                "query_system_catalog should always be present on developer"
             );
             assert!(
                 !tool_names.contains(&"query"),
-                "query tool should never appear on observatory"
+                "query tool should never appear on developer"
             );
         }
     }
 
-    // ── Response size cap tests ────────────────────────────────────────
+    // ── Data product name validation tests ─────────────────────────────
 
     #[mz_ore::test]
-    fn test_format_rows_response_within_limit() {
-        let rows = vec![vec![json!("a"), json!(1)], vec![json!("b"), json!(2)]];
-        let result = format_rows_response(rows, 1_000_000).unwrap();
-        let McpResult::ToolContent(content) = result else {
-            panic!("Expected ToolContent");
-        };
-        assert_eq!(content.content.len(), 1);
-        assert!(content.content[0].text.contains("\"a\""));
-        assert!(content.content[0].text.contains("\"b\""));
+    fn test_safe_data_product_name_valid() {
+        // Fully qualified quoted identifiers
+        assert_eq!(
+            safe_data_product_name(r#""materialize"."public"."my_view""#).unwrap(),
+            r#""materialize"."public"."my_view""#
+        );
+        // Two-part name
+        assert_eq!(
+            safe_data_product_name(r#""public"."my_view""#).unwrap(),
+            r#""public"."my_view""#
+        );
+        // Unquoted name gets quoted in stable mode
+        assert_eq!(safe_data_product_name("my_view").unwrap(), r#""my_view""#);
     }
 
     #[mz_ore::test]
-    fn test_format_rows_response_errors_when_over_limit() {
-        let rows: Vec<Vec<serde_json::Value>> = (0..100)
-            .map(|i| vec![json!(format!("row_{}", i)), json!(i)])
-            .collect();
-        let err = format_rows_response(rows, 500).unwrap_err();
-        let msg = err.to_string();
+    fn test_safe_data_product_name_rejects_empty() {
+        assert!(safe_data_product_name("").is_err());
+        assert!(safe_data_product_name("   ").is_err());
+    }
+
+    #[mz_ore::test]
+    fn test_safe_data_product_name_rejects_sql_injection() {
+        // Attempted injection via semicolon
+        assert!(safe_data_product_name("my_view; DROP TABLE users").is_err());
+        // Attempted injection via subquery
+        assert!(safe_data_product_name("my_view UNION SELECT * FROM secrets").is_err());
+        // Multiple table references via comma
+        assert!(safe_data_product_name("my_view, secrets").is_err());
+        // SQL keywords after name are rejected by the parser
+        assert!(safe_data_product_name("my_view WHERE 1=1 --").is_err());
+    }
+
+    // ── Origin validation tests ────────────────────────────────────────
+
+    #[mz_ore::test]
+    fn test_validate_origin_no_header() {
+        let headers = HeaderMap::new();
+        assert!(validate_origin(&headers).is_none(), "No Origin = allow");
+    }
+
+    #[mz_ore::test]
+    fn test_validate_origin_matching() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ORIGIN, "https://example.com".parse().unwrap());
+        headers.insert(http::header::HOST, "example.com".parse().unwrap());
         assert!(
-            msg.contains("exceeds the 500 byte limit"),
-            "Error should mention the size limit, got: {msg}"
-        );
-        assert!(
-            msg.contains("Use LIMIT or WHERE"),
-            "Error should suggest narrowing the query, got: {msg}"
+            validate_origin(&headers).is_none(),
+            "Matching Origin = allow"
         );
     }
 
     #[mz_ore::test]
-    fn test_format_rows_response_empty_rows() {
-        let rows: Vec<Vec<serde_json::Value>> = vec![];
-        let result = format_rows_response(rows, 1000).unwrap();
-        let McpResult::ToolContent(content) = result else {
-            panic!("Expected ToolContent");
-        };
-        assert_eq!(content.content.len(), 1);
-        assert_eq!(content.content[0].text, "[]");
+    fn test_validate_origin_mismatch() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ORIGIN, "https://evil.com".parse().unwrap());
+        headers.insert(http::header::HOST, "example.com".parse().unwrap());
+        assert!(
+            validate_origin(&headers).is_some(),
+            "Mismatched Origin = reject"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_validate_origin_no_host() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ORIGIN, "https://example.com".parse().unwrap());
+        assert!(
+            validate_origin(&headers).is_some(),
+            "Origin with no Host = reject"
+        );
     }
 
     #[mz_ore::test]

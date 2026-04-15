@@ -18,7 +18,7 @@ topics in your Kafka (or Kafka-API compatible) broker.
     SET CLUSTER = ingest_kafka;
     ```
 
-    A cluster of [size](/sql/create-cluster/#size) `100cc` should be enough to
+    A cluster of [size](/sql/create-cluster/#available-sizes) `100cc` should be enough to
     accommodate multiple Kafka sources, depending on the source
     characteristics (e.g., sources with [`ENVELOPE UPSERT`](/sql/create-source/kafka/#upsert-envelope)
     or [`ENVELOPE DEBEZIUM`](/sql/create-source/kafka/#debezium-envelope) will be more

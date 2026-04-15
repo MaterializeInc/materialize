@@ -45,8 +45,8 @@ type SnapshotKey = (String, Vec<(String, String)>);
 type SnapshotValue = (f64, &'static str, String);
 
 /// Constructs the logging dataflow fragment for Prometheus metrics.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    scope: G,
+pub(super) fn construct(
+    scope: Scope<'_, Timestamp>,
     config: &mz_compute_client::logging::LoggingConfig,
     metrics_registry: MetricsRegistry,
     now: Instant,

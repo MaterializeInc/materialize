@@ -1,5 +1,5 @@
 Snapshotting can take anywhere from a few minutes to several hours, depending on the size of your dataset,
-the upstream database, the number of tables (more tables can be parallelized in Postgres), and the [size of your ingestion cluster](/sql/create-cluster/#size).
+the upstream database, the number of tables (more tables can be parallelized in Postgres), and the [size of your ingestion cluster](/sql/create-cluster/#available-sizes).
 
 We've observed the following approximate snapshot rates from PostgreSQL:
 | Cluster Size | Snapshot Rate |

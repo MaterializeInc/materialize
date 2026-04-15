@@ -142,19 +142,19 @@ pub(crate) struct RewindRequest {
 }
 
 /// Renders the replication dataflow. See the module documentation for more information.
-pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     connection: PostgresSourceConnection,
     table_info: BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
-    rewind_stream: StreamVec<G, RewindRequest>,
-    slot_ready_stream: StreamVec<G, Infallible>,
+    rewind_stream: StreamVec<'scope, MzOffset, RewindRequest>,
+    slot_ready_stream: StreamVec<'scope, MzOffset, Infallible>,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     metrics: PgSourceMetrics,
 ) -> (
-    StackedCollection<G, (usize, Result<SourceMessage, DataflowError>)>,
-    StreamVec<G, Probe<MzOffset>>,
-    StreamVec<G, ReplicationError>,
+    StackedCollection<'scope, MzOffset, (usize, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, MzOffset, Probe<MzOffset>>,
+    StreamVec<'scope, MzOffset, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);

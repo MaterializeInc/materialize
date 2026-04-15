@@ -10,24 +10,24 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
-dec = "0.4.8"
-deadpool-postgres = "0.10.3"
-futures = "0.3.32"
-futures-util = "0.3.31"
+anyhow.workspace = true
+async-trait.workspace = true
+dec.workspace = true
+deadpool-postgres.workspace = true
+futures.workspace = true
+futures-util.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 mz-ore = { path = "../ore", features = ["chrono", "async", "tracing"] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-repr = { path = "../repr", features = ["tracing"] }
-postgres-protocol = { version = "0.6.9" }
-rand = "0.9.2"
-serde = "1.0.219"
-tokio = { version = "1.49.0", features = ["rt", "time"] }
-tracing = "0.1.44"
-uuid = { version = "1.19.0", features = ["v4"] }
+postgres-protocol.workspace = true
+rand.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []

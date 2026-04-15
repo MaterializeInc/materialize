@@ -292,7 +292,7 @@ impl Coordinator {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     // MIR ⇒ MIR optimization (global)
-                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.from.clone())?;
+                    let global_mir_plan = optimizer.catch_unwind_optimize(plan.clone())?;
                     // Add introduced indexes as validity dependencies.
                     validity.extend_dependencies(
                         global_mir_plan
@@ -478,7 +478,7 @@ impl Coordinator {
         replica_id: Option<ReplicaId>,
         conn_id: ConnectionId,
         session_uuid: Uuid,
-        read_holds: ReadHolds<mz_repr::Timestamp>,
+        read_holds: ReadHolds,
         plan: plan::SubscribePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let sink_id = df_desc.sink_id();

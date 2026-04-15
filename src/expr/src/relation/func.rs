@@ -2681,6 +2681,8 @@ impl AggregateFunc {
             | AggregateFunc::MaxDate
             | AggregateFunc::MaxTimestamp
             | AggregateFunc::MaxTimestampTz
+            | AggregateFunc::MaxInterval
+            | AggregateFunc::MaxTime
             | AggregateFunc::MinNumeric
             | AggregateFunc::MinInt16
             | AggregateFunc::MinInt32
@@ -2696,6 +2698,8 @@ impl AggregateFunc {
             | AggregateFunc::MinDate
             | AggregateFunc::MinTimestamp
             | AggregateFunc::MinTimestampTz
+            | AggregateFunc::MinInterval
+            | AggregateFunc::MinTime
             | AggregateFunc::SumInt16
             | AggregateFunc::SumInt32
             | AggregateFunc::SumInt64
@@ -2707,8 +2711,24 @@ impl AggregateFunc {
             | AggregateFunc::SumNumeric
             | AggregateFunc::StringAgg { .. } => true,
             // Count is never null
-            AggregateFunc::Count => false,
-            _ => false,
+            AggregateFunc::Count
+            | AggregateFunc::Any
+            | AggregateFunc::All
+            | AggregateFunc::JsonbAgg { .. }
+            | AggregateFunc::JsonbObjectAgg { .. }
+            | AggregateFunc::MapAgg { .. }
+            | AggregateFunc::ArrayConcat { .. }
+            | AggregateFunc::ListConcat { .. }
+            | AggregateFunc::RowNumber { .. }
+            | AggregateFunc::Rank { .. }
+            | AggregateFunc::DenseRank { .. }
+            | AggregateFunc::LagLead { .. }
+            | AggregateFunc::FirstValue { .. }
+            | AggregateFunc::LastValue { .. }
+            | AggregateFunc::FusedValueWindowFunc { .. }
+            | AggregateFunc::WindowAggregate { .. }
+            | AggregateFunc::FusedWindowAggregate { .. }
+            | AggregateFunc::Dummy => false,
         }
     }
 }

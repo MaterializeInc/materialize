@@ -15,6 +15,71 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.19.0
+*Released to Materialize Cloud: 2026-04-09* <br>
+*Released to Materialize Self-Managed: 2026-04-10* <br>
+
+This release introduces append mode for [Iceberg sinks](/sql/create-sink/iceberg/),
+and bug fixes.
+
+### Iceberg sink append mode
+
+When an [Iceberg sink](/sql/create-sink/iceberg/) is created in append
+mode, all changes are written as data rows — no Iceberg delete files are
+produced. This is especially useful if you're sinking data from a materialized
+view with temporal filters, and you don't want data to be deleted from your Iceberg table as it ages out.
+
+```mzsql
+CREATE SINK events_log_iceberg
+  IN CLUSTER analytics_cluster
+  FROM user_events
+  INTO ICEBERG CATALOG CONNECTION iceberg_catalog_connection (
+    NAMESPACE = 'events',
+    TABLE = 'user_events_log'
+  )
+  USING AWS CONNECTION aws_connection
+  MODE APPEND
+  WITH (COMMIT INTERVAL = '5m');
+```
+
+For more information, refer to:
+- [Guide: Apache Iceberg sink](/serve-results/sink/iceberg/)
+- [Reference: `CREATE SINK ICEBERG`](/sql/create-sink/iceberg/)
+
+### Bug Fixes {#v26.19-bug-fixes}
+
+- Fixed identifier display in system catalog tables `mz_kafka_source_tables`,
+  `mz_mysql_source_tables`, and `mz_postgres_source_tables` to show raw values
+  without SQL quoting (e.g., `my-kafka-topic` instead of `"my-kafka-topic"`).
+
+## v26.18.0
+*Released to Materialize Cloud: 2026-04-02* <br>
+*Released to Materialize Self-Managed: 2026-04-03* <br>
+
+This release includes various improvements and bug fixes.
+
+### Improvements {#v26.18-improvements}
+
+- **Improved Console reconnect behavior**. The Console shell now reconnects
+  more reliably, with toast notifications that no longer stack.
+
+- **Expanded `COPY FROM` data type support**. [`COPY FROM` parquet
+  files](/sql/copy-from/#parquet-formatting) now supports `map` and `interval`
+  data types.
+
+- **Improved query performance on wide tables**. Queries on tables with many
+  columns now execute faster.
+
+### Bug Fixes {#v26.18-bug-fixes}
+
+- Fixed SSL certificate loading to properly handle all certificates in PEM
+  bundles instead of only the first one.
+- Fixed materialized view sinks getting stuck when instantiated with output
+  shards whose initial frontier is less than the dataflow as-of.
+- Fixed panic when dropping computed tables with active `SUBSCRIBE` operations.
+- Fixed `EXPLAIN ANALYZE` not working correctly due to quoting issues in
+  `mz_mappable_objects`.
+
 ## v26.17.1
 *Released to Materialize Self-Managed: 2026-03-27* <br>
 

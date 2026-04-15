@@ -30,6 +30,7 @@ use mz_expr::{
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::{CollectionExt, HashSet};
+use mz_ore::future::OreFutureExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument, soft_assert_or_log};
@@ -117,7 +118,7 @@ use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
 use crate::{PeekResponseUnary, ReadHolds};
 
 /// A future that resolves to a real-time recency timestamp.
-type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>;
+type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
 mod cluster;
 mod copy_from;
@@ -719,12 +720,20 @@ impl Coordinator {
 
             let current_storage_parameters = self.controller.storage.config().clone();
             task::spawn(|| format!("validate_connection:{conn_id}"), async move {
-                let result = match connection
-                    .validate(connection_id, &current_storage_parameters)
-                    .await
+                let result = match std::panic::AssertUnwindSafe(
+                    connection.validate(connection_id, &current_storage_parameters),
+                )
+                .ore_catch_unwind()
+                .await
                 {
-                    Ok(()) => Ok(plan),
-                    Err(err) => Err(err.into()),
+                    Ok(Ok(())) => Ok(plan),
+                    Ok(Err(err)) => Err(err.into()),
+                    Err(_panic) => {
+                        tracing::error!("connection validation panicked");
+                        Err(AdapterError::Internal(
+                            "connection validation panicked".into(),
+                        ))
+                    }
                 };
 
                 // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
@@ -2126,7 +2135,7 @@ impl Coordinator {
         &mut self,
         ctx: &mut ExecuteContext,
         action: EndTransactionAction,
-    ) -> Result<(Option<TransactionOps<Timestamp>>, Option<WriteLocks>), AdapterError> {
+    ) -> Result<(Option<TransactionOps>, Option<WriteLocks>), AdapterError> {
         let txn = self.clear_transaction(ctx.session_mut()).await;
 
         if let EndTransactionAction::Commit = action {
@@ -2436,7 +2445,7 @@ impl Coordinator {
         ctx: ExecuteContext,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
-        read_holds: Option<ReadHolds<Timestamp>>,
+        read_holds: Option<ReadHolds>,
         imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
     ) {
         let fut = self
@@ -3120,30 +3129,8 @@ impl Coordinator {
             value: plan.value,
             interval: plan.interval,
         }];
-        self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-            Box::pin(async move {
-                let source = coord
-                    .catalog()
-                    .get_entry(&plan.id)
-                    .source()
-                    .expect("known to be source");
-                let (global_id, desc) = match &source.data_source {
-                    DataSourceDesc::Ingestion { desc, .. }
-                    | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
-                        (source.global_id, desc.clone())
-                    }
-                    _ => return,
-                };
-                let desc = desc.into_inline_connection(coord.catalog().state());
-                coord
-                    .controller
-                    .storage
-                    .alter_ingestion_source_desc(BTreeMap::from([(global_id, desc)]))
-                    .await
-                    .unwrap_or_terminate("cannot fail to alter ingestion source desc");
-            })
-        })
-        .await?;
+        self.catalog_transact_with_context(None, Some(ctx), ops)
+            .await?;
         Ok(ExecuteResponse::AlteredObject(ObjectType::Source))
     }
 
@@ -3690,9 +3677,20 @@ impl Coordinator {
                 async move {
                     let resolved_ids = conn.resolved_ids.clone();
                     let dependency_ids: BTreeSet<_> = resolved_ids.items().copied().collect();
-                    let result = match connection.validate(id, &current_storage_parameters).await {
-                        Ok(()) => Ok(conn),
-                        Err(err) => Err(err.into()),
+                    let result = match std::panic::AssertUnwindSafe(
+                        connection.validate(id, &current_storage_parameters),
+                    )
+                    .ore_catch_unwind()
+                    .await
+                    {
+                        Ok(Ok(())) => Ok(conn),
+                        Ok(Err(err)) => Err(err.into()),
+                        Err(_panic) => {
+                            tracing::error!("alter connection validation panicked");
+                            Err(AdapterError::Internal(
+                                "connection validation panicked".into(),
+                            ))
+                        }
                     };
 
                     // It is not an error for validation to complete after `internal_cmd_rx` is dropped.
@@ -3960,6 +3958,10 @@ impl Coordinator {
                         });
 
                         // Drop all text / exclude columns that are not currently referred to.
+                        // SQL Server text/exclude column refs are 3-part (schema.table.col),
+                        // which truncate to 2-part (schema.table). But external references
+                        // are 3-part (database.schema.table). Use suffix matching since
+                        // a SQL Server source connects to a single database.
                         let column_referenced =
                             |column_qualified_reference: &UnresolvedItemName| {
                                 mz_ore::soft_assert_eq_or_log!(
@@ -3969,7 +3971,7 @@ impl Coordinator {
                                 );
                                 let mut table = column_qualified_reference.clone();
                                 table.0.truncate(2);
-                                curr_references.contains(&table)
+                                curr_references.iter().any(|r| r.0.ends_with(&table.0))
                             };
                         text_columns.retain(column_referenced);
                         exclude_columns.retain(column_referenced);

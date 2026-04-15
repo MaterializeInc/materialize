@@ -11,23 +11,23 @@ license = "Apache-2.0"
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-backtrace = "0.3.76"
-flate2 = "1.1.9"
-itertools = "0.14.0"
-jemalloc_pprof = { version = "0.8.2", optional = true }
-pprof_util = "0.8.2"
+anyhow.workspace = true
+backtrace.workspace = true
+flate2.workspace = true
+itertools.workspace = true
+jemalloc_pprof = { workspace = true, optional = true }
+pprof_util.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
-pprof = "0.15.0"
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
-tracing = "0.1.44"
-tokio = { version = "1.49.0", features = ["time"] }
+pprof.workspace = true
+prost.workspace = true
+tikv-jemalloc-ctl = { workspace = true, optional = true }
+tracing.workspace = true
+tokio.workspace = true
 
 [build-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = []

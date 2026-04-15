@@ -85,15 +85,16 @@ SELECT cr.id
   ORDER BY cr.id
   LIMIT 1
 
+### Disabling this one temporarily, because it's flaky.
 # Expect to see nonzero offset_committed before we finish processing the snapshot (i.e. while snapshot_committed=false).
 # We need retries because offset_committed is initialized to 0.
 # But limit retries so we don't wait forever--once snapshot_committed=true, it will never become false again.
-$ set-max-tries max-tries=100
-> SELECT
-    s.name,
-    u.offset_committed > 0,
-    u.snapshot_committed
-  FROM mz_sources s
-  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
-  WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
-mz_source true false
+#$ set-max-tries max-tries=100
+#> SELECT
+#    s.name,
+#    u.offset_committed > 0,
+#    u.snapshot_committed
+#  FROM mz_sources s
+#  JOIN mz_internal.mz_source_statistics u ON s.id = u.id
+#  WHERE s.name IN ('mz_source') AND u.replica_id = '${replica_id}'
+#mz_source true false

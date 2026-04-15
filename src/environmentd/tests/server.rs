@@ -5010,13 +5010,13 @@ fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
                 .unwrap();
         }
 
-        let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
-        let observatory_url = format!("http://{}/api/mcp/observatory", server.http_local_addr());
+        let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+        let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
 
         f.run(|tc| {
             let url = match tc.directive.as_str() {
-                "mcp-agents" => &agents_url,
-                "mcp-observatory" => &observatory_url,
+                "mcp-agent" => &agents_url,
+                "mcp-developer" => &developer_url,
                 other => panic!("unknown directive: {}", other),
             };
 
@@ -5038,54 +5038,54 @@ fn run_mcp_datadriven(testdata_path: &str, harness: test_util::TestHarness) {
     });
 }
 
-/// Tests the MCP agents endpoint with default feature flags
-/// (enable_mcp_agents=true, enable_mcp_agents_query_tool=false).
+/// Tests the MCP agent endpoint with default feature flags
+/// (enable_mcp_agent=true, enable_mcp_agent_query_tool=false).
 #[mz_ore::test]
-fn test_mcp_agents() {
+fn test_mcp_agent() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agents".to_string(), "true".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/agents", harness);
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/agent", harness);
 }
 
-/// Tests the MCP agents endpoint with the query tool enabled.
+/// Tests the MCP agent endpoint with the query tool enabled.
 #[mz_ore::test]
-fn test_mcp_agents_query_tool() {
+fn test_mcp_agent_query_tool() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agents".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .with_system_parameter_default(
-            "enable_mcp_agents_query_tool".to_string(),
+            "enable_mcp_agent_query_tool".to_string(),
             "true".to_string(),
         );
-    run_mcp_datadriven("tests/testdata/mcp/agents_query_tool", harness);
+    run_mcp_datadriven("tests/testdata/mcp/agent_query_tool", harness);
 }
 
-/// Tests that the MCP agents endpoint returns 503 when the feature flag is disabled.
+/// Tests that the MCP agent endpoint returns 503 when the feature flag is disabled.
 #[mz_ore::test]
-fn test_mcp_agents_disabled() {
+fn test_mcp_agent_disabled() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agents".to_string(), "false".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/agents_disabled", harness);
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "false".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/agent_disabled", harness);
 }
 
-/// Tests the MCP observatory endpoint.
+/// Tests the MCP developer endpoint.
 #[mz_ore::test]
-fn test_mcp_observatory() {
+fn test_mcp_developer() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(false, true)
-        .with_system_parameter_default("enable_mcp_observatory".to_string(), "true".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/observatory", harness);
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/developer", harness);
 }
 
-/// Tests the MCP observatory endpoint when disabled (503).
+/// Tests the MCP developer endpoint when disabled (503).
 #[mz_ore::test]
-fn test_mcp_observatory_disabled() {
+fn test_mcp_developer_disabled() {
     let harness = test_util::TestHarness::default()
         .with_mcp_routes(false, true)
-        .with_system_parameter_default("enable_mcp_observatory".to_string(), "false".to_string());
-    run_mcp_datadriven("tests/testdata/mcp/observatory_disabled", harness);
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "false".to_string());
+    run_mcp_datadriven("tests/testdata/mcp/developer_disabled", harness);
 }
 
 /// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
@@ -5099,13 +5099,13 @@ fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_j
 /// Tests get_data_products, get_data_product_details, and read_data_product against
 /// a real data product (view + index + comment).
 #[mz_ore::test]
-fn test_mcp_agents_with_data_product() {
+fn test_mcp_agent_with_data_product() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agents".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .start_blocking();
 
-    let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
 
     // Set up a data product: create a view, index it, and add a comment on the index.
     {
@@ -5353,8 +5353,8 @@ fn test_mcp_agents_with_data_product() {
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("Data product not found"),
-        "SQL injection in read_data_product name should be safely handled"
+            .contains("Invalid data product name"),
+        "SQL injection in read_data_product name should be rejected by validation"
     );
 
     // SQL injection attempt in cluster override.
@@ -5381,15 +5381,15 @@ fn test_mcp_agents_with_data_product() {
 
 /// Tests runtime toggling of MCP feature flags.
 #[mz_ore::test]
-fn test_mcp_agents_runtime_flag_toggle() {
+fn test_mcp_agent_runtime_flag_toggle() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, true)
-        .with_system_parameter_default("enable_mcp_agents".to_string(), "true".to_string())
-        .with_system_parameter_default("enable_mcp_observatory".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
         .start_blocking();
 
-    let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
-    let observatory_url = format!("http://{}/api/mcp/observatory", server.http_local_addr());
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
+    let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
 
     let tools_list = serde_json::json!({
         "jsonrpc": "2.0",
@@ -5400,11 +5400,11 @@ fn test_mcp_agents_runtime_flag_toggle() {
     // Both endpoints should be enabled (feature flags set to true via system parameter defaults).
     let (status, _) = mcp_post(&agents_url, tools_list.clone());
     assert_eq!(status, StatusCode::OK);
-    let (status, _) = mcp_post(&observatory_url, tools_list.clone());
+    let (status, _) = mcp_post(&developer_url, tools_list.clone());
     assert_eq!(status, StatusCode::OK);
 
-    // Disable MCP agents at runtime.
-    server.disable_feature_flags(&["enable_mcp_agents"]);
+    // Disable MCP agent at runtime.
+    server.disable_feature_flags(&["enable_mcp_agent"]);
 
     let res = Client::new()
         .post(&agents_url)
@@ -5414,24 +5414,20 @@ fn test_mcp_agents_runtime_flag_toggle() {
     assert_eq!(
         res.status(),
         reqwest::StatusCode::SERVICE_UNAVAILABLE,
-        "agents should return 503 after disabling"
+        "agent should return 503 after disabling"
     );
 
-    // Observatory should still work.
-    let (status, _) = mcp_post(&observatory_url, tools_list.clone());
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "observatory should still be enabled"
-    );
+    // Developer should still work.
+    let (status, _) = mcp_post(&developer_url, tools_list.clone());
+    assert_eq!(status, StatusCode::OK, "developer should still be enabled");
 
-    // Re-enable MCP agents.
-    server.enable_feature_flags(&["enable_mcp_agents"]);
+    // Re-enable MCP agent.
+    server.enable_feature_flags(&["enable_mcp_agent"]);
     let (status, _) = mcp_post(&agents_url, tools_list.clone());
     assert_eq!(
         status,
         StatusCode::OK,
-        "agents should work again after re-enabling"
+        "agent should work again after re-enabling"
     );
 
     // Test query tool toggling: initially disabled.
@@ -5455,7 +5451,7 @@ fn test_mcp_agents_runtime_flag_toggle() {
     );
 
     // Enable query tool at runtime.
-    server.enable_feature_flags(&["enable_mcp_agents_query_tool"]);
+    server.enable_feature_flags(&["enable_mcp_agent_query_tool"]);
 
     let (status, body) = mcp_post(&agents_url, query_call.clone());
     assert_eq!(status, StatusCode::OK);
@@ -5470,7 +5466,7 @@ fn test_mcp_agents_runtime_flag_toggle() {
     );
 
     // Disable query tool again.
-    server.disable_feature_flags(&["enable_mcp_agents_query_tool"]);
+    server.disable_feature_flags(&["enable_mcp_agent_query_tool"]);
     let (_, body) = mcp_post(&agents_url, query_call.clone());
     assert!(
         body["error"]["message"]
@@ -5481,19 +5477,19 @@ fn test_mcp_agents_runtime_flag_toggle() {
     );
 }
 
-/// Tests that the MCP agents endpoint respects RBAC: data products are only visible
+/// Tests that the MCP agent endpoint respects RBAC: data products are only visible
 /// to users with both SELECT on the view and USAGE on the cluster.
 ///
 /// The `mz_mcp_data_products` view joins `mz_show_my_object_privileges` (SELECT) and
 /// `mz_show_my_cluster_privileges` (USAGE) — both must be satisfied for a product to appear.
 #[mz_ore::test]
-fn test_mcp_agents_rbac() {
+fn test_mcp_agent_rbac() {
     let server = test_util::TestHarness::default()
         .with_mcp_routes(true, false)
-        .with_system_parameter_default("enable_mcp_agents".to_string(), "true".to_string())
+        .with_system_parameter_default("enable_mcp_agent".to_string(), "true".to_string())
         .start_blocking();
 
-    let agents_url = format!("http://{}/api/mcp/agents", server.http_local_addr());
+    let agents_url = format!("http://{}/api/mcp/agent", server.http_local_addr());
 
     let mut super_user = server
         .pg_config_internal()

@@ -218,7 +218,7 @@ pub enum AdapterError {
     /// Another session modified the Catalog while this transaction was open.
     DDLTransactionRace,
     /// An error occurred in the storage layer
-    Storage(mz_storage_types::controller::StorageError<mz_repr::Timestamp>),
+    Storage(mz_storage_types::controller::StorageError),
     /// An error occurred in the compute layer
     Compute(anyhow::Error),
     /// An error in the orchestrator layer
@@ -1227,8 +1227,8 @@ impl From<oneshot::error::RecvError> for AdapterError {
     }
 }
 
-impl From<StorageError<mz_repr::Timestamp>> for AdapterError {
-    fn from(e: StorageError<mz_repr::Timestamp>) -> Self {
+impl From<StorageError> for AdapterError {
+    fn from(e: StorageError) -> Self {
         AdapterError::Storage(e)
     }
 }

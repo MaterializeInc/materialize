@@ -217,7 +217,7 @@ pub enum Command {
         instance_id: ComputeInstanceId,
         tx: oneshot::Sender<
             Result<
-                mz_compute_client::controller::instance_client::InstanceClient<mz_repr::Timestamp>,
+                mz_compute_client::controller::instance_client::InstanceClient,
                 mz_compute_client::controller::error::InstanceMissing,
             >,
         >,
@@ -238,19 +238,19 @@ pub enum Command {
 
     GetTransactionReadHoldsBundle {
         conn_id: ConnectionId,
-        tx: oneshot::Sender<Option<ReadHolds<mz_repr::Timestamp>>>,
+        tx: oneshot::Sender<Option<ReadHolds>>,
     },
 
     /// _Merges_ the given read holds into the given connection's stored transaction read holds.
     StoreTransactionReadHolds {
         conn_id: ConnectionId,
-        read_holds: ReadHolds<mz_repr::Timestamp>,
+        read_holds: ReadHolds,
         tx: oneshot::Sender<()>,
     },
 
     ExecuteSlowPathPeek {
-        dataflow_plan: Box<PeekDataflowPlan<mz_repr::Timestamp>>,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
+        dataflow_plan: Box<PeekDataflowPlan>,
+        determination: TimestampDetermination,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
@@ -272,7 +272,7 @@ pub enum Command {
         replica_id: Option<ReplicaId>,
         conn_id: ConnectionId,
         session_uuid: Uuid,
-        read_holds: ReadHolds<mz_repr::Timestamp>,
+        read_holds: ReadHolds,
         plan: plan::SubscribePlan,
         statement_logging_id: Option<StatementLoggingId>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
@@ -342,8 +342,8 @@ pub enum Command {
         session_wall_time: DateTime<Utc>,
         cluster_id: ClusterId,
         id_bundle: CollectionIdBundle,
-        determination: TimestampDetermination<mz_repr::Timestamp>,
-        tx: oneshot::Sender<TimestampExplanation<mz_repr::Timestamp>>,
+        determination: TimestampDetermination,
+        tx: oneshot::Sender<TimestampExplanation>,
     },
 
     /// Statement logging event from frontend peek sequencing.
@@ -456,12 +456,8 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
-    pub storage_collections: Arc<
-        dyn mz_storage_client::storage_collections::StorageCollections<
-                Timestamp = mz_repr::Timestamp,
-            > + Send
-            + Sync,
-    >,
+    pub storage_collections:
+        Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>,
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,

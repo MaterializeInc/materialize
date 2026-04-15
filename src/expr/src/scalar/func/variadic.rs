@@ -17,6 +17,7 @@ use std::borrow::Cow;
 use std::cmp;
 use std::fmt;
 
+use aws_lc_rs::hmac as aws_hmac;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use fallible_iterator::FallibleIterator;
 use hmac::{Hmac, Mac};
@@ -38,8 +39,6 @@ use mz_repr::{
     RowArena, SqlColumnType, SqlScalarType, Variadic,
 };
 use serde::{Deserialize, Serialize};
-use sha1::Sha1;
-use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use crate::func::CaseLiteral;
 use crate::func::{
@@ -804,29 +803,24 @@ pub fn hmac_inner(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, Ev
             Ok(mac.finalize().into_bytes().to_vec())
         }
         "sha1" => {
-            let mut mac = Hmac::<Sha1>::new_from_slice(key).expect("HMAC accepts any key size");
-            mac.update(to_digest);
-            Ok(mac.finalize().into_bytes().to_vec())
+            let k = aws_hmac::Key::new(aws_hmac::HMAC_SHA1_FOR_LEGACY_USE_ONLY, key);
+            Ok(aws_hmac::sign(&k, to_digest).as_ref().to_vec())
         }
         "sha224" => {
-            let mut mac = Hmac::<Sha224>::new_from_slice(key).expect("HMAC accepts any key size");
-            mac.update(to_digest);
-            Ok(mac.finalize().into_bytes().to_vec())
+            let k = aws_hmac::Key::new(aws_hmac::HMAC_SHA224, key);
+            Ok(aws_hmac::sign(&k, to_digest).as_ref().to_vec())
         }
         "sha256" => {
-            let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key size");
-            mac.update(to_digest);
-            Ok(mac.finalize().into_bytes().to_vec())
+            let k = aws_hmac::Key::new(aws_hmac::HMAC_SHA256, key);
+            Ok(aws_hmac::sign(&k, to_digest).as_ref().to_vec())
         }
         "sha384" => {
-            let mut mac = Hmac::<Sha384>::new_from_slice(key).expect("HMAC accepts any key size");
-            mac.update(to_digest);
-            Ok(mac.finalize().into_bytes().to_vec())
+            let k = aws_hmac::Key::new(aws_hmac::HMAC_SHA384, key);
+            Ok(aws_hmac::sign(&k, to_digest).as_ref().to_vec())
         }
         "sha512" => {
-            let mut mac = Hmac::<Sha512>::new_from_slice(key).expect("HMAC accepts any key size");
-            mac.update(to_digest);
-            Ok(mac.finalize().into_bytes().to_vec())
+            let k = aws_hmac::Key::new(aws_hmac::HMAC_SHA512, key);
+            Ok(aws_hmac::sign(&k, to_digest).as_ref().to_vec())
         }
         other => Err(EvalError::InvalidHashAlgorithm(other.into())),
     }

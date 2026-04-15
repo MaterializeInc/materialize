@@ -10,15 +10,15 @@ publish = false
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"] }
-itertools = "0.14.0"
+chrono.workspace = true
+itertools.workspace = true
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-proc-macro2 = "1.0.106"
+proc-macro2.workspace = true
 
 [dev-dependencies]
-datadriven = "0.9.0"
+datadriven.workspace = true
 
 [features]
 default = []

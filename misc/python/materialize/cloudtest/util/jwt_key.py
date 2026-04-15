@@ -30,7 +30,11 @@ def fetch_jwt(
         return res
 
     try:
-        res = retry(fetch, max_tries, [requests.exceptions.HTTPError])
+        res = retry(
+            fetch,
+            max_tries,
+            [requests.exceptions.HTTPError, requests.exceptions.ConnectionError],
+        )
     except requests.exceptions.HTTPError as e:
         res = e.response
         LOGGER.error(dedent(f"""

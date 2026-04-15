@@ -17,7 +17,6 @@ use std::rc::Rc;
 use anyhow::anyhow;
 use aws_types::sdk_config::SdkConfig;
 use differential_dataflow::Hashable;
-use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
@@ -31,6 +30,7 @@ use mz_storage_types::sinks::{S3SinkFormat, S3UploadInfo};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use mz_timely_util::columnation::ColumnationStack;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -58,10 +58,14 @@ mod pgcopy;
 ///
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
-pub fn copy_to<G, F>(
-    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
-    err_stream: StreamVec<G, (DataflowError, G::Timestamp, Diff)>,
-    up_to: Antichain<G::Timestamp>,
+pub fn copy_to<'scope, F>(
+    input_collection: StreamVec<
+        'scope,
+        Timestamp,
+        Vec<ColumnationStack<((Row, ()), Timestamp, Diff)>>,
+    >,
+    err_stream: StreamVec<'scope, Timestamp, (DataflowError, Timestamp, Diff)>,
+    up_to: Antichain<Timestamp>,
     connection_details: S3UploadInfo,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
@@ -72,7 +76,6 @@ pub fn copy_to<G, F>(
     output_batch_count: u64,
 ) -> Rc<dyn Any>
 where
-    G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
     let scope = input_collection.scope();
@@ -83,7 +86,7 @@ where
         render_initialization_operator(scope.clone(), sink_id, up_to.clone(), err_stream);
 
     let (completion_stream, upload_token) = match connection_details.format {
-        S3SinkFormat::PgCopy(_) => render_upload_operator::<G, pgcopy::PgCopyUploader>(
+        S3SinkFormat::PgCopy(_) => render_upload_operator::<pgcopy::PgCopyUploader>(
             scope.clone(),
             connection_context.clone(),
             aws_connection.clone(),
@@ -96,7 +99,7 @@ where
             params,
             output_batch_count,
         ),
-        S3SinkFormat::Parquet => render_upload_operator::<G, parquet::ParquetUploader>(
+        S3SinkFormat::Parquet => render_upload_operator::<parquet::ParquetUploader>(
             scope.clone(),
             connection_context.clone(),
             aws_connection.clone(),
@@ -133,15 +136,15 @@ where
 ///
 /// Returns the `start_stream` with an error received in the `err_stream`, if
 /// any, otherwise `Ok(())`.
-fn render_initialization_operator<G>(
-    scope: G,
+fn render_initialization_operator<'scope>(
+    scope: Scope<'scope, Timestamp>,
     sink_id: GlobalId,
-    up_to: Antichain<G::Timestamp>,
-    err_stream: StreamVec<G, (DataflowError, G::Timestamp, Diff)>,
-) -> (StreamVec<G, Result<(), String>>, PressOnDropButton)
-where
-    G: Scope<Timestamp = Timestamp>,
-{
+    up_to: Antichain<Timestamp>,
+    err_stream: StreamVec<'scope, Timestamp, (DataflowError, Timestamp, Diff)>,
+) -> (
+    StreamVec<'scope, Timestamp, Result<(), String>>,
+    PressOnDropButton,
+) {
     let worker_id = scope.index();
     let num_workers = scope.peers();
     let leader_id = usize::cast_from((sink_id, "initialization").hashed()) % num_workers;
@@ -206,18 +209,17 @@ where
 ///
 /// This cleanup work removes the INCOMPLETE sentinel file (see description
 /// of `render_initialization_operator` for more details).
-fn render_completion_operator<G, F>(
-    scope: G,
+fn render_completion_operator<'scope, F>(
+    scope: Scope<'scope, Timestamp>,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     connection_id: CatalogItemId,
     sink_id: GlobalId,
     s3_key_manager: S3KeyManager,
-    completion_stream: StreamVec<G, Result<u64, String>>,
+    completion_stream: StreamVec<'scope, Timestamp, Result<u64, String>>,
     worker_callback: F,
 ) -> PressOnDropButton
 where
-    G: Scope<Timestamp = Timestamp>,
     F: FnOnce(Result<u64, String>) -> () + 'static,
 {
     let worker_id = scope.index();
@@ -290,21 +292,27 @@ where
 ///
 /// The `input_collection` must be a stream of chains, partitioned and exchanged by the row's hash
 /// modulo the number of batches.
-fn render_upload_operator<G, T>(
-    scope: G,
+fn render_upload_operator<'scope, T>(
+    scope: Scope<'scope, Timestamp>,
     connection_context: ConnectionContext,
     aws_connection: AwsConnection,
     connection_id: CatalogItemId,
     connection_details: S3UploadInfo,
     sink_id: GlobalId,
-    input_collection: StreamVec<G, Vec<TimelyStack<((Row, ()), G::Timestamp, Diff)>>>,
-    up_to: Antichain<G::Timestamp>,
-    start_stream: StreamVec<G, Result<(), String>>,
+    input_collection: StreamVec<
+        'scope,
+        Timestamp,
+        Vec<ColumnationStack<((Row, ()), Timestamp, Diff)>>,
+    >,
+    up_to: Antichain<Timestamp>,
+    start_stream: StreamVec<'scope, Timestamp, Result<(), String>>,
     params: CopyToParameters,
     output_batch_count: u64,
-) -> (StreamVec<G, Result<u64, String>>, PressOnDropButton)
+) -> (
+    StreamVec<'scope, Timestamp, Result<u64, String>>,
+    PressOnDropButton,
+)
 where
-    G: Scope<Timestamp = Timestamp>,
     T: CopyToS3Uploader,
 {
     let worker_id = scope.index();

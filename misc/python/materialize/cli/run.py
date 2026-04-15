@@ -549,7 +549,7 @@ For CockroachDB:
 For PostgreSQL:
     1. Install PostgreSQL
     2. Create a database: `createdb materialize`
-    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://localhost/materialize`"""
+    3. Set the MZDEV_POSTGRES environment variable accordingly: `export MZDEV_POSTGRES=postgres://$(whoami)@localhost/materialize`"""
     try:
         dbconn = psycopg.connect(urlstr)
         dbconn.autocommit = True

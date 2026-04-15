@@ -134,16 +134,16 @@ use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
+use timely::dataflow::StreamVec;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
-use timely::dataflow::{Scope, StreamVec};
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::sync::watch;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::{debug, error, info, warn};
 
-impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
+impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
     fn get_key_indices(&self) -> Option<&[usize]> {
         self.key_desc_and_indices
             .as_ref()
@@ -159,12 +159,15 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+        input: VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
-        _err_collection: VecCollection<G, DataflowError, Diff>,
-    ) -> (StreamVec<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
-        let mut scope = input.scope();
+        _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+    ) -> (
+        StreamVec<'scope, Timestamp, HealthStatusMessage>,
+        Vec<PressOnDropButton>,
+    ) {
+        let scope = input.scope();
 
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
@@ -221,7 +224,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
             update: HealthStatusUpdate::Running,
             namespace: StatusNamespace::Kafka,
         })
-        .to_stream(&mut scope);
+        .to_stream(scope);
 
         let status = scope.concatenate([running_status, encode_status, sink_status]);
 
@@ -626,9 +629,9 @@ struct KafkaHeader {
 /// This operator exchanges all updates to a single worker by hashing on the given sink `id`.
 ///
 /// Updates are sent in ascending timestamp order.
-fn sink_collection<G: Scope<Timestamp = Timestamp>>(
+fn sink_collection<'scope>(
     name: String,
-    input: VecCollection<G, KafkaMessage, Diff>,
+    input: VecCollection<'scope, Timestamp, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -639,7 +642,10 @@ fn sink_collection<G: Scope<Timestamp = Timestamp>>(
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
-) -> (StreamVec<G, HealthStatusMessage>, PressOnDropButton) {
+) -> (
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
+    PressOnDropButton,
+) {
     let scope = input.scope();
     let mut builder = AsyncOperatorBuilder::new(name.clone(), input.inner.scope());
 
@@ -1356,15 +1362,15 @@ async fn fetch_partition_count_loop<F>(
 /// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
 ///
 /// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
-fn encode_collection<G: Scope>(
+fn encode_collection<'scope, T: timely::progress::Timestamp>(
     name: String,
-    input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    input: VecCollection<'scope, T, (Option<Row>, DiffPair<Row>), Diff>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
 ) -> (
-    VecCollection<G, KafkaMessage, Diff>,
-    StreamVec<G, HealthStatusMessage>,
+    VecCollection<'scope, T, KafkaMessage, Diff>,
+    StreamVec<'scope, T, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
@@ -1518,6 +1524,9 @@ fn encode_collection<G: Scope>(
                             SinkEnvelope::Debezium => {
                                 dbz_format(&mut row_buf.packer(), value);
                                 Some(row_buf.clone())
+                            }
+                            SinkEnvelope::Append => {
+                                unreachable!("Append envelope is not valid for Kafka sinks")
                             }
                         };
                         let value = value.map(|value| value_encoder.encode_unchecked(value));

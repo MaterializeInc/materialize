@@ -1,6 +1,6 @@
 ---
 source: src/storage-client/src/metrics.rs
-revision: 19608a8469
+revision: 00cc513fa5
 ---
 
 # storage-client::metrics

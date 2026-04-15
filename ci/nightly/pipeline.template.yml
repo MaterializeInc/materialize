@@ -73,7 +73,6 @@ steps:
         agents:
           queue: hetzner-aarch64-16cpu-32gb
         branches: "main"
-        skip: "https://github.com/MaterializeInc/database-issues/issues/11257"
 
       - id: devel-docker-tags
         label: Tag development docker images
@@ -732,7 +731,6 @@ steps:
               composition: mysql-cdc-resumption
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "database-issues#11264"
 
       - id: pg-cdc-resumption
         label: Postgres CDC resumption
@@ -784,7 +782,6 @@ steps:
               run: migration
         agents:
           queue: hetzner-aarch64-4cpu-8gb
-        skip: "database-issues#11264"
 
       - id: mysql-cdc-resumption-old-syntax
         label: MySQL CDC resumption (before source versioning)
@@ -2211,7 +2208,6 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
-        skip: "database-issues#11225"
 
       - id: orchestratord-rolling-upgrade-downtime
         label: "Orchestratord + rolling upgrade downtime"

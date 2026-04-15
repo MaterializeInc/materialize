@@ -18,10 +18,7 @@
         <a name="alter-cluster-size"></a>
         The size of the resource allocations for the cluster.
 
-        {{< yaml-list column="Cluster size" data="m1_cluster_sizing" numColumns="3" >}}
-
-        See [Size](#available-sizes) for details as well as legacy sizes
-        available.
+        For valid size values, see [Available sizes](#available-sizes).
 
         {{< warning >}}
         Changing the size of a cluster may incur downtime. For more information,

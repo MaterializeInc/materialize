@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/cli/bench.rs
-revision: 2a6ac3ab4c
+revision: 5680493e7d
 ---
 
 # persist-client::cli::bench

@@ -11,5 +11,10 @@
 > SELECT COUNT(*) > 0 FROM mz_internal.mz_source_statuses WHERE status = 'stalled' AND error LIKE '%source must be dropped and recreated due to failure%';
 true
 
+# This needs to be set because, depending on the timing of the mysql
+# restore, there may be no more transactions in mysql, meaning the
+# progress never ticks forward, and the query hangs.
+> SET TRANSACTION_ISOLATION TO SERIALIZABLE;
+
 ! SELECT * FROM t1;
 contains:Source error

@@ -3500,6 +3500,9 @@ fn plan_sink(
         (CreateSinkConnection::Iceberg { .. }, None, Some(ast::IcebergSinkMode::Upsert)) => {
             SinkEnvelope::Upsert
         }
+        (CreateSinkConnection::Iceberg { .. }, None, Some(ast::IcebergSinkMode::Append)) => {
+            SinkEnvelope::Append
+        }
         (CreateSinkConnection::Iceberg { .. }, None, None) => {
             sql_bail!("MODE clause is required")
         }
@@ -3568,6 +3571,62 @@ fn plan_sink(
                     Ok(name_idx)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
+
+            // Iceberg equality deletes require primitive, non-float key columns.
+            // Use an allow-list so that new types are rejected by default.
+            if matches!(&connection, CreateSinkConnection::Iceberg { .. }) {
+                let cols: Vec<_> = desc.iter().collect();
+                for &idx in &indices {
+                    let (col_name, col_type) = cols[idx];
+                    let scalar = &col_type.scalar_type;
+                    let is_valid = matches!(
+                        scalar,
+                        // integers
+                        SqlScalarType::Bool
+                            | SqlScalarType::Int16
+                            | SqlScalarType::Int32
+                            | SqlScalarType::Int64
+                            | SqlScalarType::UInt16
+                            | SqlScalarType::UInt32
+                            | SqlScalarType::UInt64
+                            // decimal / numeric
+                            | SqlScalarType::Numeric { .. }
+                            // date / time
+                            | SqlScalarType::Date
+                            | SqlScalarType::Time
+                            | SqlScalarType::Timestamp { .. }
+                            | SqlScalarType::TimestampTz { .. }
+                            | SqlScalarType::Interval
+                            | SqlScalarType::MzTimestamp
+                            // string-like
+                            | SqlScalarType::String
+                            | SqlScalarType::Char { .. }
+                            | SqlScalarType::VarChar { .. }
+                            | SqlScalarType::PgLegacyChar
+                            | SqlScalarType::PgLegacyName
+                            | SqlScalarType::Bytes
+                            | SqlScalarType::Jsonb
+                            // identifiers
+                            | SqlScalarType::Uuid
+                            | SqlScalarType::Oid
+                            | SqlScalarType::RegProc
+                            | SqlScalarType::RegType
+                            | SqlScalarType::RegClass
+                            | SqlScalarType::MzAclItem
+                            | SqlScalarType::AclItem
+                            | SqlScalarType::Int2Vector
+                            // ranges
+                            | SqlScalarType::Range { .. }
+                    );
+                    if !is_valid {
+                        return Err(PlanError::IcebergSinkUnsupportedKeyType {
+                            column: col_name.to_string(),
+                            column_type: format!("{:?}", scalar),
+                        });
+                    }
+                }
+            }
+
             let is_valid_key = desc
                 .typ()
                 .keys
@@ -3604,6 +3663,30 @@ fn plan_sink(
         | CreateSinkConnection::Iceberg { key: None, .. } => None,
     };
 
+    if key_indices.is_some() && envelope == SinkEnvelope::Append {
+        sql_bail!("KEY is not supported for MODE APPEND Iceberg sinks");
+    }
+
+    // Reject input columns that clash with the columns MODE APPEND adds to the Iceberg table.
+    if envelope == SinkEnvelope::Append {
+        if let CreateSinkConnection::Iceberg { .. } = &connection {
+            use mz_storage_types::sinks::{
+                ICEBERG_APPEND_DIFF_COLUMN, ICEBERG_APPEND_TIMESTAMP_COLUMN,
+            };
+            for (col_name, _) in desc.iter() {
+                if col_name.as_str() == ICEBERG_APPEND_DIFF_COLUMN
+                    || col_name.as_str() == ICEBERG_APPEND_TIMESTAMP_COLUMN
+                {
+                    sql_bail!(
+                        "column {} conflicts with the system column that MODE APPEND \
+                         adds to the Iceberg table",
+                        col_name.quoted()
+                    );
+                }
+            }
+        }
+    }
+
     let headers_index = match &connection {
         CreateSinkConnection::Kafka {
             headers: Some(headers),
@@ -3612,7 +3695,7 @@ fn plan_sink(
             scx.require_feature_flag(&ENABLE_KAFKA_SINK_HEADERS)?;
 
             match envelope {
-                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Upsert | SinkEnvelope::Append => (),
                 SinkEnvelope::Debezium => {
                     sql_bail!("HEADERS option is not supported with ENVELOPE DEBEZIUM")
                 }
@@ -4121,7 +4204,7 @@ fn kafka_sink_builder(
             let mut scope = Scope::from_source(None, value_desc.iter_names());
 
             match envelope {
-                SinkEnvelope::Upsert => (),
+                SinkEnvelope::Upsert | SinkEnvelope::Append => (),
                 SinkEnvelope::Debezium => {
                     let key_indices: HashSet<_> = key_desc_and_indices
                         .as_ref()
@@ -5085,6 +5168,7 @@ pub fn unplan_create_cluster(
                 enable_fast_path_plan_insights: _,
                 enable_cast_elimination: _,
                 enable_case_literal_transform: _,
+                enable_simplify_quantified_comparisons: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
@@ -6685,6 +6769,7 @@ pub fn plan_alter_schema_swap<F>(
     scx: &mut StatementContext,
     name_a: UnresolvedSchemaName,
     name_b: Ident,
+    if_exists: bool,
     gen_temp_suffix: F,
 ) -> Result<Plan, PlanError>
 where
@@ -6704,7 +6789,19 @@ where
         sql_bail!("cannot swap schemas that are in the ambient database");
     }
 
-    let schema_a = scx.resolve_schema(name_a.clone())?;
+    let schema_a = match scx.resolve_schema(name_a.clone()) {
+        Ok(schema) => schema,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name_a.to_ast_string_simple(),
+                object_type: ObjectType::Schema,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Schema,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
 
     let db_spec = schema_a.database().clone();
     if matches!(db_spec, ResolvedDatabaseSpecifier::Ambient) {
@@ -6720,14 +6817,15 @@ where
     // Generate a temporary name we can swap schema_a to.
     //
     // 'check' returns if the temp schema name would be valid.
+    const SCHEMA_SWAP_PREFIX: &str = "mz_schema_swap_";
     let check = |temp_suffix: &str| {
-        let mut temp_name = ident!("mz_schema_swap_");
+        let mut temp_name = ident!(SCHEMA_SWAP_PREFIX);
         temp_name.append_lossy(temp_suffix);
         scx.resolve_schema_in_database(&db_spec, &temp_name)
             .is_err()
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("mz_schema_swap_{temp_suffix}");
+    let name_temp = format!("{SCHEMA_SWAP_PREFIX}{temp_suffix}");
 
     Ok(Plan::AlterSchemaSwap(AlterSchemaSwapPlan {
         schema_a_spec: (*schema_a.database(), *schema_a.id()),
@@ -6835,16 +6933,30 @@ pub fn plan_alter_cluster_swap<F>(
     scx: &mut StatementContext,
     name_a: Ident,
     name_b: Ident,
+    if_exists: bool,
     gen_temp_suffix: F,
 ) -> Result<Plan, PlanError>
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
-    let cluster_a = scx.resolve_cluster(Some(&name_a))?;
+    let cluster_a = match scx.resolve_cluster(Some(&name_a)) {
+        Ok(cluster) => cluster,
+        Err(_) if if_exists => {
+            scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+                name: name_a.to_ast_string_simple(),
+                object_type: ObjectType::Cluster,
+            });
+            return Ok(Plan::AlterNoop(AlterNoopPlan {
+                object_type: ObjectType::Cluster,
+            }));
+        }
+        Err(e) => return Err(e),
+    };
     let cluster_b = scx.resolve_cluster(Some(&name_b))?;
 
+    const CLUSTER_SWAP_PREFIX: &str = "mz_cluster_swap_";
     let check = |temp_suffix: &str| {
-        let mut temp_name = ident!("mz_schema_swap_");
+        let mut temp_name = ident!(CLUSTER_SWAP_PREFIX);
         temp_name.append_lossy(temp_suffix);
         match scx.catalog.resolve_cluster(Some(temp_name.as_str())) {
             // Temp name does not exist, so we can use it.
@@ -6854,7 +6966,7 @@ where
         }
     };
     let temp_suffix = gen_temp_suffix(&check)?;
-    let name_temp = format!("mz_cluster_swap_{temp_suffix}");
+    let name_temp = format!("{CLUSTER_SWAP_PREFIX}{temp_suffix}");
 
     Ok(Plan::AlterClusterSwap(AlterClusterSwapPlan {
         id_a: cluster_a.id(),
@@ -6913,6 +7025,7 @@ pub fn plan_alter_object_swap(
 
     let AlterObjectSwapStatement {
         object_type,
+        if_exists,
         name_a,
         name_b,
     } = stmt;
@@ -6940,10 +7053,10 @@ pub fn plan_alter_object_swap(
 
     match (object_type, name_a, name_b) {
         (ObjectType::Schema, UnresolvedObjectName::Schema(name_a), name_b) => {
-            plan_alter_schema_swap(scx, name_a, name_b, gen_temp_suffix)
+            plan_alter_schema_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
         (ObjectType::Cluster, UnresolvedObjectName::Cluster(name_a), name_b) => {
-            plan_alter_cluster_swap(scx, name_a, name_b, gen_temp_suffix)
+            plan_alter_cluster_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
         (ObjectType::Schema | ObjectType::Cluster, _, _) => {
             unreachable!("parser ensures name type matches object type")

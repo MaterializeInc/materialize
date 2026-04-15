@@ -676,7 +676,21 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: cluster-spec-sheet
               run: default
-              args: [--cleanup, --target=cloud-production, cluster]
+              args: [--cleanup, --target=cloud-production, cluster_compute]
+        agents:
+          queue: linux-aarch64-small
+
+      - id: cluster-spec-sheet-source-ingestion
+        label: "Cluster spec sheet: Source Ingestion (against Production)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cluster-spec-sheet'
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster-spec-sheet
+              run: default
+              args: [--cleanup, --target=cloud-production, source_ingestion]
         agents:
           queue: linux-aarch64-small
 

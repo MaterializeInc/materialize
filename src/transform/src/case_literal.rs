@@ -16,7 +16,7 @@
 //! bottom-up so inner CaseLiterals are created first, then outer If nodes
 //! fold into them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use itertools::Itertools;
 use mz_expr::visit::Visit;
@@ -182,14 +182,14 @@ fn try_fold_into_case_literal(expr: &mut MirScalarExpr) {
         return;
     }
 
-    if let Some(&existing_idx) = cl.lookup.get(literal_row) {
+    if let Some(existing_idx) = cl.get(literal_row) {
         // Duplicate literal: overwrite with the earlier arm's result (this If).
         exprs[existing_idx] = then.take();
     } else {
         // New literal: insert before the fallback (last position).
         let new_idx = exprs.len() - 1;
         exprs.insert(new_idx, then.take());
-        cl.lookup.insert(literal_row.clone(), new_idx);
+        cl.insert(literal_row.clone(), new_idx);
     }
 
     // Replace the If with the CaseLiteral.
@@ -228,19 +228,19 @@ fn try_create_case_literal(expr: &mut MirScalarExpr, column_types: &[ReprColumnT
     // Build the exprs vector: [input, result1, result2, ..., els]
     let mut exprs = Vec::with_capacity(collected_cases.len() + 2);
     exprs.push(common);
-    let mut lookup = BTreeMap::new();
+    let mut cl = mz_expr::func::CaseLiteral {
+        lookup: Vec::with_capacity(collected_cases.len()),
+        return_type: sql_return_type,
+    };
     for (row, result_expr) in collected_cases {
         let idx = exprs.len();
-        lookup.insert(row, idx);
+        cl.insert(row, idx);
         exprs.push(result_expr);
     }
     exprs.push(els);
 
     *expr = MirScalarExpr::CallVariadic {
-        func: VariadicFunc::CaseLiteral(mz_expr::func::CaseLiteral {
-            lookup,
-            return_type: sql_return_type,
-        }),
+        func: VariadicFunc::CaseLiteral(cl),
         exprs,
     };
 }

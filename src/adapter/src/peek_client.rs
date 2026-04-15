@@ -44,11 +44,8 @@ use crate::statement_logging::{
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
-pub type StorageCollectionsHandle = Arc<
-    dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = Timestamp>
-        + Send
-        + Sync,
->;
+pub type StorageCollectionsHandle =
+    Arc<dyn mz_storage_client::storage_collections::StorageCollections + Send + Sync>;
 
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug)]
@@ -58,7 +55,7 @@ pub struct PeekClient {
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
     /// in a hot loop. Hopefully this won't occur any time soon.
-    compute_instances: BTreeMap<ComputeInstanceId, InstanceClient<Timestamp>>,
+    compute_instances: BTreeMap<ComputeInstanceId, InstanceClient>,
     /// Handle to storage collections for reading frontiers and policies.
     pub storage_collections: StorageCollectionsHandle,
     /// A generator for transient `GlobalId`s, shared with Coordinator.
@@ -96,7 +93,7 @@ impl PeekClient {
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<InstanceClient<Timestamp>, InstanceMissing> {
+    ) -> Result<InstanceClient, InstanceMissing> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
@@ -169,7 +166,7 @@ impl PeekClient {
     pub async fn acquire_read_holds_and_least_valid_write(
         &mut self,
         id_bundle: &CollectionIdBundle,
-    ) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionLookupError> {
+    ) -> Result<(ReadHolds, Antichain<Timestamp>), CollectionLookupError> {
         let mut read_holds = ReadHolds::new();
         let mut upper = Antichain::new();
 
@@ -235,7 +232,7 @@ impl PeekClient {
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
         row_set_finishing_seconds: Histogram,
-        input_read_holds: ReadHolds<Timestamp>,
+        input_read_holds: ReadHolds,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,

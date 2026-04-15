@@ -411,7 +411,7 @@ class ArrangementSizesFile:
 def resource_path(name: str) -> Path:
     # NOTE: we have to do this cast because pyright is not comfortable with the
     # Traversable protocol.
-    return cast(Path, resources.files(__package__)) / name
+    return cast(Path, resources.files(__name__)) / name
 
 
 def info(msg: str, fg: str = "green") -> None:

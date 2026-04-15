@@ -71,6 +71,17 @@ def workflow_smoke(c: Composition) -> None:
         "--var=aws-endpoint=minio:9000",
         "catalog.td",
         "nested-records.td",
+        "key-validation.td",
+    )
+
+
+def workflow_mode_append(c: Composition) -> None:
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "mode-append.td",
     )
 
 

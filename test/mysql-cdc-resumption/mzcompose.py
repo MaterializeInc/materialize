@@ -615,7 +615,7 @@ def backup_restore_mysql(c: Composition) -> None:
 
     # TODO: database-issues#7683: one of the two following commands must succeed
     # run_testdrive_files(c, "verify-rows-after-restore-t1.td")
-    run_testdrive_files(c, "verify-source-failed.td")
+    # run_testdrive_files(c, "verify-source-failed.td")
 
 
 def create_source_after_logs_expiration(

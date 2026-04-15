@@ -1,9 +1,9 @@
 ---
 source: src/timely-util/src/scope_label.rs
-revision: 8fd5a2a41a
+revision: b0fa98e931
 ---
 
 # timely-util::scope_label
 
-Provides `LabelledScope<G>` and `LabelledOperator<O>`, which wrap a timely `Scope` and `Operate` implementation to set a profiling label (via `custom_labels::with_label`) on every operator scheduling call.
-`ScopeExt::with_label` converts any scope into a `LabelledScope` that uses the scope's name as the label, enabling CPU profilers to attribute work to the enclosing dataflow scope.
+Provides the `ScopeExt` extension trait for timely `Scope`, which exposes a `with_label` method.
+The method is currently a no-op that returns `self` unchanged; the intended behavior of setting a profiling label before scheduling child operators is not yet implemented.

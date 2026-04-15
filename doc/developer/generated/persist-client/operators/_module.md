@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/operators/shard_source.rs
-revision: e79a6d96d9
+revision: b0fa98e931
 ---
 
 # persist-client::operators

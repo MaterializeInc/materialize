@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/controller/materialize/generation.rs
-revision: 5e38366694
+revision: b1e123e786
 ---
 
 # mz-orchestratord::controller::materialize::generation
@@ -8,6 +8,6 @@ revision: 5e38366694
 Manages version-specific generation logic for deploying `environmentd`.
 Contains version constants and thresholds (e.g., `V140_DEV0`, `V143`, `V144`, `V147_DEV0`, `V153`, `V154_DEV0`, `V161`, `V26_1_0`) that gate feature flags and configuration changes based on the running Materialize version.
 Builds the `StatefulSet`, `Service`, and `ConfigMap` resources for a specific generation of an `environmentd` deployment, encoding version-gated arguments and resource templates.
-MCP routes (agents and observatory) are enabled by default on both public and internal listeners.
+MCP routes (agents and developer) are enabled by default on both public and internal listeners.
 Key types include `DeploymentStatus` (simplified external deployment state), `Resources` (the generated Kubernetes resources for a generation), `ConnectionInfo`, and `LoginCredentials`.
 Uses the `ListenersConfig` types from `mz-server-core` to generate listener configuration for the deployed environmentd.

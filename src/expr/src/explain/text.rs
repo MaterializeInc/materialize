@@ -1319,10 +1319,10 @@ where
                     CaseLiteral(cl) => {
                         let input = self.child::<MirScalarExpr>(&exprs[0]);
                         write!(f, "case_lookup {}", input)?;
-                        for (literal_row, &idx) in &cl.lookup {
-                            let result = self.child::<MirScalarExpr>(&exprs[idx]);
+                        for entry in &cl.lookup {
+                            let result = self.child::<MirScalarExpr>(&exprs[entry.expr_index]);
                             write!(f, " when ")?;
-                            self.mode.humanize_datum(literal_row.unpack_first(), f)?;
+                            self.mode.humanize_datum(entry.literal.unpack_first(), f)?;
                             write!(f, " then {}", result)?;
                         }
                         let els = self.child::<MirScalarExpr>(exprs.last().unwrap());

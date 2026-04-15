@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/activator.rs
-revision: f87a1bceae
+revision: b0fa98e931
 ---
 
 # timely-util::activator

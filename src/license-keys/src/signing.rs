@@ -10,6 +10,7 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::anyhow;
+use aws_lc_rs::digest;
 use aws_sdk_kms::{
     primitives::Blob,
     types::{MessageType, SigningAlgorithmSpec},
@@ -18,7 +19,6 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, Header};
 use mz_ore::secure::Zeroizing;
 use pem::Pem;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{ExpirationBehavior, ISSUER, Payload};
@@ -27,8 +27,6 @@ const VERSION: u64 = 1;
 
 pub async fn get_pubkey_pem(client: &aws_sdk_kms::Client, key_id: &str) -> anyhow::Result<String> {
     let pubkey = get_pubkey(client, key_id).await?;
-    // pubkey is Zeroizing<Vec<u8>>; pass a slice to avoid moving the inner
-    // Vec out of the zeroizing wrapper.
     let pem = Pem::new("PUBLIC KEY", pubkey.as_slice());
     Ok(pem.to_string())
 }
@@ -64,8 +62,6 @@ pub async fn make_license_key(
     };
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_string(&payload).unwrap().as_bytes());
 
-    // The signing string (header.payload) is sensitive pre-image material;
-    // wrap it so it is zeroed from memory once the JWT is assembled.
     let signing_string = Zeroizing::new(format!("{}.{}", headers, payload));
     let signature = URL_SAFE_NO_PAD.encode(sign(client, key_id, signing_string.as_bytes()).await?);
 
@@ -83,20 +79,15 @@ async fn get_pubkey(
         .await?
         .public_key
     {
-        // Wrap raw public key bytes so they are zeroed when no longer needed.
         Ok(Zeroizing::new(pubkey.into_inner()))
     } else {
         Err(anyhow!("failed to get pubkey"))
     }
 }
 
-/// Compute a SHA-256 digest, returning the result wrapped in [`Zeroizing`]
-/// so that the hash bytes (which are derived from sensitive signing material)
-/// are zeroed from memory on drop.
 fn compute_digest(message: &[u8]) -> Zeroizing<Vec<u8>> {
-    let mut hasher = Sha256::new();
-    hasher.update(message);
-    Zeroizing::new(hasher.finalize().to_vec())
+    let hash = digest::digest(&digest::SHA256, message);
+    Zeroizing::new(hash.as_ref().to_vec())
 }
 
 async fn sign(
@@ -111,7 +102,6 @@ async fn sign(
         .key_id(key_id)
         .signing_algorithm(SigningAlgorithmSpec::RsassaPssSha256)
         .message_type(MessageType::Digest)
-        // Pass a copy to the AWS SDK; the original `digest` is zeroized on drop.
         .message(Blob::new(digest.to_vec()))
         .send()
         .await?
@@ -132,18 +122,12 @@ mod tests {
     use super::*;
     use mz_ore::secure::Zeroizing;
 
-    /// Verify that `compute_digest` returns a `Zeroizing<Vec<u8>>`.
-    /// This is a compile-time type assertion: if someone removes the
-    /// `Zeroizing` wrapper from `compute_digest`, this test will fail
-    /// to compile.
     #[mz_ore::test]
     fn compute_digest_returns_zeroized() {
         let digest: Zeroizing<Vec<u8>> = compute_digest(b"test data");
         assert_eq!(digest.len(), 32);
     }
 
-    /// Verify that `Zeroizing<Vec<u8>>` is compatible with `pem::Pem::new`,
-    /// exercising the same code path as `get_pubkey_pem`.
     #[mz_ore::test]
     fn zeroized_pubkey_bytes_work_with_pem() {
         let fake_key = Zeroizing::new(vec![0u8; 64]);

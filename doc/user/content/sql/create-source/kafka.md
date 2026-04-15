@@ -340,7 +340,7 @@ Debezium may produce duplicate records if the connector is interrupted. Material
 
 Kafka sources that use `ENVELOPE UPSERT` or `ENVELOPE DEBEZIUM` require storing
 the current value for _each key_ in the source to produce retractions when keys
-are updated. When using [standard cluster sizes](/sql/create-cluster/#size),
+are updated. When using [standard cluster sizes](/sql/create-cluster/#available-sizes),
 Materialize will automatically offload this state to disk, seamlessly handling
 key spaces that are larger than memory.
 

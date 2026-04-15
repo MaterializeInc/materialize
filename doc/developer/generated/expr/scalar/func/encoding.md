@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/encoding.rs
-revision: e757b4d11b
+revision: 5f785f23fd
 ---
 
 # mz-expr::scalar::func::encoding

@@ -4832,15 +4832,6 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(String, String, String) => VariadicFunc::from(variadic::MakeMzAclItem)
                 => MzAclItem, oid::FUNC_MAKE_MZ_ACL_ITEM_OID;
         },
-        "parse_catalog_id" => Scalar {
-            params!(Jsonb) => UnaryFunc::ParseCatalogId(func::ParseCatalogId)
-                => String, oid::FUNC_PARSE_CATALOG_ID_OID;
-        },
-        "parse_catalog_privileges" => Scalar {
-            params!(Jsonb) => UnaryFunc::ParseCatalogPrivileges(func::ParseCatalogPrivileges)
-                => SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)),
-                oid::FUNC_PARSE_CATALOG_PRIVILEGES_OID;
-        },
         "mz_acl_item_contains_privilege" => Scalar {
             params!(MzAclItem, String)
                 => BinaryFunc::from(func::MzAclItemContainsPrivilege)
@@ -5081,7 +5072,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             (
                 SELECT
                     CASE
-                        WHEN $1 IS NULL THEN NULL
+                        WHEN $1 IS NULL OR ident IS NULL THEN NULL
                         WHEN pg_catalog.array_length(ident, 1) > 3
                             THEN mz_unsafe.mz_error_if_null(
                                 NULL::pg_catalog.text[],
@@ -5106,7 +5097,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
              (
                 SELECT
                     CASE
-                        WHEN $1 IS NULL THEN NULL
+                        WHEN $1 IS NULL OR ident IS NULL THEN NULL
                         WHEN pg_catalog.array_length(ident, 1) > 2
                             THEN mz_unsafe.mz_error_if_null(
                                 NULL::pg_catalog.text[],
@@ -5235,6 +5226,23 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
             params!(String) => UnaryFunc::MzValidateRolePrivilege(
                 func::MzValidateRolePrivilege,
             ) => Bool, oid::FUNC_MZ_VALIDATE_ROLE_PRIVILEGE_OID;
+        },
+        "parse_catalog_create_sql" => Scalar {
+            params!(String) => UnaryFunc::ParseCatalogCreateSql(func::ParseCatalogCreateSql)
+                => Jsonb, oid::FUNC_PARSE_CATALOG_CREATE_SQL_OID;
+        },
+        "parse_catalog_id" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogId(func::ParseCatalogId)
+                => String, oid::FUNC_PARSE_CATALOG_ID_OID;
+        },
+        "parse_catalog_privileges" => Scalar {
+            params!(Jsonb) => UnaryFunc::ParseCatalogPrivileges(func::ParseCatalogPrivileges)
+                => SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)),
+                oid::FUNC_PARSE_CATALOG_PRIVILEGES_OID;
+        },
+        "redact_sql" => Scalar {
+            params!(String) => UnaryFunc::RedactSql(func::RedactSql)
+                => String, oid::FUNC_REDACT_SQL_OID;
         }
     }
 });

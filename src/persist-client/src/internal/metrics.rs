@@ -2945,7 +2945,6 @@ impl Consensus for MetricsConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         let bytes = new.data.len();
@@ -2953,10 +2952,7 @@ impl Consensus for MetricsConsensus {
             .metrics
             .consensus
             .compare_and_set
-            .run_op(
-                || self.consensus.compare_and_set(key, expected, new),
-                Self::on_err,
-            )
+            .run_op(|| self.consensus.compare_and_set(key, new), Self::on_err)
             .await;
         match res.as_ref() {
             Ok(CaSResult::Committed) => self

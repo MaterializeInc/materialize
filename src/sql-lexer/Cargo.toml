@@ -11,20 +11,20 @@ workspace = true
 
 [dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["stack"] }
-serde = { version = "1.0.219", features = ["derive"] }
-phf = { version = "0.13.1", features = ["uncased"] }
-uncased = "0.9.7"
+serde.workspace = true
+phf.workspace = true
+uncased.workspace = true
 
 [dev-dependencies]
-datadriven = "0.9.0"
+datadriven.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 
 [build-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 mz-ore-build = { path = "../ore-build", default-features = false }
-phf = { version = "0.13.1", features = ["uncased"] }
-phf_codegen = "0.13.1"
-uncased = "0.9.7"
+phf.workspace = true
+phf_codegen.workspace = true
+uncased.workspace = true
 
 [features]
 default = []

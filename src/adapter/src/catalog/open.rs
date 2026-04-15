@@ -219,11 +219,13 @@ impl Catalog {
             add_new_remove_old_builtin_clusters_migration(
                 &mut txn,
                 &builtin_bootstrap_cluster_config_map,
+                config.boot_ts,
             )?;
             add_new_remove_old_builtin_introspection_source_migration(&mut txn)?;
             add_new_remove_old_builtin_cluster_replicas_migration(
                 &mut txn,
                 &builtin_bootstrap_cluster_config_map,
+                config.boot_ts,
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
@@ -636,9 +638,7 @@ impl Catalog {
     /// collections created between versions.
     async fn initialize_storage_state(
         &mut self,
-        storage_collections: &Arc<
-            dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync,
-        >,
+        storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
     ) -> Result<(), mz_catalog::durable::CatalogError> {
         let collections = self
             .entries()
@@ -699,8 +699,7 @@ impl Catalog {
         config: mz_controller::ControllerConfig,
         envd_epoch: core::num::NonZeroI64,
         read_only: bool,
-    ) -> Result<mz_controller::Controller<mz_repr::Timestamp>, mz_catalog::durable::CatalogError>
-    {
+    ) -> Result<mz_controller::Controller, mz_catalog::durable::CatalogError> {
         let controller_start = Instant::now();
         info!("startup: controller init: beginning");
 
@@ -978,6 +977,7 @@ fn add_new_remove_old_builtin_items_migration(
 fn add_new_remove_old_builtin_clusters_migration(
     txn: &mut mz_catalog::durable::Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
+    boot_ts: Timestamp,
 ) -> Result<(), mz_catalog::durable::CatalogError> {
     let mut durable_clusters: BTreeMap<_, _> = txn
         .get_clusters()
@@ -990,7 +990,7 @@ fn add_new_remove_old_builtin_clusters_migration(
         if durable_clusters.remove(builtin_cluster.name).is_none() {
             let cluster_config = builtin_cluster_config_map.get_config(builtin_cluster.name)?;
 
-            txn.insert_system_cluster(
+            let cluster_id = txn.insert_system_cluster(
                 builtin_cluster.name,
                 vec![],
                 builtin_cluster.privileges.to_vec(),
@@ -1008,6 +1008,19 @@ fn add_new_remove_old_builtin_clusters_migration(
                 },
                 &HashSet::new(),
             )?;
+
+            let audit_id = txn.allocate_audit_log_id()?;
+            txn.insert_audit_log_event(VersionedEvent::new(
+                audit_id,
+                EventType::Create,
+                ObjectType::Cluster,
+                EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                    id: cluster_id.to_string(),
+                    name: builtin_cluster.name.to_string(),
+                }),
+                None,
+                boot_ts.into(),
+            ));
         }
     }
 
@@ -1017,6 +1030,21 @@ fn add_new_remove_old_builtin_clusters_migration(
         .map(|cluster| cluster.id)
         .collect();
     txn.remove_clusters(&old_clusters)?;
+
+    for (_name, cluster) in &durable_clusters {
+        let audit_id = txn.allocate_audit_log_id()?;
+        txn.insert_audit_log_event(VersionedEvent::new(
+            audit_id,
+            EventType::Drop,
+            ObjectType::Cluster,
+            EventDetails::IdNameV1(mz_audit_log::IdNameV1 {
+                id: cluster.id.to_string(),
+                name: cluster.name.clone(),
+            }),
+            None,
+            boot_ts.into(),
+        ));
+    }
 
     Ok(())
 }
@@ -1089,10 +1117,16 @@ fn add_new_remove_old_builtin_roles_migration(
 fn add_new_remove_old_builtin_cluster_replicas_migration(
     txn: &mut Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
+    boot_ts: Timestamp,
 ) -> Result<(), AdapterError> {
     let cluster_lookup: BTreeMap<_, _> = txn
         .get_clusters()
         .map(|cluster| (cluster.name.clone(), cluster.clone()))
+        .collect();
+
+    let cluster_id_to_name: BTreeMap<ClusterId, String> = cluster_lookup
+        .values()
+        .map(|cluster| (cluster.id, cluster.name.clone()))
         .collect();
 
     let mut durable_replicas: BTreeMap<ClusterId, BTreeMap<String, ClusterReplica>> = txn
@@ -1126,25 +1160,70 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
         {
             let replica_size = match cluster.config.variant {
                 ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
-                ClusterVariant::Unmanaged => builtin_cluster_bootstrap_config.size,
+                ClusterVariant::Unmanaged => builtin_cluster_bootstrap_config.size.clone(),
             };
 
-            let config = builtin_cluster_replica_config(replica_size);
-            txn.insert_cluster_replica(
+            let config = builtin_cluster_replica_config(replica_size.clone());
+            let replica_id = txn.insert_cluster_replica(
                 cluster.id,
                 builtin_replica.name,
                 config,
                 MZ_SYSTEM_ROLE_ID,
             )?;
+
+            let audit_id = txn.allocate_audit_log_id()?;
+            txn.insert_audit_log_event(VersionedEvent::new(
+                audit_id,
+                EventType::Create,
+                ObjectType::ClusterReplica,
+                EventDetails::CreateClusterReplicaV4(mz_audit_log::CreateClusterReplicaV4 {
+                    cluster_id: cluster.id.to_string(),
+                    cluster_name: cluster.name.clone(),
+                    replica_id: Some(replica_id.to_string()),
+                    replica_name: builtin_replica.name.to_string(),
+                    logical_size: replica_size,
+                    billed_as: None,
+                    internal: false,
+                    reason: CreateOrDropClusterReplicaReasonV1::System,
+                    scheduling_policies: None,
+                }),
+                None,
+                boot_ts.into(),
+            ));
         }
     }
 
     // Remove old replicas.
-    let old_replicas = durable_replicas
+    let old_replicas: Vec<_> = durable_replicas
         .values()
-        .flat_map(|replicas| replicas.values().map(|replica| replica.replica_id))
+        .flat_map(|replicas| replicas.values())
         .collect();
-    txn.remove_cluster_replicas(&old_replicas)?;
+    let old_replica_ids = old_replicas.iter().map(|r| r.replica_id).collect();
+    txn.remove_cluster_replicas(&old_replica_ids)?;
+
+    for replica in &old_replicas {
+        let cluster_name = cluster_id_to_name
+            .get(&replica.cluster_id)
+            .cloned()
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        let audit_id = txn.allocate_audit_log_id()?;
+        txn.insert_audit_log_event(VersionedEvent::new(
+            audit_id,
+            EventType::Drop,
+            ObjectType::ClusterReplica,
+            EventDetails::DropClusterReplicaV3(mz_audit_log::DropClusterReplicaV3 {
+                cluster_id: replica.cluster_id.to_string(),
+                cluster_name,
+                replica_id: Some(replica.replica_id.to_string()),
+                replica_name: replica.name.clone(),
+                reason: CreateOrDropClusterReplicaReasonV1::System,
+                scheduling_policies: None,
+            }),
+            None,
+            boot_ts.into(),
+        ));
+    }
 
     Ok(())
 }

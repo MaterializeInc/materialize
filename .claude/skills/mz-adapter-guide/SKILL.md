@@ -1,12 +1,12 @@
 ---
-name: adapter-guide
+name: mz-adapter-guide
 description: >
-  This skill should be used when the user works on the adapter layer,
-  coordinator, pgwire, frontend peek path, peek client, timestamp oracle,
-  batching oracle, or related crates. Trigger when the user mentions or edits
-  files in src/adapter/, src/pgwire/, src/timestamp-oracle/, or mentions
-  frontend, coordinator, read holds, timestamp selection, timestamp oracle,
-  batching oracle, or query sequencing.
+  Correctness invariants and architectural guidance for the adapter layer,
+  coordinator, pgwire, peek paths, and timestamp oracle. Trigger when the user
+  works on or asks questions about these subsystems — including "how does the
+  coordinator work", "what are read holds", "explain the peek path", "how does
+  timestamp selection work", "why does this query block". Also trigger when
+  editing files in src/adapter/, src/pgwire/, or src/timestamp-oracle/.
 ---
 
 # Adapter Guide Skill

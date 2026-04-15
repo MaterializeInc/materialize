@@ -10,32 +10,28 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-native-tls = "0.2.14"
-openssl = { version = "0.10.76", features = ["vendored"] }
-reqwest = { version = "0.12.28", features = [
-    "blocking",
-    "json",
-    "native-tls-vendored",
-] }
+anyhow.workspace = true
+native-tls.workspace = true
+openssl.workspace = true
+reqwest.workspace = true
 mz-tls-util = { path = "../tls-util" }
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.8.0" }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.149"
-url = { version = "2.5.8", features = ["serde"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-hyper = { version = "1.4.1", features = ["server"] }
-hyper-util = "0.1.20"
+hyper.workspace = true
+hyper-util.workspace = true
 mz-ore = { path = "../ore", features = ["async", "test"] }
-serde_json = "1.0.149"
-tokio = { version = "1.49.0", features = ["macros"] }
-tracing = "0.1.44"
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]

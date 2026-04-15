@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/command_channel.rs
-revision: 8fd5a2a41a
+revision: b0fa98e931
 ---
 
 # mz-compute::command_channel

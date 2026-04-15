@@ -115,7 +115,8 @@ pub use scope::Scope;
 pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
-    PlannedAlterRoleOption, PlannedRoleVariable, SqlServerConfigOptionExtracted,
+    PlannedAlterRoleOption, PlannedRoleAttributes, PlannedRoleVariable,
+    SqlServerConfigOptionExtracted,
 };
 pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,
@@ -906,6 +907,18 @@ pub enum SubscribeOutput {
         /// Order by with just keys
         order_by_keys: Vec<ColumnOrder>,
     },
+}
+
+impl SubscribeOutput {
+    pub fn row_order(&self) -> &[ColumnOrder] {
+        match self {
+            SubscribeOutput::Diffs => &[],
+            // This ordering prepends the diff, so its `order_by` field cannot be applied to rows.
+            SubscribeOutput::WithinTimestampOrderBy { .. } => &[],
+            SubscribeOutput::EnvelopeUpsert { order_by_keys } => order_by_keys,
+            SubscribeOutput::EnvelopeDebezium { order_by_keys } => order_by_keys,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -31,7 +31,7 @@ use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::{Scope, StreamVec};
-use timely::scheduling::Scheduler;
+use timely::scheduling::activate::{Activations, Activator};
 use tracing::error;
 use uuid::Uuid;
 
@@ -300,9 +300,9 @@ pub(super) struct Return {
 /// * `event_queue`: The source to read compute log events from.
 /// * `compute_event_streams`: Additional compute event streams to absorb.
 /// * `shared_state`: Shared state between logging dataflow fragments.
-pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
-    scheduler: S,
+pub(super) fn construct<'scope>(
+    scope: Scope<'scope, Timestamp>,
+    activations: Rc<RefCell<Activations>>,
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -355,7 +355,7 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
         let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
         let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
 
-        let mut demux_state = DemuxState::new(scheduler, scope.index());
+        let mut demux_state = DemuxState::new(activations, scope.index());
         demux.build(move |_capability| {
             move |_frontiers| {
                 let mut export = export_out.activate();
@@ -467,9 +467,9 @@ where
 }
 
 /// State maintained by the demux operator.
-struct DemuxState<A> {
-    /// The timely scheduler.
-    scheduler: A,
+struct DemuxState {
+    /// The timely activations handle.
+    activations: Rc<RefCell<Activations>>,
     /// The index of this worker.
     worker_id: usize,
     /// A reusable scratch string for formatting IDs.
@@ -514,10 +514,10 @@ struct DemuxState<A> {
     hydration_time_packer: PermutedRowPacker,
 }
 
-impl<A: Scheduler> DemuxState<A> {
-    fn new(scheduler: A, worker_id: usize) -> Self {
+impl DemuxState {
+    fn new(activations: Rc<RefCell<Activations>>, worker_id: usize) -> Self {
         Self {
-            scheduler,
+            activations,
             worker_id,
             scratch_string_a: String::new(),
             scratch_string_b: String::new(),
@@ -774,9 +774,9 @@ struct DemuxOutput<'a, 'b> {
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
+struct DemuxHandler<'a, 'b, 'c> {
     /// State kept by the demux operator.
-    state: &'a mut DemuxState<A>,
+    state: &'a mut DemuxState,
     /// State shared across log receivers.
     shared_state: &'a mut SharedLoggingState,
     /// Demux output sessions.
@@ -787,7 +787,7 @@ struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
     time: Duration,
 }
 
-impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
+impl DemuxHandler<'_, '_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -1186,10 +1186,10 @@ impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
             address,
         }: Ref<'_, ArrangementHeapSizeOperator>,
     ) {
-        let activator = self
-            .state
-            .scheduler
-            .activator_for(address.into_iter().collect());
+        let activator = Activator::new(
+            address.into_iter().collect(),
+            Rc::clone(&self.state.activations),
+        );
         let existing = self
             .state
             .arrangement_size
@@ -1427,9 +1427,9 @@ pub(crate) trait LogDataflowErrors {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
 }
 
-impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
+impl<'scope, T, D> LogDataflowErrors for VecCollection<'scope, T, D, Diff>
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     D: Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {
@@ -1448,9 +1448,9 @@ where
     }
 }
 
-impl<G, B> LogDataflowErrors for StreamVec<G, B>
+impl<'scope, T, B> LogDataflowErrors for StreamVec<'scope, T, B>
 where
-    G: Scope,
+    T: timely::progress::Timestamp,
     for<'a> B: BatchReader<DiffGat<'a> = &'a Diff> + Clone + 'static,
 {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self {

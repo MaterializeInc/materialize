@@ -34,7 +34,7 @@ use mz_cluster_client::metrics::ControllerMetrics;
 use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_compute_client::controller::error::{CollectionLookupError, CollectionMissing};
 use mz_compute_client::controller::{
-    ComputeController, ComputeControllerResponse, ComputeControllerTimestamp, PeekNotification,
+    ComputeController, ComputeControllerResponse, PeekNotification,
 };
 use mz_compute_client::protocol::response::SubscribeBatch;
 use mz_controller_types::WatchSetId;
@@ -44,13 +44,12 @@ use mz_ore::cast::CastFrom;
 use mz_ore::id_gen::Gen;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::now::{EpochMillis, NowFn};
+use mz_ore::now::NowFn;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
-use mz_persist_types::Codec64;
-use mz_repr::{Datum, GlobalId, Row, TimestampManipulation};
+use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
@@ -60,7 +59,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::StorageError;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -111,7 +110,7 @@ pub struct ControllerConfig {
 
 /// Responses that [`Controller`] can produce.
 #[derive(Debug)]
-pub enum ControllerResponse<T = mz_repr::Timestamp> {
+pub enum ControllerResponse {
     /// Notification of a worker's response to a specified (by connection id) peek.
     ///
     /// Additionally, an `OpenTelemetryContext` to forward trace information
@@ -119,7 +118,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
     /// done in compute!
     PeekNotification(Uuid, PeekNotification, OpenTelemetryContext),
     /// The worker's next response to a specified subscribe.
-    SubscribeResponse(GlobalId, SubscribeBatch<T>),
+    SubscribeResponse(GlobalId, SubscribeBatch),
     /// The worker's next response to a specified copy to.
     CopyToResponse(GlobalId, Result<u64, anyhow::Error>),
     /// Notification that a watch set has finished. See
@@ -131,7 +130,7 @@ pub enum ControllerResponse<T = mz_repr::Timestamp> {
 /// Whether one of the underlying controllers is ready for their `process`
 /// method to be called.
 #[derive(Debug, Default)]
-pub enum Readiness<T> {
+pub enum Readiness {
     /// No underlying controllers are ready.
     #[default]
     NotReady,
@@ -142,14 +141,14 @@ pub enum Readiness<T> {
     /// A batch of metric data is ready.
     Metrics((ReplicaId, Vec<ServiceProcessMetrics>)),
     /// An internally-generated message is ready to be returned.
-    Internal(ControllerResponse<T>),
+    Internal(ControllerResponse),
 }
 
 /// A client that maintains soft state and validates commands, in addition to forwarding them.
-pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
-    pub storage: Box<dyn StorageController<Timestamp = T>>,
-    pub storage_collections: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync>,
-    pub compute: ComputeController<T>,
+pub struct Controller {
+    pub storage: Box<dyn StorageController>,
+    pub storage_collections: Arc<dyn StorageCollections + Send + Sync>,
+    pub compute: ComputeController,
     /// The clusterd image to use when starting new cluster processes.
     clusterd_image: String,
     /// The init container image to use for clusterd.
@@ -165,7 +164,7 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     /// The cluster orchestrator.
     orchestrator: Arc<dyn NamespacedOrchestrator>,
     /// Tracks the readiness of the underlying controllers.
-    readiness: Readiness<T>,
+    readiness: Readiness,
     /// Tasks for collecting replica metrics.
     metrics_tasks: BTreeMap<ReplicaId, AbortOnDropHandle<()>>,
     /// Sender for the channel over which replica metrics are sent.
@@ -190,7 +189,7 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     // timestamp), the corresponding entry will be removed from the set.
     unfulfilled_watch_sets_by_object: BTreeMap<GlobalId, BTreeSet<WatchSetId>>,
     /// A map of installed watch sets indexed by id.
-    unfulfilled_watch_sets: BTreeMap<WatchSetId, (BTreeSet<GlobalId>, T)>,
+    unfulfilled_watch_sets: BTreeMap<WatchSetId, (BTreeSet<GlobalId>, Timestamp)>,
     /// A sequence of numbers used to mint unique WatchSetIds.
     watch_set_id_gen: Gen<WatchSetId>,
 
@@ -208,7 +207,7 @@ pub struct Controller<T: ComputeControllerTimestamp = mz_repr::Timestamp> {
     replica_http_locator: Arc<ReplicaHttpLocator>,
 }
 
-impl<T: ComputeControllerTimestamp> Controller<T> {
+impl Controller {
     /// Update the controller configuration.
     pub fn update_configuration(&mut self, updates: ConfigUpdates) {
         updates.apply(&self.dyncfg);
@@ -296,10 +295,7 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
     }
 }
 
-impl<T> Controller<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl Controller {
     pub fn update_orchestrator_scheduling_config(
         &self,
         config: mz_orchestrator::scheduling_config::ServiceSchedulingConfig,
@@ -324,7 +320,7 @@ where
     /// Returns `Some` if there is an immediately available
     /// internally-generated response that we need to return to the
     /// client (as opposed to waiting for a response from compute or storage).
-    fn take_internal_response(&mut self) -> Option<ControllerResponse<T>> {
+    fn take_internal_response(&mut self) -> Option<ControllerResponse> {
         let ws = std::mem::take(&mut self.immediate_watch_sets);
         (!ws.is_empty()).then_some(ControllerResponse::WatchSetFinished(ws))
     }
@@ -366,7 +362,7 @@ where
     }
 
     /// Returns the [Readiness] status of this controller.
-    pub fn get_readiness(&self) -> &Readiness<T> {
+    pub fn get_readiness(&self) -> &Readiness {
         &self.readiness
     }
 
@@ -381,7 +377,7 @@ where
     pub fn install_compute_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
-        t: T,
+        t: Timestamp,
     ) -> Result<WatchSetId, CollectionLookupError> {
         let ws_id = self.watch_set_id_gen.allocate_id();
 
@@ -424,7 +420,7 @@ where
     pub fn install_storage_watch_set(
         &mut self,
         mut objects: BTreeSet<GlobalId>,
-        t: T,
+        t: Timestamp,
     ) -> Result<WatchSetId, CollectionMissing> {
         let ws_id = self.watch_set_id_gen.allocate_id();
 
@@ -478,7 +474,7 @@ where
     fn process_storage_response(
         &mut self,
         storage_metadata: &StorageMetadata,
-    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
         let maybe_response = self.storage.process(storage_metadata)?;
         Ok(maybe_response.and_then(
             |mz_storage_client::controller::Response::FrontierUpdates(r)| {
@@ -489,7 +485,7 @@ where
 
     /// Process a pending response from the compute controller. If necessary,
     /// return a higher-level response to our client.
-    fn process_compute_response(&mut self) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+    fn process_compute_response(&mut self) -> Result<Option<ControllerResponse>, anyhow::Error> {
         let response = self.compute.process();
 
         let response = response.and_then(|r| match r {
@@ -520,7 +516,7 @@ where
     pub fn process(
         &mut self,
         storage_metadata: &StorageMetadata,
-    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
         match mem::take(&mut self.readiness) {
             Readiness::NotReady => Ok(None),
             Readiness::Storage => self.process_storage_response(storage_metadata),
@@ -535,8 +531,8 @@ where
     /// from a frontier update is `WatchSetCompleted`.
     fn handle_frontier_updates(
         &mut self,
-        updates: &[(GlobalId, Antichain<T>)],
-    ) -> Option<ControllerResponse<T>> {
+        updates: &[(GlobalId, Antichain<Timestamp>)],
+    ) -> Option<ControllerResponse> {
         let mut finished = vec![];
         for (obj_id, antichain) in updates {
             let ws_ids = self.unfulfilled_watch_sets_by_object.entry(*obj_id);
@@ -575,7 +571,7 @@ where
         &mut self,
         id: ReplicaId,
         metrics: Vec<ServiceProcessMetrics>,
-    ) -> Result<Option<ControllerResponse<T>>, anyhow::Error> {
+    ) -> Result<Option<ControllerResponse>, anyhow::Error> {
         self.record_replica_metrics(id, &metrics);
         Ok(None)
     }
@@ -626,23 +622,12 @@ where
         &self,
         ids: BTreeSet<GlobalId>,
         timeout: Duration,
-    ) -> Result<BoxFuture<'static, Result<T, StorageError<T>>>, StorageError<T>> {
+    ) -> Result<BoxFuture<'static, Result<Timestamp, StorageError>>, StorageError> {
         self.storage.real_time_recent_timestamp(ids, timeout).await
     }
 }
 
-impl<T> Controller<T>
-where
-    // Bounds needed by `StorageController` and/or `Controller`:
-    T: Timestamp
-        + Codec64
-        + From<EpochMillis>
-        + TimestampManipulation
-        + std::fmt::Display
-        + Into<mz_repr::Timestamp>,
-    // Bounds needed by `ComputeController`:
-    T: ComputeControllerTimestamp,
-{
+impl Controller {
     /// Creates a new controller.
     ///
     /// For correctness, this function expects to have access to the mutations
@@ -655,7 +640,7 @@ where
         config: ControllerConfig,
         envd_epoch: NonZeroI64,
         read_only: bool,
-        storage_txn: &dyn StorageTxn<T>,
+        storage_txn: &dyn StorageTxn,
     ) -> Self {
         if read_only {
             tracing::info!("starting controllers in read-only mode!");
@@ -680,8 +665,7 @@ where
         )
         .await;
 
-        let collections_ctl: Arc<dyn StorageCollections<Timestamp = T> + Send + Sync> =
-            Arc::new(collections_ctl);
+        let collections_ctl: Arc<dyn StorageCollections + Send + Sync> = Arc::new(collections_ctl);
 
         let storage_controller = mz_storage_controller::Controller::new(
             config.build_info,

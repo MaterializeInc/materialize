@@ -16,12 +16,17 @@ import multiprocessing
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from argparse import Namespace
 from typing import Any, Literal
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
+from materialize.mzbuild import (
+    RustIncrementalBuildFailure,
+    run_and_detect_rust_incremental_build_failure,
+)
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.azurite import Azurite
@@ -407,33 +412,49 @@ def run_cargo_nextest(
 
         clusterd_thread = PropagatingThread(target=worker)
         clusterd_thread.start()
-        spawn.runv(
+        try:
+            run_and_detect_rust_incremental_build_failure(
+                [
+                    "cargo",
+                    "nextest",
+                    "run",
+                    "--no-run",
+                    *nextest_common_args,
+                    *nextest_test_args,
+                ],
+                cwd=MZ_ROOT,
+                env=env,
+            )
+        except RustIncrementalBuildFailure:
+            _handle_incremental_build_failure()
+        clusterd_thread.join()
+
+    try:
+        run_and_detect_rust_incremental_build_failure(
             [
                 "cargo",
                 "nextest",
                 "run",
-                "--no-run",
+                # We want all tests to run
+                "--no-fail-fast",
                 *nextest_common_args,
+                # Be careful about raising this since it will cause
+                # contention in cargo test when running against CRDB
+                # for tagged builds. Also increases test flakiness in
+                # general.
+                f"--test-threads={multiprocessing.cpu_count()}",
                 *nextest_test_args,
             ],
+            cwd=MZ_ROOT,
             env=env,
         )
-        clusterd_thread.join()
+    except RustIncrementalBuildFailure:
+        _handle_incremental_build_failure()
 
-    spawn.runv(
-        [
-            "cargo",
-            "nextest",
-            "run",
-            # We want all tests to run
-            "--no-fail-fast",
-            *nextest_common_args,
-            # Be careful about raising this since it will cause
-            # contention in cargo test when running against CRDB
-            # for tagged builds. Also increases test flakiness in
-            # general.
-            f"--test-threads={multiprocessing.cpu_count()}",
-            *nextest_test_args,
-        ],
-        env=env,
-    )
+
+def _handle_incremental_build_failure() -> None:
+    print("--- Detected incremental build failure, clearing cargo target directories")
+    for dir in ["target", "target-xcompile"]:
+        if os.path.exists(dir):
+            shutil.rmtree(dir, ignore_errors=True)
+    sys.exit(199)

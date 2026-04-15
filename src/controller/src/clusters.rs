@@ -22,7 +22,6 @@ use bytesize::ByteSize;
 use chrono::{DateTime, Utc};
 use futures::stream::{BoxStream, StreamExt};
 use mz_cluster_client::client::{ClusterReplicaLocation, TimelyConfig};
-use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
@@ -267,6 +266,7 @@ impl ReplicaLocation {
 
 /// The "role" of a cluster, which is currently used to determine the
 /// severity of alerts for problems with its replicas.
+#[derive(Debug, Clone)]
 pub enum ClusterRole {
     /// The existence and proper functioning of the cluster's replicas is
     /// business-critical for Materialize.
@@ -356,10 +356,7 @@ pub struct ClusterEvent {
     pub time: DateTime<Utc>,
 }
 
-impl<T> Controller<T>
-where
-    T: ComputeControllerTimestamp,
-{
+impl Controller {
     /// Creates a cluster with the specified identifier and configuration.
     ///
     /// A cluster is a combination of a storage instance and a compute instance.
@@ -378,16 +375,16 @@ where
     }
 
     /// Updates the workload class for a cluster.
-    pub fn update_cluster_workload_class(
-        &mut self,
-        id: ClusterId,
-        workload_class: Option<String>,
-    ) -> Result<(), anyhow::Error> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance does not exist in the StorageController or the ComputeController.
+    pub fn update_cluster_workload_class(&mut self, id: ClusterId, workload_class: Option<String>) {
         self.storage
             .update_instance_workload_class(id, workload_class.clone());
         self.compute
-            .update_instance_workload_class(id, workload_class)?;
-        Ok(())
+            .update_instance_workload_class(id, workload_class)
+            .expect("instance exists");
     }
 
     /// Drops the specified cluster.

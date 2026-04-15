@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/order.rs
-revision: 4267863081
+revision: 834eb88f27
 ---
 
 # timely-util::order

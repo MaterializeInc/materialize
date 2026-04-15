@@ -93,4 +93,5 @@ disallowed-macros = [
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "use `std::collections::BTreeMap` or `mz_ore::collections::HashMap` instead" },
     { path = "std::collections::HashSet", reason = "use `std::collections::BTreeSet` or `mz_ore::collections::HashSet` instead" },
+    { path = "differential_dataflow::containers::TimelyStack", reason = "use `mz_timely_util::columnation::ColumnationStack` instead" },
 ]

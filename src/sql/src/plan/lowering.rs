@@ -141,6 +141,7 @@ pub struct Config {
     pub enable_variadic_left_join_lowering: bool,
     pub enable_guard_subquery_tablefunc: bool,
     pub enable_cast_elimination: bool,
+    pub enable_simplify_quantified_comparisons: bool,
 }
 
 impl Default for Config {
@@ -150,6 +151,7 @@ impl Default for Config {
             enable_variadic_left_join_lowering: false,
             enable_guard_subquery_tablefunc: false,
             enable_cast_elimination: false,
+            enable_simplify_quantified_comparisons: false,
         }
     }
 }
@@ -161,6 +163,7 @@ impl From<&SystemVars> for Config {
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
             enable_cast_elimination: vars.enable_cast_elimination(),
+            enable_simplify_quantified_comparisons: vars.enable_simplify_quantified_comparisons(),
         }
     }
 }
@@ -203,7 +206,10 @@ impl HirRelationExpr {
             mut other => {
                 let mut id_gen = mz_ore::id_gen::IdGen::default();
                 transform_hir::split_subquery_predicates(&mut other)?;
-                transform_hir::try_simplify_quantified_comparisons(&mut other)?;
+                transform_hir::try_simplify_quantified_comparisons(
+                    &mut other,
+                    context.config.enable_simplify_quantified_comparisons,
+                )?;
                 transform_hir::fuse_window_functions(&mut other, &context)?;
                 MirRelationExpr::constant(vec![vec![]], ReprRelationType::new(vec![])).let_in(
                     &mut id_gen,

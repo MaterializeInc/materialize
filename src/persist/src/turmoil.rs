@@ -201,12 +201,10 @@ impl Consensus for TurmoilConsensus {
     async fn compare_and_set(
         &self,
         key: &str,
-        expected: Option<SeqNo>,
         new: VersionedData,
     ) -> Result<CaSResult, ExternalError> {
         self.call(ConsensusCommand::CompareAndSet {
             key: key.into(),
-            expected,
             new,
         })
         .await
@@ -243,7 +241,6 @@ enum ConsensusCommand {
     },
     CompareAndSet {
         key: String,
-        expected: Option<SeqNo>,
         new: VersionedData,
     },
     Scan {
@@ -300,8 +297,8 @@ async fn serve_consensus_connection(
                 let data = data.map_err(RpcError::from);
                 rpc_write(&mut conn, data).await?;
             }
-            ConsensusCommand::CompareAndSet { key, expected, new } => {
-                let result = state.0.compare_and_set(&key, expected, new).await;
+            ConsensusCommand::CompareAndSet { key, new } => {
+                let result = state.0.compare_and_set(&key, new).await;
                 let result = result.map_err(RpcError::from);
                 rpc_write(&mut conn, result).await?;
             }

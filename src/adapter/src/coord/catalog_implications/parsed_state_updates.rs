@@ -13,12 +13,15 @@
 //!
 //! See [parse_state_update] for details.
 
+use mz_catalog::builtin::BUILTIN_LOG_LOOKUP;
 use mz_catalog::memory::objects::{
     CatalogItem, DataSourceDesc, StateDiff, StateUpdate, StateUpdateKind,
 };
 use mz_catalog::{durable, memory};
+use mz_compute_client::logging::LogVariant;
+use mz_controller_types::ClusterId;
 use mz_ore::instrument;
-use mz_repr::{CatalogItemId, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::sources::GenericSourceConnection;
 
@@ -56,6 +59,11 @@ pub enum ParsedStateUpdateKind {
         durable_cluster_replica: durable::objects::ClusterReplica,
         parsed_cluster_replica: memory::objects::ClusterReplica,
     },
+    IntrospectionSourceIndex {
+        cluster_id: ClusterId,
+        log: LogVariant,
+        index_id: GlobalId,
+    },
 }
 
 /// Potentially generate a [ParsedStateUpdate] that corresponds to the given
@@ -86,6 +94,9 @@ pub fn parse_state_update(
         StateUpdateKind::Cluster(cluster) => Some(parse_cluster_update(catalog, cluster)),
         StateUpdateKind::ClusterReplica(replica) => {
             Some(parse_cluster_replica_update(catalog, replica))
+        }
+        StateUpdateKind::IntrospectionSourceIndex(isi) => {
+            Some(parse_introspection_source_index_update(isi))
         }
         _ => {
             // The controllers are currently not interested in other kinds of
@@ -168,6 +179,20 @@ fn parse_cluster_update(
     ParsedStateUpdateKind::Cluster {
         durable_cluster,
         parsed_cluster: parsed_cluster.clone(),
+    }
+}
+
+fn parse_introspection_source_index_update(
+    isi: durable::objects::IntrospectionSourceIndex,
+) -> ParsedStateUpdateKind {
+    let builtin_log = BUILTIN_LOG_LOOKUP
+        .get(isi.name.as_str())
+        .expect("introspection source index must reference a known log");
+
+    ParsedStateUpdateKind::IntrospectionSourceIndex {
+        cluster_id: isi.cluster_id,
+        log: builtin_log.variant.clone(),
+        index_id: isi.index_id,
     }
 }
 

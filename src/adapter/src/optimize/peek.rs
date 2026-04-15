@@ -145,7 +145,7 @@ pub struct LocalMirPlan<T = Unresolved> {
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
 pub struct Resolved<'s> {
-    timestamp_ctx: TimestampContext<Timestamp>,
+    timestamp_ctx: TimestampContext,
     stats: Box<dyn StatisticsOracle>,
     session: &'s dyn SessionMetadata,
 }
@@ -206,7 +206,7 @@ impl LocalMirPlan<Unresolved> {
     /// required for the next stage.
     pub fn resolve(
         self,
-        timestamp_ctx: TimestampContext<Timestamp>,
+        timestamp_ctx: TimestampContext,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved<'_>> {
@@ -269,18 +269,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.config.features,
         )?;
         df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
-
-        // Resolve all unmaterializable function calls except mz_now(), because
-        // we don't yet have a timestamp.
-        let style = ExprPrepOneShot {
-            logical_time: EvalTime::Deferred,
-            session,
-            catalog_state: self.catalog.state(),
-        };
-        df_desc.visit_children(
-            |r| style.prep_relation_expr(r),
-            |s| style.prep_scalar_expr(s),
-        )?;
 
         // TODO: Instead of conditioning here we should really
         // reconsider how to render multi-plan peek dataflows. The main

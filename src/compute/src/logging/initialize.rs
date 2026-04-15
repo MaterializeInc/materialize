@@ -10,6 +10,11 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use crate::arrangement::manager::TraceBundle;
+use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
+use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::typedefs::{ErrBatcher, ErrBuilder};
 use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
@@ -24,27 +29,18 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::scope_label::ScopeExt;
 use timely::ContainerBuilder;
-use timely::communication::Allocate;
 use timely::container::{ContainerBuilder as _, PushInto};
-use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
-use timely::worker::AsWorker;
-
-use crate::arrangement::manager::TraceBundle;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
-use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
-use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
 ///
 /// Returns a logger for compute events, and for each `LogVariant` a trace bundle usable for
 /// retrieving logged records as well as the index of the exporting dataflow.
-pub fn initialize<A: Allocate + 'static>(
-    worker: &mut timely::worker::Worker<A>,
+pub fn initialize(
+    worker: &mut timely::worker::Worker,
     config: &LoggingConfig,
     metrics_registry: MetricsRegistry,
     worker_config: Rc<ConfigSet>,
@@ -98,8 +94,8 @@ pub fn initialize<A: Allocate + 'static>(
 
 pub(super) type ReachabilityEvent = (usize, Vec<(usize, usize, bool, Timestamp, Diff)>);
 
-struct LoggingContext<'a, A: Allocate> {
-    worker: &'a mut timely::worker::Worker<A>,
+struct LoggingContext<'a> {
+    worker: &'a mut timely::worker::Worker,
     config: &'a LoggingConfig,
     interval_ms: u128,
     now: Instant,
@@ -123,17 +119,17 @@ pub(crate) struct LoggingTraces {
     pub compute_logger: super::compute::Logger,
 }
 
-impl<A: Allocate + 'static> LoggingContext<'_, A> {
+impl LoggingContext<'_> {
     fn construct_dataflow(&mut self) -> BTreeMap<LogVariant, TraceBundle> {
         self.worker.dataflow_named("Dataflow: logging", |scope| {
-            let scope = &mut scope.with_label();
+            let scope = scope.with_label();
 
             let mut collections = BTreeMap::new();
 
             let super::timely::Return {
                 collections: timely_collections,
             } = super::timely::construct(
-                scope.clone(),
+                scope,
                 self.config,
                 self.t_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -142,17 +138,13 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
             let super::reachability::Return {
                 collections: reachability_collections,
-            } = super::reachability::construct(
-                scope.clone(),
-                self.config,
-                self.r_event_queue.clone(),
-            );
+            } = super::reachability::construct(scope, self.config, self.r_event_queue.clone());
             collections.extend(reachability_collections);
 
             let super::differential::Return {
                 collections: differential_collections,
             } = super::differential::construct(
-                scope.clone(),
+                scope,
                 self.config,
                 self.d_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -163,7 +155,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
                 collections: compute_collections,
             } = super::compute::construct(
                 scope.clone(),
-                scope.parent().clone(),
+                scope.activations(),
                 self.config,
                 self.c_event_queue.clone(),
                 Rc::clone(&self.shared_state),
@@ -173,7 +165,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
             let super::prometheus::Return {
                 collections: prometheus_collections,
             } = super::prometheus::construct(
-                scope.clone(),
+                scope,
                 self.config,
                 self.metrics_registry.clone(),
                 self.now,

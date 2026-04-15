@@ -10,12 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-async-trait = "0.1.89"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-differential-dataflow = "0.21.1"
-futures = "0.3.32"
-itertools = { version = "0.14.0" }
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
+itertools.workspace = true
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-controller-types = { path = "../controller-types" }
@@ -29,26 +29,15 @@ mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage-types = { path = "../storage-types" }
 mz-txn-wal = { path = "../txn-wal" }
-prometheus = { version = "0.14.0", default-features = false }
-rdkafka = { version = "0.29.0", features = [
-    "cmake-build",
-    "ssl-vendored",
-    "libz-static",
-    "zstd",
-] }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = { version = "1.0.149" }
-smallvec = { version = "1.15.1", features = ["serde", "union"] }
-timely = "0.28.0"
-tokio = { version = "1.49.0", features = [
-    "fs",
-    "rt",
-    "sync",
-    "test-util",
-    "time",
-] }
-tracing = "0.1.44"
-uuid = "1.19.0"
+prometheus.workspace = true
+rdkafka.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+smallvec = { workspace = true, features = ["serde", "union"] }
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 mz-build-info = { path = "../build-info" }

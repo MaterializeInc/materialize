@@ -164,6 +164,16 @@ def get_variable_system_parameters(
         # -----
         # Others (ordered by name),
         VariableSystemParameter(
+            "compute_correction_v2_chain_proportionality",
+            "3",
+            ["2", "3"],
+        ),
+        VariableSystemParameter(
+            "compute_correction_v2_chunk_size",
+            "8192",
+            ["8192", "65536", "1048576"],
+        ),
+        VariableSystemParameter(
             "compute_dataflow_max_inflight_bytes",
             "134217728",
             ["1048576", "4194304", "16777216", "67108864"],
@@ -468,6 +478,7 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
     "enable_lgalloc_eager_reclamation",
@@ -628,9 +639,9 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "oidc_authentication_claim",
     "console_oidc_client_id",
     "console_oidc_scopes",
-    "enable_mcp_agents",
-    "enable_mcp_agents_query_tool",
-    "enable_mcp_observatory",
+    "enable_mcp_agent",
+    "enable_mcp_agent_query_tool",
+    "enable_mcp_developer",
     "mcp_max_response_size",
     "user_id_pool_batch_size",
 ]

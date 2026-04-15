@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/bytes.rs
-revision: 4267863081
+revision: 5f785f23fd
 ---
 
 # mz-repr::bytes

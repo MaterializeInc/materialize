@@ -24,7 +24,21 @@ To create an Iceberg sink, you need:
 
 ## Syntax
 
-{{% include-syntax file="examples/create_sink_iceberg" example="syntax" %}}
+{{< tabs level=3 >}}
+
+{{< tab "MODE UPSERT" >}}
+
+{{% include-syntax file="examples/create_sink_iceberg" example="syntax-upsert" %}}
+
+{{< /tab >}}
+
+{{< tab "MODE APPEND" >}}
+
+{{% include-syntax file="examples/create_sink_iceberg" example="syntax-append" %}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## Details
 
@@ -36,8 +50,9 @@ At each `COMMIT INTERVAL`:
 
 1. All pending writes are flushed to Parquet data files. See [Type
    mapping](#type-mapping).
-2. Delete files are written for any updates or deletes. See [Delete
-   handling](#delete-handling).
+2. In **upsert** mode, delete files are written for any updates or deletes. See
+   [Delete handling](#delete-handling). In **append** mode, no delete files are
+   written; all changes are data rows. See [Append mode](#append-mode).
 3. A new Iceberg snapshot is committed atomically.
 
 When the snapshot is committed, the data is available to downstream query
@@ -86,13 +101,31 @@ queries.
 
 ### Unique keys
 
-The Iceberg sink uses upsert semantics based on the `KEY`. The columns you
+In upsert mode, the Iceberg sink uses upsert semantics based on the `KEY`. The columns you
 specify as the `KEY` must uniquely identify rows. Materialize validates that the
 key is unique; if it cannot prove uniqueness, you'll receive an error.
 
 If you have outside knowledge that the key is unique, you can bypass validation
 using `NOT ENFORCED`. However, if the key is not actually unique, downstream
 consumers may see incorrect results.
+
+### Append mode
+
+In append mode (`MODE APPEND`), every change in the Materialize update stream
+is written as a data row. No Iceberg delete files are produced. Two extra
+columns are appended to the Iceberg table:
+
+| Column | Iceberg type | Description |
+|--------|-------------|-------------|
+| `_mz_diff` | `int` | `+1` for insertions, `-1` for deletions. |
+| `_mz_timestamp` | `long` | The Materialize logical timestamp of the change. |
+
+- An **insert** produces one row with `_mz_diff = +1`.
+- A **delete** produces one row with `_mz_diff = -1`.
+- An **update** produces two rows: one with `_mz_diff = -1` (the old value) and
+  one with `_mz_diff = +1` (the new value). Both carry the same `_mz_timestamp`.
+
+No `KEY` clause is permitted with `MODE APPEND`.
 
 ### Type mapping
 
@@ -104,6 +137,11 @@ consumers may see incorrect results.
 {{% include-headless "/headless/iceberg-sinks/limitations-list" %}}
 
 ### Delete handling
+
+{{< note >}}
+Delete handling applies to `MODE UPSERT` only. In `MODE APPEND`, all changes
+are written as data rows. See [Append mode](#append-mode).
+{{< /note >}}
 
 Iceberg sinks use a hybrid delete strategy:
 
@@ -138,14 +176,14 @@ connection.
 {{% include-example file="examples/create_connection"
 example="example-iceberg-catalog-connection" %}}
 
-### Creating a sink
+### Creating an upsert sink
 
 {{% include-example file="examples/create_sink_iceberg"
 example="example-create-iceberg-sink" %}}
 
-The required `KEY` clause uniquely identifies rows; in this example, it uses a
-composite key of `user_id` and `event_timestamp`. Materialize validates that
-this key is unique in the source data.
+In upsert mode, the required `KEY` clause uniquely identifies rows; in this
+example, it uses a composite key of `user_id` and `event_timestamp`.
+Materialize validates that this key is unique in the source data.
 
 ### Bypassing unique key validation
 
@@ -170,6 +208,15 @@ CREATE SINK deduped_sink
 If the key is not actually unique, downstream consumers may see incorrect
 results.
 {{< /warning >}}
+
+### Creating an append sink
+
+{{% include-example file="examples/create_sink_iceberg"
+example="example-create-iceberg-sink-append" %}}
+
+The Iceberg table will contain all columns from `user_events` plus two
+additional columns: `_mz_diff` and `_mz_timestamp`. See [Append
+mode](#append-mode).
 
 ## Related pages
 

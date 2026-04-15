@@ -59,20 +59,23 @@ class RustIncrementalBuildFailure(Exception):
 
 
 def run_and_detect_rust_incremental_build_failure(
-    cmd: list[str], cwd: str | Path
+    cmd: list[str],
+    cwd: str | Path,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """This function is complex since it prints out each line immediately to
     stdout/stderr, but still records them at the same time so that we can scan
     for known incremental build failures."""
     stdout_result = io.StringIO()
     stderr_result = io.StringIO()
+    base_env = env if env is not None else os.environ
     p = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
-        env={**os.environ, "CARGO_TERM_COLOR": "always", "RUSTC_COLOR": "always"},
+        env={**base_env, "CARGO_TERM_COLOR": "always", "RUSTC_COLOR": "always"},
     )
 
     sel = selectors.DefaultSelector()

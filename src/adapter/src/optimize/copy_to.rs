@@ -19,8 +19,8 @@ use mz_compute_types::sinks::{
     ComputeSinkConnection, ComputeSinkDesc, CopyToS3OneshotSinkConnection,
 };
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
+use mz_repr::GlobalId;
 use mz_repr::explain::trace_plan;
-use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
@@ -118,7 +118,7 @@ pub struct LocalMirPlan<T = Unresolved> {
 /// Marker type for [`LocalMirPlan`] structs representing an optimization result
 /// with attached environment context required for the next optimization stage.
 pub struct Resolved<'s> {
-    timestamp_ctx: TimestampContext<Timestamp>,
+    timestamp_ctx: TimestampContext,
     stats: Box<dyn StatisticsOracle>,
     session: &'s dyn SessionMetadata,
 }
@@ -191,7 +191,7 @@ impl LocalMirPlan<Unresolved> {
     /// required for the next stage.
     pub fn resolve(
         self,
-        timestamp_ctx: TimestampContext<Timestamp>,
+        timestamp_ctx: TimestampContext,
         session: &dyn SessionMetadata,
         stats: Box<dyn StatisticsOracle>,
     ) -> LocalMirPlan<Resolved<'_>> {
@@ -284,20 +284,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             refresh_schedule: None,
         };
         df_desc.export_sink(self.select_id, sink_description);
-
-        // Prepare expressions in the assembled dataflow.
-        //
-        // Resolve all unmaterializable function calls except mz_now(), because
-        // we don't yet have a timestamp.
-        let style = ExprPrepOneShot {
-            logical_time: EvalTime::Deferred,
-            session,
-            catalog_state: self.catalog.state(),
-        };
-        df_desc.visit_children(
-            |r| style.prep_relation_expr(r),
-            |s| style.prep_scalar_expr(s),
-        )?;
 
         // Set the `as_of` and `until` timestamps for the dataflow.
         df_desc.set_as_of(timestamp_ctx.antichain());

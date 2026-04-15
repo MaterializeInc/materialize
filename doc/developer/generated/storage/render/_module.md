@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/render.rs
-revision: e79a6d96d9
+revision: b0fa98e931
 ---
 
 # mz-storage::render

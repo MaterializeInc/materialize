@@ -421,9 +421,7 @@ impl Catalog {
         &mut self,
         // n.b. this is an option to prevent us from needing to build out a
         // dummy impl of `StorageController` for tests.
-        storage_collections: Option<
-            &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
-        >,
+        storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,
@@ -654,9 +652,7 @@ impl Catalog {
     #[instrument(name = "catalog::transact_inner")]
     async fn transact_inner(
         mode: TransactInnerMode,
-        storage_collections: Option<
-            &mut Arc<dyn StorageCollections<Timestamp = mz_repr::Timestamp> + Send + Sync>,
-        >,
+        storage_collections: Option<&mut Arc<dyn StorageCollections + Send + Sync>>,
         oracle_write_ts: mz_repr::Timestamp,
         session: Option<&ConnMeta>,
         ops: Vec<Op>,

@@ -1546,6 +1546,15 @@ class FlipFlagsAction(Action):
             "1024",
         ]
         self.flags_with_values["compute_apply_column_demands"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["compute_correction_v2_chain_proportionality"] = [
+            "2",
+            "3",
+        ]
+        self.flags_with_values["compute_correction_v2_chunk_size"] = [
+            "8192",
+            "65536",
+            "1048576",
+        ]
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -1580,6 +1589,7 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
             "linear_join_yielding",
@@ -1756,9 +1766,9 @@ class FlipFlagsAction(Action):
             "enable_multi_replica_sources",
             "enable_password_auth",
             "persist_fast_path_order",
-            "enable_mcp_agents",
-            "enable_mcp_agents_query_tool",
-            "enable_mcp_observatory",
+            "enable_mcp_agent",
+            "enable_mcp_agent_query_tool",
+            "enable_mcp_developer",
             "mcp_max_response_size",
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
@@ -2905,6 +2915,7 @@ class CreateIcebergSinkAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "BYTES format with non-encodable type",
+            "cannot be used as an Iceberg equality delete key",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:

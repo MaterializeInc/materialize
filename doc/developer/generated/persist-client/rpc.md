@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/rpc.rs
-revision: 4267863081
+revision: 6040296dc3
 ---
 
 # persist-client::rpc

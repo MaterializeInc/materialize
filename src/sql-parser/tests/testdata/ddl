@@ -327,6 +327,31 @@ CREATE TABLE t FROM SOURCE foo (REFERENCE = baz) WITH (PARTITION BY = (a, b))
 CreateTableFromSource(CreateTableFromSourceStatement { name: UnresolvedItemName([Ident("t")]), columns: NotSpecified, constraints: [], if_not_exists: false, source: Name(UnresolvedItemName([Ident("foo")])), external_reference: Some(UnresolvedItemName([Ident("baz")])), with_options: [TableFromSourceOption { name: PartitionBy, value: Some(Sequence([UnresolvedItemName(UnresolvedItemName([Ident("a")])), UnresolvedItemName(UnresolvedItemName([Ident("b")]))])) }], include_metadata: [], format: None, envelope: None })
 
 
+# TEMP/TEMPORARY TABLE FROM SOURCE is not supported. Verify a clear error.
+parse-statement
+CREATE TEMP TABLE t FROM SOURCE foo
+----
+error: temporary tables FROM SOURCE are not supported
+CREATE TEMP TABLE t FROM SOURCE foo
+       ^
+
+parse-statement
+CREATE TEMPORARY TABLE t FROM SOURCE foo
+----
+error: temporary tables FROM SOURCE are not supported
+CREATE TEMPORARY TABLE t FROM SOURCE foo
+       ^
+
+# Bug: peek_keywords_lookahead scans the ENTIRE remaining token stream for
+# FROM SOURCE. A table literally named "source" in a subexpression can cause
+# a false match, misrouting to parse_create_table_from_source.
+parse-statement
+CREATE TABLE t (x int DEFAULT (SELECT 1 FROM source))
+----
+error: Expected FROM, found EOF
+CREATE TABLE t (x int DEFAULT (SELECT 1 FROM source))
+                                                     ^
+
 parse-statement
 CREATE DATABASE IF EXISTS foo
 ----
@@ -934,6 +959,13 @@ CREATE SINK bar FROM foo INTO ICEBERG CATALOG CONNECTION s3tables (BLAH = 'boo!'
 error: Expected one of NAMESPACE or TABLE, found identifier "blah"
 CREATE SINK bar FROM foo INTO ICEBERG CATALOG CONNECTION s3tables (BLAH = 'boo!') USING AWS CONNECTION aws_conn MODE UPSERT;
                                                                    ^
+
+parse-statement
+CREATE SINK bar FROM foo INTO ICEBERG CATALOG CONNECTION s3tables (NAMESPACE = 'testnamespace', TABLE = 'daily_sales') USING AWS CONNECTION aws_conn MODE APPEND;
+----
+CREATE SINK bar FROM foo INTO ICEBERG CATALOG CONNECTION s3tables (NAMESPACE = 'testnamespace', TABLE = 'daily_sales') USING AWS CONNECTION aws_conn MODE APPEND
+=>
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("bar")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("foo")])), connection: Iceberg { connection: Name(UnresolvedItemName([Ident("s3tables")])), aws_connection: Name(UnresolvedItemName([Ident("aws_conn")])), key: None, options: [IcebergSinkConfigOption { name: Namespace, value: Some(Value(String("testnamespace"))) }, IcebergSinkConfigOption { name: Table, value: Some(Value(String("daily_sales"))) }] }, format: None, envelope: None, mode: Some(Append), with_options: [] })
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)

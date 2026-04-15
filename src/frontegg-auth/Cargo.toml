@@ -10,31 +10,31 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-base64 = "0.22.1"
-clap = { version = "4.5.23", features = ["wrap_help", "env", "derive"] }
-derivative = "2.2.0"
-futures = "0.3.32"
-jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
-lru = "0.16.3"
+anyhow.workspace = true
+base64.workspace = true
+clap = { workspace = true, features = ["env", "wrap_help"] }
+derivative.workspace = true
+futures.workspace = true
+jsonwebtoken.workspace = true
+lru.workspace = true
 mz-auth = { path = "../auth", default-features = false }
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
-prometheus = { version = "0.14.0", default-features = false }
-reqwest = "0.12.28"
-reqwest-middleware = { version = "0.4.2", features = ["json"] }
-reqwest-retry = "0.8.0"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.149"
-thiserror = "2.0.18"
-tokio = { version = "1.49.0", features = ["macros"] }
-tracing = "0.1.44"
-uuid = { version = "1.19.0", features = ["serde"] }
+prometheus.workspace = true
+reqwest.workspace = true
+reqwest-middleware.workspace = true
+reqwest-retry.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-axum = "0.8.8"
+axum.workspace = true
 mz-ore = { path = "../ore", features = ["network", "test"] }
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+tokio.workspace = true
 
 [features]
 default = []

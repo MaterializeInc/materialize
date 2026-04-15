@@ -331,6 +331,33 @@ REVOKE CREATEROLE ON SYSTEM FROM joe;
 ----
 COMPLETE 0
 
+# Regression test: ALTER ROLE PASSWORD + LOGIN should not bypass CREATEROLE check.
+# The RBAC match arm for self-password-change must verify that password is the
+# ONLY attribute being changed.
+
+simple conn=joe,user=joe
+ALTER ROLE joe LOGIN;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret' LOGIN;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret' INHERIT;
+----
+db error: ERROR: permission denied for SYSTEM
+DETAIL: The 'joe' role needs CREATEROLE privileges on SYSTEM
+
+simple conn=joe,user=joe
+ALTER ROLE joe PASSWORD 'secret';
+----
+COMPLETE 0
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_password_auth TO false;
 ----

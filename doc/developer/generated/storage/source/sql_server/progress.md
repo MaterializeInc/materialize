@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/sql_server/progress.rs
-revision: e79a6d96d9
+revision: b0fa98e931
 ---
 
 # mz-storage::source::sql_server::progress

@@ -1,6 +1,6 @@
 ---
 source: src/expr-derive-impl/src/sqlfunc.rs
-revision: 61475c0097
+revision: 5680493e7d
 ---
 
 # mz-expr-derive-impl::sqlfunc

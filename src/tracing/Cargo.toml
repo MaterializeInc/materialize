@@ -11,9 +11,9 @@ workspace = true
 
 [dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test", "tracing"] }
-serde = { version = "1.0.219", features = ["derive"] }
-tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt"] }
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [features]
 default = []

@@ -49,12 +49,12 @@
 //!       (c, 3, +1) |              |
 //! ```
 //!
-//! The "chain invariant" states that each chain has at least [`CHAIN_PROPORTIONALITY`] times as
+//! The "chain invariant" states that each chain has at least `chain_proportionality` times as
 //! many chunks as the next one. This means that chain sizes will often be powers of
-//! `CHAIN_PROPORTIONALITY`, but they don't have to be. For example, for a proportionality of 2,
+//! `chain_proportionality`, but they don't have to be. For example, for a proportionality of 2,
 //! the chain sizes `[11, 5, 2, 1]` would satisfy the chain invariant.
 //!
-//! Choosing the `CHAIN_PROPORTIONALITY` value allows tuning the trade-off between memory and CPU
+//! Choosing the `chain_proportionality` value allows tuning the trade-off between memory and CPU
 //! resources required to maintain corrections. A higher proportionality forces more frequent chain
 //! merges, and therefore consolidation, reducing memory usage but increasing CPU usage.
 //!
@@ -129,18 +129,16 @@ use std::collections::{BinaryHeap, VecDeque};
 use std::fmt;
 use std::rc::Rc;
 
-use differential_dataflow::containers::{Columnation, TimelyStack};
+use columnation::Columnation;
 use differential_dataflow::trace::implementations::BatchContainer;
+use mz_ore::cast::CastLossy;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
+use mz_timely_util::columnation::ColumnationStack;
 use timely::PartialOrder;
-use timely::container::SizableContainer;
 use timely::progress::Antichain;
 
 use crate::sink::correction::{Logging, SizeMetrics};
-
-/// Determines the size factor of subsequent chains required by the chain invariant.
-const CHAIN_PROPORTIONALITY: usize = 3;
 
 /// Convenient alias for use in data trait bounds.
 pub trait Data: differential_dataflow::Data + Columnation {}
@@ -158,6 +156,10 @@ pub(super) struct CorrectionV2<D: Data> {
     stage: Stage<D>,
     /// The frontier by which all contained times are advanced.
     since: Antichain<Timestamp>,
+    /// The size factor of subsequent chains required by the chain invariant.
+    chain_proportionality: f64,
+    /// The capacity of each [`Chunk`].
+    chunk_capacity: usize,
 
     /// Total count of updates in the correction buffer.
     ///
@@ -181,11 +183,18 @@ impl<D: Data> CorrectionV2<D> {
         metrics: SinkMetrics,
         worker_metrics: SinkWorkerMetrics,
         logging: Option<Logging>,
+        chain_proportionality: f64,
+        chunk_size: usize,
     ) -> Self {
+        let update_size = std::mem::size_of::<(D, Timestamp, Diff)>();
+        let chunk_capacity = std::cmp::max(chunk_size / update_size, 1);
+
         Self {
             chains: Default::default(),
-            stage: Stage::new(logging.clone()),
+            stage: Stage::new(logging.clone(), chunk_capacity),
             since: Antichain::from_elem(Timestamp::MIN),
+            chain_proportionality,
+            chunk_capacity,
             prev_update_count: 0,
             prev_size: Default::default(),
             metrics,
@@ -236,8 +245,13 @@ impl<D: Data> CorrectionV2<D> {
             self.chains.push(chain);
 
             // Restore the chain invariant.
+            let prop = self.chain_proportionality;
             let merge_needed = |chains: &[Chain<_>]| match chains {
-                [.., prev, last] => last.len() * CHAIN_PROPORTIONALITY > prev.len(),
+                [.., prev, last] => {
+                    let last_len = f64::cast_lossy(last.len());
+                    let prev_len = f64::cast_lossy(prev.len());
+                    last_len * prop > prev_len
+                }
                 _ => false,
             };
 
@@ -247,7 +261,7 @@ impl<D: Data> CorrectionV2<D> {
                 self.log_chain_dropped(&a);
                 self.log_chain_dropped(&b);
 
-                let merged = merge_chains([a, b], &self.since);
+                let merged = self.merge_chains([a, b]);
                 self.log_chain_created(&merged);
                 self.chains.push(merged);
             }
@@ -308,7 +322,7 @@ impl<D: Data> CorrectionV2<D> {
             return;
         }
 
-        let (merged, remains) = merge_chains_up_to(chains, &self.since, upper);
+        let (merged, remains) = self.merge_chains_up_to(chains, upper);
 
         self.chains = remains;
         if !merged.is_empty() {
@@ -328,12 +342,14 @@ impl<D: Data> CorrectionV2<D> {
         while i > 0 {
             let needs_merge = self.chains.get(i).is_some_and(|a| {
                 let b = &self.chains[i - 1];
-                a.len() * CHAIN_PROPORTIONALITY > b.len()
+                let a_len = f64::cast_lossy(a.len());
+                let b_len = f64::cast_lossy(b.len());
+                a_len * self.chain_proportionality > b_len
             });
             if needs_merge {
                 let a = self.chains.remove(i);
-                let b = std::mem::take(&mut self.chains[i - 1]);
-                let merged = merge_chains([a, b], &self.since);
+                let b = std::mem::replace(&mut self.chains[i - 1], Chain::new(0));
+                let merged = self.merge_chains([a, b]);
                 self.chains[i - 1] = merged;
             } else {
                 // Only advance the index if we didn't merge. A merge can reduce the size of the
@@ -412,6 +428,155 @@ impl<D: Data> CorrectionV2<D> {
         self.prev_size = new_size;
         self.prev_update_count = new_length;
     }
+
+    /// Merge the given chains, advancing times by the current `since` in the process.
+    fn merge_chains(&self, chains: impl IntoIterator<Item = Chain<D>>) -> Chain<D> {
+        let Some(&since_ts) = self.since.as_option() else {
+            return Chain::new(self.chunk_capacity);
+        };
+
+        let mut to_merge = Vec::new();
+        for chain in chains {
+            if let Some(cursor) = chain.into_cursor() {
+                let mut runs = cursor.advance_by(since_ts);
+                to_merge.append(&mut runs);
+            }
+        }
+
+        self.merge_cursors(to_merge)
+    }
+
+    /// Merge the given chains, advancing times by the current `since` in the process, but only up
+    /// to the given `upper`.
+    ///
+    /// Returns the merged chain and a list of non-empty remainders of the input chains.
+    fn merge_chains_up_to(
+        &self,
+        chains: Vec<Chain<D>>,
+        upper: &Antichain<Timestamp>,
+    ) -> (Chain<D>, Vec<Chain<D>>) {
+        let Some(&since_ts) = self.since.as_option() else {
+            return (Chain::new(self.chunk_capacity), Vec::new());
+        };
+        let Some(&upper_ts) = upper.as_option() else {
+            let merged = self.merge_chains(chains);
+            return (merged, Vec::new());
+        };
+
+        if since_ts >= upper_ts {
+            // After advancing by `since` there will be no updates before `upper`.
+            return (Chain::new(self.chunk_capacity), chains);
+        }
+
+        let mut to_merge = Vec::new();
+        let mut to_keep = Vec::new();
+        for chain in chains {
+            if let Some(cursor) = chain.into_cursor() {
+                let mut runs = cursor.advance_by(since_ts);
+                if let Some(last) = runs.pop() {
+                    let (before, beyond) = last.split_at_time(upper_ts);
+                    before.map(|c| runs.push(c));
+                    beyond.map(|c| to_keep.push(c));
+                }
+                to_merge.append(&mut runs);
+            }
+        }
+
+        let merged = self.merge_cursors(to_merge);
+        let remains = to_keep
+            .into_iter()
+            .map(|c| c.try_unwrap(self.chunk_capacity).expect("unwrapable"))
+            .collect();
+
+        (merged, remains)
+    }
+
+    /// Merge the given cursors into one chain.
+    fn merge_cursors(&self, cursors: Vec<Cursor<D>>) -> Chain<D> {
+        match cursors.len() {
+            0 => Chain::new(self.chunk_capacity),
+            1 => {
+                let [cur] = cursors.try_into().unwrap();
+                cur.into_chain(self.chunk_capacity)
+            }
+            2 => {
+                let [a, b] = cursors.try_into().unwrap();
+                self.merge_2(a, b)
+            }
+            _ => self.merge_many(cursors),
+        }
+    }
+
+    /// Merge the given two cursors using a 2-way merge.
+    ///
+    /// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
+    fn merge_2(&self, cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
+        let mut rest1 = Some(cursor1);
+        let mut rest2 = Some(cursor2);
+        let mut merged = Chain::new(self.chunk_capacity);
+
+        loop {
+            match (rest1, rest2) {
+                (Some(c1), Some(c2)) => {
+                    let (d1, t1, r1) = c1.get();
+                    let (d2, t2, r2) = c2.get();
+
+                    match (t1, d1).cmp(&(t2, d2)) {
+                        Ordering::Less => {
+                            merged.push((d1, t1, r1));
+                            rest1 = c1.step();
+                            rest2 = Some(c2);
+                        }
+                        Ordering::Greater => {
+                            merged.push((d2, t2, r2));
+                            rest1 = Some(c1);
+                            rest2 = c2.step();
+                        }
+                        Ordering::Equal => {
+                            let r = r1 + r2;
+                            if r != Diff::ZERO {
+                                merged.push((d1, t1, r));
+                            }
+                            rest1 = c1.step();
+                            rest2 = c2.step();
+                        }
+                    }
+                }
+                (Some(c), None) | (None, Some(c)) => {
+                    merged.push_cursor(c);
+                    break;
+                }
+                (None, None) => break,
+            }
+        }
+
+        merged
+    }
+
+    /// Merge the given cursors using a k-way merge with a binary heap.
+    fn merge_many(&self, cursors: Vec<Cursor<D>>) -> Chain<D> {
+        let mut heap = MergeHeap::from_iter(cursors);
+        let mut merged = Chain::new(self.chunk_capacity);
+        while let Some(cursor1) = heap.pop() {
+            let (data, time, mut diff) = cursor1.get();
+
+            while let Some((cursor2, r)) = heap.pop_equal(data, time) {
+                diff += r;
+                if let Some(cursor2) = cursor2.step() {
+                    heap.push(cursor2);
+                }
+            }
+
+            if diff != Diff::ZERO {
+                merged.push((data, time, diff));
+            }
+            if let Some(cursor1) = cursor1.step() {
+                heap.push(cursor1);
+            }
+        }
+
+        merged
+    }
 }
 
 impl<D: Data> Drop for CorrectionV2<D> {
@@ -435,19 +600,21 @@ struct Chain<D: Data> {
     update_count: usize,
     /// Cached value of the current chain size, for efficient updating of metrics.
     cached_size: Option<SizeMetrics>,
+    /// The capacity of each contained [`Chunk`].
+    chunk_capacity: usize,
 }
 
-impl<D: Data> Default for Chain<D> {
-    fn default() -> Self {
+impl<D: Data> Chain<D> {
+    /// Construct an empty chain whose chunks have the given capacity.
+    fn new(chunk_capacity: usize) -> Self {
         Self {
             chunks: Default::default(),
             update_count: 0,
             cached_size: None,
+            chunk_capacity,
         }
     }
-}
 
-impl<D: Data> Chain<D> {
     /// Return whether the chain is empty.
     fn is_empty(&self) -> bool {
         self.chunks.is_empty()
@@ -469,9 +636,9 @@ impl<D: Data> Chain<D> {
         debug_assert!(self.can_accept(update));
 
         match self.chunks.last_mut() {
-            Some(c) if !c.at_capacity() => c.push(update),
+            Some(c) if c.len() < self.chunk_capacity => c.push(update),
             Some(_) | None => {
-                let chunk = Chunk::from_update(update);
+                let chunk = Chunk::from_update(update, self.chunk_capacity);
                 self.push_chunk(chunk);
             }
         }
@@ -785,6 +952,20 @@ impl<D: Data> Cursor<D> {
         }
     }
 
+    /// Drain the cursor into a [`Chain`].
+    ///
+    /// This reuses the underlying chunks if possible, and writes new ones otherwise.
+    fn into_chain(self, chunk_capacity: usize) -> Chain<D> {
+        match self.try_unwrap(chunk_capacity) {
+            Ok(chain) => chain,
+            Err((_, cursor)) => {
+                let mut chain = Chain::new(chunk_capacity);
+                chain.push_cursor(cursor);
+                chain
+            }
+        }
+    }
+
     /// Attempt to unwrap the cursor into a [`Chain`].
     ///
     /// This operation efficiently reuses chunks by directly inserting them into the output chain
@@ -794,7 +975,7 @@ impl<D: Data> Cursor<D> {
     /// the cursor has unique references to its chunks. If the unwrap fails, this method returns an
     /// `Err` containing the cursor in an unchanged state, allowing the caller to convert it into a
     /// chain by copying chunks rather than reusing them.
-    fn try_unwrap(self) -> Result<Chain<D>, (&'static str, Self)> {
+    fn try_unwrap(self, chunk_capacity: usize) -> Result<Chain<D>, (&'static str, Self)> {
         if self.limit.is_some() {
             return Err(("cursor with limit", self));
         }
@@ -805,7 +986,7 @@ impl<D: Data> Cursor<D> {
             return Err(("cursor on shared chunks", self));
         }
 
-        let mut chain = Chain::default();
+        let mut chain = Chain::new(chunk_capacity);
         let mut remaining = Some(self);
 
         // We might be partway through the first chunk, in which case we can't reuse it but need to
@@ -831,44 +1012,19 @@ impl<D: Data> Cursor<D> {
     }
 }
 
-impl<D: Data> From<Cursor<D>> for Chain<D> {
-    fn from(cursor: Cursor<D>) -> Self {
-        match cursor.try_unwrap() {
-            Ok(chain) => chain,
-            Err((_, cursor)) => {
-                let mut chain = Chain::default();
-                chain.push_cursor(cursor);
-                chain
-            }
-        }
-    }
-}
-
 /// A non-empty chunk of updates, backed by a columnation region.
 ///
 /// All updates in a chunk are sorted by (time, data) and consolidated.
 ///
 /// We would like all chunks to have the same fixed size, to make it easy for the allocator to
-/// re-use chunk allocations. Unfortunately, the current `TimelyStack`/`ChunkedStack` API doesn't
+/// re-use chunk allocations. Unfortunately, the current `ColumnationStack`/`ChunkedStack` API doesn't
 /// provide a convenient way to pre-size regions, so chunks are currently only fixed-size in
 /// spirit.
 struct Chunk<D: Data> {
     /// The contained updates.
-    data: TimelyStack<(D, Timestamp, Diff)>,
+    data: ColumnationStack<(D, Timestamp, Diff)>,
     /// Cached value of the current chunk size, for efficient updating of metrics.
     cached_size: Option<SizeMetrics>,
-}
-
-impl<D: Data> Default for Chunk<D> {
-    fn default() -> Self {
-        let mut data = TimelyStack::default();
-        data.ensure_capacity(&mut None);
-
-        Self {
-            data,
-            cached_size: None,
-        }
-    }
 }
 
 impl<D: Data> fmt::Debug for Chunk<D> {
@@ -879,10 +1035,13 @@ impl<D: Data> fmt::Debug for Chunk<D> {
 
 impl<D: Data> Chunk<D> {
     /// Create a new chunk containing a single update.
-    fn from_update<DT: Borrow<D>>(update: (DT, Timestamp, Diff)) -> Self {
+    fn from_update<DT: Borrow<D>>(update: (DT, Timestamp, Diff), chunk_capacity: usize) -> Self {
         let (d, t, r) = update;
 
-        let mut chunk = Self::default();
+        let mut chunk = Self {
+            data: ColumnationStack::with_capacity(chunk_capacity),
+            cached_size: None,
+        };
         chunk.data.copy_destructured(d.borrow(), &t, &r);
 
         chunk
@@ -891,16 +1050,6 @@ impl<D: Data> Chunk<D> {
     /// Return the number of updates in the chunk.
     fn len(&self) -> usize {
         self.data.len()
-    }
-
-    /// Return the (local) capacity of the chunk.
-    fn capacity(&self) -> usize {
-        self.data.capacity()
-    }
-
-    /// Return whether the chunk is at capacity.
-    fn at_capacity(&self) -> bool {
-        self.data.at_capacity()
     }
 
     /// Return the update at the given index.
@@ -995,17 +1144,16 @@ struct Stage<D> {
 }
 
 impl<D: Data> Stage<D> {
-    fn new(logging: Option<Logging>) -> Self {
-        // Make sure that the `Stage` has the same capacity as a `Chunk`.
-        let chunk = Chunk::<D>::default();
-        let data = Vec::with_capacity(chunk.capacity());
-
+    fn new(logging: Option<Logging>, chunk_capacity: usize) -> Self {
         // For logging, we pretend the stage consists of a single chain.
         if let Some(logging) = &logging {
             logging.chain_created(0);
         }
 
-        Self { data, logging }
+        Self {
+            data: Vec::with_capacity(chunk_capacity),
+            logging,
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -1022,14 +1170,14 @@ impl<D: Data> Stage<D> {
 
         // Determine how many chunks we can fill with the available updates.
         let update_count = self.data.len() + updates.len();
-        let chunk_size = self.data.capacity();
-        let chunk_count = update_count / chunk_size;
+        let chunk_capacity = self.data.capacity();
+        let chunk_count = update_count / chunk_capacity;
 
         let mut new_updates = updates.drain(..);
 
         // If we have enough shipable updates, collect them, consolidate, and build a chain.
         let maybe_chain = if chunk_count > 0 {
-            let ship_count = chunk_count * chunk_size;
+            let ship_count = chunk_count * chunk_capacity;
             let mut buffer = Vec::with_capacity(ship_count);
 
             buffer.append(&mut self.data);
@@ -1040,7 +1188,7 @@ impl<D: Data> Stage<D> {
 
             consolidate(&mut buffer);
 
-            let mut chain = Chain::default();
+            let mut chain = Chain::new(chunk_capacity);
             chain.extend(buffer);
             Some(chain)
         } else {
@@ -1065,7 +1213,8 @@ impl<D: Data> Stage<D> {
             return None;
         }
 
-        let mut chain = Chain::default();
+        let chunk_capacity = self.data.capacity();
+        let mut chain = Chain::new(chunk_capacity);
         chain.extend(self.data.drain(..));
         Some(chain)
     }
@@ -1162,158 +1311,6 @@ fn consolidate<D: Data>(updates: &mut Vec<(D, Timestamp, Diff)>) {
     }
 
     updates.truncate(offset);
-}
-
-/// Merge the given chains, advancing times by the given `since` in the process.
-fn merge_chains<D: Data>(
-    chains: impl IntoIterator<Item = Chain<D>>,
-    since: &Antichain<Timestamp>,
-) -> Chain<D> {
-    let Some(&since_ts) = since.as_option() else {
-        return Chain::default();
-    };
-
-    let mut to_merge = Vec::new();
-    for chain in chains {
-        if let Some(cursor) = chain.into_cursor() {
-            let mut runs = cursor.advance_by(since_ts);
-            to_merge.append(&mut runs);
-        }
-    }
-
-    merge_cursors(to_merge)
-}
-
-/// Merge the given chains, advancing times by the given `since` in the process, but only up to the
-/// given `upper`.
-///
-/// Returns the merged chain and a list of non-empty remainders of the input chains.
-fn merge_chains_up_to<D: Data>(
-    chains: Vec<Chain<D>>,
-    since: &Antichain<Timestamp>,
-    upper: &Antichain<Timestamp>,
-) -> (Chain<D>, Vec<Chain<D>>) {
-    let Some(&since_ts) = since.as_option() else {
-        return (Chain::default(), Vec::new());
-    };
-    let Some(&upper_ts) = upper.as_option() else {
-        let merged = merge_chains(chains, since);
-        return (merged, Vec::new());
-    };
-
-    if since_ts >= upper_ts {
-        // After advancing by `since` there will be no updates before `upper`.
-        return (Chain::default(), chains);
-    }
-
-    let mut to_merge = Vec::new();
-    let mut to_keep = Vec::new();
-    for chain in chains {
-        if let Some(cursor) = chain.into_cursor() {
-            let mut runs = cursor.advance_by(since_ts);
-            if let Some(last) = runs.pop() {
-                let (before, beyond) = last.split_at_time(upper_ts);
-                before.map(|c| runs.push(c));
-                beyond.map(|c| to_keep.push(c));
-            }
-            to_merge.append(&mut runs);
-        }
-    }
-
-    let merged = merge_cursors(to_merge);
-    let remains = to_keep
-        .into_iter()
-        .map(|c| c.try_unwrap().expect("unwrapable"))
-        .collect();
-
-    (merged, remains)
-}
-
-/// Merge the given cursors into one chain.
-fn merge_cursors<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
-    match cursors.len() {
-        0 => Chain::default(),
-        1 => {
-            let [cur] = cursors.try_into().unwrap();
-            Chain::from(cur)
-        }
-        2 => {
-            let [a, b] = cursors.try_into().unwrap();
-            merge_2(a, b)
-        }
-        _ => merge_many(cursors),
-    }
-}
-
-/// Merge the given two cursors using a 2-way merge.
-///
-/// This function is a specialization of `merge_many` that avoids the overhead of a binary heap.
-fn merge_2<D: Data>(cursor1: Cursor<D>, cursor2: Cursor<D>) -> Chain<D> {
-    let mut rest1 = Some(cursor1);
-    let mut rest2 = Some(cursor2);
-    let mut merged = Chain::default();
-
-    loop {
-        match (rest1, rest2) {
-            (Some(c1), Some(c2)) => {
-                let (d1, t1, r1) = c1.get();
-                let (d2, t2, r2) = c2.get();
-
-                match (t1, d1).cmp(&(t2, d2)) {
-                    Ordering::Less => {
-                        merged.push((d1, t1, r1));
-                        rest1 = c1.step();
-                        rest2 = Some(c2);
-                    }
-                    Ordering::Greater => {
-                        merged.push((d2, t2, r2));
-                        rest1 = Some(c1);
-                        rest2 = c2.step();
-                    }
-                    Ordering::Equal => {
-                        let r = r1 + r2;
-                        if r != Diff::ZERO {
-                            merged.push((d1, t1, r));
-                        }
-                        rest1 = c1.step();
-                        rest2 = c2.step();
-                    }
-                }
-            }
-            (Some(c), None) | (None, Some(c)) => {
-                merged.push_cursor(c);
-                break;
-            }
-            (None, None) => break,
-        }
-    }
-
-    merged
-}
-
-/// Merge the given cursors using a k-way merge with a binary heap.
-fn merge_many<D: Data>(cursors: Vec<Cursor<D>>) -> Chain<D> {
-    let mut heap = MergeHeap::from_iter(cursors);
-    let mut merged = Chain::default();
-    while let Some(cursor1) = heap.pop() {
-        let (data, time, mut diff) = cursor1.get();
-
-        while let Some((cursor2, r)) = heap.pop_equal(data, time) {
-            diff += r;
-            if let Some(cursor2) = cursor2.step() {
-                heap.push(cursor2);
-            }
-        }
-
-        if diff != Diff::ZERO {
-            merged.push((data, time, diff));
-        }
-        if let Some(cursor1) = cursor1.step() {
-            heap.push(cursor1);
-        }
-    }
-
-    merged
 }
 
 /// A binary heap specialized for merging [`Cursor`]s.

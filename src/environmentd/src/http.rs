@@ -474,23 +474,26 @@ impl HttpServer {
         }
 
         // MCP (Model Context Protocol) endpoints
-        // Enabled via runtime `routes_enabled.mcp_agents` and `routes_enabled.mcp_observatory` configuration
-        if routes_enabled.mcp_agents || routes_enabled.mcp_observatory {
+        // Enabled via runtime `routes_enabled.mcp_agent` and `routes_enabled.mcp_developer` configuration
+        if routes_enabled.mcp_agent || routes_enabled.mcp_developer {
             use tracing::info;
 
             let mut mcp_router = Router::new();
 
-            if routes_enabled.mcp_agents {
-                info!("Enabling MCP agents endpoint: /api/mcp/agents");
-                mcp_router =
-                    mcp_router.route("/api/mcp/agents", routing::post(mcp::handle_mcp_agents));
+            if routes_enabled.mcp_agent {
+                info!("Enabling MCP agent endpoint: /api/mcp/agent");
+                mcp_router = mcp_router.route(
+                    "/api/mcp/agent",
+                    routing::post(mcp::handle_mcp_agent).get(mcp::handle_mcp_method_not_allowed),
+                );
             }
 
-            if routes_enabled.mcp_observatory {
-                info!("Enabling MCP observatory endpoint: /api/mcp/observatory");
+            if routes_enabled.mcp_developer {
+                info!("Enabling MCP developer endpoint: /api/mcp/developer");
                 mcp_router = mcp_router.route(
-                    "/api/mcp/observatory",
-                    routing::post(mcp::handle_mcp_observatory),
+                    "/api/mcp/developer",
+                    routing::post(mcp::handle_mcp_developer)
+                        .get(mcp::handle_mcp_method_not_allowed),
                 );
             }
 

@@ -41,6 +41,7 @@ Analysis
 Analyze
 And
 Any
+Append
 Apply
 Arity
 Arn

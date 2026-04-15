@@ -68,7 +68,6 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fmt;
 use std::net::IpAddr;
 use std::num::NonZeroI64;
 use std::ops::Neg;
@@ -77,6 +76,7 @@ use std::sync::LazyLock;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::{fmt, mem};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -129,7 +129,9 @@ use mz_ore::task::{JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
-use mz_ore::{assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, stack};
+use mz_ore::{
+    assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
+};
 use mz_persist_client::PersistClient;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
@@ -643,7 +645,7 @@ pub struct PeekStageOptimize {
     source_ids: BTreeSet<GlobalId>,
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
+    determination: TimestampDetermination,
     optimizer: Either<optimize::peek::Optimizer, optimize::copy_to::Optimizer>,
     /// An optional context set iff the state machine is initiated from
     /// sequencing an EXPLAIN for this statement.
@@ -658,7 +660,7 @@ pub struct PeekStageFinish {
     id_bundle: CollectionIdBundle,
     target_replica: Option<ReplicaId>,
     source_ids: BTreeSet<GlobalId>,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
+    determination: TimestampDetermination,
     cluster_id: ComputeInstanceId,
     finishing: RowSetFinishing,
     /// When present, an optimizer trace to be used for emitting a plan insights
@@ -690,7 +692,7 @@ pub struct PeekStageExplainPlan {
 #[derive(Debug)]
 pub struct PeekStageExplainPushdown {
     validity: PlanValidity,
-    determination: TimestampDetermination<mz_repr::Timestamp>,
+    determination: TimestampDetermination,
     imports: BTreeMap<GlobalId, MapFilterProject>,
 }
 
@@ -1018,7 +1020,7 @@ pub struct IntrospectionSubscribeTimestampOptimizeLir {
 pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
-    read_holds: ReadHolds<Timestamp>,
+    read_holds: ReadHolds,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }
@@ -1307,7 +1309,7 @@ pub struct PendingReadTxn {
     /// The transaction type
     txn: PendingRead,
     /// The timestamp context of the transaction.
-    timestamp_context: TimestampContext<mz_repr::Timestamp>,
+    timestamp_context: TimestampContext,
     /// When we created this pending txn, when the transaction ends. Only used for metrics.
     created: Instant,
     /// Number of times we requeued the processing of this pending read txn.
@@ -1320,7 +1322,7 @@ pub struct PendingReadTxn {
 
 impl PendingReadTxn {
     /// Return the timestamp context of the pending read transaction.
-    pub fn timestamp_context(&self) -> &TimestampContext<mz_repr::Timestamp> {
+    pub fn timestamp_context(&self) -> &TimestampContext {
         &self.timestamp_context
     }
 
@@ -1842,7 +1844,7 @@ pub struct Coordinator {
 
     /// Mechanism for totally ordering write and read timestamps, so that all reads
     /// reflect exactly the set of writes that precede them, and no writes that follow.
-    global_timelines: BTreeMap<Timeline, TimelineState<Timestamp>>,
+    global_timelines: BTreeMap<Timeline, TimelineState>,
 
     /// A generator for transient [`GlobalId`]s, shareable with other threads.
     transient_id_gen: Arc<TransientIdGen>,
@@ -1853,7 +1855,7 @@ pub struct Coordinator {
     /// For each transaction, the read holds taken to support any performed reads.
     ///
     /// Upon completing a transaction, these read holds should be dropped.
-    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
+    txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds>,
 
     /// Access to the peek fields should be restricted to methods in the [`peek`] API.
     /// A map from pending peek ids to the queue into which responses are sent, and
@@ -3040,41 +3042,6 @@ impl Coordinator {
             self.get_local_write_ts().await.timestamp
         };
 
-        // New builtin storage collections are by default created with [0] since/upper frontiers. For
-        // collections that have dependencies on other collections (MVs, CTs), this can violate the
-        // frontier invariants assumed by as-of selection. For example, as-of selection expects to
-        // be able to pick up computing a materialized view from its most recent upper, but if that
-        // upper is [0] it's likely that the required times are not available anymore in the MV
-        // inputs.
-        //
-        // To avoid violating frontier invariants, we need to bump their sinces to times greater
-        // than all of their upstream storage inputs. To know the since of a storage input, it has
-        // to be registered with the storage controller first. Which means we need to split out
-        // builtin storage collections that have storage inputs here, and then process them once
-        // the input-less collections have been registered.
-        let mut derived_builtin_storage_collections: Vec<_> = collections
-            .extract_if(.., |(id, c)| {
-                // Don't silently overwrite an explicitly specified `since`.
-                if !id.is_system() || c.since.is_some() {
-                    return false;
-                }
-
-                use CatalogItem::*;
-                match &self.catalog.get_entry_by_global_id(id).item {
-                    // Not storage collections.
-                    Log(_) | View(_) | Index(_) | Type(_) | Func(_) | Secret(_) | Connection(_) => {
-                        false
-                    }
-                    // Storage collections without dependencies.
-                    Table(_) | Source(_) => false,
-                    // Storage collections with dependencies.
-                    MaterializedView(_) | ContinualTask(_) => true,
-                    // Storage collections not supported as builtin types.
-                    Sink(_) => unimplemented!(),
-                }
-            })
-            .collect();
-
         let storage_metadata = self.catalog.state().storage_metadata();
         let migrated_storage_collections = migrated_storage_collections
             .into_iter()
@@ -3091,46 +3058,95 @@ impl Coordinator {
             .await
             .unwrap_or_terminate("cannot fail to evolve collections");
 
-        self.controller
-            .storage
-            .create_collections_for_bootstrap(
-                storage_metadata,
-                Some(register_ts),
-                collections,
-                &migrated_storage_collections,
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
+        // New builtin storage collections are by default created with [0] since/upper frontiers.
+        // For collections that have dependencies on other collections (MVs, CTs), this can violate
+        // the frontier invariants assumed by as-of selection. For example, as-of selection expects
+        // to be able to pick up computing a materialized view from its most recent upper, but if
+        // that upper is [0] it's likely that the required times are not available anymore in the
+        // MV inputs.
+        //
+        // To avoid violating frontier invariants, we need to bump their sinces to times greater
+        // than all of their upstream storage inputs. To know the since of a storage input, it has
+        // to be registered with the storage controller first. Thus we register collections in
+        // layers: Each iteration registers the collections whose dependencies are all already
+        // registered.
+        let mut pending: BTreeMap<_, _> = collections.into_iter().collect();
 
-        // Bump and register the derived builtin collections, now that their (transitive) inputs
-        // have been registered.
-        for (gid, collection) in &mut derived_builtin_storage_collections {
-            let entry = self.catalog.get_entry_by_global_id(gid);
-            let mut derived_since = Antichain::from_elem(Timestamp::MIN);
-            for dep_id in self.catalog.state().transitive_uses(entry.id()) {
-                let entry = self.catalog.state().get_entry(&dep_id);
-                let dep_gid = entry.latest_global_id();
+        // Precompute storage-collection dependencies for each collection.
+        let transitive_dep_gids: BTreeMap<_, _> = pending
+            .keys()
+            .map(|gid| {
+                let entry = self.catalog.get_entry_by_global_id(gid);
+                let item_id = entry.id();
+                let deps = self.catalog.state().transitive_uses(item_id);
+                let dep_gids: BTreeSet<_> = deps
+                    // Ignore self-dependencies. For example, `transitive_uses` includes the input ID,
+                    // and CTs can depend on themselves.
+                    .filter(|dep_id| *dep_id != item_id)
+                    .map(|dep_id| self.catalog.get_entry(&dep_id).latest_global_id())
+                    // Ignore dependencies on objects that are not storage collections.
+                    .filter(|dep_gid| pending.contains_key(dep_gid))
+                    .collect();
+                (*gid, dep_gids)
+            })
+            .collect();
 
-                // It's fine if the storage controller doesn't know about the collection. This
-                // happens because the dependency is something else than a storage collection, or
-                // because the dependency is the current collection itself (`transitive_uses` also
-                // returns the input ID).
-                if let Ok((since, _)) = self.controller.storage.collection_frontiers(dep_gid) {
+        while !pending.is_empty() {
+            // Drain collections whose dependencies have all been registered already
+            // (i.e., are not in `pending`).
+            let ready_gids: BTreeSet<_> = pending
+                .keys()
+                .filter(|gid| {
+                    let mut deps = transitive_dep_gids[gid].iter();
+                    !deps.any(|dep_gid| pending.contains_key(dep_gid))
+                })
+                .copied()
+                .collect();
+            let mut ready: Vec<_> = pending
+                .extract_if(.., |gid, _| ready_gids.contains(gid))
+                .collect();
+
+            // Bump sinces of builtin collections.
+            for (gid, collection) in &mut ready {
+                // Don't silently overwrite an explicitly specified `since`.
+                if !gid.is_system() || collection.since.is_some() {
+                    continue;
+                }
+
+                let mut derived_since = Antichain::from_elem(Timestamp::MIN);
+                for dep_gid in &transitive_dep_gids[gid] {
+                    let (since, _) = self
+                        .controller
+                        .storage
+                        .collection_frontiers(*dep_gid)
+                        .expect("previously registered");
                     derived_since.join_assign(&since);
                 }
+                collection.since = Some(derived_since);
             }
-            collection.since = Some(derived_since);
+
+            if ready.is_empty() {
+                soft_panic_or_log!(
+                    "cycle in storage collections: {:?}",
+                    pending.keys().collect::<Vec<_>>(),
+                );
+                // We get here only due to a bug. Rather than crash-looping, we try our best to
+                // reach a sane state by attempting to register all the remaining collections at
+                // once.
+                ready = mem::take(&mut pending).into_iter().collect();
+            }
+
+            self.controller
+                .storage
+                .create_collections_for_bootstrap(
+                    storage_metadata,
+                    Some(register_ts),
+                    ready,
+                    &migrated_storage_collections,
+                )
+                .await
+                .unwrap_or_terminate("cannot fail to create collections");
         }
-        self.controller
-            .storage
-            .create_collections_for_bootstrap(
-                storage_metadata,
-                Some(register_ts),
-                derived_builtin_storage_collections,
-                &migrated_storage_collections,
-            )
-            .await
-            .unwrap_or_terminate("cannot fail to create collections");
 
         if !self.controller.read_only() {
             self.apply_local_write(register_ts).await;
@@ -4944,7 +4960,7 @@ pub struct AlterSinkReadyContext {
     otel_ctx: OpenTelemetryContext,
     plan: AlterSinkPlan,
     plan_validity: PlanValidity,
-    read_hold: ReadHolds<Timestamp>,
+    read_hold: ReadHolds,
 }
 
 impl AlterSinkReadyContext {

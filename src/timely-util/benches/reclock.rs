@@ -19,8 +19,6 @@ use mz_ore::Overflowing;
 use mz_timely_util::capture::PusherCapture;
 use mz_timely_util::order::Partitioned;
 use mz_timely_util::reclock::reclock;
-use timely::communication::allocator::Thread;
-use timely::dataflow::Scope;
 use timely::dataflow::operators::capture::Event;
 use timely::dataflow::operators::vec::UnorderedInput;
 use timely::dataflow::operators::vec::unordered_input::UnorderedHandle;
@@ -44,7 +42,7 @@ where
     FromTime: Timestamp + Refines<()>,
     D: ExchangeData,
     F: FnOnce(
-            &mut Worker<Thread>,
+            &mut Worker,
             BindingHandle<FromTime>,
             DataHandle<D, FromTime>,
             ReclockedStream<D>,
@@ -77,7 +75,7 @@ where
     })
 }
 
-fn step(worker: &mut Worker<Thread>) {
+fn step(worker: &mut Worker) {
     for _ in 0..4 {
         worker.step();
     }

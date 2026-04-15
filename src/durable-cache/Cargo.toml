@@ -10,23 +10,23 @@ publish = false
 workspace = true
 
 [dependencies]
-async-trait = "0.1.89"
-bytes = { version = "1.11.1" }
-differential-dataflow = "0.21.1"
-futures = "0.3.32"
-itertools = { version = "0.14.0" }
+async-trait.workspace = true
+bytes.workspace = true
+differential-dataflow.workspace = true
+futures.workspace = true
+itertools.workspace = true
 mz-ore = { path = "../ore", features = ["process"] }
 mz-dyncfg = { path = "../dyncfg" }
 mz-persist-types = { path = "../persist-types" }
 mz-persist-client = { path = "../persist-client" }
 mz-timely-util = { path = "../timely-util" }
-prometheus = { version = "0.14.0", default-features = false }
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-serde = { version = "1.0.219", features = ["derive", "rc"] }
-timely = "0.28.0"
-tokio = { version = "1.49.0", default-features = false, features = ["rt", "rt-multi-thread"] }
-tracing = "0.1.44"
-uuid = { version = "1.19.0", features = ["v4"] }
+prometheus.workspace = true
+prost.workspace = true
+serde = { workspace = true, features = ["rc"] }
+timely.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []

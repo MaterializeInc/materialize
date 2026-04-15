@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/foundationdb.rs
-revision: 4267863081
+revision: 181b1e7efc
 ---
 
 # persist::foundationdb

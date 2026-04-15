@@ -14,7 +14,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::ShardId;
-use mz_repr::{Diff, GlobalId, RelationDesc, Row};
+use mz_repr::{GlobalId, RelationDesc, Timestamp, UpdateCollection};
 use serde::{Deserialize, Serialize};
 use timely::progress::frontier::Antichain;
 use uuid::Uuid;
@@ -26,7 +26,7 @@ use uuid::Uuid;
 ///
 /// [`ComputeCommand`]: super::command::ComputeCommand
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ComputeResponse<T = mz_repr::Timestamp> {
+pub enum ComputeResponse {
     /// `Frontiers` announces the advancement of the various frontiers of the specified compute
     /// collection.
     ///
@@ -58,7 +58,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`CreateInstance` command]: super::command::ComputeCommand::CreateInstance
     /// [#16271]: https://github.com/MaterializeInc/database-issues/issues/4699
     /// [#16274]: https://github.com/MaterializeInc/database-issues/issues/4701
-    Frontiers(GlobalId, FrontiersResponse<T>),
+    Frontiers(GlobalId, FrontiersResponse),
 
     /// `PeekResponse` reports the result of a previous [`Peek` command]. The peek is identified by
     /// a `Uuid` that matches the command's [`Peek::uuid`].
@@ -110,7 +110,7 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
     /// [`DroppedAt`]: SubscribeResponse::DroppedAt
     /// [`CreateDataflow` command]: super::command::ComputeCommand::CreateDataflow
     /// [`AllowCompaction` command]: super::command::ComputeCommand::AllowCompaction
-    SubscribeResponse(GlobalId, SubscribeResponse<T>),
+    SubscribeResponse(GlobalId, SubscribeResponse),
 
     /// `CopyToResponse` reports the completion of an S3-oneshot sink.
     ///
@@ -143,21 +143,21 @@ pub enum ComputeResponse<T = mz_repr::Timestamp> {
 /// All contained frontier fields are optional. `None` values imply that the respective frontier
 /// has not advanced and the previously reported value is still current.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct FrontiersResponse<T = mz_repr::Timestamp> {
+pub struct FrontiersResponse {
     /// The collection's new write frontier, if any.
     ///
     /// Upon receiving an updated `write_frontier`, the controller may assume that the contents of the
     /// collection are sealed for all times less than that frontier. Once it has reported the
     /// `write_frontier` as the empty frontier, the replica must no longer change the contents of the
     /// collection.
-    pub write_frontier: Option<Antichain<T>>,
+    pub write_frontier: Option<Antichain<Timestamp>>,
     /// The collection's new input frontier, if any.
     ///
     /// Upon receiving an updated `input_frontier`, the controller may assume that the replica has
     /// finished reading from the collection’s inputs up to that frontier. Once it has reported the
     /// `input_frontier` as the empty frontier, the replica must no longer read from the
     /// collection's inputs.
-    pub input_frontier: Option<Antichain<T>>,
+    pub input_frontier: Option<Antichain<Timestamp>>,
     /// The collection's new output frontier, if any.
     ///
     /// Upon receiving an updated `output_frontier`, the controller may assume that the replica
@@ -171,10 +171,10 @@ pub struct FrontiersResponse<T = mz_repr::Timestamp> {
     ///  * `REFRESH` MVs jump their write frontier ahead to the next refresh time.
     ///  * In a multi-replica cluster, slower replicas observe and report the write frontier of the
     ///    fastest replica, by witnessing advancements of the target persist shard's `upper`.
-    pub output_frontier: Option<Antichain<T>>,
+    pub output_frontier: Option<Antichain<Timestamp>>,
 }
 
-impl<T> FrontiersResponse<T> {
+impl FrontiersResponse {
     /// Returns whether there are any contained updates.
     pub fn has_updates(&self) -> bool {
         self.write_frontier.is_some()
@@ -236,7 +236,7 @@ pub struct StashedPeekResponse {
 }
 
 impl StashedPeekResponse {
-    /// Total count of [`Row`]s represented by this collection, considering a
+    /// Total count of [mz_repr::Row]s represented by this collection, considering a
     /// possible `OFFSET` and `LIMIT`.
     pub fn num_rows(&self, offset: usize, limit: Option<usize>) -> usize {
         let num_stashed_rows: usize = usize::cast_from(self.num_rows_batches);
@@ -265,14 +265,14 @@ pub enum CopyToResponse {
 
 /// Various responses that can be communicated about the progress of a SUBSCRIBE command.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub enum SubscribeResponse<T = mz_repr::Timestamp> {
+pub enum SubscribeResponse {
     /// A batch of updates over a non-empty interval of time.
-    Batch(SubscribeBatch<T>),
+    Batch(SubscribeBatch),
     /// The SUBSCRIBE dataflow was dropped, leaving updates from this frontier onward unspecified.
-    DroppedAt(Antichain<T>),
+    DroppedAt(Antichain<Timestamp>),
 }
 
-impl<T> SubscribeResponse<T> {
+impl SubscribeResponse {
     /// Converts `self` to an error if a maximum size is exceeded.
     pub fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         if let SubscribeResponse::Batch(batch) = self {
@@ -283,26 +283,30 @@ impl<T> SubscribeResponse<T> {
 
 /// A batch of updates for the interval `[lower, upper)`.
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub struct SubscribeBatch<T = mz_repr::Timestamp> {
+pub struct SubscribeBatch {
     /// The lower frontier of the batch of updates.
-    pub lower: Antichain<T>,
+    pub lower: Antichain<Timestamp>,
     /// The upper frontier of the batch of updates.
-    pub upper: Antichain<T>,
+    pub upper: Antichain<Timestamp>,
     /// All updates greater than `lower` and not greater than `upper`.
     ///
+    /// Each of the update collections is sorted first by time, and then by the ordering specified
+    /// by the order-by of the subscribe. There is no implied ordering between different collections
+    /// of updates in the [Vec].
+    ///
+    /// It's typical to include just a single collection as part of the clusterd's response, but we
+    /// may aggregate different batches together later as we combine results from different workers.
+    ///
     /// An `Err` variant can be used to indicate e.g. that the size of the updates exceeds internal limits.
-    pub updates: Result<Vec<(T, Row, Diff)>, String>,
+    pub updates: Result<Vec<UpdateCollection>, String>,
 }
 
-impl<T> SubscribeBatch<T> {
+impl SubscribeBatch {
     /// Converts `self` to an error if a maximum size is exceeded.
     fn to_error_if_exceeds(&mut self, max_result_size: usize) {
         use bytesize::ByteSize;
         if let Ok(updates) = &self.updates {
-            let total_size: usize = updates
-                .iter()
-                .map(|(_time, row, _diff)| row.byte_len())
-                .sum();
+            let total_size: usize = updates.iter().map(|updates| updates.byte_len()).sum();
             if total_size > max_result_size {
                 self.updates = Err(format!(
                     "result exceeds max size of {}",

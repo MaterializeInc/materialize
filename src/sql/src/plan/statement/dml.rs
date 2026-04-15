@@ -41,7 +41,7 @@ use mz_storage_types::sinks::{
     MIN_S3_SINK_FILE_SIZE, S3SinkFormat, StorageSinkConnection,
 };
 
-use crate::ast::display::AstDisplay;
+use crate::ast::display::{AstDisplay, escaped_string_literal};
 use crate::ast::{
     AstInfo, CopyDirection, CopyOption, CopyOptionName, CopyRelation, CopyStatement, CopyTarget,
     DeleteStatement, ExplainPlanStatement, ExplainStage, Explainee, Ident, InsertStatement, Query,
@@ -650,6 +650,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_fast_path_plan_insights: Default::default(),
                 enable_cast_elimination: Default::default(),
                 enable_case_literal_transform: Default::default(),
+                enable_simplify_quantified_comparisons: Default::default(),
             },
         })
     }
@@ -917,14 +918,17 @@ pub fn plan_explain_analyze_object(
              JOIN {from} USING (lir_id)
              JOIN mz_introspection.mz_mappable_objects mo
                ON (mlm.global_id = mo.global_id)
-       WHERE     mo.name = '{plan.explainee_name}'
+       WHERE     mo.name = {escaped explainee_name}
              AND {predicates}
        ORDER BY lir_id DESC
     */
     let mut ctes = Vec::with_capacity(4); // max 2 per ExplainAnalyzeComputationProperty
     let mut columns = vec!["REPEAT(' ', nesting * 2) || operator AS operator"];
     let mut from = vec!["mz_introspection.mz_lir_mapping mlm"];
-    let mut predicates = vec![format!("mo.name = '{}'", explainee_name)];
+    let mut predicates = vec![format!(
+        "mo.name = {}",
+        escaped_string_literal(&explainee_name)
+    )];
     let mut order_by = vec!["mlm.lir_id DESC"];
 
     match statement.properties {

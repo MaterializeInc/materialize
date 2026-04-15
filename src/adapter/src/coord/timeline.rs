@@ -24,7 +24,7 @@ use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use mz_timestamp_oracle::{self, TimestampOracle, TimestampOracleConfig, WriteTimestamp};
-use timely::progress::Timestamp as TimelyTimestamp;
+use timely::progress::Timestamp as _;
 use tracing::{Instrument, debug, error, info};
 
 use crate::AdapterError;
@@ -69,12 +69,12 @@ impl TimelineContext {
 /// For each timeline we maintain a timestamp oracle, which is responsible for
 /// providing read (and sometimes write) timestamps, and a set of read holds which
 /// guarantee that those read timestamps are valid.
-pub(crate) struct TimelineState<T: TimelyTimestamp> {
-    pub(crate) oracle: Arc<dyn TimestampOracle<T> + Send + Sync>,
-    pub(crate) read_holds: ReadHolds<T>,
+pub(crate) struct TimelineState {
+    pub(crate) oracle: Arc<dyn TimestampOracle<Timestamp> + Send + Sync>,
+    pub(crate) read_holds: ReadHolds,
 }
 
-impl<T: TimelyTimestamp> fmt::Debug for TimelineState<T> {
+impl fmt::Debug for TimelineState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TimelineState")
             .field("read_holds", &self.read_holds)
@@ -189,7 +189,7 @@ impl Coordinator {
     pub(crate) async fn ensure_timeline_state<'a>(
         &'a mut self,
         timeline: &'a Timeline,
-    ) -> &'a mut TimelineState<Timestamp> {
+    ) -> &'a mut TimelineState {
         Self::ensure_timeline_state_with_initial_time(
             timeline,
             Timestamp::minimum(),
@@ -209,9 +209,9 @@ impl Coordinator {
         initially: Timestamp,
         now: NowFn,
         oracle_config: Option<TimestampOracleConfig>,
-        global_timelines: &'a mut BTreeMap<Timeline, TimelineState<Timestamp>>,
+        global_timelines: &'a mut BTreeMap<Timeline, TimelineState>,
         read_only: bool,
-    ) -> &'a mut TimelineState<Timestamp> {
+    ) -> &'a mut TimelineState {
         if !global_timelines.contains_key(timeline) {
             info!("opening a new TimestampOracle for timeline {:?}", timeline,);
 

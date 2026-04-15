@@ -493,8 +493,8 @@ impl Error for DataflowError {}
 
 mod boxed_str {
 
-    use differential_dataflow::containers::Region;
-    use differential_dataflow::containers::StableRegion;
+    use columnation::Region;
+    use columnation::StableRegion;
 
     /// Region allocation for `String` data.
     ///
@@ -546,7 +546,7 @@ mod boxed_str {
 mod columnation {
     use std::iter::once;
 
-    use differential_dataflow::containers::{Columnation, Region, StableRegion};
+    use columnation::{Columnation, Region, StableRegion};
     use mz_expr::EvalError;
     use mz_repr::Row;
     use mz_repr::adt::range::InvalidRangeError;
@@ -870,6 +870,9 @@ mod columnation {
                         EvalError::PrettyError(x) => {
                             EvalError::PrettyError(self.string_region.copy(x))
                         }
+                        EvalError::RedactError(x) => {
+                            EvalError::RedactError(self.string_region.copy(x))
+                        }
                     };
                     let reference = self.eval_error_region.copy_iter(once(err));
                     let boxed = unsafe { Box::from_raw(reference.as_mut_ptr()) };
@@ -1009,13 +1012,13 @@ mod columnation {
 
     #[cfg(test)]
     mod tests {
-        use differential_dataflow::containers::TimelyStack;
+        use mz_timely_util::columnation::ColumnationStack;
         use proptest::prelude::*;
 
         use super::*;
 
-        fn columnation_roundtrip<T: Columnation>(item: &T) -> TimelyStack<T> {
-            let mut container = TimelyStack::with_capacity(1);
+        fn columnation_roundtrip<T: Columnation>(item: &T) -> ColumnationStack<T> {
+            let mut container = ColumnationStack::with_capacity(1);
             container.copy(item);
             container
         }

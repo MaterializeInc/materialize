@@ -10,39 +10,39 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-axum = "0.8.8"
-clap = { version = "4.5.23", features = [ "derive" ] }
-csv = "1.4.0"
-dirs = "6.0.0"
-indicatif = "0.18.4"
-termcolor = "1.4.1"
-maplit = "1.0.2"
+axum.workspace = true
+clap.workspace = true
+csv.workspace = true
+dirs.workspace = true
+indicatif.workspace = true
+termcolor.workspace = true
+maplit.workspace = true
 mz-cloud-api = { path = "../cloud-api" }
 mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
 mz-sql-parser = { path = "../sql-parser" }
-open = "5.3.3"
-openssl-probe = "0.1.6"
-hyper = "1.4.1"
-reqwest = { version = "0.12.28", features = ["blocking", "json", "default-tls", "charset", "http2"], default-features = false }
-rpassword = "7.4.0"
-semver = "1.0.27"
-serde = { version = "1.0.219", features = ["derive"] }
-serde-aux = "4.7.0"
-serde_json = "1.0.149"
-tabled = "0.20.0"
-time = "0.3.17"
-tokio = { version = "1.49.0", features = ["full"] }
-toml = "0.8.22"
-toml_edit = { version = "0.22.26", features = ["serde"] }
-thiserror = "2.0.18"
-uuid = "1.19.0"
-url = "2.5.8"
+open.workspace = true
+openssl-probe.workspace = true
+hyper.workspace = true
+reqwest.workspace = true
+rpassword.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde-aux.workspace = true
+serde_json.workspace = true
+tabled.workspace = true
+time.workspace = true
+tokio.workspace = true
+toml.workspace = true
+toml_edit.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+url.workspace = true
 
 [dev-dependencies]
-assert_cmd = "2.1.2"
+assert_cmd.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "2.10.0"

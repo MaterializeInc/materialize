@@ -11,19 +11,19 @@ publish = false
 workspace = true
 
 [dependencies]
-bytesize = "2.1.0"
-datadriven = { version = "0.9.0", optional = true }
-enum-kinds = "0.5.1"
-itertools = "0.14.0"
+bytesize.workspace = true
+datadriven = { workspace = true, optional = true }
+enum-kinds.workspace = true
+itertools.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["stack", "assert-no-tracing"] }
 mz-sql-lexer = { path = "../sql-lexer", default-features = false }
-phf = { version = "0.13.1", features = ["uncased"] }
-serde = { version = "1.0.219", features = ["derive"] }
-smallvec = { version = "1.15.1", features = ["union"] }
-thiserror = "2.0.18"
-tracing = "0.1.44"
-uncased = "0.9.7"
-unicode-width = { version = "0.2.2", optional = true }
+phf.workspace = true
+serde.workspace = true
+smallvec = { workspace = true, features = ["union"] }
+thiserror.workspace = true
+tracing.workspace = true
+uncased.workspace = true
+unicode-width = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["assert"] }
@@ -33,7 +33,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 mz-sql-parser = { path = ".", default-features = false, features = ["test"] }
 
 [build-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 mz-ore-build = { path = "../ore-build", default-features = false }
 mz-walkabout = { path = "../walkabout", default-features = false }
 

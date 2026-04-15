@@ -137,8 +137,8 @@ impl Coordinator {
                         AdapterError::Unstructured(anyhow::anyhow!("expected S3 uri: {err}"))
                     })
                     .and_then(|uri| {
-                        if uri.scheme_str() != Some("s3") {
-                            coord_bail!("only 's3://...' urls are supported as COPY FROM target");
+                        if uri.scheme_str() != Some("s3") && uri.scheme_str() != Some("gs") {
+                            coord_bail!("only 's3://...' and 'gs://...' urls are supported as COPY FROM target");
                         }
                         Ok(uri)
                     })

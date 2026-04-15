@@ -435,7 +435,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         config: ClusterConfig,
         temporary_oids: &HashSet<u32>,
-    ) -> Result<(), CatalogError> {
+    ) -> Result<ClusterId, CatalogError> {
         let cluster_id = self.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
         let cluster_id = ClusterId::system(cluster_id).ok_or(SqlCatalogError::IdExhaustion)?;
         self.insert_cluster(
@@ -446,7 +446,8 @@ impl<'a> Transaction<'a> {
             privileges,
             config,
             temporary_oids,
-        )
+        )?;
+        Ok(cluster_id)
     }
 
     fn insert_cluster(
@@ -2623,7 +2624,7 @@ use crate::durable::async_trait;
 use super::objects::{RoleAuthKey, RoleAuthValue};
 
 #[async_trait]
-impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
+impl StorageTxn for Transaction<'_> {
     fn get_collection_metadata(&self) -> BTreeMap<GlobalId, ShardId> {
         self.storage_collection_metadata
             .items()
@@ -2640,7 +2641,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
     fn insert_collection_metadata(
         &mut self,
         metadata: BTreeMap<GlobalId, ShardId>,
-    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
+    ) -> Result<(), StorageError> {
         for (id, shard) in metadata {
             self.storage_collection_metadata
                 .insert(
@@ -2688,10 +2689,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .collect()
     }
 
-    fn insert_unfinalized_shards(
-        &mut self,
-        s: BTreeSet<ShardId>,
-    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
+    fn insert_unfinalized_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError> {
         for shard in s {
             match self
                 .unfinalized_shards
@@ -2721,10 +2719,7 @@ impl StorageTxn<mz_repr::Timestamp> for Transaction<'_> {
             .map(|TxnWalShardValue { shard }| *shard)
     }
 
-    fn write_txn_wal_shard(
-        &mut self,
-        shard: ShardId,
-    ) -> Result<(), StorageError<mz_repr::Timestamp>> {
+    fn write_txn_wal_shard(&mut self, shard: ShardId) -> Result<(), StorageError> {
         self.txn_wal_shard
             .insert((), TxnWalShardValue { shard }, self.op_id)
             .map_err(|err| match err {

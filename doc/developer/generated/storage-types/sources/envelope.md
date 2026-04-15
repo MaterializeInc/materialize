@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/sources/envelope.rs
-revision: db271c31b1
+revision: 5680493e7d
 ---
 
 # storage-types::sources::envelope

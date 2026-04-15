@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/deployment/preflight.rs
-revision: 5b9fb22e87
+revision: 5680493e7d
 ---
 
 # environmentd::deployment::preflight

@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/storage_state.rs
-revision: 6904a6baf2
+revision: b0fa98e931
 ---
 
 # mz-storage::storage_state

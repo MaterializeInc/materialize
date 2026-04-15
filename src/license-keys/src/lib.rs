@@ -189,12 +189,6 @@ fn validate_with_pubkey_v1(
     validation.validate_nbf = true;
     validation.validate_aud = false;
 
-    // NOTE(SEC-115): `DecodingKey` is an opaque type from the `jsonwebtoken` crate
-    // that holds parsed RSA key material internally. It cannot be wrapped in
-    // `Zeroizing` because `jsonwebtoken` does not expose the inner bytes, nor
-    // does `DecodingKey` implement `Zeroize`. The public key PEM used here is
-    // compiled into the binary (`PUBLIC_KEYS`), so this is a documentation-only
-    // limitation rather than a leak of runtime secrets.
     let key = DecodingKey::from_rsa_pem(pubkey_pem.as_bytes())?;
 
     let (jwt, expired): (TokenData<Payload>, _) =

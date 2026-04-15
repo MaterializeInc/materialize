@@ -1,6 +1,6 @@
 ---
 source: src/dyncfg-launchdarkly/src/lib.rs
-revision: f8348f3bca
+revision: 002ac45886
 ---
 
 # mz-dyncfg-launchdarkly

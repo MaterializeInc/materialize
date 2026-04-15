@@ -22,25 +22,26 @@ name = "window_functions"
 harness = false
 
 [dependencies]
-aho-corasick = "1.1.4"
-anyhow = "1.0.102"
-bytes = "1.11.1"
-bytesize = "2.1.0"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"] }
-crc32fast = "1.4.2"
-csv = "1.4.0"
-differential-dataflow = "0.21.1"
-dec = "0.4.8"
-derivative = "2.2.0"
-encoding = "0.2.0"
-enum-iterator = "2.1.0"
-fallible-iterator = "0.2.0"
-hex = "0.4.3"
-hmac = "0.12.1"
-itertools = "0.14.0"
-md-5 = "0.10.6"
-murmur2 = "0.1.0"
+aho-corasick.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+bytesize.workspace = true
+chrono.workspace = true
+columnation.workspace = true
+chrono-tz.workspace = true
+crc32fast.workspace = true
+csv.workspace = true
+differential-dataflow.workspace = true
+dec.workspace = true
+derivative.workspace = true
+encoding.workspace = true
+enum-iterator.workspace = true
+fallible-iterator.workspace = true
+hex.workspace = true
+hmac.workspace = true
+itertools.workspace = true
+md-5.workspace = true
+murmur2.workspace = true
 mz-expr-derive = { path = "../expr-derive", features = ["test"] }
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore", features = ["network", "proptest", "id_gen"] }
@@ -52,40 +53,38 @@ mz-regexp = { path = "../regexp" }
 mz-repr = { path = "../repr" }
 mz-sql-parser = { path = "../sql-parser" }
 mz-sql-pretty = { path = "../sql-pretty" }
-num = "0.4.3"
-num_enum = "0.7.6"
-ordered-float = { version = "5.1.0", features = ["serde"] }
-paste = "1.0.11"
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-regex = "1.12.3"
-regex-syntax = "0.8.10"
-seahash = "4.1.0"
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.149"
-sha1 = "0.10.6"
-sha2 = "0.10.9"
-subtle = "2.6.1"
-tracing = "0.1.44"
-uncased = "0.9.7"
-unicode-normalization = "0.1.25"
-uuid = { version = "1.19.0", features = ["v5"] }
-proptest = { version = "1.10.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
-smallvec = { version = "1.15.1" }
+num.workspace = true
+num_enum.workspace = true
+ordered-float.workspace = true
+paste.workspace = true
+prost.workspace = true
+regex.workspace = true
+regex-syntax.workspace = true
+seahash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+aws-lc-rs.workspace = true
+tracing.workspace = true
+uncased.workspace = true
+unicode-normalization.workspace = true
+uuid = { workspace = true, features = ["v5"] }
+proptest.workspace = true
+proptest-derive.workspace = true
+smallvec.workspace = true
 
 [dev-dependencies]
-criterion = { version = "0.8.2" }
-datadriven = "0.9.0"
-insta = "1.45"
+criterion.workspace = true
+datadriven.workspace = true
+insta.workspace = true
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
 mz-transform = { path = "../transform" }
-rand = "0.9.2"
+rand.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]

@@ -1367,6 +1367,12 @@ impl OrchestratorWorker {
             self.owner_references
                 .extend(orchestrator_pod.owner_references().into_iter().cloned());
 
+            if !self.collect_pod_metrics {
+                info!(
+                    "pod metrics collection is disabled; resource usage graphs in the console will not be available"
+                );
+            }
+
             info!(
                 "Kubernetes orchestrator worker initialized in {:?}",
                 start.elapsed()

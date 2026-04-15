@@ -72,9 +72,10 @@
   description: |
 
     To create new **read-only** tables from a source table, use the `CREATE
-    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement. The
-    following example creates **read-only** tables `items` and `orders` from the
-    PostgreSQL source's `public.items` and `public.orders` tables (the schema is `public`).
+    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement in a [DDL
+    transaction block](/sql/begin/#ddl-only-transactions). The following example
+    creates **read-only** tables `items` and `orders` from the PostgreSQL
+    source's `public.items` and `public.orders` tables (the schema is `public`).
 
     {{< note >}}
 
@@ -129,12 +130,14 @@
           );
     */
 
+    BEGIN;
     CREATE TABLE items
     FROM SOURCE pg_source(REFERENCE public.items)
     ;
     CREATE TABLE orders
     FROM SOURCE pg_source(REFERENCE public.orders)
     ;
+    COMMIT;
   results: |
 
     {{< include-md

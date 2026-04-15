@@ -15,7 +15,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use columnar::{Columnar, Index};
-use differential_dataflow::containers::{Columnation, CopyRegion};
+use columnation::{Columnation, CopyRegion};
 use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
@@ -56,8 +56,8 @@ pub(super) struct Return {
 /// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct(
+    scope: Scope<'_, Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
@@ -158,7 +158,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         // We pre-arrange the logging streams to force a consolidation and reduce the amount of
         // updates that reach `Row` encoding.
 
-        let operates = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let operates = consolidate_and_pack::<KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
             operates,
             TimelyLog::Operates,
             move |data, packer, session| {
@@ -209,7 +209,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         type KVB<K, V, T, D> = KeyValBatcher<K, V, T, D>;
         type KB<K, T, D> = KeyBatcher<K, T, D>;
 
-        let addresses = consolidate_and_pack::<_, KVB<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let addresses = consolidate_and_pack::<KVB<_, _, _, _>, ColumnBuilder<_>, _, _>(
             addresses,
             TimelyLog::Addresses,
             move |data, packer, session| {
@@ -228,7 +228,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let parks = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
+        let parks = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
             parks,
             TimelyLog::Parks,
             move |data, packer, session| {
@@ -246,7 +246,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let batches_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
+        let batches_sent = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
             batches_sent,
             TimelyLog::BatchesSent,
             move |data, packer, session| {
@@ -261,7 +261,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let batches_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
+        let batches_received = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
             batches_received,
             TimelyLog::BatchesReceived,
             move |data, packer, session| {
@@ -276,7 +276,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let messages_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
+        let messages_sent = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
             messages_sent,
             TimelyLog::MessagesSent,
             move |data, packer, session| {
@@ -291,7 +291,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let messages_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
+        let messages_received = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
             messages_received,
             TimelyLog::MessagesReceived,
             move |data, packer, session| {
@@ -306,7 +306,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let elapsed = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
+        let elapsed = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
             schedules_duration,
             TimelyLog::Elapsed,
             move |data, packer, session| {
@@ -320,7 +320,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let histogram = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
+        let histogram = consolidate_and_pack::<KB<_, _, _>, ColumnBuilder<_>, _, _>(
             schedules_histogram,
             TimelyLog::Histogram,
             move |data, packer, session| {

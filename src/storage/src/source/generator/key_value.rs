@@ -35,18 +35,18 @@ use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespac
 use crate::source::types::{SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
-pub fn render<G: Scope<Timestamp = MzOffset>>(
+pub fn render<'scope>(
     key_value: KeyValueLoadGenerator,
-    scope: &mut G,
+    scope: Scope<'scope, MzOffset>,
     config: RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
     start_signal: impl std::future::Future<Output = ()> + 'static,
     output_map: BTreeMap<LoadGeneratorOutput, Vec<usize>>,
     idx_to_exportid: BTreeMap<usize, GlobalId>,
 ) -> (
-    BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-    StreamVec<G, Infallible>,
-    StreamVec<G, HealthStatusMessage>,
+    BTreeMap<GlobalId, StackedCollection<'scope, MzOffset, Result<SourceMessage, DataflowError>>>,
+    StreamVec<'scope, MzOffset, Infallible>,
+    StreamVec<'scope, MzOffset, HealthStatusMessage>,
     Vec<PressOnDropButton>,
 ) {
     // known and comitted offsets are recorded in the stats operator
@@ -543,8 +543,8 @@ impl UpdateProducer {
     }
 }
 
-pub fn render_statistics_operator<G: Scope<Timestamp = MzOffset>>(
-    scope: &G,
+pub fn render_statistics_operator<'scope>(
+    scope: Scope<'scope, MzOffset>,
     config: &RawSourceCreationConfig,
     committed_uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'static,
 ) -> PressOnDropButton {

@@ -13,9 +13,9 @@ workspace = true
 mz-repr = { path = "../repr" }
 
 [dev-dependencies]
-anyhow = "1.0.102"
+anyhow.workspace = true
 mz-ore = { path = "../ore", features = ["cli"] }
-postgres = "0.19.12"
+postgres.workspace = true
 
 [features]
 default = []

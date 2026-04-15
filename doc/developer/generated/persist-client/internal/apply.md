@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/apply.rs
-revision: b8f9449bec
+revision: 181b1e7efc
 ---
 
 # persist-client::internal::apply

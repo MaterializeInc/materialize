@@ -10,13 +10,13 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-deadpool-postgres = "0.10.3"
+anyhow.workspace = true
+deadpool-postgres.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes"] }
 mz-tls-util = { path = "../tls-util" }
-prometheus = { version = "0.14.0", default-features = false }
-tokio = { version = "1.49.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
-tracing = "0.1.44"
+prometheus.workspace = true
+tokio.workspace = true
+tracing.workspace = true
 
 [features]
 default = []

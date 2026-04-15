@@ -1290,7 +1290,7 @@ fn test_explain_timestamp_json() {
         .unwrap();
     let explain: String = row.get(0);
     // Just check that we can round-trip to the original type
-    let _explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let _explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
 }
 
 // Verify that `EXPLAIN TIMESTAMP ...` within acts like a peek within a transaction.
@@ -1347,7 +1347,7 @@ fn test_transactional_explain_timestamps() {
             .unwrap();
 
         let explain: String = row.get(0);
-        let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+        let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
         let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
 
         if let Some(timestamp) = query_timestamp {
@@ -1411,7 +1411,7 @@ fn test_transactional_explain_timestamps() {
         .unwrap();
 
     let explain: String = row.get(0);
-    let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+    let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
     let explain_timestamp = explain.determination.timestamp_context.timestamp().unwrap();
 
     assert_eq!(*explain_timestamp, mz_now_timestamp);
@@ -1465,7 +1465,7 @@ async fn test_utilization_hold() {
 
             let row = client.query_one(explain_q, &[]).await.unwrap();
             let explain: String = row.get(0);
-            let explain: TimestampExplanation<Timestamp> = serde_json::from_str(&explain).unwrap();
+            let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
 
             // Assert that we actually used the indexes/tables, as required
             for s in &explain.sources {
@@ -1530,8 +1530,7 @@ async fn test_utilization_hold() {
                     .unwrap();
                 let row = client.query_one(explain_q, &[]).await.unwrap();
                 let explain: String = row.get(0);
-                let explain: TimestampExplanation<Timestamp> =
-                    serde_json::from_str(&explain).unwrap();
+                let explain: TimestampExplanation = serde_json::from_str(&explain).unwrap();
                 let since = explain
                     .determination
                     .since

@@ -310,6 +310,10 @@ pub enum MySqlSourcePurificationError {
     NoTablesFoundForSchemas(Vec<String>),
     #[error(transparent)]
     InvalidConnection(#[from] MySqlConnectionValidationError),
+    #[error(
+        "The MySQL system variable 'binlog_row_metadata' is set to an unsupported value: {setting}. Materialize requires this variable to be set to 'FULL' to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
+    )]
+    UnsupportedBinlogMetadataSetting { setting: String },
 }
 
 impl MySqlSourcePurificationError {

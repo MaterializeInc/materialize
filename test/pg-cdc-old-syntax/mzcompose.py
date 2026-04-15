@@ -149,7 +149,7 @@ SERVICES = [
     Materialized(
         volumes_extra=["secrets:/share/secrets"],
         additional_system_parameter_defaults={
-            "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+            "log_filter": "mz_storage::source::postgres=trace,info"
         },
         external_blob_store=True,
         default_replication_factor=2,
@@ -448,7 +448,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
-                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error"
+                "log_filter": "mz_storage::source::postgres=trace,info"
             },
             default_replication_factor=2,
         )
@@ -459,7 +459,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
-                "log_filter": "mz_storage::source::postgres=trace,debug,info,warn,error",
+                "log_filter": "mz_storage::source::postgres=trace,info",
                 "force_source_table_syntax": "true",
             },
             default_replication_factor=2,
@@ -548,7 +548,7 @@ def workflow_migration_multi_version_upgrade(
     upgrade_args_list = generate_materialized_upgrade_args(versions)
 
     for i, upgrade_args in enumerate(upgrade_args_list):
-        log_filter = "mz_storage::source::postgres=trace,debug,info,warn,error"
+        log_filter = "mz_storage::source::postgres=trace,info"
 
         # Enable source versioning migration at the end (final version)
         enable_source_migration_arg = (

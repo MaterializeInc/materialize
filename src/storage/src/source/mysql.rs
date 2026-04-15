@@ -56,7 +56,6 @@ use std::io;
 use std::rc::Rc;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::containers::TimelyStack;
 use itertools::Itertools;
 use mz_mysql_util::quote_identifier;
 use mz_ore::cast::CastFrom;
@@ -64,6 +63,7 @@ use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
+use mz_timely_util::columnation::ColumnationStack;
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
@@ -102,16 +102,19 @@ impl SourceRender for MySqlSourceConnection {
 
     /// Render the ingestion dataflow. This function only connects things together and contains no
     /// actual processing logic.
-    fn render<G: Scope<Timestamp = GtidPartition>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, GtidPartition>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<GtidPartition>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, GtidPartition, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, GtidPartition, HealthStatusMessage>,
+        StreamVec<'scope, GtidPartition, Probe<GtidPartition>>,
         Vec<PressOnDropButton>,
     ) {
         // Collect the source outputs that we will be exporting.
@@ -380,7 +383,7 @@ pub(crate) struct RewindRequest {
 
 type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
     T,
-    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
+    AccountedStackBuilder<CapacityContainerBuilder<ColumnationStack<(D, T, Diff)>>>,
 >;
 
 async fn return_definite_error(

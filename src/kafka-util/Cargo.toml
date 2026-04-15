@@ -10,36 +10,36 @@ publish = false
 workspace = true
 
 [dependencies]
-anyhow = "1.0.102"
-aws-config = { version = "1.8.13", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.8" }
-aws-sigv4 = { version = "1.3.6" }
-aws-types = "1.3.9"
-base64 = "0.22.1"
-chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-clap = { version = "4.5.23", features = ["derive"] }
-crossbeam = "0.8.4"
-fancy-regex = "0.16.2"
-futures = "0.3.32"
-itertools = "0.14.0"
+anyhow.workspace = true
+aws-config.workspace = true
+aws-credential-types.workspace = true
+aws-sigv4.workspace = true
+aws-types.workspace = true
+base64.workspace = true
+chrono.workspace = true
+clap.workspace = true
+crossbeam.workspace = true
+fancy-regex.workspace = true
+futures.workspace = true
+itertools.workspace = true
 mz-avro = { path = "../avro" }
 mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["cli", "network", "async"] }
 mz-ssh-util = { path = "../ssh-util" }
-num_cpus = "1.17.0"
-prost = { version = "0.14.3", features = ["no-recursion-limit"] }
-rand = "0.9.2"
-rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.149"
-tokio = { version = "1.49.0", features = ["macros", "rt", "sync"] }
-thiserror = "2.0.18"
-tracing = "0.1.44"
-url = "2.5.8"
+num_cpus.workspace = true
+prost.workspace = true
+rand.workspace = true
+rdkafka.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+url.workspace = true
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.14.3"
+prost-build.workspace = true
 
 [features]
 default = ["mz-build-tools/default"]

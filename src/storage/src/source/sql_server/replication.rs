@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use differential_dataflow::AsCollection;
-use differential_dataflow::containers::TimelyStack;
 use futures::StreamExt;
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -35,6 +34,7 @@ use mz_storage_types::sources::sql_server::{MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPO
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
+use mz_timely_util::columnation::ColumnationStack;
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::vec::Map;
@@ -56,15 +56,15 @@ use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
 /// replicate different tables, if we're using SQL Server's CDC features.
 static REPL_READER: &str = "reader";
 
-pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
-    scope: G,
+pub(crate) fn render<'scope>(
+    scope: Scope<'scope, Lsn>,
     config: RawSourceCreationConfig,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     source: SqlServerSourceConnection,
     metrics: SqlServerSourceMetrics,
 ) -> (
-    StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
-    StreamVec<G, ReplicationError>,
+    StackedCollection<'scope, Lsn, (u64, Result<SourceMessage, DataflowError>)>,
+    StreamVec<'scope, Lsn, ReplicationError>,
     PressOnDropButton,
 ) {
     let op_name = format!("SqlServerReplicationReader({})", config.id);
@@ -740,7 +740,7 @@ async fn handle_data_event(
 
 type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
     T,
-    AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
+    AccountedStackBuilder<CapacityContainerBuilder<ColumnationStack<(D, T, Diff)>>>,
 >;
 
 /// Helper method to decode a row from a [`tiberius::Row`] (or 2 of them in the case of update)

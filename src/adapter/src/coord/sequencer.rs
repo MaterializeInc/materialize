@@ -52,7 +52,6 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
 use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::Antichain;
-use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Level, Span, event, warn};
 
@@ -1053,8 +1052,8 @@ pub fn eval_copy_to_uri(
     }
     let to_url = match Uri::from_str(evaled.unwrap_str()) {
         Ok(url) => {
-            if url.scheme_str() != Some("s3") {
-                coord_bail!("only 's3://...' urls are supported as COPY TO target");
+            if url.scheme_str() != Some("s3") && url.scheme_str() != Some("gs") {
+                coord_bail!("only 's3://...' and 'gs://...' urls are supported as COPY TO target");
             }
             url
         }
@@ -1074,7 +1073,7 @@ pub(crate) async fn explain_pushdown_future_inner<
 >(
     session: &Session,
     catalog: &Catalog,
-    storage_collections: &Arc<dyn StorageCollections<Timestamp = Timestamp> + Send + Sync>,
+    storage_collections: &Arc<dyn StorageCollections + Send + Sync>,
     as_of: Antichain<Timestamp>,
     mz_now: ResultSpec<'static>,
     imports: I,
@@ -1232,10 +1231,11 @@ pub(crate) async fn statistics_oracle(
     query_as_of: &Antichain<Timestamp>,
     is_oneshot: bool,
     system_config: &vars::SystemVars,
-    storage_collections: &dyn StorageCollections<Timestamp = Timestamp>,
+    storage_collections: &dyn StorageCollections,
 ) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
     if !session.vars().enable_session_cardinality_estimates() {
-        return Ok(Box::new(EmptyStatisticsOracle));
+        let stats: Box<dyn StatisticsOracle> = Box::new(EmptyStatisticsOracle);
+        return Ok(stats);
     }
 
     let timeout = if is_oneshot {
@@ -1272,11 +1272,11 @@ struct CachedStatisticsOracle {
 }
 
 impl CachedStatisticsOracle {
-    pub async fn new<T: TimelyTimestamp>(
+    pub async fn new(
         ids: &BTreeSet<GlobalId>,
-        as_of: &Antichain<T>,
-        storage_collections: &dyn StorageCollections<Timestamp = T>,
-    ) -> Result<Self, StorageError<T>> {
+        as_of: &Antichain<Timestamp>,
+        storage_collections: &dyn StorageCollections,
+    ) -> Result<Self, StorageError> {
         let mut cache = BTreeMap::new();
 
         for id in ids {

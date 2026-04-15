@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use bytesize::ByteSize;
 use differential_dataflow::Hashable;
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
@@ -33,8 +34,8 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
-use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
+use mz_expr::{RowComparator, SafeMfpPlan};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -58,11 +59,9 @@ use mz_storage_types::sources::SourceData;
 use mz_storage_types::time_dependence::TimeDependence;
 use mz_txn_wal::operator::TxnsContext;
 use mz_txn_wal::txn_cache::TxnsCache;
-use timely::communication::Allocate;
 use timely::dataflow::operators::probe;
 use timely::order::PartialOrder;
 use timely::progress::frontier::Antichain;
-use timely::scheduling::Scheduler;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, span, trace, warn};
@@ -355,9 +354,9 @@ impl ComputeState {
 }
 
 /// A wrapper around [ComputeState] with a live timely worker and response channel.
-pub(crate) struct ActiveComputeState<'a, A: Allocate> {
+pub(crate) struct ActiveComputeState<'a> {
     /// The underlying Timely worker.
-    pub timely_worker: &'a mut TimelyWorker<A>,
+    pub timely_worker: &'a mut TimelyWorker,
     /// The compute state itself.
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
@@ -374,7 +373,7 @@ impl SinkToken {
     }
 }
 
-impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
+impl<'a> ActiveComputeState<'a> {
     /// Entrypoint for applying a compute command.
     #[mz_ore::instrument(level = "debug")]
     pub fn handle_compute_command(&mut self, cmd: ComputeCommand) {
@@ -1160,12 +1159,12 @@ impl PendingPeek {
         })
     }
 
-    fn persist<A: Allocate>(
+    fn persist(
         peek: Peek,
         persist_clients: Arc<PersistClientCache>,
         metadata: CollectionMetadata,
         max_result_size: usize,
-        timely_worker: &TimelyWorker<A>,
+        timely_worker: &TimelyWorker,
     ) -> Self {
         let active_worker = {
             // Choose the worker that does the actual peek arbitrarily but consistently.
@@ -1534,7 +1533,7 @@ impl IndexPeek {
     where
         for<'a> Tr: TraceReader<
                 Key<'a>: ToDatumIter + Eq,
-                KeyOwn = Row,
+                KeyContainer: BatchContainer<Owned = Row>,
                 Val<'a>: ToDatumIter,
                 TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
                 DiffGat<'a> = &'a Diff,
@@ -1571,15 +1570,14 @@ impl IndexPeek {
         // just at least those results that would have been returned.
         let max_results = peek.finishing.num_rows_needed();
 
-        let mut l_datum_vec = DatumVec::new();
-        let mut r_datum_vec = DatumVec::new();
+        let comparator = RowComparator::new(peek.finishing.order_by.as_slice());
 
         // Row iteration timing
         let row_iteration_start = Instant::now();
         let mut sort_time_accum = Duration::ZERO;
 
         while let Some(row) = peek_iterator.next() {
-            let row = match row {
+            let row: (Row, _) = match row {
                 Ok(row) => row,
                 Err(err) => return PeekStatus::Ready(PeekResponse::Error(err)),
             };
@@ -1633,21 +1631,18 @@ impl IndexPeek {
                         // in the other case).
                         let sort_start = Instant::now();
                         results.sort_by(|left, right| {
-                            let left_datums = l_datum_vec.borrow_with(&left.0);
-                            let right_datums = r_datum_vec.borrow_with(&right.0);
-                            mz_expr::compare_columns(
-                                &peek.finishing.order_by,
-                                &left_datums,
-                                &right_datums,
-                                || left.0.cmp(&right.0),
-                            )
+                            comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
                         });
                         sort_time_accum += sort_start.elapsed();
                         let dropped = results.drain(max_results..);
                         let dropped_size =
-                            dropped.into_iter().fold(0, |acc: usize, (row, _count)| {
-                                acc.saturating_add(row.byte_len().saturating_add(count_byte_size))
-                            });
+                            dropped
+                                .into_iter()
+                                .fold(0, |acc: usize, (row, _count): (Row, _)| {
+                                    acc.saturating_add(
+                                        row.byte_len().saturating_add(count_byte_size),
+                                    )
+                                });
                         total_size = total_size.saturating_sub(dropped_size);
                     }
                 }

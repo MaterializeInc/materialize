@@ -20,14 +20,14 @@ use std::sync::Arc;
 use std::task::{Context, Poll, ready};
 
 use differential_dataflow::Collection;
-use differential_dataflow::containers::TimelyStack;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
+use mz_timely_util::columnation::ColumnationStack;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
-use timely::dataflow::{Scope, ScopeParent, StreamVec};
+use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 use tokio::sync::Semaphore;
 use tokio_util::sync::PollSemaphore;
@@ -53,8 +53,7 @@ pub enum ProgressStatisticsUpdate {
     },
 }
 
-pub type StackedCollection<G, T> =
-    Collection<G, TimelyStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
+pub type StackedCollection<'scope, T, D> = Collection<'scope, T, ColumnationStack<(D, T, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
@@ -84,16 +83,19 @@ pub trait SourceRender {
     /// source to immediately drop all capabilities and advance its frontier to the empty antichain.
     ///
     /// [^1]: <https://github.com/MaterializeInc/materialize/blob/main/doc/developer/design/20210831_correctness.md#describing-definite-data>
-    fn render<G: Scope<Timestamp = Self::Time>>(
+    fn render<'scope>(
         self,
-        scope: &mut G,
+        scope: Scope<'scope, Self::Time>,
         config: &RawSourceCreationConfig,
         resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
-        BTreeMap<GlobalId, StackedCollection<G, Result<SourceMessage, DataflowError>>>,
-        StreamVec<G, HealthStatusMessage>,
-        StreamVec<G, Probe<Self::Time>>,
+        BTreeMap<
+            GlobalId,
+            StackedCollection<'scope, Self::Time, Result<SourceMessage, DataflowError>>,
+        >,
+        StreamVec<'scope, Self::Time, HealthStatusMessage>,
+        StreamVec<'scope, Self::Time, Probe<Self::Time>>,
         Vec<PressOnDropButton>,
     );
 }

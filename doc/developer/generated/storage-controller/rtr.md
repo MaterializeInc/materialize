@@ -1,6 +1,6 @@
 ---
 source: src/storage-controller/src/rtr.rs
-revision: 82d92a7fad
+revision: 00cc513fa5
 ---
 
 # storage-controller::rtr

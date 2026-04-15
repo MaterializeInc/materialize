@@ -3413,7 +3413,7 @@ mod tests {
             allow_windows: false,
         };
         let arena = RowArena::new();
-        let mut session = Session::<Timestamp>::dummy();
+        let mut session = Session::dummy();
         session
             .start_transaction(to_datetime(0), None, None)
             .expect("must succeed");

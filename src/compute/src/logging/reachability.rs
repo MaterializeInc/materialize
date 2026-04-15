@@ -44,8 +44,8 @@ pub(super) struct Return {
 /// * `scope`: The Timely scope hosting the log analysis dataflow.
 /// * `config`: Logging configuration
 /// * `event_queue`: The source to read log events from.
-pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
-    mut scope: G,
+pub(super) fn construct(
+    scope: Scope<'_, Timestamp>,
     config: &LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ReachabilityEvent)>, 3>,
 ) -> Return {
@@ -96,7 +96,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         let worker_id = scope.index();
 
         let updates =
-            consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
+            consolidate_and_pack::<Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
                 logs,
                 TimelyLog::Reachability,
                 move |data, packer, session| {

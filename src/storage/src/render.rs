@@ -210,13 +210,10 @@ use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceConnection};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::scope_label::ScopeExt;
-use timely::communication::Allocate;
-use timely::dataflow::Scope;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{Concatenate, ConnectLoop, Feedback, Leave};
-use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
-use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::worker::Worker as TimelyWorker;
 use tokio::sync::Semaphore;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
@@ -231,8 +228,8 @@ pub mod sources;
 ///
 /// This method creates a new dataflow to host the implementations of sources for the `dataflow`
 /// argument, and returns assets for each source that can import the results into a new dataflow.
-pub fn build_ingestion_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_ingestion_dataflow(
+    timely_worker: &mut TimelyWorker,
     storage_state: &mut StorageState,
     primary_source_id: GlobalId,
     description: IngestionDescription<CollectionMetadata>,
@@ -245,8 +242,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
     let debug_name = primary_source_id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, root_scope| {
-        let root_scope: &mut Child<_, ()> = root_scope;
-        let root_scope = &mut root_scope.with_label();
+        let root_scope = root_scope.with_label();
 
         // Here we need to create two scopes. One timestamped with `()`, which is the root scope,
         // and one timestamped with `mz_repr::Timestamp` which is the final scope of the dataflow.
@@ -305,6 +301,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
             let (outputs, source_health, source_tokens) = match connection {
                 GenericSourceConnection::Kafka(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -314,6 +311,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 ),
                 GenericSourceConnection::Postgres(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -323,6 +321,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 ),
                 GenericSourceConnection::MySql(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -332,6 +331,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 ),
                 GenericSourceConnection::SqlServer(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -341,6 +341,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                 ),
                 GenericSourceConnection::LoadGenerator(c) => crate::render::sources::render_source(
                     mz_scope,
+                    root_scope,
                     &debug_name,
                     c,
                     description.clone(),
@@ -392,7 +393,7 @@ pub fn build_ingestion_dataflow<A: Allocate>(
                         update: halt_status,
                     }
                 });
-                health_streams.push(sink_health.leave());
+                health_streams.push(sink_health.leave(root_scope));
             }
 
             mz_scope
@@ -435,8 +436,8 @@ pub fn build_ingestion_dataflow<A: Allocate>(
 }
 
 /// do the export dataflow thing
-pub fn build_export_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub fn build_export_dataflow(
+    timely_worker: &mut TimelyWorker,
     storage_state: &mut StorageState,
     id: GlobalId,
     description: StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
@@ -445,7 +446,7 @@ pub fn build_export_dataflow<A: Allocate>(
     let debug_name = id.to_string();
     let name = format!("Source dataflow: {debug_name}");
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
-        let scope = &mut scope.with_label();
+        let scope = scope.with_label();
 
         let mut tokens = vec![];
         let (health_stream, sink_tokens) =
@@ -478,8 +479,8 @@ pub fn build_export_dataflow<A: Allocate>(
     });
 }
 
-pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
-    timely_worker: &mut TimelyWorker<A>,
+pub(crate) fn build_oneshot_ingestion_dataflow(
+    timely_worker: &mut TimelyWorker,
     storage_state: &mut StorageState,
     ingestion_id: uuid::Uuid,
     collection_id: GlobalId,
@@ -501,9 +502,9 @@ pub(crate) fn build_oneshot_ingestion_dataflow<A: Allocate>(
 
     let name = format!("Oneshot ingestion: {ingestion_id}");
     let tokens = timely_worker.dataflow_named(&name, |scope| {
-        let scope = &mut scope.with_label();
+        let scope = scope.with_label();
         mz_storage_operators::oneshot_source::render(
-            scope.clone(),
+            scope,
             Arc::clone(&storage_state.persist_clients),
             connection_context,
             collection_id,

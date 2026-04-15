@@ -95,26 +95,9 @@ displays cluster resource utilization and sizing advice.
 #### Available sizes
 
 {{< tabs >}}
-{{< tab "M.1 Clusters" >}}
+{{< tab "cc Clusters" >}}
 
-{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
-
-{{< yaml-table data="m1_cluster_sizing" >}}
-
-{{< /tab >}}
-{{< tab "Legacy cc Clusters" >}}
-
-{{< tip >}}
-In most cases, you **should not** use legacy sizes. [M.1 sizes](#available-sizes)
-offer better performance per credit for nearly all workloads. We recommend using
-M.1 sizes for all new clusters, and recommend migrating existing
-legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
-customers during the transition period as we move to deprecate legacy sizes.
-
-The legacy size information is provided for completeness.
-{{< /tip >}}
-
-Valid legacy cc cluster sizes are:
+Valid cc cluster sizes are:
 
 * `25cc`
 * `50cc`
@@ -132,18 +115,33 @@ Valid legacy cc cluster sizes are:
 * `256C`
 * `512C`
 
-For clusters using legacy cc sizes, resource allocations are proportional to the
-number in the size name. For example, a cluster of size `600cc` has 2x as much
-CPU, memory, and disk as a cluster of size `300cc`, and 1.5x as much CPU,
-memory, and disk as a cluster of size `400cc`.
+Resource allocations are proportional to the number in the size name. For
+example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
+cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
+size `400cc`.
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
+{{< /tab >}}
+{{< tab "M.1 Clusters" >}}
+
+{{< note >}}
+M.1 sizes provide access to additional disk capacity compared to
+equivalently-priced cc sizes, which can be beneficial for disk-intensive
+workloads. However, cc sizes offer better compute performance per credit for
+most workloads. We recommend using cc sizes unless your workload specifically
+requires the additional disk capacity that M.1 sizes provide.
+{{< /note >}}
+
+{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+
+{{< yaml-table data="m1_cluster_sizing" >}}
+
 {{< /tab >}}
 {{< /tabs >}}
 
 See also:
 
-- [M.1 to cc size mapping](/sql/m1-cc-mapping/).
+- [cc to M.1 size mapping](/sql/m1-cc-mapping/).
 
 - [Materialize service consumption
   table](https://materialize.com/pdfs/pricing.pdf).
@@ -180,7 +178,7 @@ replica.
 
 ```sql
 ALTER CLUSTER c1
-SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 The `ALTER` statement is blocking and will return only when the new replica
@@ -278,7 +276,7 @@ CLUSTER` command with the `WAIT UNTIL READY` [option](#syntax):
 
 ```mzsql
 ALTER CLUSTER c1
-SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 {{% include-headless "/headless/alter-cluster-wait-until-ready-note" %}}
@@ -287,7 +285,7 @@ Alternatively, you can alter the cluster size immediately, without waiting, by
 running the `ALTER CLUSTER` command:
 
 ```mzsql
-ALTER CLUSTER c1 SET (SIZE 'M.1-xsmall');
+ALTER CLUSTER c1 SET (SIZE '100cc');
 ```
 
 This will incur downtime when the cluster contains objects that need

@@ -128,11 +128,11 @@ graph TD
     SC --> R2[Replica via CTP]
 ```
 
-1. **`mz_controller`** — unified `Controller<T>` multiplexing compute + storage
+1. **`mz_controller`** — unified `Controller` multiplexing compute + storage
 2. **`mz_compute_client::controller`** — `ComputeController` manages compute clusters/replicas
 3. **`mz_compute_client::controller::instance`** — per-cluster `Instance` state
 4. **`mz_compute_client::controller::replica`** — per-replica connection state
-5. **`mz_storage_controller`** — `Controller<T>` for storage; manages ingestion/export lifecycle
-6. **`mz_storage_controller::instance`** — per-cluster `Instance<T>` and `Replica<T>`
+5. **`mz_storage_controller`** — `Controller` for storage; manages ingestion/export lifecycle
+6. **`mz_storage_controller::instance`** — per-cluster `Instance` and `Replica`
 7. **`mz_service::transport`** — Cluster Transport Protocol (CTP): length-prefixed bincode over TCP/UDS
 8. **`mz_cluster::communication`** — generation-epoch mesh protocol for Timely workers

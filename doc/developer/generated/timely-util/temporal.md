@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/temporal.rs
-revision: a048f88ed6
+revision: d90aafba34
 ---
 
 # timely-util::temporal
