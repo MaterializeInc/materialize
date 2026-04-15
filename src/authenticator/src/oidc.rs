@@ -20,6 +20,7 @@ use jsonwebtoken::jwk::JwkSet;
 use mz_adapter::{AdapterError, AuthenticationError, Client as AdapterClient};
 use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_ISSUER};
 use mz_auth::Authenticated;
+use mz_ore::secure::{Zeroize, ZeroizeOnDrop};
 use mz_ore::soft_panic_or_log;
 use mz_pgwire_common::{ErrorResponse, Severity};
 use reqwest::Client as HttpClient;
@@ -183,6 +184,20 @@ pub struct OidcClaims {
     pub unknown_claims: BTreeMap<String, serde_json::Value>,
 }
 
+impl Zeroize for OidcClaims {
+    fn zeroize(&mut self) {
+        self.iss.zeroize();
+        self.exp.zeroize();
+        self.iat.zeroize();
+        for s in &mut self.aud {
+            s.zeroize();
+        }
+        self.aud.clear();
+        // serde_json::Value doesn't implement Zeroize; clearing is best-effort.
+        self.unknown_claims.clear();
+    }
+}
+
 impl OidcClaims {
     /// Extract the username from the OIDC claims.
     fn user(&self, authentication_claim: &str) -> Option<&str> {
@@ -192,12 +207,14 @@ impl OidcClaims {
     }
 }
 
+#[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ValidatedClaims {
     pub user: String,
     // Prevent construction outside of `GenericOidcAuthenticator::validate_token`.
     _private: (),
 }
 
+/// Wrapper around `jsonwebtoken::DecodingKey` with a redacted `Debug` impl.
 #[derive(Clone)]
 struct OidcDecodingKey(jsonwebtoken::DecodingKey);
 
@@ -566,5 +583,37 @@ mod tests {
             url.to_string(),
             "https://dev-123456.okta.com/oauth2/default/.well-known/openid-configuration"
         );
+    }
+
+    #[mz_ore::test]
+    fn zeroize_clears_validated_claims() {
+        use mz_ore::secure::Zeroize;
+        let mut claims = ValidatedClaims {
+            user: "alice@example.com".to_string(),
+            _private: (),
+        };
+        claims.zeroize();
+        assert!(claims.user.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn zeroize_clears_oidc_claims() {
+        use mz_ore::secure::Zeroize;
+        let mut claims = OidcClaims {
+            iss: "https://issuer.example.com".to_string(),
+            exp: 1234567890,
+            iat: Some(1234567800),
+            aud: vec!["app1".to_string(), "app2".to_string()],
+            unknown_claims: BTreeMap::from([(
+                "email".to_string(),
+                serde_json::Value::String("alice@example.com".to_string()),
+            )]),
+        };
+        claims.zeroize();
+        assert!(claims.iss.is_empty());
+        assert_eq!(claims.exp, 0);
+        assert!(claims.iat.is_none());
+        assert!(claims.aud.is_empty());
+        assert!(claims.unknown_claims.is_empty());
     }
 }
