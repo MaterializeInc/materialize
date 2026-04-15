@@ -1057,6 +1057,35 @@ pub fn plan_as_of(
         Some(as_of) => match as_of {
             AsOf::At(expr) => Ok(QueryWhen::AtTimestamp(plan_as_of_or_up_to(scx, expr)?)),
             AsOf::AtLeast(expr) => Ok(QueryWhen::AtLeastTimestamp(plan_as_of_or_up_to(scx, expr)?)),
+            AsOf::AtLeastFrontierOf(names) => {
+                let mut ids = Vec::with_capacity(names.len());
+                for name in names {
+                    let id = match &name {
+                        ResolvedItemName::Item { id, .. } => *id,
+                        ResolvedItemName::Cte { .. }
+                        | ResolvedItemName::ContinualTask { .. }
+                        | ResolvedItemName::Error => sql_bail!(
+                            "AS OF AT LEAST FRONTIER OF requires a source, table, \
+                             or materialized view; got {}",
+                            name.full_name_str(),
+                        ),
+                    };
+                    let item = scx.get_item(&id);
+                    match item.item_type() {
+                        CatalogItemType::Source
+                        | CatalogItemType::Table
+                        | CatalogItemType::MaterializedView => {}
+                        other => sql_bail!(
+                            "AS OF AT LEAST FRONTIER OF does not support {} {}; \
+                             only sources, tables, and materialized views are supported",
+                            other,
+                            name.full_name_str(),
+                        ),
+                    }
+                    ids.push(id);
+                }
+                Ok(QueryWhen::AtLeastFrontierOf(ids))
+            }
         },
     }
 }
