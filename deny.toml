@@ -212,7 +212,7 @@ wrappers = [
 ]
 
 # FIPS 140-3 compliance: migrating to rustls + aws-lc-rs as the single crypto
-# backend. The rustls ban has been removed; see doc/developer/openssl-to-rustls-migration.md.
+# backend. The rustls ban has been removed.
 
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
