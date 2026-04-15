@@ -58,21 +58,14 @@ use mz_server_core::listeners::{
 use mz_server_core::{ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
+use mz_tls_util::MakeRustlsConnect;
 use mz_tracing::CloneableEnvFilter;
-use openssl::asn1::Asn1Time;
-use openssl::error::ErrorStack;
-use openssl::hash::MessageDigest;
-use openssl::nid::Nid;
-use openssl::pkey::{PKey, Private};
-use openssl::rsa::Rsa;
-use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslOptions};
-use openssl::x509::extension::{BasicConstraints, SubjectAlternativeName};
-use openssl::x509::{X509, X509Name, X509NameBuilder};
 use postgres::error::DbError;
 use postgres::tls::{MakeTlsConnect, TlsConnect};
 use postgres::types::{FromSql, Type};
 use postgres::{NoTls, Socket};
-use postgres_openssl::MakeTlsConnector;
+use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair};
+use rustls::pki_types::CertificateDer;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
@@ -269,6 +262,9 @@ impl TestHarness {
         self,
         tls_reload_certs: ReloadTrigger,
     ) -> Result<TestServer, anyhow::Error> {
+        // Install CryptoProvider early, before any TLS usage. Required for
+        // --all-features builds where both ring and aws-lc-rs are active.
+        let _ = mz_ore::crypto::fips_crypto_provider();
         let listeners = Listeners::new(&self).await?;
         listeners.serve_with_trigger(self, tls_reload_certs).await
     }
@@ -1695,76 +1691,209 @@ pub fn make_header<H: Header>(h: H) -> HeaderMap {
     map
 }
 
-pub fn make_pg_tls<F>(configure: F) -> MakeTlsConnector
-where
-    F: FnOnce(&mut SslConnectorBuilder) -> Result<(), ErrorStack>,
-{
-    let mut connector_builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    // Disable TLS v1.3 because `postgres` and `hyper` produce stabler error
-    // messages with TLS v1.2.
-    //
-    // Briefly, in TLS v1.3, failing to present a client certificate does not
-    // error during the TLS handshake, as it does in TLS v1.2, but on the first
-    // attempt to read from the stream. But both `postgres` and `hyper` write a
-    // bunch of data before attempting to read from the stream. With a failed
-    // TLS v1.3 connection, sometimes `postgres` and `hyper` succeed in writing
-    // out this data, and then return a nice error message on the call to read.
-    // But sometimes the connection is closed before they write out the data,
-    // and so they report "connection closed" before they ever call read, never
-    // noticing the underlying SSL error.
-    //
-    // It's unclear who's bug this is. Is it on `hyper`/`postgres` to call read
-    // if writing to the stream fails to see if a TLS error occured? Is it on
-    // OpenSSL to provide a better API [1]? Is it a protocol issue that ought to
-    // be corrected in TLS v1.4? We don't want to answer these questions, so we
-    // just avoid TLS v1.3 for now.
-    //
-    // [1]: https://github.com/openssl/openssl/issues/11118
-    let options = connector_builder.options() | SslOptions::NO_TLSV1_3;
-    connector_builder.set_options(options);
-    configure(&mut connector_builder).unwrap();
-    MakeTlsConnector::new(connector_builder.build())
+/// Builds a rustls [`MakeRustlsConnect`] from a [`TestTlsConfig`].
+pub fn make_pg_tls(config: TestTlsConfig) -> MakeRustlsConnect {
+    MakeRustlsConnect::new((*config.build_rustls_client_config()).clone())
+}
+
+/// Performs a TLS handshake to `addr` and returns the peer's leaf certificate
+/// in DER encoding.
+///
+/// We use a raw `tokio_rustls` connection instead of reqwest because
+/// `reqwest::tls::TlsInfo::peer_certificate()` only returns the peer cert
+/// when reqwest is built with the `native-tls` backend. With the `rustls-tls`
+/// backend it always returns `None` — a known reqwest limitation. By dropping
+/// down to `tokio_rustls` directly we can call
+/// `ServerConnection::peer_certificates()` which always works.
+pub async fn peer_certificate_der(
+    addr: std::net::SocketAddr,
+    tls_config: &TestTlsConfig,
+) -> Vec<u8> {
+    use tokio_rustls::TlsConnector;
+
+    let connector = TlsConnector::from(tls_config.build_rustls_client_config());
+    let server_name = rustls::pki_types::ServerName::IpAddress(addr.ip().into());
+    let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let tls = connector.connect(server_name, tcp).await.unwrap();
+    let (_, session) = tls.get_ref();
+    let certs = session.peer_certificates().expect("peer certificates");
+    certs[0].as_ref().to_vec()
+}
+
+/// Reads a PEM certificate file and returns the first certificate as DER bytes.
+pub fn cert_file_to_der(path: &Path) -> Vec<u8> {
+    let pem = fs::read(path).unwrap();
+    let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
+        .collect::<Result<_, _>>()
+        .unwrap();
+    certs[0].as_ref().to_vec()
+}
+
+/// Configuration for test TLS connections.
+#[derive(Clone, Debug)]
+pub struct TestTlsConfig {
+    /// CA certificate files to trust. Empty = no custom roots.
+    pub ca_certs: Vec<PathBuf>,
+    /// Client certificate and key for mTLS.
+    pub client_cert: Option<(PathBuf, PathBuf)>,
+    /// Whether to verify the server certificate.
+    pub verify: bool,
+}
+
+impl TestTlsConfig {
+    /// No verification, no client cert.
+    pub fn no_verify() -> Self {
+        TestTlsConfig {
+            ca_certs: Vec::new(),
+            client_cert: None,
+            verify: false,
+        }
+    }
+
+    /// Verify with the given CA cert.
+    pub fn with_ca(ca_cert: &Path) -> Self {
+        TestTlsConfig {
+            ca_certs: vec![ca_cert.to_path_buf()],
+            client_cert: None,
+            verify: true,
+        }
+    }
+
+    /// Add a client certificate (for mTLS).
+    pub fn with_client_cert(mut self, cert: &Path, key: &Path) -> Self {
+        self.client_cert = Some((cert.to_path_buf(), key.to_path_buf()));
+        self
+    }
+
+    /// Build the rustls [`ClientConfig`](rustls::ClientConfig) from this configuration.
+    pub fn build_rustls_client_config(&self) -> Arc<rustls::ClientConfig> {
+        use rustls::client::danger::{
+            HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+        };
+        use rustls::pki_types::{ServerName, UnixTime};
+        use rustls::{DigitallySignedStruct, SignatureScheme};
+
+        let provider = mz_ore::crypto::fips_crypto_provider();
+
+        let builder = if self.verify && !self.ca_certs.is_empty() {
+            let mut root_store = rustls::RootCertStore::empty();
+            for ca_path in &self.ca_certs {
+                let pem = fs::read(ca_path).unwrap();
+                let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*pem)
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                for cert in certs {
+                    root_store.add(cert).unwrap();
+                }
+            }
+            rustls::ClientConfig::builder_with_provider(provider)
+                .with_protocol_versions(&[&rustls::version::TLS12])
+                .unwrap()
+                .with_root_certificates(root_store)
+        } else {
+            // No verification.
+            #[derive(Debug)]
+            struct NoVerifier(Arc<rustls::crypto::CryptoProvider>);
+            impl ServerCertVerifier for NoVerifier {
+                fn verify_server_cert(
+                    &self,
+                    _: &CertificateDer<'_>,
+                    _: &[CertificateDer<'_>],
+                    _: &ServerName<'_>,
+                    _: &[u8],
+                    _: UnixTime,
+                ) -> Result<ServerCertVerified, rustls::Error> {
+                    Ok(ServerCertVerified::assertion())
+                }
+                fn verify_tls12_signature(
+                    &self,
+                    _: &[u8],
+                    _: &CertificateDer<'_>,
+                    _: &DigitallySignedStruct,
+                ) -> Result<HandshakeSignatureValid, rustls::Error> {
+                    Ok(HandshakeSignatureValid::assertion())
+                }
+                fn verify_tls13_signature(
+                    &self,
+                    _: &[u8],
+                    _: &CertificateDer<'_>,
+                    _: &DigitallySignedStruct,
+                ) -> Result<HandshakeSignatureValid, rustls::Error> {
+                    Ok(HandshakeSignatureValid::assertion())
+                }
+                fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+                    self.0.signature_verification_algorithms.supported_schemes()
+                }
+            }
+            rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
+                .with_protocol_versions(&[&rustls::version::TLS12])
+                .unwrap()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerifier(provider)))
+        };
+
+        let config = match &self.client_cert {
+            Some((cert_path, key_path)) => {
+                let cert_pem = fs::read(cert_path).unwrap();
+                let key_pem = fs::read(key_path).unwrap();
+                let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut &*cert_pem)
+                    .collect::<Result<_, _>>()
+                    .unwrap();
+                let key = rustls_pemfile::private_key(&mut &*key_pem)
+                    .unwrap()
+                    .unwrap();
+                builder.with_client_auth_cert(certs, key).unwrap()
+            }
+            None => builder.with_no_client_auth(),
+        };
+
+        Arc::new(config)
+    }
 }
 
 /// A certificate authority for use in tests.
 pub struct Ca {
     pub dir: TempDir,
-    pub name: X509Name,
-    pub cert: X509,
-    pub pkey: PKey<Private>,
+    /// The CA's certificate parameters, used to build an Issuer for signing.
+    ca_params: CertificateParams,
+    /// The CA's key pair.
+    ca_key: KeyPair,
+    /// PEM-encoded CA certificate bytes.
+    pub cert_pem: Vec<u8>,
+    /// PEM-encoded private key bytes.
+    pub key_pem: Vec<u8>,
 }
 
 impl Ca {
     fn make_ca(name: &str, parent: Option<&Ca>) -> Result<Ca, Box<dyn Error>> {
         let dir = tempfile::tempdir()?;
-        let rsa = Rsa::generate(2048)?;
-        let pkey = PKey::from_rsa(rsa)?;
-        let name = {
-            let mut builder = X509NameBuilder::new()?;
-            builder.append_entry_by_nid(Nid::COMMONNAME, name)?;
-            builder.build()
+
+        let mut params = CertificateParams::new(Vec::<String>::new())?;
+        params
+            .distinguished_name
+            .push(DnType::CommonName, name.to_string());
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+
+        let key_pair = KeyPair::generate()?;
+
+        let cert = if let Some(parent) = parent {
+            let issuer = Issuer::new(parent.ca_params.clone(), &parent.ca_key);
+            params.signed_by(&key_pair, &issuer)?
+        } else {
+            params.self_signed(&key_pair)?
         };
-        let cert = {
-            let mut builder = X509::builder()?;
-            builder.set_version(2)?;
-            builder.set_pubkey(&pkey)?;
-            builder.set_issuer_name(parent.map(|ca| &ca.name).unwrap_or(&name))?;
-            builder.set_subject_name(&name)?;
-            builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
-            builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
-            builder.append_extension(BasicConstraints::new().critical().ca().build()?)?;
-            builder.sign(
-                parent.map(|ca| &ca.pkey).unwrap_or(&pkey),
-                MessageDigest::sha256(),
-            )?;
-            builder.build()
-        };
-        fs::write(dir.path().join("ca.crt"), cert.to_pem()?)?;
+
+        let cert_pem = cert.pem().into_bytes();
+        let key_pem = key_pair.serialize_pem().into_bytes();
+
+        fs::write(dir.path().join("ca.crt"), &cert_pem)?;
+
         Ok(Ca {
             dir,
-            name,
-            cert,
-            pkey,
+            ca_params: params,
+            ca_key: key_pair,
+            cert_pem,
+            key_pem,
         })
     }
 
@@ -1797,35 +1926,52 @@ impl Ca {
     where
         I: IntoIterator<Item = IpAddr>,
     {
-        let rsa = Rsa::generate(2048)?;
-        let pkey = PKey::from_rsa(rsa)?;
-        let subject_name = {
-            let mut builder = X509NameBuilder::new()?;
-            builder.append_entry_by_nid(Nid::COMMONNAME, name)?;
-            builder.build()
-        };
-        let cert = {
-            let mut builder = X509::builder()?;
-            builder.set_version(2)?;
-            builder.set_pubkey(&pkey)?;
-            builder.set_issuer_name(self.cert.subject_name())?;
-            builder.set_subject_name(&subject_name)?;
-            builder.set_not_before(&*Asn1Time::days_from_now(0)?)?;
-            builder.set_not_after(&*Asn1Time::days_from_now(365)?)?;
-            for ip in ips {
-                builder.append_extension(
-                    SubjectAlternativeName::new()
-                        .ip(&ip.to_string())
-                        .build(&builder.x509v3_context(None, None))?,
-                )?;
-            }
-            builder.sign(&self.pkey, MessageDigest::sha256())?;
-            builder.build()
-        };
+        let mut params = CertificateParams::new(Vec::<String>::new())?;
+        params
+            .distinguished_name
+            .push(DnType::CommonName, name.to_string());
+
+        let ip_addrs: Vec<IpAddr> = ips.into_iter().collect();
+        for ip in &ip_addrs {
+            params
+                .subject_alt_names
+                .push(rcgen::SanType::IpAddress(*ip));
+        }
+
+        let key_pair = KeyPair::generate()?;
+        let issuer = Issuer::from_params(&self.ca_params, &self.ca_key);
+        let cert = params.signed_by(&key_pair, &issuer)?;
+
         let cert_path = self.dir.path().join(Path::new(name).with_extension("crt"));
         let key_path = self.dir.path().join(Path::new(name).with_extension("key"));
-        fs::write(&cert_path, cert.to_pem()?)?;
-        fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
+        fs::write(&cert_path, cert.pem())?;
+        fs::write(&key_path, key_pair.serialize_pem())?;
         Ok((cert_path, key_path))
     }
+
+    /// Generates an RSA keypair suitable for JWT signing (RS256).
+    ///
+    /// This is separate from the CA's ECDSA key used for TLS.
+    /// Returns a [`JwtRsaKeyPair`] with PEM-encoded private and public keys.
+    pub fn generate_jwt_rsa_keypair() -> JwtRsaKeyPair {
+        let key_pair = KeyPair::generate_for(&rcgen::PKCS_RSA_SHA256)
+            .expect("RSA key generation requires aws_lc_rs feature");
+        let private_pem = key_pair.serialize_pem().into_bytes();
+        let public_pem = key_pair.public_key_pem().into_bytes();
+        JwtRsaKeyPair {
+            private_pem,
+            public_pem,
+        }
+    }
+}
+
+/// RSA keypair for JWT signing in tests.
+///
+/// The mock OIDC and Frontegg servers require RSA keys (RS256),
+/// which are separate from the ECDSA keys used for TLS certificates.
+pub struct JwtRsaKeyPair {
+    /// PEM-encoded RSA private key (PKCS8 format).
+    pub private_pem: Vec<u8>,
+    /// PEM-encoded RSA public key (SPKI format).
+    pub public_pem: Vec<u8>,
 }
