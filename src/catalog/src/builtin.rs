@@ -3735,37 +3735,60 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_SECRETS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_secrets",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SECRETS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The unique ID of the secret."),
-        ("oid", "A PostgreSQL-compatible oid for the secret."),
-        (
-            "schema_id",
-            "The ID of the schema to which the secret belongs. Corresponds to `mz_schemas.id`.",
-        ),
-        ("name", "The name of the secret."),
-        (
-            "owner_id",
-            "The role ID of the owner of the secret. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges belonging to the secret."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+pub static MZ_SECRETS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_secrets",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_SECRETS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The unique ID of the secret."),
+            ("oid", "A PostgreSQL-compatible oid for the secret."),
+            (
+                "schema_id",
+                "The ID of the schema to which the secret belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the secret."),
+            (
+                "owner_id",
+                "The role ID of the owner of the secret. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the secret."),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'Item' AND
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'secret'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    }
 });
 
 pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -14382,7 +14405,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_CLUSTERS),
         Builtin::MaterializedView(&MZ_CLUSTER_WORKLOAD_CLASSES),
         Builtin::Table(&MZ_CLUSTER_SCHEDULES),
-        Builtin::Table(&MZ_SECRETS),
+        Builtin::MaterializedView(&MZ_SECRETS),
         Builtin::MaterializedView(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),

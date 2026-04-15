@@ -534,7 +534,6 @@ mz_pseudo_types                ""
 mz_role_auth                   ""
 mz_roles                       ""
 mz_role_parameters             ""
-mz_secrets                     ""
 mz_sinks                       ""
 mz_sources                     ""
 mz_ssh_tunnel_connections      ""
@@ -560,6 +559,7 @@ mz_connections      mz_catalog_server   ""
 mz_databases        mz_catalog_server   ""
 mz_role_members     mz_catalog_server   ""
 mz_schemas          mz_catalog_server   ""
+mz_secrets          mz_catalog_server   ""
 mz_materialized_views mz_catalog_server ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
@@ -817,7 +817,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-55
+54
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

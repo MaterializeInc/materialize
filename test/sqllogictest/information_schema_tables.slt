@@ -226,7 +226,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_secrets
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sinks
