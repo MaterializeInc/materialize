@@ -45,7 +45,7 @@ parquet.workspace = true
 prometheus.workspace = true
 proptest.workspace = true
 prost.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["stream", "rustls-tls-webpki-roots-no-provider"], default-features = false }
 sentry.workspace = true
 serde.workspace = true
 smallvec = { workspace = true, features = ["union"] }

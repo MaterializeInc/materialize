@@ -23,8 +23,8 @@ mz-ore = { path = "../ore", default-features = false, features = ["async"]  }
 mz-secrets = { path = "../secrets", default-features = false }
 mz-repr = { path = "../repr", default-features = false }
 k8s-openapi.workspace = true
-kube.workspace = true
-reqwest.workspace = true
+kube = { workspace = true, features = ["client", "runtime", "ws"], default-features = false }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots-no-provider"], default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

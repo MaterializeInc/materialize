@@ -39,7 +39,6 @@ use std::time::Duration;
 use console_subscriber::ConsoleLayer;
 use derivative::Derivative;
 use http::HeaderMap;
-use hyper_tls::HttpsConnector;
 use hyper_util::client::legacy::connect::HttpConnector;
 use opentelemetry::propagation::{Extractor, Injector};
 use opentelemetry::trace::TracerProvider;
@@ -376,7 +375,7 @@ where
     {
         opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
-        // Manually set up an OpenSSL-backed, h2, proxied `Channel`,
+        // Manually set up a rustls-backed, h2, proxied `Channel`,
         // with the timeout configured according to:
         // https://docs.rs/opentelemetry-otlp/latest/opentelemetry_otlp/struct.TonicExporterBuilder.html#method.with_channel
         let channel = Endpoint::from_shared(otel_config.endpoint)?
@@ -385,16 +384,13 @@ where
             .connect_with_connector_lazy({
                 let mut http = HttpConnector::new();
                 http.enforce_http(false);
-                HttpsConnector::from((
-                    http,
-                    // This is the same as the default, plus an h2 ALPN request.
-                    tokio_native_tls::TlsConnector::from(
-                        native_tls::TlsConnector::builder()
-                            .request_alpns(&["h2"])
-                            .build()
-                            .unwrap(),
-                    ),
-                ))
+                hyper_rustls::HttpsConnectorBuilder::new()
+                    .with_provider_and_native_roots(rustls::crypto::aws_lc_rs::default_provider())
+                    .expect("native root certs")
+                    .https_or_http()
+                    .enable_http1()
+                    .enable_http2()
+                    .wrap_connector(http)
             });
         let exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()

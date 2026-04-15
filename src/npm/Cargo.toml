@@ -14,7 +14,8 @@ anyhow.workspace = true
 flate2.workspace = true
 hex.workspace = true
 hex-literal.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking", "rustls-tls-webpki-roots-no-provider"], default-features = false }
+rustls = { workspace = true, features = ["aws_lc_rs"], default-features = false }
 sha2.workspace = true
 tar.workspace = true
 walkdir.workspace = true

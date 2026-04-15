@@ -21,7 +21,7 @@ mz-auth = { path = "../auth", default-features = false }
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
 prometheus.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots-no-provider"], default-features = false }
 reqwest-middleware.workspace = true
 reqwest-retry.workspace = true
 serde.workspace = true

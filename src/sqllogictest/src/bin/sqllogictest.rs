@@ -112,6 +112,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    let _ = mz_ore::crypto::fips_crypto_provider();
     mz_ore::panic::install_enhanced_handler();
 
     let args: Args = cli::parse_args(CliConfig {
