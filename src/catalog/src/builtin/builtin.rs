@@ -16,13 +16,13 @@ use mz_pgrepr::oid;
 use mz_repr::adt::mz_acl_item::MzAclItem;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
 use mz_repr::{RelationDesc, SqlScalarType};
-use mz_sql::ast::Statement;
 use mz_sql::ast::display::{AstDisplay, escaped_string_literal};
+use mz_sql::ast::{RawItemName, Statement};
 use mz_sql::catalog::{NameReference, ObjectType};
 use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
-use crate::builtin::{Builtin, BuiltinMaterializedView, BuiltinView, PUBLIC_SELECT};
+use crate::builtin::{Builtin, BuiltinIndex, BuiltinMaterializedView, BuiltinView, PUBLIC_SELECT};
 
 /// Generate builtin views reporting the given builtins.
 ///
@@ -30,16 +30,81 @@ use crate::builtin::{Builtin, BuiltinMaterializedView, BuiltinView, PUBLIC_SELEC
 pub(super) fn builtins(
     builtin_items: &[Builtin<NameReference>],
 ) -> impl Iterator<Item = Builtin<NameReference>> {
+    let idx_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Index(x) => Some(*x),
+        _ => None,
+    });
     let mv_iter = builtin_items.iter().filter_map(|b| match b {
         Builtin::MaterializedView(x) => Some(*x),
         _ => None,
     });
+
+    let indexes = make_builtin_indexes(idx_iter);
     let materialized_views = make_builtin_materialized_views(mv_iter);
 
-    [materialized_views].into_iter().map(|v| {
+    [indexes, materialized_views].into_iter().map(|v| {
         let static_ref = Box::leak(Box::new(v));
         Builtin::View(static_ref)
     })
+}
+
+fn make_builtin_indexes(iter: impl Iterator<Item = &'static BuiltinIndex>) -> BuiltinView {
+    let values = iter
+        .map(|idx| {
+            let create_sql_str = idx.create_sql();
+            let stmt = mz_sql::parse::parse(&create_sql_str)
+                .expect("valid sql")
+                .into_element()
+                .ast;
+            let Statement::CreateIndex(stmt) = stmt else {
+                panic!("invalid builtin index SQL");
+            };
+
+            let create_sql = stmt.to_ast_string_stable();
+            let create_sql = escaped_string_literal(&create_sql);
+
+            let cluster_name = stmt.in_cluster.expect("builtin index has cluster");
+
+            let RawItemName::Name(on_name) = stmt.on_name else {
+                panic!("builtin index SQL must have unresolved ON name");
+            };
+            let Ok([on_schema_name, on_name]) = <[_; 2]>::try_from(on_name.0) else {
+                panic!("builtin index ON name must be schema-qualified");
+            };
+
+            format!(
+                "({}::oid, '{}', '{}', '{}', '{}', '{}', {})",
+                idx.oid, idx.schema, idx.name, on_schema_name, on_name, cluster_name, create_sql
+            )
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, on_schema_name, on_name, cluster_name, create_sql
+FROM (VALUES {values}) AS v(oid, schema_name, name, on_schema_name, on_name, cluster_name, create_sql)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_indexes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("on_schema_name", SqlScalarType::String.nullable(false))
+            .with_column("on_name", SqlScalarType::String.nullable(false))
+            .with_column("cluster_name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .with_key(vec![4])
+            .with_key(vec![6])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+    }
 }
 
 fn make_builtin_materialized_views<'a>(
