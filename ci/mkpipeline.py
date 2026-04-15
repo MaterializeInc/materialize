@@ -71,6 +71,39 @@ def get_imported_files(composition: str) -> list[str]:
     return spawn.capture(["bin/ci-python-imports", composition]).splitlines()
 
 
+def post_ci_trigger_status() -> None:
+    """Post a GitHub commit status linking to the CI trigger page for PRs."""
+    if not ui.env_is_truthy("BUILDKITE_PULL_REQUEST"):
+        return
+    pr_number = os.environ["BUILDKITE_PULL_REQUEST"]
+    token = os.getenv("GITHUB_CI_ISSUE_REFERENCE_CHECKER_TOKEN") or os.getenv(
+        "GITHUB_TOKEN"
+    )
+    if not token:
+        return
+    commit = os.getenv("BUILDKITE_COMMIT", "")
+    if not commit:
+        return
+    try:
+        resp = requests.post(
+            f"https://api.github.com/repos/MaterializeInc/materialize/statuses/{commit}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            json={
+                "state": "success",
+                "target_url": f"https://ci.dev.materialize.com/trigger/{pr_number}",
+                "description": "Trigger Nightly/Release Qualification/...",
+                "context": "Additional CI runs",
+            },
+        )
+        resp.raise_for_status()
+        print("Posted CI trigger link status to GitHub")
+    except Exception as e:
+        print(f"Failed to post CI trigger link status: {e}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="mkpipeline",
@@ -95,6 +128,10 @@ so it is executed.""",
     )
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
+
+    if not args.dry_run:
+        ci_trigger_thread = threading.Thread(target=post_ci_trigger_status, daemon=True)
+        ci_trigger_thread.start()
 
     print(f"Pipeline is: {args.pipeline}")
 
