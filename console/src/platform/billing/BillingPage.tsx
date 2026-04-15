@@ -46,7 +46,6 @@ import {
   useCurrentOrganization,
 } from "~/api/auth";
 import { Organization } from "~/api/cloudGlobalApi";
-import { OpenApiFetchError } from "~/api/OpenApiFetchError";
 import Alert, {
   AlertBanner,
   AlertBannerContent,
@@ -61,12 +60,14 @@ import { CalendarIcon, PaymentIcon, PlusIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { MaterializeTheme } from "~/theme";
 import { buildStripeInputStyles } from "~/theme/components/Input";
+import { isApiError } from "~/util";
 import {
   formatDateInUtc,
   FRIENDLY_DATE_FORMAT,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 
+import { FORBIDDEN_PAYMENT_ERROR_MESSAGE } from "./constants";
 import { EvaluationPlanDetails, UpgradedPlanDetails } from "./PlanDetails";
 import {
   useDetachPaymentMethod,
@@ -425,12 +426,9 @@ const PlanText = ({ organization }: { organization: Organization }) => {
   }
 };
 
-const FORBIDDEN_ERROR_MESSAGE =
-  "Only organization admins can manage payment methods. Contact an admin to make changes.";
-
 function getPaymentErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof OpenApiFetchError && error.status === 403) {
-    return FORBIDDEN_ERROR_MESSAGE;
+  if (isApiError(error) && error.status === 403) {
+    return FORBIDDEN_PAYMENT_ERROR_MESSAGE;
   }
   return fallback;
 }
@@ -438,11 +436,11 @@ function getPaymentErrorMessage(error: unknown, fallback: string): string {
 const BillingDetails = ({
   addPaymentMethodButtonProps,
   organization,
-  canManagePayments,
+  canManagePayments = false,
 }: {
   addPaymentMethodButtonProps?: ButtonProps;
   organization: Organization;
-  canManagePayments: boolean;
+  canManagePayments?: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const toast = useToast();
@@ -474,7 +472,7 @@ const BillingDetails = ({
       </HStack>
 
       {!canManagePayments && (
-        <Alert variant="info" message={FORBIDDEN_ERROR_MESSAGE} />
+        <Alert variant="info" message={FORBIDDEN_PAYMENT_ERROR_MESSAGE} />
       )}
 
       <HStack spacing="10" flexWrap="wrap">
