@@ -74,7 +74,7 @@ describe("buildSourceStatisticsQuery", () => {
 
   it(
     "gets statistics for only the first replica on a multi-replica cluster",
-    { timeout: 180_000 },
+    { timeout: 60_000 },
     async () => {
       await testdrive(
         `
@@ -86,7 +86,7 @@ describe("buildSourceStatisticsQuery", () => {
         ALTER SYSTEM SET storage_statistics_interval = 200
 
         # Create a cluster with multiple replicas
-        > CREATE CLUSTER multirep_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'), r3 (SIZE 'scale=1,workers=2'));
+        > CREATE CLUSTER multirep_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=1'));
 
         $ kafka-create-topic topic=multi_rep_input
 
@@ -109,9 +109,9 @@ describe("buildSourceStatisticsQuery", () => {
         # We wait on mz_source_statistics_with_history specifically because the console
         # query reads from that view, which has a separate index that may advance at a
         # different frontier than mz_source_statistics.
-        $ set-sql-timeout duration=120s
+        $ set-sql-timeout duration=30s
         > SELECT count(distinct replica_id) FROM mz_internal.mz_source_statistics_with_history JOIN mz_sources using(id) where name = 'kafka_multi' AND offset_committed = 3 AND offset_known = 3 AND messages_received > 0
-        3
+        2
       `,
       );
       const client = await getMaterializeClient();
