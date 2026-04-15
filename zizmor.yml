@@ -17,3 +17,4 @@ rules:
       - slack_notify_labeled.yml
       - slack_notify_qa_risky.yml
       - slack_notify_sql_parser.yml
+
