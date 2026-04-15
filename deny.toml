@@ -152,6 +152,10 @@ skip = [
     { name = "supports-color", version = "2.1.0" },
     # reqwest_0_12 workspace alias; see Cargo.toml.
     { name = "reqwest", version = "0.12" },
+    # Pulled in by rustls ecosystem
+    { name = "core-foundation", version = "0.9.3" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "security-framework", version = "2.10.0" },
 ]
 
 [[bans.deny]]
@@ -206,6 +210,7 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    "hyper-rustls",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "native-tls",
