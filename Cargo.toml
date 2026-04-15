@@ -301,7 +301,7 @@ bytefmt = "0.1.7"
 bytemuck = { version = "1.23.1", features = ["latest_stable_rust"] }
 byteorder = "1.5"
 bytes = "1.11.1"
-bytesize = "2.1.0"
+bytesize = "2.3.1"
 cc = "1.2.59"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
