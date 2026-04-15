@@ -72,6 +72,7 @@ def workflow_smoke(c: Composition) -> None:
         "catalog.td",
         "nested-records.td",
         "key-validation.td",
+        "partition-by.td",
     )
 
 
