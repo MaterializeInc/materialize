@@ -1,6 +1,6 @@
 ---
 source: src/cluster/src/communication.rs
-revision: 8cd889e259
+revision: b0fa98e931
 ---
 
 # communication

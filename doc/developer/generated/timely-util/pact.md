@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/pact.rs
-revision: f641a29d4a
+revision: b0fa98e931
 ---
 
 # timely-util::pact

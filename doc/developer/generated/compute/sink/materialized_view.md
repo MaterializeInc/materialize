@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/materialized_view.rs
-revision: 7411afe76f
+revision: b0fa98e931
 ---
 
 # mz-compute::sink::materialized_view

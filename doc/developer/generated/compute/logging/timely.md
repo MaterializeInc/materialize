@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/logging/timely.rs
-revision: 834eb88f27
+revision: b0fa98e931
 ---
 
 # mz-compute::logging::timely

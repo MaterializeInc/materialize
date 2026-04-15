@@ -1,6 +1,6 @@
 ---
 source: src/controller/src/clusters.rs
-revision: eb105c0ce8
+revision: f4f99cbc37
 ---
 
 # controller::clusters

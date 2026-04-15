@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/as_of_selection.rs
-revision: 52af3ba2a1
+revision: 00cc513fa5
 ---
 
 # mz-compute-client::as_of_selection

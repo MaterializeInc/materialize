@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/peek.rs
-revision: 4267863081
+revision: bce428d203
 ---
 
 # adapter::coord::sequencer::inner::peek

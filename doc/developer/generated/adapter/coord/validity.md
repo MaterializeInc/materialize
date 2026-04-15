@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/validity.rs
-revision: aa7a1afd31
+revision: bce428d203
 ---
 
 # adapter::coord::validity

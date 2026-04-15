@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/apply.rs
-revision: f75acad2d2
+revision: ae3360a4c1
 ---
 
 # adapter::catalog::apply

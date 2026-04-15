@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/in_memory_oracle.rs
-revision: 8ed0d4135b
+revision: bce428d203
 ---
 
 # adapter::coord::in_memory_oracle

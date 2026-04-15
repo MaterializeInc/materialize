@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/notice.rs
-revision: 4267863081
+revision: bce428d203
 ---
 
 # adapter::notice

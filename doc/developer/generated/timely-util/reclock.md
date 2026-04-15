@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/reclock.rs
-revision: c642b63c77
+revision: b0fa98e931
 ---
 
 # timely-util::reclock

@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/environmentd/main.rs
-revision: f8348f3bca
+revision: 117286ee15
 ---
 
 # environmentd::environmentd::main

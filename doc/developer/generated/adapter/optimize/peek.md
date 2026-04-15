@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/peek.rs
-revision: c0e930f9df
+revision: bce428d203
 ---
 
 # adapter::optimize::peek
