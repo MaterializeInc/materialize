@@ -2618,55 +2618,86 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: true,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_connections",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_CONNECTIONS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_column("create_sql", SqlScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The unique ID of the connection."),
-        ("oid", "A PostgreSQL-compatible OID for the connection."),
-        (
-            "schema_id",
-            "The ID of the schema to which the connection belongs. Corresponds to `mz_schemas.id`.",
-        ),
-        ("name", "The name of the connection."),
-        (
-            "type",
-            "The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.",
-        ),
-        (
-            "owner_id",
-            "The role ID of the owner of the connection. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges belonging to the connection."),
-        (
-            "create_sql",
-            "The `CREATE` SQL statement for the connection.",
-        ),
-        (
-            "redacted_create_sql",
-            "The redacted `CREATE` SQL statement for the connection.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+
+pub static MZ_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_connections",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_CONNECTIONS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The unique ID of the connection."),
+            ("oid", "A PostgreSQL-compatible OID for the connection."),
+            (
+                "schema_id",
+                "The ID of the schema to which the connection belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the connection."),
+            (
+                "type",
+                "The type of the connection: `confluent-schema-registry`, `kafka`, `postgres`, or `ssh-tunnel`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the connection. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges belonging to the connection."),
+            (
+                "create_sql",
+                "The `CREATE` SQL statement for the connection.",
+            ),
+            (
+                "redacted_create_sql",
+                "The redacted `CREATE` SQL statement for the connection.",
+            ),
+        ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL type,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'connection_type' AS type,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+    data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+    mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+FROM mz_internal.mz_catalog_raw
+WHERE
+    data->>'kind' = 'Item' AND
+    mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'connection'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    }
 });
+
 pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_ssh_tunnel_connections",
     schema: MZ_CATALOG_SCHEMA,
@@ -14352,7 +14383,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_CLUSTER_WORKLOAD_CLASSES),
         Builtin::Table(&MZ_CLUSTER_SCHEDULES),
         Builtin::Table(&MZ_SECRETS),
-        Builtin::Table(&MZ_CONNECTIONS),
+        Builtin::MaterializedView(&MZ_CONNECTIONS),
         Builtin::Table(&MZ_SSH_TUNNEL_CONNECTIONS),
         Builtin::Table(&MZ_CLUSTER_REPLICAS),
         Builtin::Source(&MZ_CLUSTER_REPLICA_METRICS_HISTORY),

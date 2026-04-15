@@ -130,7 +130,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_connections
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_databases

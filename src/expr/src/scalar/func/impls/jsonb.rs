@@ -381,7 +381,12 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         use mz_sql_parser::ast::Statement::*;
         let item_type = match stmt {
             CreateSecret(_) => "secret",
-            CreateConnection(_) => "connection",
+            CreateConnection(stmt) => {
+                let connection_type = stmt.connection_type.as_str();
+                info.insert("connection_type", json!(connection_type));
+
+                "connection"
+            }
             CreateView(_) => "view",
             CreateMaterializedView(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
