@@ -7398,11 +7398,9 @@ dependencies = [
  "mz-repr",
  "mz-server-core",
  "mz-sql",
- "openssl",
  "postgres",
  "tokio",
  "tokio-metrics",
- "tokio-openssl",
  "tokio-stream",
  "tokio-util",
  "tracing",
@@ -7703,8 +7701,9 @@ dependencies = [
  "futures",
  "mz-dyncfg",
  "mz-ore",
- "openssl",
  "proxy-header",
+ "rustls",
+ "rustls-pemfile",
  "schemars",
  "scopeguard",
  "serde",
@@ -7712,6 +7711,7 @@ dependencies = [
  "socket2 0.6.3",
  "tokio",
  "tokio-metrics",
+ "tokio-rustls",
  "tokio-stream",
  "tracing",
  "uuid",
@@ -10791,6 +10791,15 @@ dependencies = [
  "rustls-webpki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]
