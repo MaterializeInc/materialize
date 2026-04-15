@@ -547,7 +547,7 @@ where
                             }
                         }
                         FilterResult::ReplaceWith { key, val } => {
-                            part_desc.maybe_optimize(&cfg, key, val);
+                            part_desc.maybe_optimize(key, val);
                             audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
                         }
                     }

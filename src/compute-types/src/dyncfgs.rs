@@ -72,13 +72,6 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
 /// Enable lgalloc.
 pub const ENABLE_LGALLOC: Config<bool> = Config::new("enable_lgalloc", true, "Enable lgalloc.");
 
-/// Enable lgalloc's eager memory return/reclamation feature.
-pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
-    "enable_lgalloc_eager_reclamation",
-    true,
-    "Enable lgalloc's eager return behavior.",
-);
-
 /// The interval at which the background thread wakes.
 pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
     "lgalloc_background_interval",
@@ -387,7 +380,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MEMORY_LIMITER_INTERVAL)
         .add(&MEMORY_LIMITER_USAGE_BIAS)
         .add(&MEMORY_LIMITER_BURST_FACTOR)
-        .add(&ENABLE_LGALLOC_EAGER_RECLAMATION)
         .add(&ENABLE_COLUMNATION_LGALLOC)
         .add(&ENABLE_COLUMNAR_LGALLOC)
         .add(&COMPUTE_SERVER_MAINTENANCE_INTERVAL)

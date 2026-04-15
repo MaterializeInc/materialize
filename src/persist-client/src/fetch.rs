@@ -21,7 +21,7 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use itertools::EitherOrBoth;
-use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
+use mz_dyncfg::{Config, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::{soft_assert_or_log, soft_panic_no_log, soft_panic_or_log};
@@ -83,12 +83,6 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     "\
     Format we'll use to decode a Persist Part, either 'row', \
     'row_with_validate', or 'arrow' (Materialize).",
-);
-
-pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
-    "persist_optimize_ignored_data_fetch",
-    true,
-    "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
 );
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
@@ -567,16 +561,13 @@ where
 
     /// Apply any relevant projection pushdown optimizations, assuming that the data in the part
     /// is equivalent to the provided key and value.
-    pub fn maybe_optimize(&mut self, cfg: &ConfigSet, key: ArrayRef, val: ArrayRef) {
+    pub fn maybe_optimize(&mut self, key: ArrayRef, val: ArrayRef) {
         assert_eq!(key.len(), 1, "expect a single-row key array");
         assert_eq!(val.len(), 1, "expect a single-row val array");
         let as_of = match &self.filter {
             FetchBatchFilter::Snapshot { as_of } => as_of,
             FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
         };
-        if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
-            return;
-        }
         let (diffs_sum, _stats) = match &self.part {
             BatchPart::Hollow(x) => (x.diffs_sum, x.stats.as_ref()),
             BatchPart::Inline { .. } => return,

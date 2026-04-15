@@ -1477,9 +1477,6 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_claim_unclaimed_compactions"] = (
             BOOLEAN_FLAG_VALUES
         )
-        self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -1589,7 +1586,6 @@ class FlipFlagsAction(Action):
             "enable_compute_correction_v2",
             "linear_join_yielding",
             "enable_lgalloc",
-            "enable_lgalloc_eager_reclamation",
             "enable_s3_tables_region_check",
             "lgalloc_background_interval",
             "lgalloc_file_growth_dampener",
@@ -1621,8 +1617,6 @@ class FlipFlagsAction(Action):
             "compute_logical_backpressure_inflight_slack",
             "persist_fetch_semaphore_cost_adjustment",
             "persist_fetch_semaphore_permit_adjustment",
-            "persist_pubsub_client_enabled",
-            "persist_pubsub_push_diff_enabled",
             "persist_pubsub_same_process_delegate_enabled",
             "persist_pubsub_connect_attempt_timeout",
             "persist_pubsub_request_timeout",
@@ -1649,7 +1643,6 @@ class FlipFlagsAction(Action):
             "crdb_keepalives_idle",
             "crdb_keepalives_interval",
             "crdb_keepalives_retries",
-            "use_global_txn_cache_source",
             "persist_batch_builder_max_outstanding_parts",
             "persist_compaction_heuristic_min_inputs",
             "persist_compaction_heuristic_min_parts",
@@ -1715,7 +1708,6 @@ class FlipFlagsAction(Action):
             "persist_txns_data_shard_retryer_multiplier",
             "persist_txns_data_shard_retryer_clamp",
             "storage_cluster_shutdown_grace_period",
-            "storage_dataflow_delay_sources_past_rehydration",
             "storage_dataflow_suspendable_sources",
             "storage_downgrade_since_during_finalization",
             "replica_metrics_history_retention_interval",
