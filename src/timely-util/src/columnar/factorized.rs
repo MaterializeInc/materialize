@@ -121,7 +121,7 @@ where
 /// `bounds` stores cumulative end positions: element `i` owns children
 /// `bounds[i-1]..bounds[i]` (with `bounds[-1]` defined as 0).
 #[inline]
-fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usize> {
+pub fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usize> {
     let lower = if i == 0 {
         0
     } else {

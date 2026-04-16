@@ -16,9 +16,11 @@
 //! Benchmarks for factorized columnar storage.
 
 use columnar::bytes::indexed;
-use columnar::{Borrow, Len};
+use columnar::{Borrow, FromBytes, Index, IndexAs, Len};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mz_timely_util::columnar::factorized::{FactorizedColumns, KVUpdates, KVUpdatesRepeats};
+use mz_timely_util::columnar::factorized::{
+    FactorizedColumns, KVUpdates, KVUpdatesRepeats, Lists, child_range,
+};
 
 /// Generate sorted data with controllable repetition.
 fn generate_sorted_data(n: usize, distinct_a: usize, distinct_b: usize) -> Vec<(u64, u64, i64)> {
@@ -318,6 +320,159 @@ fn bench_kv_iter(c: &mut Criterion) {
     group.finish();
 }
 
+/// Serialize a `Lists<CC>` into a `Vec<u64>` store.
+fn serialize_lists<CC: columnar::ContainerBytes>(lists: &Lists<CC>) -> Vec<u64> {
+    let mut store = Vec::new();
+    indexed::encode(&mut store, &lists.borrow());
+    store
+}
+
+/// Helper: decode a serialized `Lists` store into its borrowed form and iterate with cursor.
+macro_rules! for_each_serialized {
+    ($a_store:expr, $b_store:expr, $c_store:expr, $at:ty, $bt:ty, $ct:ty, $f:expr) => {{
+        type BorrowedStrides<'a> = columnar::primitive::offsets::Strides<&'a [u64], &'a [u64]>;
+        let a_ds = indexed::DecodedStore::new($a_store);
+        let b_ds = indexed::DecodedStore::new($b_store);
+        let c_ds = indexed::DecodedStore::new($c_store);
+        let a_lists: columnar::Vecs<$at, BorrowedStrides<'_>> =
+            FromBytes::from_store(&a_ds, &mut 0);
+        let b_lists: columnar::Vecs<$bt, BorrowedStrides<'_>> =
+            FromBytes::from_store(&b_ds, &mut 0);
+        let c_lists: columnar::Vecs<$ct, BorrowedStrides<'_>> =
+            FromBytes::from_store(&c_ds, &mut 0);
+        for_each_on_borrowed(a_lists, b_lists, c_lists, $f);
+    }};
+}
+
+/// Iterate three borrowed `Vecs` levels using cursor-based leaf traversal.
+fn for_each_on_borrowed<AL, BL, CL>(
+    a_lists: columnar::Vecs<AL, columnar::primitive::offsets::Strides<&[u64], &[u64]>>,
+    b_lists: columnar::Vecs<BL, columnar::primitive::offsets::Strides<&[u64], &[u64]>>,
+    c_lists: columnar::Vecs<CL, columnar::primitive::offsets::Strides<&[u64], &[u64]>>,
+    mut f: impl FnMut(AL::Ref, BL::Ref, CL::Ref),
+) where
+    AL: Index + Copy,
+    BL: Index + Copy,
+    CL: Index + Copy,
+    AL::Ref: Copy,
+    BL::Ref: Copy,
+{
+    for outer in 0..Len::len(&a_lists) {
+        for a_idx in child_range(a_lists.bounds, outer) {
+            let a_val = a_lists.values.get(a_idx);
+            for b_idx in child_range(b_lists.bounds, a_idx) {
+                let b_val = b_lists.values.get(b_idx);
+                let range = child_range(c_lists.bounds, b_idx);
+                for c_val in c_lists.values.cursor(range) {
+                    f(a_val, b_val, c_val);
+                }
+            }
+        }
+    }
+}
+
+fn bench_kv_serialized(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/kv_serialized");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+        let data = generate_kv_data(n, nk, nv, nt);
+
+        // Build and form plain.
+        let mut plain_flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            plain_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        let refs: Vec<_> = plain_flat.iter().collect();
+        let plain = KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        // Build and form repeats.
+        let mut repeat_flat: KVUpdatesRepeats<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            repeat_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        let refs: Vec<_> = repeat_flat.iter().collect();
+        let repeat = KVUpdatesRepeats::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        // Serialize each level.
+        let plain_a = serialize_lists(&plain.lists);
+        let plain_b = serialize_lists(&plain.rest.lists);
+        let plain_c = serialize_lists(&plain.rest.rest);
+        let repeat_a = serialize_lists(&repeat.lists);
+        let repeat_b = serialize_lists(&repeat.rest.lists);
+        let repeat_c = serialize_lists(&repeat.rest.rest);
+
+        let plain_bytes = (plain_a.len() + plain_b.len() + plain_c.len()) * 8;
+        let repeat_bytes = (repeat_a.len() + repeat_b.len() + repeat_c.len()) * 8;
+
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        // Typed cursor (baseline).
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("plain/typed", &label), |b| {
+            b.iter(|| {
+                let mut count = 0usize;
+                plain.for_each_cursor(|_, _, _| count += 1);
+                count
+            })
+        });
+
+        // Serialized cursor plain.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("plain/serialized", &label), |b| {
+            b.iter(|| {
+                let mut count = 0usize;
+                for_each_serialized!(
+                    &plain_a,
+                    &plain_b,
+                    &plain_c,
+                    &[u64],
+                    &[u64],
+                    (&[u64], &[i64]),
+                    |_: &u64, _: &u64, _: (&u64, &i64)| count += 1
+                );
+                count
+            })
+        });
+
+        // Typed cursor repeats.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("repeats/typed", &label), |b| {
+            b.iter(|| {
+                let mut count = 0usize;
+                repeat.for_each_cursor(|_, _, _| count += 1);
+                count
+            })
+        });
+
+        // Serialized cursor repeats.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("repeats/serialized", &label), |b| {
+            b.iter(|| {
+                let mut count = 0usize;
+                type BorrowedRepeatsU64<'a> =
+                    columnar::Repeats<&'a [u64], &'a [u64], &'a [u64], &'a [u64]>;
+                type BorrowedRepeatsI64<'a> =
+                    columnar::Repeats<&'a [i64], &'a [u64], &'a [u64], &'a [u64]>;
+                for_each_serialized!(
+                    &repeat_a,
+                    &repeat_b,
+                    &repeat_c,
+                    &[u64],
+                    &[u64],
+                    (BorrowedRepeatsU64<'_>, BorrowedRepeatsI64<'_>),
+                    |_: &u64, _: &u64, _: (&u64, &i64)| count += 1
+                );
+                count
+            })
+        });
+
+        eprintln!(
+            "  [{label}] plain: {plain_bytes} bytes, repeats: {repeat_bytes} bytes, ratio: {:.1}x",
+            plain_bytes as f64 / repeat_bytes as f64,
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_push_flat,
@@ -326,5 +481,6 @@ criterion_group!(
     bench_dedup_ratio,
     bench_kv_form,
     bench_kv_iter,
+    bench_kv_serialized,
 );
 criterion_main!(benches);
