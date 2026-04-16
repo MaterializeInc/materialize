@@ -170,6 +170,104 @@ where
                     .map(move |c_idx| (a_val, b_val, c_lists.values.get(c_idx)))
             })
     }
+
+    /// Build a factorized trie from a sorted iterator of `(A, B, C)` refs.
+    ///
+    /// The input **must** be sorted by `(A, B, C)` order. Equal A values are
+    /// deduplicated into a single entry mapping to a range of B values; likewise
+    /// for B→C. No consolidation of C values is performed — the caller is
+    /// responsible for deduplication or diff accumulation if needed.
+    ///
+    /// Produces a single outer group containing all A values.
+    pub fn form<'a>(
+        sorted: impl Iterator<
+            Item = (
+                columnar::Ref<'a, A>,
+                columnar::Ref<'a, B>,
+                <CC as Borrow>::Ref<'a>,
+            ),
+        >,
+    ) -> Self
+    where
+        ContainerOf<A>: Push<columnar::Ref<'a, A>>,
+        ContainerOf<B>: Push<columnar::Ref<'a, B>>,
+        CC: columnar::Container,
+        <CC as Borrow>::Ref<'a>: Eq,
+        columnar::Ref<'a, A>: Eq,
+        columnar::Ref<'a, B>: Eq,
+    {
+        let mut output = Self::default();
+        let mut sorted = sorted.peekable();
+
+        if let Some((a, b, c)) = sorted.next() {
+            let mut prev_a = a;
+            let mut prev_b = b;
+            output.lists.values.push(a);
+            output.rest.lists.values.push(b);
+            output.rest.rest.values.push(c);
+
+            for (a, b, c) in sorted {
+                if a != prev_a {
+                    // New A: seal C bounds (for prev B) and B bounds (for prev A).
+                    Push::push(
+                        &mut output.rest.rest.bounds,
+                        output.rest.rest.values.len() as u64,
+                    );
+                    Push::push(
+                        &mut output.rest.lists.bounds,
+                        output.rest.lists.values.len() as u64,
+                    );
+                    output.lists.values.push(a);
+                    output.rest.lists.values.push(b);
+                } else if b != prev_b {
+                    // Same A, new B: seal C bounds (for prev B).
+                    Push::push(
+                        &mut output.rest.rest.bounds,
+                        output.rest.rest.values.len() as u64,
+                    );
+                    output.rest.lists.values.push(b);
+                }
+                // Always push C.
+                output.rest.rest.values.push(c);
+
+                prev_a = a;
+                prev_b = b;
+            }
+
+            // Seal all open bounds.
+            Push::push(
+                &mut output.rest.rest.bounds,
+                output.rest.rest.values.len() as u64,
+            );
+            Push::push(
+                &mut output.rest.lists.bounds,
+                output.rest.lists.values.len() as u64,
+            );
+            Push::push(&mut output.lists.bounds, output.lists.values.len() as u64);
+        }
+
+        output
+    }
+
+    /// Number of leaf (C-level) entries, equal to the total number of tuples.
+    pub fn len(&self) -> usize {
+        Len::len(&self.rest.rest.values)
+    }
+
+    /// Whether the structure contains no tuples.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Clear all levels, resetting to an empty state.
+    pub fn clear(&mut self) {
+        columnar::Clear::clear(&mut self.lists.values);
+        columnar::Clear::clear(&mut self.lists.bounds);
+        columnar::Clear::clear(&mut self.rest.lists.values);
+        columnar::Clear::clear(&mut self.rest.lists.bounds);
+        columnar::Clear::clear(&mut self.rest.rest.values);
+        columnar::Clear::clear(&mut self.rest.rest.bounds);
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +294,45 @@ mod tests {
 
         let items: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
         assert_eq!(items, vec![(1, 10, 100), (2, 20, 200), (3, 30, 300)]);
+    }
+
+    #[mz_ore::test]
+    fn test_form_deduplication() {
+        let input: Vec<(u64, u64, i64)> =
+            vec![(1, 10, 100), (1, 10, 200), (1, 20, 300), (2, 30, 400)];
+        let refs: Vec<_> = input.iter().map(|(a, b, c)| (a, b, c)).collect();
+
+        let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+
+        let result: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
+        assert_eq!(
+            result,
+            vec![(1, 10, 100), (1, 10, 200), (1, 20, 300), (2, 30, 400)]
+        );
+
+        // Verify deduplication.
+        assert_eq!(Len::len(&fc.lists.values), 2); // A: [1, 2]
+        assert_eq!(Len::len(&fc.rest.lists.values), 3); // B: [10, 20, 30]
+        assert_eq!(Len::len(&fc.rest.rest.values), 4); // C: [100, 200, 300, 400]
+    }
+
+    #[mz_ore::test]
+    fn test_len_clear() {
+        let mut fc: FactorizedColumns<u64, u64, i64> = Default::default();
+        assert_eq!(fc.len(), 0);
+        assert!(fc.is_empty());
+
+        fc.push_flat(&1u64, &10u64, &100i64);
+        fc.push_flat(&2u64, &20u64, &200i64);
+        assert_eq!(fc.len(), 2);
+        assert!(!fc.is_empty());
+
+        fc.clear();
+        assert_eq!(fc.len(), 0);
+        assert!(fc.is_empty());
+
+        fc.push_flat(&5u64, &50u64, &500i64);
+        let items: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
+        assert_eq!(items, vec![(5, 50, 500)]);
     }
 }
