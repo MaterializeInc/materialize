@@ -8458,6 +8458,7 @@ dependencies = [
  "lgalloc",
  "mz-ore",
  "num-traits",
+ "proptest",
  "serde",
  "timely",
  "tokio",

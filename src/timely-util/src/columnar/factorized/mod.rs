@@ -29,10 +29,28 @@
 //! * [`FactorizedColumns::push_flat`] — stride-1 insertion (no dedup), for accumulating unsorted data.
 //! * [`FactorizedColumns::form`] — build a trie from a sorted iterator, deduplicating at each level.
 
+pub mod batch;
+pub mod container;
+pub mod layout;
+#[cfg(test)]
+mod tests_prop;
+
+use std::rc::Rc;
+
 use columnar::primitive::offsets::Strides;
 use columnar::{
     AsBytes, Borrow, ContainerOf, FromBytes, Index, IndexAs, Len, Lookbacks, Push, Repeats, Vecs,
 };
+use differential_dataflow::trace::implementations::spine_fueled::Spine;
+use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+
+use batch::{FactBatch, FactBuilder};
+
+/// A spine of factorized columnar batches.
+pub type FactValSpine<K, V, T, R> = Spine<Rc<FactBatch<K, V, T, R>>>;
+
+/// A builder producing `Rc<FactBatch>` for use with [`FactValSpine`].
+pub type FactValBuilder<K, V, T, R> = RcBuilder<FactBuilder<K, V, T, R>>;
 
 /// A [`Vecs`] using [`Strides`] for offset bounds.
 ///
@@ -387,6 +405,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use differential_dataflow::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+    use timely::progress::Antichain;
+    use timely::progress::frontier::AntichainRef;
 
     #[mz_ore::test]
     fn test_push_flat_compiles() {
@@ -747,6 +768,105 @@ mod tests {
             "Reduction: A {:.0}x, B {:.0}x",
             n as f64 / Len::len(&fc.lists.values) as f64,
             n as f64 / Len::len(&fc.rest.lists.values) as f64,
+        );
+    }
+
+    /// Integration test: build multiple batches, merge them through the full
+    /// Batch/Merger/Builder stack, verify cursor output.
+    #[mz_ore::test]
+    fn test_spine_stack_integration() {
+        use batch::{FactBuilder, FactMerger};
+
+        // Build two abutting batches.
+        let mut chunk1 = vec![
+            ((1u64, 10u64), 100u64, 1i64),
+            ((1, 20), 100, 1),
+            ((2, 30), 100, 1),
+        ];
+        let mut builder1 = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
+        builder1.push(&mut chunk1);
+        let batch1 = builder1.done(Description::new(
+            Antichain::from_elem(0u64),
+            Antichain::from_elem(200u64),
+            Antichain::from_elem(0u64),
+        ));
+
+        let mut chunk2 = vec![
+            ((1u64, 10u64), 300u64, 2i64),
+            ((2, 30), 300, -1),
+            ((3, 40), 300, 1),
+        ];
+        let mut builder2 = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
+        builder2.push(&mut chunk2);
+        let batch2 = builder2.done(Description::new(
+            Antichain::from_elem(200u64),
+            Antichain::from_elem(400u64),
+            Antichain::from_elem(0u64),
+        ));
+
+        // Merge without compaction.
+        let mut merger: FactMerger<u64, u64, u64, i64> =
+            batch1.begin_merge(&batch2, AntichainRef::new(&[]));
+        merger.work(&batch1, &batch2, &mut 10000);
+        let merged = merger.done();
+
+        // Verify merged batch has all updates.
+        assert_eq!(merged.len(), 6);
+
+        // Collect and verify.
+        let mut result = Vec::new();
+        let mut cursor = merged.cursor();
+        while cursor.key_valid(&merged) {
+            while cursor.val_valid(&merged) {
+                let k = *cursor.key(&merged);
+                let v = *cursor.val(&merged);
+                cursor.map_times(&merged, |t, d| {
+                    result.push((k, v, *t, *d));
+                });
+                cursor.step_val(&merged);
+            }
+            cursor.step_key(&merged);
+        }
+
+        assert_eq!(
+            result,
+            vec![
+                (1, 10, 100, 1),
+                (1, 10, 300, 2),
+                (1, 20, 100, 1),
+                (2, 30, 100, 1),
+                (2, 30, 300, -1),
+                (3, 40, 300, 1),
+            ]
+        );
+
+        // Now merge with compaction at time 400 — all times advance to 400.
+        let mut merger2: FactMerger<u64, u64, u64, i64> =
+            batch1.begin_merge(&batch2, Antichain::from_elem(400u64).borrow());
+        merger2.work(&batch1, &batch2, &mut 10000);
+        let compacted = merger2.done();
+
+        let mut compacted_result = Vec::new();
+        let mut cursor = compacted.cursor();
+        while cursor.key_valid(&compacted) {
+            while cursor.val_valid(&compacted) {
+                let k = *cursor.key(&compacted);
+                let v = *cursor.val(&compacted);
+                cursor.map_times(&compacted, |t, d| {
+                    compacted_result.push((k, v, *t, *d));
+                });
+                cursor.step_val(&compacted);
+            }
+            cursor.step_key(&compacted);
+        }
+
+        // Key 1, Val 10: times 100→400, 300→400, diffs 1+2=3.
+        // Key 1, Val 20: time 100→400, diff 1.
+        // Key 2, Val 30: times 100→400, 300→400, diffs 1+(-1)=0 → gone!
+        // Key 3, Val 40: time 300→400, diff 1.
+        assert_eq!(
+            compacted_result,
+            vec![(1, 10, 400, 3), (1, 20, 400, 1), (3, 40, 400, 1),]
         );
     }
 }
