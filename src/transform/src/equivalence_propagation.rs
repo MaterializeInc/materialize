@@ -659,7 +659,10 @@ impl EquivalencePropagation {
 
                 // Discard equivalences among non-key columns, as it is not correct that `input` may drop rows
                 // that violate constraints among non-key columns without affecting the result.
-                outer_equivalences.project(0..group_key.len());
+                // Project to the group_key column indices. After project, group_key[i] has been
+                // remapped to position i; permute restores the original indices.
+                outer_equivalences.project(group_key.iter().copied());
+                outer_equivalences.permute(&group_key[..]);
                 self.apply(
                     input,
                     derived.last_child(),

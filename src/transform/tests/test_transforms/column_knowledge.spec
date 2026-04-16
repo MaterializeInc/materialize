@@ -168,6 +168,26 @@ TopK group_by=[#0] order_by=[#1 asc nulls_first] limit=7 offset=1
     Get t0
 
 
+# TopK must not push non-group-key column equivalences into its input.
+# Here #0 = 5 from the outer Filter must NOT propagate into the Constant below the TopK
+# (group_key is [#1], so only #1 equivalences should pass through).
+# Regression test for https://github.com/MaterializeInc/database-issues/issues/11282
+apply pipeline=equivalence_propagation
+Filter (#0 = 5)
+  TopK group_by=[#1] order_by=[#2 asc nulls_last] limit=1 offset=0
+    Constant // { types: "(bigint, bigint, bigint)" }
+      - (5, 1, 10)
+      - (5, 1, 20)
+      - (3, 1, 5)
+----
+Filter (#0 = 5)
+  TopK group_by=[#1] order_by=[#2 asc nulls_last] limit=1
+    Constant
+      - (5, 1, 10)
+      - (5, 1, 20)
+      - (3, 1, 5)
+
+
 ## Outer join patterns
 ## -------------------
 
