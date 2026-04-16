@@ -29,8 +29,8 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
 use mz_ore::iter::IteratorExt;
+use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
-use mz_ore::{assert_none, soft_panic_or_log};
 use mz_postgres_util::desc::PostgresTableDesc;
 use mz_proto::RustType;
 use mz_repr::{CatalogItemId, RelationDesc, RelationVersionSelector, Timestamp, strconv};
@@ -1437,7 +1437,9 @@ async fn purify_alter_source_add_subsources(
         details,
         seen: _,
     } = options.clone().try_into()?;
-    assert_none!(details, "details cannot be explicitly set");
+    if details.is_some() {
+        sql_bail!("DETAILS option cannot be explicitly set");
+    }
 
     let mut requested_subsource_map = BTreeMap::new();
 
@@ -1759,7 +1761,9 @@ async fn purify_create_table_from_source(
         partition_by: _,
         seen: _,
     } = with_options.clone().try_into()?;
-    assert_none!(details, "details cannot be explicitly set");
+    if details.is_some() {
+        sql_bail!("DETAILS option cannot be explicitly set");
+    }
 
     // Our text column values are unqualified (just column names), but the purification methods below
     // expect to match the fully-qualified names against the full set of tables in upstream, so we
