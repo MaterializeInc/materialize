@@ -194,6 +194,39 @@ where
             })
     }
 
+    /// Visit all `(A, B, C)` tuples using cursor-based leaf iteration.
+    ///
+    /// Like [`Self::iter`] but uses [`Index::cursor`] for the leaf level instead of
+    /// per-element `get()` calls. For containers like [`Repeats`] where `get()` involves
+    /// expensive `rank()` operations, cursor-based iteration maintains sequential state
+    /// and is significantly faster.
+    ///
+    /// Uses `for_each` style because cursor iterators borrow the container, which is
+    /// incompatible with `flat_map`'s `FnMut` closure requirement.
+    pub fn for_each_cursor(
+        &self,
+        mut f: impl FnMut(columnar::Ref<'_, A>, columnar::Ref<'_, B>, <CC as Borrow>::Ref<'_>),
+    ) where
+        CC: Borrow,
+    {
+        let a_lists = self.lists.borrow();
+        let b_lists = self.rest.lists.borrow();
+        let c_lists = self.rest.rest.borrow();
+
+        for outer in 0..Len::len(&a_lists) {
+            for a_idx in child_range(a_lists.bounds, outer) {
+                let a_val = a_lists.values.get(a_idx);
+                for b_idx in child_range(b_lists.bounds, a_idx) {
+                    let b_val = b_lists.values.get(b_idx);
+                    let range = child_range(c_lists.bounds, b_idx);
+                    for c_val in c_lists.values.cursor(range) {
+                        f(a_val, b_val, c_val);
+                    }
+                }
+            }
+        }
+    }
+
     /// Build a factorized trie from a sorted iterator of `(A, B, C)` refs.
     ///
     /// The input **must** be sorted by `(A, B, C)` order. Equal A values are

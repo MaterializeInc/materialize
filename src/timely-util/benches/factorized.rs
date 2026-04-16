@@ -288,13 +288,31 @@ fn bench_kv_iter(c: &mut Criterion) {
         let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
 
         group.throughput(Throughput::Elements(n as u64));
-        group.bench_function(BenchmarkId::new("plain", &label), |b| {
+        group.bench_function(BenchmarkId::new("plain/iter", &label), |b| {
             b.iter(|| plain.iter().count())
         });
 
         group.throughput(Throughput::Elements(n as u64));
-        group.bench_function(BenchmarkId::new("repeats", &label), |b| {
+        group.bench_function(BenchmarkId::new("plain/cursor", &label), |b| {
+            b.iter(|| {
+                let mut count = 0usize;
+                plain.for_each_cursor(|_, _, _| count += 1);
+                count
+            })
+        });
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("repeats/iter", &label), |b| {
             b.iter(|| repeat.iter().count())
+        });
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("repeats/cursor", &label), |b| {
+            b.iter(|| {
+                let mut count = 0usize;
+                repeat.for_each_cursor(|_, _, _| count += 1);
+                count
+            })
         });
     }
     group.finish();
