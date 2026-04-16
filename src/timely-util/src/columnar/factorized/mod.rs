@@ -30,6 +30,7 @@
 //! * [`FactorizedColumns::form`] — build a trie from a sorted iterator, deduplicating at each level.
 
 pub mod batch;
+pub mod column;
 pub mod container;
 pub mod layout;
 #[cfg(test)]
