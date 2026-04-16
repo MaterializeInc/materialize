@@ -2238,6 +2238,8 @@ pub enum ClusterOptionName {
     Size,
     /// The `SCHEDULE` option.
     Schedule,
+    /// The `UPSERT V2` option.
+    UpsertV2,
     /// The `WORKLOAD CLASS` option.
     WorkloadClass,
 }
@@ -2254,6 +2256,7 @@ impl AstDisplay for ClusterOptionName {
             ClusterOptionName::ReplicationFactor => f.write_str("REPLICATION FACTOR"),
             ClusterOptionName::Size => f.write_str("SIZE"),
             ClusterOptionName::Schedule => f.write_str("SCHEDULE"),
+            ClusterOptionName::UpsertV2 => f.write_str("UPSERT V2"),
             ClusterOptionName::WorkloadClass => f.write_str("WORKLOAD CLASS"),
         }
     }
@@ -2276,6 +2279,7 @@ impl WithOptionName for ClusterOptionName {
             | ClusterOptionName::ReplicationFactor
             | ClusterOptionName::Size
             | ClusterOptionName::Schedule
+            | ClusterOptionName::UpsertV2
             | ClusterOptionName::WorkloadClass => false,
         }
     }

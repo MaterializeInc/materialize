@@ -350,6 +350,7 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub optimizer_feature_overrides: BTreeMap<String, String>,
     pub schedule: ClusterSchedule,
+    pub enable_upsert_v2: Option<bool>,
 }
 
 #[derive(Clone, Debug, Ord, PartialOrd, PartialEq, Eq)]

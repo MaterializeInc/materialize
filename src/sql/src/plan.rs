@@ -590,6 +590,7 @@ pub struct CreateClusterManagedPlan {
     pub compute: ComputeReplicaConfig,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    pub enable_upsert_v2: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -2045,6 +2046,7 @@ pub struct PlanClusterOption {
     pub replication_factor: AlterOptionParameter<u32>,
     pub size: AlterOptionParameter,
     pub schedule: AlterOptionParameter<ClusterSchedule>,
+    pub enable_upsert_v2: AlterOptionParameter<bool>,
     pub workload_class: AlterOptionParameter<Option<String>>,
 }
 
@@ -2059,6 +2061,7 @@ impl Default for PlanClusterOption {
             replication_factor: AlterOptionParameter::Unchanged,
             size: AlterOptionParameter::Unchanged,
             schedule: AlterOptionParameter::Unchanged,
+            enable_upsert_v2: AlterOptionParameter::Unchanged,
             workload_class: AlterOptionParameter::Unchanged,
         }
     }

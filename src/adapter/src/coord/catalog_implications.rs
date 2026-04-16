@@ -34,8 +34,8 @@ use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, Connection, ContinualTask, DataSourceDesc, Index,
-    MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    CatalogItem, Cluster, ClusterReplica, ClusterVariant, Connection, ContinualTask, DataSourceDesc,
+    Index, MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
@@ -1379,11 +1379,17 @@ impl Coordinator {
                 let desc = desc.into_inline_connection(self.catalog().state());
                 let item_global_id = self.catalog().get_entry(&item_id).latest_global_id();
 
-                let ingestion = mz_storage_types::sources::IngestionDescription::new(
+                let mut ingestion = mz_storage_types::sources::IngestionDescription::new(
                     desc,
                     cluster_id,
                     item_global_id,
                 );
+
+                if let ClusterVariant::Managed(managed) =
+                    &self.catalog().get_cluster(cluster_id).config.variant
+                {
+                    ingestion.enable_upsert_v2 = managed.enable_upsert_v2;
+                }
 
                 DataSource::Ingestion(ingestion)
             }
@@ -1409,6 +1415,12 @@ impl Coordinator {
                     cluster_id,
                     progress_subsource,
                 );
+
+                if let ClusterVariant::Managed(managed) =
+                    &self.catalog().get_cluster(cluster_id).config.variant
+                {
+                    ingestion.enable_upsert_v2 = managed.enable_upsert_v2;
+                }
 
                 let legacy_export = SourceExport {
                     storage_metadata: (),

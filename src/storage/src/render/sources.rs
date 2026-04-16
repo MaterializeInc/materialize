@@ -333,10 +333,12 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    let (upsert, health_update, snapshot_progress, upsert_token) =
-                        if dyncfgs::ENABLE_UPSERT_V2
+                    let use_upsert_v2 = description.enable_upsert_v2.unwrap_or_else(|| {
+                        dyncfgs::ENABLE_UPSERT_V2
                             .get(storage_state.storage_configuration.config_set())
-                        {
+                    });
+                    let (upsert, health_update, snapshot_progress, upsert_token) =
+                        if use_upsert_v2 {
                             crate::upsert::upsert_v2(
                                 upsert_input.enter(scope),
                                 upsert_envelope.clone(),

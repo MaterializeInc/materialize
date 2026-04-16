@@ -3406,6 +3406,7 @@ where
             desc: ingestion_description.desc.clone(),
             instance_id: ingestion_description.instance_id,
             remap_collection_id: ingestion_description.remap_collection_id,
+            enable_upsert_v2: ingestion_description.enable_upsert_v2,
         };
 
         let storage_instance_id = description.instance_id;
