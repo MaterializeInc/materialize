@@ -335,4 +335,155 @@ mod tests {
         let items: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
         assert_eq!(items, vec![(5, 50, 500)]);
     }
+
+    #[mz_ore::test]
+    fn test_strides_compression_flat() {
+        // Flat push: all bounds should use constant stride (no Vec<u64> allocation).
+        let mut fc: FactorizedColumns<u64, u64, i64> = Default::default();
+        for i in 0..100u64 {
+            fc.push_flat(&i, &(i * 10), &(i as i64 * 100));
+        }
+
+        // All strides should be 1 (each element maps to exactly 1 child).
+        assert_eq!(fc.lists.bounds.strided(), Some(1));
+        assert_eq!(fc.rest.lists.bounds.strided(), Some(1));
+        assert_eq!(fc.rest.rest.bounds.strided(), Some(1));
+    }
+
+    #[mz_ore::test]
+    fn test_strides_compression_form() {
+        // Form with varying fan-out: strides should NOT all be constant.
+        let input: Vec<(u64, u64, i64)> = vec![
+            (1, 10, 100),
+            (1, 10, 200), // A=1 has 2 C values under B=10
+            (1, 20, 300), // A=1 has 2 B values
+            (2, 30, 400), // A=2 has 1 B value
+        ];
+        let refs: Vec<_> = input.iter().map(|(a, b, c)| (a, b, c)).collect();
+        let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+
+        // A bounds: single outer group.
+        assert!(fc.lists.bounds.strided().is_some());
+
+        // B bounds: A[0]=1 has 2 B children, A[1]=2 has 1 B child → varying.
+        assert_eq!(fc.rest.lists.bounds.strided(), None);
+
+        // C bounds: B[0]=10 has 2 children, B[1]=20 has 1, B[2]=30 has 1 → varying.
+        assert_eq!(fc.rest.rest.bounds.strided(), None);
+    }
+
+    #[mz_ore::test]
+    fn test_form_sort_roundtrip() {
+        let data = vec![
+            (3u64, 30u64, 300i64),
+            (1, 10, 100),
+            (1, 10, 200),
+            (2, 20, 200),
+            (1, 20, 300),
+            (2, 30, 400),
+        ];
+
+        let mut flat: FactorizedColumns<u64, u64, i64> = Default::default();
+        for (a, b, c) in &data {
+            flat.push_flat(a, b, c);
+        }
+
+        let mut refs: Vec<_> = flat.iter().collect();
+        refs.sort();
+        let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+
+        let result: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
+        let mut expected = data;
+        expected.sort();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_form_empty() {
+        let empty: Vec<(&u64, &u64, &i64)> = vec![];
+        let fc = FactorizedColumns::<u64, u64, i64>::form(empty.into_iter());
+        assert!(fc.is_empty());
+        assert_eq!(fc.len(), 0);
+        let items: Vec<_> = fc.iter().collect();
+        assert!(items.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_form_single_element() {
+        let input = vec![(42u64, 7u64, -1i64)];
+        let refs: Vec<_> = input.iter().map(|(a, b, c)| (a, b, c)).collect();
+        let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+
+        assert_eq!(fc.len(), 1);
+        let items: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
+        assert_eq!(items, vec![(42, 7, -1)]);
+    }
+
+    #[mz_ore::test]
+    fn test_form_all_same_a() {
+        let input: Vec<(u64, u64, i64)> =
+            vec![(1, 10, 100), (1, 10, 200), (1, 20, 300), (1, 20, 400)];
+        let refs: Vec<_> = input.iter().map(|(a, b, c)| (a, b, c)).collect();
+        let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+
+        let result: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
+        assert_eq!(result, input);
+
+        assert_eq!(Len::len(&fc.lists.values), 1);
+        assert_eq!(Len::len(&fc.rest.lists.values), 2);
+        assert_eq!(Len::len(&fc.rest.rest.values), 4);
+    }
+
+    #[mz_ore::test]
+    fn bench_memory_savings() {
+        let n = 100_000usize;
+        let n_distinct_a = 100usize;
+        let n_distinct_b = 1_000usize;
+
+        let mut data: Vec<(u64, u64, i64)> = Vec::with_capacity(n);
+        for i in 0..n {
+            data.push((
+                (i % n_distinct_a) as u64,
+                (i % n_distinct_b) as u64,
+                i as i64,
+            ));
+        }
+        data.sort();
+
+        let mut flat: FactorizedColumns<u64, u64, i64> = Default::default();
+        for (a, b, c) in &data {
+            flat.push_flat(a, b, c);
+        }
+        let refs: Vec<_> = flat.iter().collect();
+        let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+
+        // Verify correctness.
+        assert_eq!(fc.len(), n);
+        let result: Vec<_> = fc.iter().map(|(a, b, c)| (*a, *b, *c)).collect();
+        assert_eq!(result, data);
+
+        // Report.
+        println!("--- Factorized columns memory benchmark ---");
+        println!(
+            "Input: {} tuples, {} distinct A, {} distinct B",
+            n, n_distinct_a, n_distinct_b
+        );
+        println!(
+            "Flat:        A={}, B={}, C={} values",
+            Len::len(&flat.lists.values),
+            Len::len(&flat.rest.lists.values),
+            Len::len(&flat.rest.rest.values),
+        );
+        println!(
+            "Factorized:  A={}, B={}, C={} values",
+            Len::len(&fc.lists.values),
+            Len::len(&fc.rest.lists.values),
+            Len::len(&fc.rest.rest.values),
+        );
+        println!(
+            "Reduction: A {:.0}x, B {:.0}x",
+            n as f64 / Len::len(&fc.lists.values) as f64,
+            n as f64 / Len::len(&fc.rest.lists.values) as f64,
+        );
+    }
 }
