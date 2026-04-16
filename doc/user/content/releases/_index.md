@@ -16,8 +16,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.20.0
-*Released to Materialize Cloud: Thursday, 2026-04-17* <br>
-*Released to Materialize Self-Managed: Friday, 2026-04-18* <br>
+*Released to Materialize Cloud: 2026-04-16* <br>
+*Released to Materialize Self-Managed: 2026-04-17* <br>
 
 This release introduces MySQL source versioning, Console improvements, and
 bug fixes.
