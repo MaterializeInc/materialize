@@ -18,7 +18,7 @@ This figure illustrates the compute networking stack, as well as the flow of com
 
 ### What is the set of commands that the COMPUTE layer responds to and what do these commands do at a high level?
 
-The set of available commands can be seen in `ComputeCommand<T>` at [`src/compute-client/src/command.rs`](/src/compute-client/src/command.rs). At a high level, there are commands to: (a) initialize a COMPUTE replica, (b) communicate to a replica that all command reconciliation during initialization has been completed, (c) create dataflows, (d) allow compactions of COMPUTE-managed collections to take place, (e) peek at arrangements, (f) cancel peeks. The types of responses to the commands are listed in `ComputeResponse` at [`src/compute-client/src/response.rs`](/src/compute-client/src/response.rs).
+The set of available commands can be seen in `ComputeCommand` at [`src/compute-client/src/command.rs`](/src/compute-client/src/command.rs). At a high level, there are commands to: (a) initialize a COMPUTE replica, (b) communicate to a replica that all command reconciliation during initialization has been completed, (c) create dataflows, (d) allow compactions of COMPUTE-managed collections to take place, (e) peek at arrangements, (f) cancel peeks. The types of responses to the commands are listed in `ComputeResponse` at [`src/compute-client/src/response.rs`](/src/compute-client/src/response.rs).
 
 ### What is the lifecycle of networking threads in a `computed` process? Do they farm out work to other threads?
 

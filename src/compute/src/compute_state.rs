@@ -1087,8 +1087,8 @@ impl<'a> ActiveComputeState<'a> {
     pub fn determine_dataflow_expiration(
         &self,
         time_dependence: &TimeDependence,
-        until: &Antichain<mz_repr::Timestamp>,
-    ) -> Antichain<mz_repr::Timestamp> {
+        until: &Antichain<Timestamp>,
+    ) -> Antichain<Timestamp> {
         // Evaluate time dependence with respect to the expiration time.
         // * Step time forward to ensure the expiration time is different to the moment a dataflow
         //   can legitimately jump to.
@@ -1098,7 +1098,7 @@ impl<'a> ActiveComputeState<'a> {
             .replica_expiration
             .iter()
             .filter_map(|t| time_dependence.apply(*t))
-            .filter_map(|t| mz_repr::Timestamp::try_step_forward(&t))
+            .filter_map(|t| Timestamp::try_step_forward(&t))
             .filter(|expiration| !until.less_equal(expiration));
         Antichain::from_iter(iter)
     }
@@ -1523,7 +1523,7 @@ impl IndexPeek {
 
     /// Collects data for a known-complete peek from the ok stream.
     fn collect_ok_finished_data<Tr>(
-        peek: &Peek<Timestamp>,
+        peek: &Peek,
         oks_handle: &mut Tr,
         max_result_size: u64,
         peek_stash_eligible: bool,
@@ -1535,7 +1535,7 @@ impl IndexPeek {
                 Key<'a>: ToDatumIter + Eq,
                 KeyContainer: BatchContainer<Owned = Row>,
                 Val<'a>: ToDatumIter,
-                TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+                TimeGat<'a>: PartialOrder<Timestamp>,
                 DiffGat<'a> = &'a Diff,
             >,
     {

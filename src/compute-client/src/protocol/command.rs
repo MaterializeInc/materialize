@@ -18,7 +18,7 @@ use mz_dyncfg::ConfigUpdates;
 use mz_expr::RowSetFinishing;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
-use mz_repr::{GlobalId, RelationDesc, Row};
+use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
 use mz_service::params::GrpcClientParameters;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_tracing::params::TracingParameters;
@@ -35,7 +35,7 @@ use crate::logging::LoggingConfig;
 ///
 /// [Protocol Stages]: super#protocol-stages
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ComputeCommand<T = mz_repr::Timestamp> {
+pub enum ComputeCommand {
     /// `Hello` is the first command sent to a replica after a connection was established. It
     /// provides the replica with meta information about the connection.
     ///
@@ -141,7 +141,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [`CopyToResponse`]: super::response::ComputeResponse::CopyToResponse
-    CreateDataflow(Box<DataflowDescription<RenderPlan<T>, CollectionMetadata, T>>),
+    CreateDataflow(Box<DataflowDescription<RenderPlan<Timestamp>, CollectionMetadata, Timestamp>>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.
     ///
@@ -210,7 +210,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
         /// TODO(database-issues#7533): Add documentation.
         id: GlobalId,
         /// TODO(database-issues#7533): Add documentation.
-        frontier: Antichain<T>,
+        frontier: Antichain<Timestamp>,
     },
 
     /// `Peek` instructs the replica to perform a peek on a collection: either an index or a
@@ -241,7 +241,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [`Rows`]: super::response::PeekResponse::Rows
     /// [`Error`]: super::response::PeekResponse::Error
     /// [`Canceled`]: super::response::PeekResponse::Canceled
-    Peek(Box<Peek<T>>),
+    Peek(Box<Peek>),
 
     /// `CancelPeek` instructs the replica to cancel the identified pending peek.
     ///
@@ -417,7 +417,7 @@ impl PeekTarget {
 /// the dataflow runners are responsible for ensuring that they can
 /// correctly answer the `Peek`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Peek<T = mz_repr::Timestamp> {
+pub struct Peek {
     /// Target-specific metadata.
     pub target: PeekTarget,
     /// The relation description for the rows returned by this peek, before
@@ -432,7 +432,7 @@ pub struct Peek<T = mz_repr::Timestamp> {
     /// Used in responses and cancellation requests.
     pub uuid: Uuid,
     /// The logical timestamp at which the collection is queried.
-    pub timestamp: T,
+    pub timestamp: Timestamp,
     /// Actions to apply to the result set before returning them.
     pub finishing: RowSetFinishing,
     /// Linear operation to apply in-line on each result.
