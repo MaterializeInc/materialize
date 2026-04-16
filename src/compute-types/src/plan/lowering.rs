@@ -19,9 +19,8 @@ use mz_expr::{
     OptimizedMirRelationExpr, TableFunc, permutation_for_arrangement,
 };
 use mz_ore::{assert_none, soft_assert_eq_or_log, soft_panic_or_log};
-use mz_repr::GlobalId;
 use mz_repr::optimize::OptimizerFeatures;
-use timely::progress::Timestamp;
+use mz_repr::{GlobalId, Timestamp};
 
 use crate::dataflows::{BuildDesc, DataflowDescription, IndexImport};
 use crate::plan::join::{DeltaJoinPlan, JoinPlan, LinearJoinPlan};
@@ -65,10 +64,10 @@ impl Context {
         id
     }
 
-    pub fn lower<T: Timestamp>(
+    pub fn lower(
         mut self,
         desc: DataflowDescription<OptimizedMirRelationExpr>,
-    ) -> Result<DataflowDescription<Plan<T>>, String> {
+    ) -> Result<DataflowDescription<Plan>, String> {
         // Sources might provide arranged forms of their data, in the future.
         // Indexes provide arranged forms of their data.
         for IndexImport {
@@ -141,10 +140,10 @@ impl Context {
     ///
     /// An empty list of arrangement keys indicates that only a `Collection` stream can
     /// be assumed to exist.
-    fn lower_mir_expr<T: Timestamp>(
+    fn lower_mir_expr(
         &mut self,
         expr: &MirRelationExpr,
-    ) -> Result<(Plan<T>, AvailableCollections), String> {
+    ) -> Result<(Plan, AvailableCollections), String> {
         // This function is recursive and can overflow its stack, so grow it if
         // needed. The growth here is unbounded. Our general solution for this problem
         // is to use [`ore::stack::RecursionGuard`] to additionally limit the stack
@@ -157,13 +156,10 @@ impl Context {
         mz_ore::stack::maybe_grow(|| self.lower_mir_expr_stack_safe(expr))
     }
 
-    fn lower_mir_expr_stack_safe<T>(
+    fn lower_mir_expr_stack_safe(
         &mut self,
         expr: &MirRelationExpr,
-    ) -> Result<(Plan<T>, AvailableCollections), String>
-    where
-        T: Timestamp,
-    {
+    ) -> Result<(Plan, AvailableCollections), String> {
         // Extract a maximally large MapFilterProject from `expr`.
         // We will then try and push this in to the resulting expression.
         //
@@ -190,7 +186,7 @@ impl Context {
                 let node = PlanNode::Constant {
                     rows: rows.clone().map(|rows| {
                         rows.into_iter()
-                            .map(|(row, diff)| (row, T::minimum(), diff))
+                            .map(|(row, diff)| (row, Timestamp::MIN, diff))
                             .collect()
                     }),
                 };
@@ -981,7 +977,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
     /// originally on top of the `Reduce`. This MFP, or a part of it, might be fused into the
     /// `Reduce`, in which case `mfp_on_top` is mutated to be the residual MFP, i.e., what was not
     /// fused.
-    fn lower_reduce<T: Timestamp>(
+    fn lower_reduce(
         &mut self,
         input: &MirRelationExpr,
         group_key: &Vec<MirScalarExpr>,
@@ -990,7 +986,7 @@ This is not expected to cause incorrect results, but could indicate a performanc
         expected_group_size: &Option<u64>,
         mfp_on_top: &mut MapFilterProject,
         fused_unnest_list: bool,
-    ) -> Result<(Plan<T>, AvailableCollections), String> {
+    ) -> Result<(Plan, AvailableCollections), String> {
         let input_arity = input.arity();
         let (input, keys) = self.lower_mir_expr(input)?;
         let (input_key, permutation_and_new_arity) =
@@ -1048,13 +1044,13 @@ This is not expected to cause incorrect results, but could indicate a performanc
 
     /// Replace the plan with another one
     /// that has the collection in some additional forms.
-    pub fn arrange_by<T>(
+    pub fn arrange_by(
         &mut self,
-        plan: Plan<T>,
+        plan: Plan,
         collections: AvailableCollections,
         old_collections: &AvailableCollections,
         arity: usize,
-    ) -> Plan<T> {
+    ) -> Plan {
         if let Plan {
             node:
                 PlanNode::ArrangeBy {

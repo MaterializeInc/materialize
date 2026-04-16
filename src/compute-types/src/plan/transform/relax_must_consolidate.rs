@@ -10,8 +10,6 @@
 //! Placeholder module for an [crate::plan::transform::Transform] that infers
 //! physical monotonicity.
 
-use std::marker::PhantomData;
-
 use crate::plan::interpret::{PhysicallyMonotonic, SingleTimeMonotonic};
 use crate::plan::reduce::{HierarchicalPlan, MonotonicPlan};
 use crate::plan::top_k::{MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan};
@@ -22,23 +20,12 @@ use crate::plan::{Plan, PlanNode, ReducePlan};
 /// analysis and refines, as appropriate, the setting of the `must_consolidate`
 /// flag in monotonic `Plan` nodes with forced consolidation.
 #[derive(Debug)]
-pub struct RelaxMustConsolidate<T = mz_repr::Timestamp> {
-    _phantom: PhantomData<T>,
-}
-
-impl<T> RelaxMustConsolidate<T> {
-    /// TODO(database-issues#7533): Add documentation.
-    pub fn new() -> Self {
-        RelaxMustConsolidate {
-            _phantom: Default::default(),
-        }
-    }
-}
-
-impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
+pub struct RelaxMustConsolidate;
+ 
+impl BottomUpTransform for RelaxMustConsolidate {
     type Info = PhysicallyMonotonic;
 
-    type Interpreter<'a> = SingleTimeMonotonic<'a, T>;
+    type Interpreter<'a> = SingleTimeMonotonic<'a>;
 
     fn name(&self) -> &'static str {
         "must_consolidate relaxation"
@@ -48,7 +35,7 @@ impl<T> BottomUpTransform<T> for RelaxMustConsolidate<T> {
         SingleTimeMonotonic::new(&config.monotonic_ids)
     }
 
-    fn action(plan: &mut Plan<T>, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
+    fn action(plan: &mut Plan, _plan_info: &Self::Info, input_infos: &[Self::Info]) {
         // Look at `input_infos` and type of `Plan` node and refine the `must_consolidate` flag.
         // Note that the LIR nodes we care about have a single input.
         match (&mut plan.node, input_infos) {
