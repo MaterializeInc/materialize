@@ -15,8 +15,9 @@
 
 //! Benchmarks for factorized columnar storage.
 
-use columnar::Len;
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use columnar::bytes::indexed;
+use columnar::{Borrow, Len};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mz_timely_util::columnar::factorized::FactorizedColumns;
 
 /// Generate sorted data with controllable repetition.
@@ -29,10 +30,18 @@ fn generate_sorted_data(n: usize, distinct_a: usize, distinct_b: usize) -> Vec<(
     data
 }
 
+/// Compute total serialized size of a `FactorizedColumns` in u64 words.
+fn total_words(fc: &FactorizedColumns<u64, u64, i64>) -> usize {
+    indexed::length_in_words(&fc.lists.borrow())
+        + indexed::length_in_words(&fc.rest.lists.borrow())
+        + indexed::length_in_words(&fc.rest.rest.borrow())
+}
+
 fn bench_push_flat(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorized/push_flat");
     for n in [10_000, 100_000] {
         let data = generate_sorted_data(n, n, n); // all distinct
+        group.throughput(Throughput::Elements(n as u64));
         group.bench_with_input(BenchmarkId::new("n", n), &data, |b, data| {
             b.iter(|| {
                 let mut fc: FactorizedColumns<u64, u64, i64> = Default::default();
@@ -57,6 +66,13 @@ fn bench_form(c: &mut Criterion) {
             flat.push_flat(a, b, cc);
         }
 
+        // Build formed version to measure sizes.
+        let refs: Vec<_> = flat.iter().collect();
+        let formed = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+        let flat_words = total_words(&flat);
+        let formed_words = total_words(&formed);
+
+        group.throughput(Throughput::Elements(n as u64));
         let label = format!("n={n}/da={da}/db={db}");
         group.bench_function(BenchmarkId::new("from_flat", &label), |b| {
             b.iter(|| {
@@ -64,6 +80,13 @@ fn bench_form(c: &mut Criterion) {
                 FactorizedColumns::<u64, u64, i64>::form(refs.into_iter())
             });
         });
+
+        eprintln!(
+            "  [{label}] flat: {flat_words} words ({} bytes), formed: {formed_words} words ({} bytes), ratio: {:.1}x",
+            flat_words * 8,
+            formed_words * 8,
+            flat_words as f64 / formed_words as f64,
+        );
     }
     group.finish();
 }
@@ -79,15 +102,27 @@ fn bench_iter(c: &mut Criterion) {
         let refs: Vec<_> = flat.iter().collect();
         let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
 
+        let flat_words = total_words(&flat);
+        let formed_words = total_words(&fc);
+
         let label = format!("n={n}/da={da}/db={db}");
 
+        group.throughput(Throughput::Elements(n as u64));
         group.bench_function(BenchmarkId::new("flat", &label), |b| {
             b.iter(|| flat.iter().count())
         });
 
+        group.throughput(Throughput::Elements(n as u64));
         group.bench_function(BenchmarkId::new("formed", &label), |b| {
             b.iter(|| fc.iter().count())
         });
+
+        eprintln!(
+            "  [{label}] flat: {flat_words} words, formed: {formed_words} words, A={}, B={}, C={}",
+            Len::len(&fc.lists.values),
+            Len::len(&fc.rest.lists.values),
+            Len::len(&fc.rest.rest.values),
+        );
     }
     group.finish();
 }
@@ -96,19 +131,25 @@ fn bench_dedup_ratio(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorized/dedup_ratio");
     // Vary repetition level: from no dedup to extreme dedup.
     for (da, db) in [(100_000, 100_000), (1_000, 10_000), (100, 1_000), (10, 100)] {
-        let n = 100_000;
+        let n = 100_000usize;
         let data = generate_sorted_data(n, da, db);
         let mut flat: FactorizedColumns<u64, u64, i64> = Default::default();
         for (a, b, cc) in &data {
             flat.push_flat(a, b, cc);
         }
 
+        // Build formed to measure sizes.
+        let refs: Vec<_> = flat.iter().collect();
+        let formed = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+        let flat_words = total_words(&flat);
+        let formed_words = total_words(&formed);
+
+        group.throughput(Throughput::Elements(n as u64));
         let label = format!("da={da}/db={db}");
         group.bench_function(BenchmarkId::new("form", &label), |b| {
             b.iter(|| {
                 let refs: Vec<_> = flat.iter().collect();
                 let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
-                // Return lengths to prevent dead-code elimination.
                 (
                     Len::len(&fc.lists.values),
                     Len::len(&fc.rest.lists.values),
@@ -116,6 +157,16 @@ fn bench_dedup_ratio(c: &mut Criterion) {
                 )
             });
         });
+
+        eprintln!(
+            "  [{label}] flat: {flat_words} words ({} bytes), formed: {formed_words} words ({} bytes), ratio: {:.1}x, A={}, B={}, C={}",
+            flat_words * 8,
+            formed_words * 8,
+            flat_words as f64 / formed_words as f64,
+            Len::len(&formed.lists.values),
+            Len::len(&formed.rest.lists.values),
+            formed.len(),
+        );
     }
     group.finish();
 }
