@@ -19,7 +19,7 @@ use timely::progress::Antichain;
 
 /// A sink for updates to a relational collection.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
+pub struct ComputeSinkDesc<S: 'static = ()> {
     /// TODO(database-issues#7533): Add documentation.
     pub from: GlobalId,
     /// TODO(database-issues#7533): Add documentation.
@@ -29,7 +29,7 @@ pub struct ComputeSinkDesc<S: 'static = (), T = Timestamp> {
     /// TODO(database-issues#7533): Add documentation.
     pub with_snapshot: bool,
     /// TODO(database-issues#7533): Add documentation.
-    pub up_to: Antichain<T>,
+    pub up_to: Antichain<Timestamp>,
     /// TODO(database-issues#7533): Add documentation.
     pub non_null_assertions: Vec<usize>,
     /// TODO(database-issues#7533): Add documentation.

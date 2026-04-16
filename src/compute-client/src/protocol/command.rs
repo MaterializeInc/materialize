@@ -141,7 +141,7 @@ pub enum ComputeCommand {
     /// [`Frontiers`]: super::response::ComputeResponse::Frontiers
     /// [`SubscribeResponse`]: super::response::ComputeResponse::SubscribeResponse
     /// [`CopyToResponse`]: super::response::ComputeResponse::CopyToResponse
-    CreateDataflow(Box<DataflowDescription<RenderPlan<Timestamp>, CollectionMetadata, Timestamp>>),
+    CreateDataflow(Box<DataflowDescription<RenderPlan, CollectionMetadata>>),
 
     /// `Schedule` allows the replica to start computation for a compute collection.
     ///

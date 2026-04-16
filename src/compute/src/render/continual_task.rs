@@ -317,7 +317,7 @@ impl ContinualTaskSourceTransformer {
 }
 
 impl<'scope> ContinualTaskCtx<'scope> {
-    pub fn new<P, S>(dataflow: &DataflowDescription<P, S, Timestamp>) -> Self {
+    pub fn new<P, S>(dataflow: &DataflowDescription<P, S>) -> Self {
         let mut name = None;
         let mut ct_inputs = BTreeSet::new();
         let mut ct_outputs = BTreeSet::new();

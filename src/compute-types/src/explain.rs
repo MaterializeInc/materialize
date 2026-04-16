@@ -152,7 +152,7 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
 }
 
 /// TODO(database-issues#7533): Add documentation.
-pub fn export_ids_for<P, S, T>(dd: &DataflowDescription<P, S, T>) -> BTreeMap<GlobalId, GlobalId> {
+pub fn export_ids_for<P, S>(dd: &DataflowDescription<P, S>) -> BTreeMap<GlobalId, GlobalId> {
     let mut map = BTreeMap::<GlobalId, GlobalId>::default();
 
     // Dataflows created from a `CREATE MATERIALIZED VIEW` have:

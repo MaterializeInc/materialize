@@ -469,7 +469,7 @@ pub enum GetPlan {
     Collection(MapFilterProject),
 }
 
-impl<T: timely::progress::Timestamp> Plan<T> {
+impl Plan {
     /// Convert the dataflow description into one that uses render plans.
     #[mz_ore::instrument(
         target = "optimizer",
@@ -704,7 +704,7 @@ impl<T: timely::progress::Timestamp> Plan<T> {
         // a single-time dataflow.
         assert!(dataflow.is_single_time());
 
-        let transform = transform::RelaxMustConsolidate::<T>::new();
+        let transform = transform::RelaxMustConsolidate::new();
         for build_desc in dataflow.objects_to_build.iter_mut() {
             transform
                 .transform(config, &mut build_desc.plan)
