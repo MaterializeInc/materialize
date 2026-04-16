@@ -102,7 +102,7 @@ General notes:
 
 General notes:
 
-- For anything related to catalog state, we could re-use the methodology of http/prometheus.rs and use an adapter client to execute queries. Otherwise we can to derive these metrics from a catalog snapshot.
+- For anything related to catalog state, we could re-use the methodology of http/prometheus.rs and use an adapter client to execute queries. Otherwise we can derive these metrics from a catalog snapshot.
 
 Pros:
 - More reusable / unified
@@ -113,12 +113,13 @@ Cons:
 - Can make noise in other metrics (i.e. connections active, etc.)
 - Relies on clusters and mz_catalog_server being up
 
+- Comparing metrics from other database systems, I feel like the ones proposed that represent the catalog are too high level. What's the value of these metrics?
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_catalog_objects_total` | Gauge | `object_type` | Total catalog objects by type (object_type: table, view, materialized_view, source, sink, index, connection, cluster, secret, role, database, schema). Source: `mz_catalog.mz_objects` | `mz_catalog_items` / `mz_*_count` (environmentd/src/http/prometheus.rs) — SQL-based per-type counts: `mz_sources_count`, `mz_views_count`, `mz_mzd_views_count`, `mz_tables_count`, `mz_sinks_count`, `mz_secrets_count`, `mz_connections_count`, `mz_indexes_count` |
-| `mz_catalog_objects_per_schema` | Gauge | `database`, `schema`, `object_type` | Objects per schema for detecting sprawl. Source: `mz_catalog.mz_objects` joined with `mz_schemas` and `mz_databases` | ? |
-| `mz_catalog_dependencies_total` | Gauge | - | Total object dependency edges. Source: `mz_internal.mz_object_dependencies` | ? |
+| `mz_catalog_objects_per_schema` | Gauge | `database`, `schema`, `object_type` | Objects per schema for detecting sprawl. Source: `mz_catalog.mz_objects` joined with `mz_schemas` and `mz_databases` | ? | Doesn't seem useful
+| `mz_catalog_dependencies_total` | Gauge | - | Total object dependency edges. Source: `mz_internal.mz_object_dependencies` | ? | This doesn't seem useful.
 | `mz_catalog_notices_total` | Counter | `severity` | Catalog notices emitted (severity: warning, notice, debug). `mz_optimization_notices` (adapter/src/metrics.rs) — counter with `notice_type` label | These are optimizer notices, an abandoned frameworks and not actual catalog notices. We can do counts per per process, but this number isn't going to be too useful for info / warning / debug logs. Should we not include these?
 | `mz_catalog_notices_active` | Gauge | `severity` | Currently active catalog notices. Source: `mz_internal.mz_notices` | ? | Should we get rid of this metric, similar to `mz_catalog_notices_total`?
 
@@ -251,21 +252,22 @@ General notes:
 | `mz_cluster_swap_utilization_ratio` | Gauge | `cluster`, `replica` | Swap utilization as ratio (0.0-1.0) | ? |
 | `mz_cluster_disk_bytes_used` | Gauge | `cluster`, `replica` | Scratch disk bytes used | ? (data in `mz_internal.mz_cluster_replica_utilization` SQL table) |
 | `mz_cluster_disk_bytes_total` | Gauge | `cluster`, `replica` | Total scratch disk bytes available | ? |
-| `mz_cluster_heap_bytes_used` | Gauge | `cluster`, `replica` | Heap memory bytes used | ? |
-| `mz_cluster_heap_bytes_limit` | Gauge | `cluster`, `replica` | Heap memory limit | ? |
+| `mz_cluster_heap_bytes_used` | Gauge | `cluster`, `replica` | Heap memory bytes used | ? | I don't think we record this.
+| `mz_cluster_heap_bytes_limit` | Gauge | `cluster`, `replica` | Heap memory limit | ? | I don't think we record this.
 
-### Replica Health (TODO)
+### Replica Health
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_cluster_replicas_configured` | Gauge | `cluster` | Number of replicas configured (replication factor) | `mz_cluster_reps_count` (environmentd/src/http/prometheus.rs) — SQL-based, by size |
-| `mz_cluster_replicas_ready` | Gauge | `cluster` | Number of replicas in ready state | `mz_compute_cluster_status` (environmentd/src/http/prometheus.rs) — SQL-based, includes replica info |
-| `mz_cluster_replicas_not_ready` | Gauge | `cluster` | Number of replicas not ready | ? |
-| `mz_cluster_replica_status` | Gauge | `cluster`, `replica`, `status` | Replica status (1 if in this status, 0 otherwise; status: ready, not_ready, rehydrating) | `mz_compute_cluster_status` (environmentd/src/http/prometheus.rs) — partial |
-| `mz_cluster_replica_uptime_seconds` | Gauge | `cluster`, `replica` | Replica uptime in seconds | ? |
-| `mz_cluster_replica_restarts_total` | Counter | `cluster`, `replica` | Total replica restarts | ? |
+| `mz_cluster_replicas_configured` | Gauge | `cluster` | Number of replicas configured (replication factor) | ? | Redundant with any of the utilization metrics
+| `mz_cluster_replicas_ready` | Gauge | `cluster` | Number of replicas in ready state | ? | Not sure what ready means here. I think as soon as we see some utilization active per replica, we know it's "ready" too.
+| `mz_cluster_replicas_not_ready` | Gauge | `cluster` | Number of replicas not ready | ? | Same as `mz_cluster_replicas_ready`.
+| `mz_cluster_replica_status` | Gauge | `cluster`, `replica`, `status` | Replica status (1 if in this status, 0 otherwise; status: ready, not_ready, rehydrating) | ? | A cluster doesn't have a hydration status. Can perhaps derive it from the hydration status of all dataflows inside of it. We do have `mz_compute_collection_count` with label `status`
+| `mz_cluster_replica_uptime_seconds` | Gauge | `cluster`, `replica` | Replica uptime in seconds | ? | Derivable from pod's `container_start_time_seconds`
+| `mz_cluster_replica_restarts_total` | Counter | `cluster`, `replica` | Total replica restarts | ? | Redundant with container_start_time_seconds in k8s. We could potentially expose this from scraping cadvisor, but realistically it might be
 
-### Query Execution (TODO)
+
+### Query Execution
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -275,37 +277,59 @@ General notes:
 | `mz_cluster_query_duration_seconds` | Histogram | `cluster`, `type`, `isolation_level` | Query execution duration (isolation_level: strict_serializable, serializable) | `mz_time_to_first_row_seconds` (adapter/src/metrics.rs) — histogram; also `mz_compute_peek_duration_seconds` (compute-client/src/metrics.rs) |
 | `mz_cluster_query_rows_returned_total` | Counter | `cluster` | Total rows returned by queries | ? |
 
-### SUBSCRIBE Operations (TODO)
+### SUBSCRIBE Operations
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_cluster_subscribes_active` | Gauge | `cluster` | Currently active SUBSCRIBE operations | `mz_active_subscribes` (adapter/src/metrics.rs) — gauge |
-| `mz_cluster_subscribes_total` | Counter | `cluster` | Total SUBSCRIBE operations started | `mz_compute_controller_subscribe_count` (compute-client/src/metrics.rs) — gauge of active subscribes |
-| `mz_cluster_subscribe_rows_emitted_total` | Counter | `cluster` | Total rows emitted by SUBSCRIBE | `mz_subscribe_outputs` (adapter/src/metrics.rs) — counter |
-| `mz_cluster_subscribe_duration_seconds` | Histogram | `cluster` | SUBSCRIBE session duration | ? |
+| `mz_cluster_subscribes_active` | Gauge | `cluster` | Currently active SUBSCRIBE operations | `mz_active_subscribes` (adapter/src/metrics.rs) — gauge | This isn't by cluster, but rather session.
+| `mz_cluster_subscribes_total` | Counter | `cluster` | Total SUBSCRIBE operations started | `mz_compute_controller_subscribe_count` (compute-client/src/metrics.rs) — gauge of active subscribes | This by cluster and is a gauge.
+| `mz_cluster_subscribe_rows_emitted_total` | Counter | `cluster` | Total rows emitted by SUBSCRIBE | ? | Would need to implement
+| `mz_cluster_subscribe_duration_seconds` | Histogram | `cluster` | SUBSCRIBE session duration | ? | Would need to implement.
 
-### Dataflow Processing (TODO)
+### Dataflow Processing
+
+General notes:
+Data from mz_introspection is actually separate from the Prometheus metrics registry. We could double track for each of this data, but ideally there's a cleaner way to do this. It's a bit smelly that we'd do this as well have a SQL relation which pipes out the metrics in the prometheus registry.
+
+Common:
+  Peek timing
+  - compute.rs emits ComputeLog::PeekDuration in handle_peek_retire (lines 1051–1075): install-to-retire elapsed, bucketed to the next power of two.
+  - metrics.rs exposes mz_persist_peek_seconds, mz_stashed_peek_seconds, and the mz_index_peek_*_seconds histogram family — these are observe()d directly by the peek-processing code, not by this demux.
+
+  Hydration status
+  - compute.rs: ComputeLog::HydrationTime (per-export ns) and ComputeLog::OperatorHydrationStatus (per-LIR bool), driven by ComputeEvent::Hydration / OperatorHydration.
+  - metrics.rs: mz_compute_collection_count{hydrated} — a gauge flipped via CollectionMetrics::record_collection_hydrated (lines 494–504), which deliberately avoids a per-collection label to keep cardinality
+  down.
+
+  Collections / exports
+  - compute.rs: ComputeLog::DataflowCurrent + DataflowGlobal via handle_export.
+  - metrics.rs: mz_compute_collection_count via CollectionMetrics::new / Drop.
+
+No overlap at all:
+  - Reconciliation (mz_compute_reconciliation_*), command history (history_command_count, history_dataflow_count), Timely step duration / parks, arrangement maintenance, replica expiration, shared row heap capacity,
+  subscribe-snapshot skip counter — none have a corresponding ComputeLog variant.
+  - Conversely: ArrangementHeapSize/Capacity/Allocations, ErrorCount, LirMapping, Frontier/ImportFrontier, PeekCurrent — none have a corresponding Prometheus metric in metrics.rs.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_cluster_dataflows_active` | Gauge | `cluster`, `replica` | Number of active dataflows | `mz_compute_controller_history_dataflow_count` (compute-client/src/metrics.rs) |
-| `mz_cluster_dataflow_operators_total` | Gauge | `cluster`, `replica` | Total dataflow operators | ? |
-| `mz_cluster_dataflow_arrangements_bytes` | Gauge | `cluster`, `replica` | Memory used by arrangements | `mz_arrangement_size_bytes` (environmentd/src/http/prometheus.rs) — SQL-based, per-collection |
+| `mz_cluster_dataflow_operators_total` | Gauge | `cluster`, `replica` | Total dataflow operators | ? | We'd need to add a new metric for this.
+| `mz_cluster_dataflow_arrangements_bytes` | Gauge | `cluster`, `replica` | Memory used by arrangements | ? | There exists a builtin metric `mz_arrangement_size_bytes` (environmentd/src/http/prometheus.rs) — SQL-based, per-collection. Can possibly port from this |
 
-### Scheduling & Headroom (TODO)
-
-| Metric | Type | Labels | Description | Existing Metric | Notes |
-|--------|------|--------|-------------|-----------------| ------|
-| `mz_cluster_scheduling_parks_ns_total` | Counter | `cluster`, `replica` | Total nanoseconds all dataflow workers spent parked (idle). The delta over time is the primary headroom metric. Source: `mz_internal.mz_scheduling_parks_histogram` via `SUM(slept_for_ns * count)` | `mz_compute_replica_park_duration_seconds_total` (environmentd/src/http/prometheus.rs) — SQL-based, per-worker |
-| `mz_cluster_headroom_ratio` | Gauge | `cluster`, `replica` | Fraction of wall-clock time workers spent parked (0.0-1.0). Derived as `rate(parks_ns) / (elapsed_ns)`. >0.10 indicates healthy headroom. | ? (derivable from `mz_compute_replica_park_duration_seconds_total`) |
-
-### Dataflow-Level Metrics (TODO)
+### Scheduling & Headroom
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_dataflow_arrangement_bytes` | Gauge | `cluster`, `replica`, `dataflow` | Arrangement memory per dataflow. Source: `mz_internal.mz_dataflow_arrangement_sizes` | `mz_arrangement_size_bytes` (environmentd/src/http/prometheus.rs) — SQL-based per-collection |
-| `mz_dataflow_scheduling_elapsed_seconds` | Counter | `cluster`, `replica`, `dataflow` | Total scheduling time per dataflow. Source: `mz_internal.mz_scheduling_elapsed` | `mz_dataflow_elapsed_seconds_total` (environmentd/src/http/prometheus.rs) — SQL-based per-collection per-worker |
-| `mz_dataflow_scheduling_elapsed_per_worker_seconds` | Counter | `cluster`, `replica`, `dataflow`, `worker` | Per-worker scheduling time for skew detection. Source: `mz_internal.mz_scheduling_elapsed_per_worker` | `mz_dataflow_elapsed_seconds_total` (environmentd/src/http/prometheus.rs) — includes worker_id |
+| `mz_cluster_scheduling_parks_ns_total` | Counter | `cluster`, `replica` | Total nanoseconds all dataflow workers spent parked (idle). The delta over time is the primary headroom metric. Source: `mz_internal.mz_scheduling_parks_histogram` via `SUM(slept_for_ns * count)` | ? | Can be derived from `mz_compute_replica_park_duration_seconds_total` (environmentd/src/http/prometheus.rs) — SQL-based, per-worker
+| `mz_cluster_headroom_ratio` | Gauge | `cluster`, `replica` | Fraction of wall-clock time workers spent parked (0.0-1.0). Derived as `rate(parks_ns) / (elapsed_ns)`. >0.10 indicates healthy headroom. | ? | Redundant and derivable from `mz_compute_replica_park_duration_seconds_total`
+
+### Dataflow-Level Metrics
+
+| Metric | Type | Labels | Description | Existing Metric | Notes |
+|--------|------|--------|-------------|-----------------| ------|
+| `mz_dataflow_arrangement_bytes` | Gauge | `cluster`, `replica`, `dataflow` | Arrangement memory per dataflow. Source: `mz_internal.mz_dataflow_arrangement_sizes` | ? | We can combine this with `mz_cluster_dataflow_arrangements_bytes`. Can potentially derive from builtin relation with `mz_arrangement_size_bytes`.
+| `mz_dataflow_scheduling_elapsed_seconds` | Counter | `cluster`, `replica`, `dataflow` | Total scheduling time per dataflow. Source: `mz_internal.mz_scheduling_elapsed` | ? | Derivable from `mz_dataflow_elapsed_seconds_total` (environmentd/src/http/prometheus.rs)
+| `mz_dataflow_scheduling_elapsed_per_worker_seconds` | Counter | `cluster`, `replica`, `dataflow`, `worker` | Per-worker scheduling time for skew detection. Source: `mz_internal.mz_scheduling_elapsed_per_worker` | ? | Derivable from  `mz_dataflow_elapsed_seconds_total` (environmentd/src/http/prometheus.rs) — includes worker_id
 
 ---
 
