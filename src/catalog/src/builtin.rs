@@ -11622,16 +11622,18 @@ FROM
 
 /// Lightweight data product discovery for MCP (Model Context Protocol).
 ///
-/// Lists indexed views with comments that the current user has privileges on.
+/// Lists materialized views that the current user has SELECT privileges on.
+/// Indexes and comments are optional enrichment — any MV accessible via RBAC
+/// appears as a data product.
 /// Used by the `get_data_products` and `read_data_product` MCP tools.
-/// Does not include schema details — use `mz_mcp_data_product_details` for that.
+/// Does not include schema details: use `mz_mcp_data_product_details` for that.
 pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_mcp_data_products",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MCP_DATA_PRODUCTS_OID,
     desc: RelationDesc::builder()
         .with_column("object_name", SqlScalarType::String.nullable(false))
-        .with_column("cluster", SqlScalarType::String.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(true))
         .with_column("description", SqlScalarType::String.nullable(true))
         .with_key(vec![0, 1, 2])
         .finish(),
@@ -11640,43 +11642,49 @@ pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
             "object_name",
             "Fully qualified object name (database.schema.name).",
         ),
-        ("cluster", "Cluster where the index is hosted."),
+        (
+            "cluster",
+            "Cluster where the object computes or its index is hosted. The object can be read from any cluster.",
+        ),
         (
             "description",
-            "Index comment (used as data product description).",
+            "Index comment if available, otherwise object comment. Used as data product description.",
         ),
     ]),
     sql: r#"
 SELECT DISTINCT
     '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
-    c.name AS cluster,
-    cts.comment AS description
+    COALESCE(c_idx.name, c_obj.name) AS cluster,
+    COALESCE(cts_idx.comment, cts_obj.comment) AS description
 FROM mz_internal.mz_show_my_object_privileges op
 JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
 JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
 JOIN mz_databases d ON d.name = op.database AND d.id = s.database_id
-JOIN mz_indexes i ON i.on_id = o.id
-JOIN mz_clusters c ON c.id = i.cluster_id
-JOIN mz_internal.mz_show_my_cluster_privileges cp ON cp.name = c.name
-LEFT JOIN mz_internal.mz_comments cts ON cts.id = i.id AND cts.object_sub_id IS NULL
+LEFT JOIN mz_indexes i ON i.on_id = o.id
+LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
+LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
+LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
 WHERE op.privilege_type = 'SELECT'
-  AND cp.privilege_type = 'USAGE'
+  AND o.type = 'materialized-view'
+  AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 "#,
     access: vec![PUBLIC_SELECT],
 });
 
 /// Full data product details with JSON Schema for MCP agents.
 ///
-/// Extends `mz_mcp_data_products` with column types, index keys, and column
-/// comments, formatted as a JSON Schema object. Used by the
-/// `get_data_product_details` MCP tool.
+/// Extends `mz_mcp_data_products` with column types, index keys (when
+/// available), and column comments, formatted as a JSON Schema object.
+/// Used by the `get_data_product_details` MCP tool. Indexes and comments
+/// are optional enrichment.
 pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_mcp_data_product_details",
     schema: MZ_INTERNAL_SCHEMA,
     oid: oid::VIEW_MZ_MCP_DATA_PRODUCT_DETAILS_OID,
     desc: RelationDesc::builder()
         .with_column("object_name", SqlScalarType::String.nullable(false))
-        .with_column("cluster", SqlScalarType::String.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(true))
         .with_column("description", SqlScalarType::String.nullable(true))
         .with_column("schema", SqlScalarType::Jsonb.nullable(false))
         .with_key(vec![0, 1, 2])
@@ -11686,10 +11694,13 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
             "object_name",
             "Fully qualified object name (database.schema.name).",
         ),
-        ("cluster", "Cluster where the index is hosted."),
+        (
+            "cluster",
+            "Cluster where the object computes or its index is hosted. The object can be read from any cluster.",
+        ),
         (
             "description",
-            "Index comment (used as data product description).",
+            "Index comment if available, otherwise object comment. Used as data product description.",
         ),
         (
             "schema",
@@ -11700,8 +11711,8 @@ pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(||
 SELECT * FROM (
     SELECT
         '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
-        c.name AS cluster,
-        cts.comment AS description,
+        COALESCE(c_idx.name, c_obj.name) AS cluster,
+        COALESCE(cts_idx.comment, cts_obj.comment) AS description,
         COALESCE(jsonb_build_object(
         'type', 'object',
         'required', jsonb_agg(distinct ccol.name) FILTER (WHERE ccol.position = ic.on_position),
@@ -11761,15 +11772,17 @@ FROM mz_internal.mz_show_my_object_privileges op
 JOIN mz_objects o ON op.name = o.name AND op.object_type = o.type
 JOIN mz_schemas s ON s.name = op.schema AND s.id = o.schema_id
 JOIN mz_databases d ON d.name = op.database AND d.id = s.database_id
-JOIN mz_indexes i ON i.on_id = o.id
-JOIN mz_index_columns ic ON i.id = ic.index_id
 JOIN mz_columns ccol ON ccol.id = o.id
-JOIN mz_clusters c ON c.id = i.cluster_id
-JOIN mz_internal.mz_show_my_cluster_privileges cp ON cp.name = c.name
-LEFT JOIN mz_internal.mz_comments cts ON cts.id = i.id AND cts.object_sub_id IS NULL
+LEFT JOIN mz_indexes i ON i.on_id = o.id
+LEFT JOIN mz_index_columns ic ON i.id = ic.index_id
+LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
+LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
+LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
+LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
 LEFT JOIN mz_internal.mz_comments cts_col ON cts_col.id = o.id AND cts_col.object_sub_id = ccol.position
 WHERE op.privilege_type = 'SELECT'
-  AND cp.privilege_type = 'USAGE'
+  AND o.type = 'materialized-view'
+  AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 GROUP BY 1, 2, 3
 )
 "#,

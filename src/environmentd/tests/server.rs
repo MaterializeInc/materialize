@@ -5144,10 +5144,10 @@ fn test_mcp_agent_with_data_product() {
             ))
             .unwrap();
 
-        // Create a view and an index on it.
+        // Create a materialized view and an index on it.
         super_user
             .batch_execute(
-                "CREATE VIEW test_products AS SELECT 1::int AS id, 'widget'::text AS name",
+                "CREATE MATERIALIZED VIEW test_products IN CLUSTER quickstart AS SELECT 1::int AS id, 'widget'::text AS name",
             )
             .unwrap();
         super_user
@@ -5155,7 +5155,7 @@ fn test_mcp_agent_with_data_product() {
                 "CREATE INDEX test_products_idx IN CLUSTER quickstart ON test_products (id)",
             )
             .unwrap();
-        // Comment on the index makes it show up as a data product.
+        // Comment on the index enriches the data product description.
         super_user
             .batch_execute("COMMENT ON INDEX test_products_idx IS 'A test data product for integration testing'")
             .unwrap();
@@ -5477,11 +5477,9 @@ fn test_mcp_agent_runtime_flag_toggle() {
     );
 }
 
-/// Tests that the MCP agent endpoint respects RBAC: data products are only visible
-/// to users with both SELECT on the view and USAGE on the cluster.
-///
-/// The `mz_mcp_data_products` view joins `mz_show_my_object_privileges` (SELECT) and
-/// `mz_show_my_cluster_privileges` (USAGE) — both must be satisfied for a product to appear.
+/// Tests that the MCP agent endpoint respects RBAC: data products are visible
+/// to any user with SELECT on the view. Cluster USAGE is not required for
+/// discovery — the view appears with a NULL cluster if no accessible index exists.
 #[mz_ore::test]
 fn test_mcp_agent_rbac() {
     let server = test_util::TestHarness::default()
@@ -5521,18 +5519,9 @@ fn test_mcp_agent_rbac() {
         ))
         .unwrap();
 
-    // Create a dedicated cluster with no PUBLIC USAGE grant so we can control
-    // USAGE precisely (quickstart grants USAGE to PUBLIC by default).
+    // Create a data product: a materialized view (no index or comment required).
     super_user
-        .batch_execute("CREATE CLUSTER rbac_cluster REPLICAS (r1 (SIZE 'scale=1,workers=1'))")
-        .unwrap();
-
-    // Create a data product: view + index on the dedicated cluster.
-    super_user
-        .batch_execute("CREATE VIEW rbac_product AS SELECT 1::int AS id, 'secret'::text AS payload")
-        .unwrap();
-    super_user
-        .batch_execute("CREATE INDEX rbac_product_idx IN CLUSTER rbac_cluster ON rbac_product (id)")
+        .batch_execute("CREATE MATERIALIZED VIEW rbac_product IN CLUSTER quickstart AS SELECT 1::int AS id, 'secret'::text AS payload")
         .unwrap();
 
     let get_products = serde_json::json!({
@@ -5560,7 +5549,7 @@ fn test_mcp_agent_rbac() {
             .unwrap_or(false)
     };
 
-    // 1. No SELECT, no USAGE → product NOT visible.
+    // 1. No SELECT → product NOT visible.
     let (status, body) = mcp_post(&agents_url, get_products.clone());
     assert_eq!(status, StatusCode::OK);
     assert!(
@@ -5568,7 +5557,7 @@ fn test_mcp_agent_rbac() {
         "product should not be visible with no privileges"
     );
 
-    // 2. Grant SELECT on view only (no cluster USAGE) → still NOT visible.
+    // 2. Grant SELECT on view → product NOW visible (no index or cluster USAGE needed).
     super_user
         .batch_execute(&format!(
             "GRANT SELECT ON rbac_product TO {}",
@@ -5578,22 +5567,8 @@ fn test_mcp_agent_rbac() {
     let (status, body) = mcp_post(&agents_url, get_products.clone());
     assert_eq!(status, StatusCode::OK);
     assert!(
-        !products_visible(&body),
-        "product should not be visible with SELECT but no cluster USAGE"
-    );
-
-    // 3. Also grant USAGE on rbac_cluster → product NOW visible.
-    super_user
-        .batch_execute(&format!(
-            "GRANT USAGE ON CLUSTER rbac_cluster TO {}",
-            &HTTP_DEFAULT_USER.name
-        ))
-        .unwrap();
-    let (status, body) = mcp_post(&agents_url, get_products.clone());
-    assert_eq!(status, StatusCode::OK);
-    assert!(
         products_visible(&body),
-        "product should be visible with both SELECT and cluster USAGE"
+        "product should be visible with just SELECT (no index required)"
     );
 
     // Capture the fully-qualified product name for subsequent tests.
@@ -5615,7 +5590,7 @@ fn test_mcp_agent_rbac() {
         .unwrap()
         .to_string();
 
-    // 4. Revoke SELECT → product disappears.
+    // 3. Revoke SELECT → product disappears.
     super_user
         .batch_execute(&format!(
             "REVOKE SELECT ON rbac_product FROM {}",
@@ -5629,9 +5604,7 @@ fn test_mcp_agent_rbac() {
         "product should disappear after revoking SELECT"
     );
 
-    // 5. read_data_product by name while lacking SELECT → DataProductNotFound.
-    //    The query fails with a privilege error, which is translated into
-    //    DataProductNotFound so callers get a clean, actionable message.
+    // 4. read_data_product by name while lacking SELECT → DataProductNotFound.
     let (status, body) = mcp_post(
         &agents_url,
         serde_json::json!({
@@ -5650,7 +5623,7 @@ fn test_mcp_agent_rbac() {
         "read_data_product should fail with not-found when SELECT is revoked"
     );
 
-    // 6. Re-grant SELECT → visible again.
+    // 5. Re-grant SELECT → visible again.
     super_user
         .batch_execute(&format!(
             "GRANT SELECT ON rbac_product TO {}",
@@ -5662,39 +5635,6 @@ fn test_mcp_agent_rbac() {
     assert!(
         products_visible(&body),
         "product should reappear after re-granting SELECT"
-    );
-
-    // 7. Revoke cluster USAGE → product disappears again.
-    super_user
-        .batch_execute(&format!(
-            "REVOKE USAGE ON CLUSTER rbac_cluster FROM {}",
-            &HTTP_DEFAULT_USER.name
-        ))
-        .unwrap();
-    let (status, body) = mcp_post(&agents_url, get_products.clone());
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        !products_visible(&body),
-        "product should disappear after revoking cluster USAGE"
-    );
-
-    // 8. get_data_product_details by name while invisible → DataProductNotFound.
-    let (status, body) = mcp_post(
-        &agents_url,
-        serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {"name": "get_data_product_details", "arguments": {"name": product_name}}
-        }),
-    );
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap_or("")
-            .contains("Data product not found"),
-        "get_data_product_details should fail with not-found when cluster USAGE is revoked"
     );
 }
 

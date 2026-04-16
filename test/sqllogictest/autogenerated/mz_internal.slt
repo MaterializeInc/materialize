@@ -317,15 +317,15 @@ query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_products' ORDER BY position
 ----
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
-cluster  text  Cluster␠where␠the␠index␠is␠hosted.
-description  text  Index␠comment␠(used␠as␠data␠product␠description).
+cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠The␠object␠can␠be␠read␠from␠any␠cluster.
+description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_product_details' ORDER BY position
 ----
 object_name  text  Fully␠qualified␠object␠name␠(database.schema.name).
-cluster  text  Cluster␠where␠the␠index␠is␠hosted.
-description  text  Index␠comment␠(used␠as␠data␠product␠description).
+cluster  text  Cluster␠where␠the␠object␠computes␠or␠its␠index␠is␠hosted.␠The␠object␠can␠be␠read␠from␠any␠cluster.
+description  text  Index␠comment␠if␠available,␠otherwise␠object␠comment.␠Used␠as␠data␠product␠description.
 schema  jsonb  JSON␠Schema␠describing␠the␠object's␠columns␠and␠types.
 
 query TTT
