@@ -61,7 +61,7 @@ synthesizes the results.
    - To use an existing app password, generate a base64-encoded token.
 
      ```bash
-     printf '<user>:<app_password>' | base64
+     printf '<user>:<app_password>' | base64 -w0
      ```
 
    - To create a new app password to use, click on the **Create app password**
@@ -84,12 +84,12 @@ synthesizes the results.
    Base64-encoded `user:password` string.
 
    ```bash
-   printf '<user>:<app_password>' | base64
+   printf '<user>:<app_password>' | base64 -w0
    ```
 
    For example:
    ```bash
-   printf 'svc-mcp-agent@mycompany.com:my_app_password_here' | base64
+   printf 'svc-mcp-agent@mycompany.com:my_app_password_here' | base64 -w0
    # Output: c3ZjLW1jcC1hZ2VudEBteWNvbXBhbnkuY29tOm15X2FwcF9wYXNzd29yZF9oZXJl
    ```
 
