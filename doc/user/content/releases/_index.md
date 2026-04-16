@@ -15,6 +15,37 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.20.0
+*Released to Materialize Cloud: Thursday, 2026-04-17* <br>
+*Released to Materialize Self-Managed: Friday, 2026-04-18* <br>
+
+This release introduces MySQL source versioning, Console improvements, and
+bug fixes.
+
+### Features {#v26-20-features}
+- **MySQL Source Versioning**: MySQL sources now support versioning using the
+  `FULL` binlog row metadata setting. This feature allows for seamless handling
+  of upstream schema changes by including column names in binlog row events,
+  making it easier to adapt to evolving database schemas.
+
+### Improvements {#v26-20-improvements}
+- **Enhanced MySQL source validation**: Added validation checks for the
+  `binlog_row_metadata` system variable when using new `CREATE TABLE FROM
+  SOURCE` syntax.
+- **Improved MySQL schema validation**: Enhanced schema validation to ensure
+  proper `binlog_row_metadata` settings during MySQL source operations.
+- **Better Console schema navigation**: The schema dropdown in the SQL Shell now
+  prioritizes schemas from the current database, making it easier to find
+  relevant schemas.
+- **Developer endpoint naming**: Renamed the observatory endpoint to developer
+  for better clarity.
+
+### Bug Fixes {#v26-20-bug-fixes}
+- Fixed Console RBAC users tab that was displaying incorrectly for cloud users
+  due to null `rolcanlogin` values.
+- Fixed builtin dependency ordering issue that could cause system catalog
+  inconsistencies.
+
 ## v26.19.0
 *Released to Materialize Cloud: 2026-04-09* <br>
 *Released to Materialize Self-Managed: 2026-04-10* <br>
