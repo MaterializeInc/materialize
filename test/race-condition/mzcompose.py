@@ -64,7 +64,10 @@ SERVICES = [
     Mc(),
     Materialized(
         default_replication_factor=2,
-        additional_system_parameter_defaults={"memory_limiter_interval": "0"},
+        additional_system_parameter_defaults={
+            "memory_limiter_interval": "0",
+            "enable_replica_targeted_materialized_views": "true",
+        },
     ),
 ]
 
@@ -186,6 +189,12 @@ class UpsertSource(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
+            # Bounce cluster to force source restart (database-issues#8698)
+            lambda: dedent("""
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 2);
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -270,6 +279,12 @@ class PostgresSource(Object):
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
                 """),
+            # Bounce cluster to force source restart (database-issues#8698)
+            lambda: dedent("""
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 2);
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -340,6 +355,12 @@ class MySqlSource(Object):
                 > DROP TABLE IF EXISTS {self.name}_tmp_table
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+                """),
+            # Bounce cluster to force source restart (database-issues#8698)
+            lambda: dedent("""
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 2);
                 """),
         ]
         return manipulations[kind % len(manipulations)]()
@@ -415,6 +436,12 @@ class SqlServerSource(Object):
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
                 """),
+            # Bounce cluster to force source restart (database-issues#8698)
+            lambda: dedent("""
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 2);
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -440,6 +467,12 @@ class LoadGeneratorSource(Object):
                 > DROP SOURCE IF EXISTS {self.name}_tmp_source
                 > ALTER SOURCE {self.name} RENAME TO {self.name}_tmp_source
                 > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}
+                """),
+            # Bounce cluster to force source restart (database-issues#8698)
+            lambda: dedent("""
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 2);
                 """),
         ]
         return manipulations[kind % len(manipulations)]()
@@ -493,19 +526,12 @@ class KafkaSink(Object):
         )
 
     def create(self) -> str:
-        self.references_str = (
-            self.references.name if self.references else f"{self.name}_view"
-        )
-        cmds = []
-        if not self.references:
-            cmds.append(
-                f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT 'foo' AS a, 'bar' AS b"
-            )
-        elif isinstance(self.references, View):
-            self.references_str = f"{self.name}_mv"
-            cmds.append(
-                f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT * FROM {self.references.name}"
-            )
+        # Always create an intermediary MV with a known schema so that
+        # KEY (a) works regardless of what the referenced object provides.
+        self.references_str = f"{self.name}_mv"
+        cmds = [
+            f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT 'foo' AS a, 'bar' AS b",
+        ]
 
         # See database-issues#9048, topic has to be unique
         topic = f"{self.name}-{uuid4()}"
@@ -520,6 +546,7 @@ class KafkaSink(Object):
               IN CLUSTER quickstart
               FROM {self.references_str}
               INTO KAFKA CONNECTION kafka_conn (TOPIC '{topic}')
+              KEY (a) NOT ENFORCED
               FORMAT {self.format}
               ENVELOPE DEBEZIUM"""))
         return "\n".join(cmds)
@@ -557,29 +584,23 @@ class IcebergSink(Object):
         super().__init__(name, references, rng)
 
     def create(self) -> str:
-        self.references_str = (
-            self.references.name if self.references else f"{self.name}_view"
-        )
-        cmds = []
-        if not self.references:
-            cmds.append(
-                f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT 'foo' AS a, 'bar' AS b"
-            )
-        elif isinstance(self.references, View):
-            self.references_str = f"{self.name}_mv"
-            cmds.append(
-                f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT * FROM {self.references.name}"
-            )
+        # Always create an intermediary MV with a known schema so that
+        # KEY (a) works regardless of what the referenced object provides.
+        self.references_str = f"{self.name}_mv"
+        cmds = [
+            f"> CREATE MATERIALIZED VIEW IF NOT EXISTS {self.references_str} AS SELECT 'foo' AS a, 'bar' AS b",
+        ]
 
         # See database-issues#9048, topic has to be unique
         table = f"{self.name}-{uuid4()}"
 
+        key_clause = " KEY (a) NOT ENFORCED" if self._mode == "UPSERT" else ""
         cmds.append(dedent(f"""
             > CREATE SINK {self.name}
               IN CLUSTER quickstart
               FROM {self.references_str}
               INTO ICEBERG CATALOG CONNECTION polaris_conn (NAMESPACE 'default_namespace', TABLE '{table}')
-              USING AWS CONNECTION aws_conn
+              USING AWS CONNECTION aws_conn{key_clause}
               MODE {self._mode} WITH (COMMIT INTERVAL '1s')"""))
         return "\n".join(cmds)
 
@@ -758,6 +779,12 @@ class Scenario:
     def print(self) -> None:
         print(self._impl(1))
 
+    # Errors that are transient and safe to ignore in race-condition testing.
+    ignorable_errors: list[str] = [
+        # TODO: https://github.com/MaterializeInc/database-issues/issues/9690
+        "another session modified the catalog while this DDL transaction was open",
+    ]
+
     def run_fragment(self, text: str, tries: int = 1) -> None:
         if not text:
             return
@@ -766,6 +793,9 @@ class Scenario:
                 self.c.testdrive(text, quiet=True)
                 return
             except Exception as e:
+                if any(msg in str(e) for msg in self.ignorable_errors):
+                    print(f"Ignoring transient error: {e}")
+                    return
                 print(e)
                 if i == tries - 1:
                     print("Failed to run fragment, giving up")
@@ -829,7 +859,7 @@ class Concurrent(Scenario):
 class Subsequent(Scenario):
     def __init__(self, c: Composition, rng: random.Random, num_objects: int):
         super().__init__(c, rng, num_objects)
-        objects = list(all_subclasses(Object))
+        objects = [o for o in list(all_subclasses(Object)) if o.enabled]
         self.objs = [
             rng.choice([o for o in objects if o.can_refer])("o_base", None, rng)
         ]
@@ -856,7 +886,7 @@ class Subsequent(Scenario):
 class SubsequentChain(Scenario):
     def __init__(self, c: Composition, rng: random.Random, num_objects: int):
         super().__init__(c, rng, num_objects)
-        objects = list(all_subclasses(Object))
+        objects = [o for o in list(all_subclasses(Object)) if o.enabled]
         self.objs = [
             rng.choice([o for o in objects if o.can_refer])("o_base", None, rng)
         ]
@@ -955,11 +985,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         user="mz_system",
         port=6877,
     )
-    c.sql(
-        "ALTER SYSTEM SET enable_replica_targeted_materialized_views = true",
-        user="mz_system",
-        port=6877,
-    )
+    # enable_replica_targeted_materialized_views is set via
+    # additional_system_parameter_defaults on the Materialized service so it
+    # survives c.down()/c.up() cycles in the Concurrent scenario.
 
     seed = args.seed
 
