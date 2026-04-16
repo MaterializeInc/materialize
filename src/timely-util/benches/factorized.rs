@@ -796,7 +796,12 @@ fn build_fact_batch(
 
 fn bench_arrangement_builder(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorized/arrangement/builder");
-    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+    for (n, nk, nv, nt) in [
+        (100_000, 100, 1_000, 5),
+        (100_000, 10, 100, 5),
+        (1_000_000, 1_000, 10_000, 10),
+        (1_000_000, 100, 1_000, 5),
+    ] {
         let data = generate_kv_updates(n, nk, nv, nt);
         let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
 
@@ -819,7 +824,12 @@ fn bench_arrangement_builder(c: &mut Criterion) {
 
 fn bench_arrangement_cursor(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorized/arrangement/cursor");
-    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+    for (n, nk, nv, nt) in [
+        (100_000, 100, 1_000, 5),
+        (100_000, 10, 100, 5),
+        (1_000_000, 1_000, 10_000, 10),
+        (1_000_000, 100, 1_000, 5),
+    ] {
         let data = generate_kv_updates(n, nk, nv, nt);
         let batch = build_fact_batch(&data, 0, 1000);
         let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
@@ -863,7 +873,12 @@ fn bench_arrangement_cursor(c: &mut Criterion) {
 
 fn bench_arrangement_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorized/arrangement/merge");
-    for (n, nk, nv, nt) in [(50_000, 100, 1_000, 5), (50_000, 10, 100, 5)] {
+    for (n, nk, nv, nt) in [
+        (50_000, 100, 1_000, 5),
+        (50_000, 10, 100, 5),
+        (500_000, 1_000, 10_000, 10),
+        (500_000, 100, 1_000, 5),
+    ] {
         let data1 = generate_kv_updates(n, nk, nv, nt);
         let mut data2: Vec<_> = (0..n)
             .map(|i| {
@@ -885,7 +900,7 @@ fn bench_arrangement_merge(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("no_compaction", &label), |b| {
             b.iter(|| {
                 let mut merger = batch1.begin_merge(&batch2, AntichainRef::new(&[]));
-                merger.work(&batch1, &batch2, &mut 1_000_000);
+                merger.work(&batch1, &batch2, &mut 10_000_000);
                 merger.done()
             })
         });
@@ -896,7 +911,7 @@ fn bench_arrangement_merge(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("with_compaction", &label), |b| {
             b.iter(|| {
                 let mut merger = batch1.begin_merge(&batch2, frontier.borrow());
-                merger.work(&batch1, &batch2, &mut 1_000_000);
+                merger.work(&batch1, &batch2, &mut 10_000_000);
                 merger.done()
             })
         });
@@ -906,7 +921,7 @@ fn bench_arrangement_merge(c: &mut Criterion) {
 
 fn bench_fact_column_serialization(c: &mut Criterion) {
     let mut group = c.benchmark_group("factorized/arrangement/container_bytes");
-    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5)] {
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (1_000_000, 1_000, 10_000, 10)] {
         let data = generate_kv_updates(n, nk, nv, nt);
         let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
 
