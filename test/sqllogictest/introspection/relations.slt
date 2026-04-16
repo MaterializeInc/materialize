@@ -161,6 +161,7 @@ Compute␠Logging␠Demux  Arrange␠Compute(LirMapping)  mz_timely_util::column
 Compute␠Logging␠Demux  Arrange␠Compute(OperatorHydrationStatus)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  Arrange␠Compute(PeekCurrent)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Compute␠Logging␠Demux  Arrange␠Compute(PeekDuration)  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+Concatenate  Timely␠Logging␠Demux  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 Consolidate␠Differential(ArrangementBatches)  ToRow␠Differential(ArrangementBatches)  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 Consolidate␠Differential(ArrangementRecords)  ToRow␠Differential(ArrangementRecords)  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 Consolidate␠Differential(BatcherAllocations)  ToRow␠Differential(BatcherAllocations)  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
@@ -185,12 +186,15 @@ Differential␠Logging␠Demux  Consolidate␠Differential(BatcherCapacity)  all
 Differential␠Logging␠Demux  Consolidate␠Differential(BatcherRecords)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Differential␠Logging␠Demux  Consolidate␠Differential(BatcherSize)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Differential␠Logging␠Demux  Consolidate␠Differential(Sharing)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+Filter  Remap␠Storage␠IDs  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 FlatMapReachability  Consolidate␠Timely(Reachability)  mz_timely_util::columnar::Column<(((bool,␠usize,␠usize,␠usize,␠mz_repr::timestamp::Timestamp),␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 PrometheusMetrics  Arrange␠PrometheusMetrics  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+Remap␠Storage␠IDs  Concatenate  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 Replay␠compute␠logs  Compute␠Logging␠Demux  mz_timely_util::columnar::Column<(core::time::Duration,␠mz_compute::logging::compute::ComputeEvent)>
 Replay␠differential␠logs  Differential␠Logging␠Demux  alloc::vec::Vec<(core::time::Duration,␠differential_dataflow::logging::DifferentialEvent)>
 Replay␠reachability␠logs  FlatMapReachability  mz_timely_util::columnar::Column<(core::time::Duration,␠(usize,␠alloc::vec::Vec<(usize,␠usize,␠bool,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>))>
-Replay␠timely␠logs  Timely␠Logging␠Demux  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
+Replay␠storage␠timely␠logs  Filter  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
+Replay␠timely␠logs  Concatenate  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 Timely␠Logging␠Demux  Consolidate␠Timely(Addresses)  alloc::vec::Vec<((usize,␠alloc::vec::Vec<usize>),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Timely␠Logging␠Demux  Consolidate␠Timely(BatchesReceived)  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Timely␠Logging␠Demux  Consolidate␠Timely(BatchesSent)  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -234,7 +238,6 @@ GROUP BY type;
 1  alloc::vec::Vec<((usize,␠alloc::string::String),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  alloc::vec::Vec<((usize,␠alloc::vec::Vec<usize>),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  alloc::vec::Vec<(core::time::Duration,␠differential_dataflow::logging::DifferentialEvent)>
-1  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 1  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<(((bool,␠usize,␠usize,␠usize,␠mz_repr::timestamp::Timestamp),␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 1  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((mz_compute::logging::timely::ParkDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
 1  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((mz_compute::logging::timely::ScheduleHistogramDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
@@ -248,5 +251,6 @@ GROUP BY type;
 32  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 4  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 4  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
+5  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 8  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 8  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
