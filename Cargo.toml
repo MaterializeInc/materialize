@@ -307,7 +307,8 @@ cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
 clap = { version = "4.5.60", features = ["derive"] }
-columnar = "0.12.1"
+# TODO: switch back to crates.io after frankmcsherry/columnar#105 is released
+columnar = { git = "https://github.com/antiguru/columnar", branch = "feature/cursor-index" }
 columnation = "0.1.2"
 compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"

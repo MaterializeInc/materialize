@@ -1975,7 +1975,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "161f39fb04ec1e1446e76f65ee5fc19f59240d9095b0b89b9a325da608c927f1"
 dependencies = [
  "bytemuck",
- "columnar_derive",
+ "columnar_derive 0.12.0",
+ "smallvec",
+]
+
+[[package]]
+name = "columnar"
+version = "0.12.1"
+source = "git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index#02abf8380525df720596350e382eac62e5333249"
+dependencies = [
+ "bytemuck",
+ "columnar_derive 0.12.1",
  "smallvec",
 ]
 
@@ -1984,6 +1994,16 @@ name = "columnar_derive"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d874c276acb8ce8e425e2822c54ce67a444dc407ec97767bbfc6490acc9fa2d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "columnar_derive"
+version = "0.12.1"
+source = "git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index#02abf8380525df720596350e382eac62e5333249"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2819,7 +2839,7 @@ version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d842a3e5e50bcd08a7f247c01a41cb057fde0c16f3865772682bff2edef5f40a"
 dependencies = [
- "columnar",
+ "columnar 0.12.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "columnation",
  "fnv",
  "paste",
@@ -6127,7 +6147,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytesize",
- "columnar",
+ "columnar 0.12.1 (git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index)",
  "columnation",
  "core_affinity",
  "dec",
@@ -6203,7 +6223,7 @@ dependencies = [
 name = "mz-compute-types"
 version = "0.0.0"
 dependencies = [
- "columnar",
+ "columnar 0.12.1 (git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index)",
  "columnation",
  "differential-dataflow",
  "itertools 0.14.0",
@@ -7134,7 +7154,7 @@ dependencies = [
  "bytes",
  "chrono",
  "clap",
- "columnar",
+ "columnar 0.12.1 (git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index)",
  "columnation",
  "compact_bytes",
  "console-subscriber",
@@ -7604,7 +7624,7 @@ dependencies = [
  "bytes",
  "cfg-if",
  "chrono",
- "columnar",
+ "columnar 0.12.1 (git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index)",
  "columnation",
  "compact_bytes",
  "criterion",
@@ -8429,7 +8449,7 @@ dependencies = [
  "allocation-counter",
  "bincode",
  "bytemuck",
- "columnar",
+ "columnar 0.12.1 (git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index)",
  "columnation",
  "criterion",
  "differential-dataflow",
@@ -12054,7 +12074,7 @@ checksum = "5cdba58f1357fd65576620166d88afb7911b0d4f83b97c0624b03797e85ef4e9"
 dependencies = [
  "bincode",
  "byteorder",
- "columnar",
+ "columnar 0.12.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "columnation",
  "getopts",
  "itertools 0.14.0",
@@ -12079,7 +12099,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f9efbf4f3899dc9905b780ec3646920022de3323086cc05ba84f4ffaad9a80c8"
 dependencies = [
  "byteorder",
- "columnar",
+ "columnar 0.12.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "getopts",
  "serde",
  "timely_bytes",
