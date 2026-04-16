@@ -97,6 +97,7 @@ def test(
     print(f"--- {posixpath.relpath(file, LOCATION)}")
     services = set()
 
+    has_iceberg = False
     for schemas in workload["databases"].values():
         for objs in schemas.values():
             for connection in objs["connections"].values():
@@ -111,7 +112,9 @@ def test(
                 elif connection["type"] == "ssh-tunnel":
                     services.add("ssh-bastion-host")
                 elif connection["type"] == "iceberg-catalog":
-                    pass  # handled by setup_polaris_for_iceberg in objects.py
+                    has_iceberg = (
+                        True  # handled by setup_polaris_for_iceberg in objects.py
+                    )
                 elif connection["type"] == "aws-privatelink":
                     pass  # can't run outside of cloud
                 elif connection["type"] == "aws":
@@ -125,6 +128,14 @@ def test(
         "materialized",
         *services,
         Service("testdrive", idle=True),
+        *(
+            [
+                Service("polaris-bootstrap", idle=True),
+                Service("polaris", idle=True),
+            ]
+            if has_iceberg
+            else []
+        ),
     )
     print(f"Console available: http://127.0.0.1:{c.port('materialized', 6874)}")
 

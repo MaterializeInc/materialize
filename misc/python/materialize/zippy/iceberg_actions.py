@@ -10,7 +10,7 @@
 import random
 from textwrap import dedent
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.zippy.balancerd_capabilities import BalancerdIsRunning
 from materialize.zippy.framework import (
@@ -39,7 +39,11 @@ class IcebergStart(Action):
         return {IcebergIsRunning}
 
     def run(self, c: Composition, state: State) -> None:
-        c.up("postgres")
+        c.up(
+            "postgres",
+            Service("polaris-bootstrap", idle=True),
+            Service("polaris", idle=True),
+        )
         username, key = setup_polaris_for_iceberg(c)
         state.iceberg_username = username
         state.iceberg_key = key
