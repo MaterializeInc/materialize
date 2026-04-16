@@ -981,12 +981,6 @@ impl ComputeController {
         instance_id: ComputeInstanceId,
         dataflow: &DataflowDescription<mz_compute_types::plan::Plan, ()>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
-        // TODO(ct3): Continual tasks don't support replica expiration
-        let is_continual_task = dataflow.continual_task_ids().next().is_some();
-        if is_continual_task {
-            return Ok(None);
-        }
-
         let instance = self
             .instance(instance_id)
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
@@ -1001,8 +995,7 @@ impl ComputeController {
 
         'source: for id in dataflow.imported_source_ids() {
             // We first check whether the id is backed by a compute object, in which case we use
-            // the time dependence we know. This is true for materialized views, continual tasks,
-            // etc.
+            // the time dependence we know. This is true for storage sinks.
             for instance in self.instances.values() {
                 if let Ok(dependence) = instance.get_time_dependence(id) {
                     time_dependencies.push(dependence);

@@ -618,8 +618,7 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_)
-                    | CatalogItem::ContinualTask(_) => {}
+                    | CatalogItem::Connection(_) => {}
                 }
             }
         }
@@ -1371,9 +1370,6 @@ impl Catalog {
                             storage_collections_to_create.insert(mv_gid);
                         }
                     }
-                    CatalogItem::ContinualTask(ct) => {
-                        storage_collections_to_create.insert(ct.global_id());
-                    }
                     CatalogItem::Sink(sink) => {
                         storage_collections_to_create.insert(sink.global_id());
                     }
@@ -1567,13 +1563,10 @@ impl Catalog {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
-                        | CatalogItem::Connection(_)
-                        | CatalogItem::ContinualTask(_) => {
-                            EventDetails::IdFullNameV1(IdFullNameV1 {
-                                id: id.to_string(),
-                                name,
-                            })
-                        }
+                        | CatalogItem::Connection(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                            id: id.to_string(),
+                            name,
+                        }),
                     };
                     CatalogState::add_to_audit_log(
                         &state.system_configuration,

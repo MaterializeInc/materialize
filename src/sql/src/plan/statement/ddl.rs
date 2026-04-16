@@ -55,10 +55,9 @@ use mz_sql_parser::ast::{
     ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
     ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
     ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
-    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
-    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
-    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
-    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
+    ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement, CreateClusterStatement,
+    CreateConnectionOption, CreateConnectionOptionName, CreateConnectionStatement,
+    CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
     CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
@@ -137,8 +136,7 @@ use crate::names::{
 use crate::normalize::{self, ident};
 use crate::plan::error::PlanError;
 use crate::plan::query::{
-    CteDesc, ExprContext, QueryLifetime, cast_relation, plan_expr, scalar_type_from_catalog,
-    scalar_type_from_sql,
+    ExprContext, QueryLifetime, plan_expr, scalar_type_from_catalog, scalar_type_from_sql,
 };
 use crate::plan::scope::Scope;
 use crate::plan::statement::ddl::connection::{INALTERABLE_OPTIONS, MUTUALLY_EXCLUSIVE_SETS};
@@ -155,15 +153,14 @@ use crate::plan::{
     AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
     ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
     CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
-    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
-    PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
-    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
-    transform_ast,
+    CreateConnectionPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
+    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -2736,13 +2733,6 @@ pub fn describe_create_materialized_view(
     Ok(StatementDesc::new(None))
 }
 
-pub fn describe_create_continual_task(
-    _: &StatementContext,
-    _: CreateContinualTaskStatement<Aug>,
-) -> Result<StatementDesc, PlanError> {
-    Ok(StatementDesc::new(None))
-}
-
 pub fn describe_create_network_policy(
     _: &StatementContext,
     _: CreateNetworkPolicyStatement<Aug>,
@@ -3121,306 +3111,6 @@ generate_extracted_config!(
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
 
-pub fn plan_create_continual_task(
-    scx: &StatementContext,
-    mut stmt: CreateContinualTaskStatement<Aug>,
-) -> Result<Plan, PlanError> {
-    match &stmt.sugar {
-        None => scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_CREATE)?,
-        Some(ast::CreateContinualTaskSugar::Transform { .. }) => {
-            scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_TRANSFORM)?
-        }
-        Some(ast::CreateContinualTaskSugar::Retain { .. }) => {
-            scx.require_feature_flag(&vars::ENABLE_CONTINUAL_TASK_RETAIN)?
-        }
-    };
-    let cluster_id = match &stmt.in_cluster {
-        None => scx.catalog.resolve_cluster(None)?.id(),
-        Some(in_cluster) => in_cluster.id,
-    };
-    stmt.in_cluster = Some(ResolvedClusterName {
-        id: cluster_id,
-        print_name: None,
-    });
-
-    let create_sql =
-        normalize::create_statement(scx, Statement::CreateContinualTask(stmt.clone()))?;
-
-    let ContinualTaskOptionExtracted { snapshot, seen: _ } = stmt.with_options.try_into()?;
-
-    // It seems desirable for a CT that e.g. simply filters the input to keep
-    // the same nullability. So, start by assuming all columns are non-nullable,
-    // and then make them nullable below if any of the exprs plan them as
-    // nullable.
-    let mut desc = match stmt.columns {
-        None => None,
-        Some(columns) => {
-            let mut desc_columns = Vec::with_capacity(columns.capacity());
-            for col in columns.iter() {
-                desc_columns.push((
-                    normalize::column_name(col.name.clone()),
-                    SqlColumnType {
-                        scalar_type: scalar_type_from_sql(scx, &col.data_type)?,
-                        nullable: false,
-                    },
-                ));
-            }
-            Some(RelationDesc::from_names_and_types(desc_columns))
-        }
-    };
-    let input = scx.get_item_by_resolved_name(&stmt.input)?;
-    match input.item_type() {
-        // Input must be a thing directly backed by a persist shard, so we can
-        // use a persist listen to efficiently rehydrate.
-        CatalogItemType::ContinualTask
-        | CatalogItemType::Table
-        | CatalogItemType::MaterializedView
-        | CatalogItemType::Source => {}
-        CatalogItemType::Sink
-        | CatalogItemType::View
-        | CatalogItemType::Index
-        | CatalogItemType::Type
-        | CatalogItemType::Func
-        | CatalogItemType::Secret
-        | CatalogItemType::Connection => {
-            sql_bail!(
-                "CONTINUAL TASK cannot use {} as an input",
-                input.item_type()
-            );
-        }
-    }
-
-    let mut qcx = QueryContext::root(scx, QueryLifetime::MaterializedView);
-    let ct_name = stmt.name;
-    let placeholder_id = match &ct_name {
-        ResolvedItemName::ContinualTask { id, name } => {
-            let desc = match desc.as_ref().cloned() {
-                Some(x) => x,
-                None => {
-                    // The user didn't specify the CT's columns. Take a wild
-                    // guess that the CT has the same shape as the input. It's
-                    // fine if this is wrong, we'll get an error below after
-                    // planning the query.
-                    let desc = input.relation_desc().expect("item type checked above");
-                    desc.into_owned()
-                }
-            };
-            qcx.ctes.insert(
-                *id,
-                CteDesc {
-                    name: name.item.clone(),
-                    desc,
-                },
-            );
-            Some(*id)
-        }
-        _ => None,
-    };
-
-    let mut exprs = Vec::new();
-    for (idx, stmt) in stmt.stmts.iter().enumerate() {
-        let query = continual_task_query(&ct_name, stmt).ok_or_else(|| sql_err!("TODO(ct3)"))?;
-        let query::PlannedRootQuery {
-            expr,
-            desc: desc_query,
-            finishing,
-            scope: _,
-        } = query::plan_ct_query(&mut qcx, query)?;
-        // We get back a trivial finishing because we plan with a "maintained"
-        // QueryLifetime, see comment in `plan_view`.
-        assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
-            &finishing,
-            expr.arity()
-        ));
-        if expr.contains_parameters()? {
-            if expr.contains_parameters()? {
-                return Err(PlanError::ParameterNotAllowed(
-                    "continual tasks".to_string(),
-                ));
-            }
-        }
-        let expr = match desc.as_mut() {
-            None => {
-                desc = Some(desc_query);
-                expr
-            }
-            Some(desc) => {
-                // We specify the columns for DELETE, so if any columns types don't
-                // match, it's because it's an INSERT.
-                if desc_query.arity() > desc.arity() {
-                    sql_bail!(
-                        "statement {}: INSERT has more expressions than target columns",
-                        idx
-                    );
-                }
-                if desc_query.arity() < desc.arity() {
-                    sql_bail!(
-                        "statement {}: INSERT has more target columns than expressions",
-                        idx
-                    );
-                }
-                // Ensure the types of the source query match the types of the target table,
-                // installing assignment casts where necessary and possible.
-                let target_types = desc.iter_types().map(|x| &x.scalar_type);
-                let expr = cast_relation(&qcx, CastContext::Assignment, expr, target_types);
-                let expr = expr.map_err(|e| {
-                    sql_err!(
-                        "statement {}: column {} is of type {} but expression is of type {}",
-                        idx,
-                        desc.get_name(e.column).quoted(),
-                        qcx.humanize_sql_scalar_type(&e.target_type, false),
-                        qcx.humanize_sql_scalar_type(&e.source_type, false),
-                    )
-                })?;
-
-                // Update ct nullability as necessary. The `ne` above verified that the
-                // types are the same len.
-                let zip_types = || desc.iter_types().zip_eq(desc_query.iter_types());
-                let updated = zip_types().any(|(ct, q)| q.nullable && !ct.nullable);
-                if updated {
-                    let new_types = zip_types().map(|(ct, q)| {
-                        let mut ct = ct.clone();
-                        if q.nullable {
-                            ct.nullable = true;
-                        }
-                        ct
-                    });
-                    *desc = RelationDesc::from_names_and_types(
-                        desc.iter_names().cloned().zip_eq(new_types),
-                    );
-                }
-
-                expr
-            }
-        };
-        match stmt {
-            ast::ContinualTaskStmt::Insert(_) => exprs.push(expr),
-            ast::ContinualTaskStmt::Delete(_) => exprs.push(expr.negate()),
-        }
-    }
-    // TODO(ct3): Collect things by output and assert that there is only one (or
-    // support multiple outputs).
-    let expr = exprs
-        .into_iter()
-        .reduce(|acc, expr| acc.union(expr))
-        .ok_or_else(|| sql_err!("TODO(ct3)"))?;
-    let dependencies = expr
-        .depends_on()
-        .into_iter()
-        .map(|gid| scx.catalog.resolve_item_id(&gid))
-        .collect();
-
-    let desc = desc.ok_or_else(|| sql_err!("TODO(ct3)"))?;
-    let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
-    if let Some(dup) = column_names.iter().duplicates().next() {
-        sql_bail!("column {} specified more than once", dup.quoted());
-    }
-
-    // Check for an object in the catalog with this same name
-    let name = match &ct_name {
-        ResolvedItemName::Item { id, .. } => scx.catalog.get_item(id).name().clone(),
-        ResolvedItemName::ContinualTask { name, .. } => {
-            let name = scx.allocate_qualified_name(name.clone())?;
-            let full_name = scx.catalog.resolve_full_name(&name);
-            let partial_name = PartialItemName::from(full_name.clone());
-            // For PostgreSQL compatibility, we need to prevent creating this when there
-            // is an existing object *or* type of the same name.
-            if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
-                return Err(PlanError::ItemAlreadyExists {
-                    name: full_name.to_string(),
-                    item_type: item.item_type(),
-                });
-            }
-            name
-        }
-        ResolvedItemName::Cte { .. } => unreachable!("name should not resolve to a CTE"),
-        ResolvedItemName::Error => unreachable!("error should be returned in name resolution"),
-    };
-
-    let as_of = stmt.as_of.map(Timestamp::from);
-    Ok(Plan::CreateContinualTask(CreateContinualTaskPlan {
-        name,
-        placeholder_id,
-        desc,
-        input_id: input.global_id(),
-        with_snapshot: snapshot.unwrap_or(true),
-        continual_task: MaterializedView {
-            create_sql,
-            expr,
-            dependencies,
-            column_names,
-            replacement_target: None,
-            cluster_id,
-            target_replica: None,
-            non_null_assertions: Vec::new(),
-            compaction_window: None,
-            refresh_schedule: None,
-            as_of,
-        },
-    }))
-}
-
-fn continual_task_query<'a>(
-    ct_name: &ResolvedItemName,
-    stmt: &'a ast::ContinualTaskStmt<Aug>,
-) -> Option<ast::Query<Aug>> {
-    match stmt {
-        ast::ContinualTaskStmt::Insert(ast::InsertStatement {
-            table_name: _,
-            columns,
-            source,
-            returning,
-        }) => {
-            if !columns.is_empty() || !returning.is_empty() {
-                return None;
-            }
-            match source {
-                ast::InsertSource::Query(query) => Some(query.clone()),
-                ast::InsertSource::DefaultValues => None,
-            }
-        }
-        ast::ContinualTaskStmt::Delete(ast::DeleteStatement {
-            table_name: _,
-            alias,
-            using,
-            selection,
-        }) => {
-            if !using.is_empty() {
-                return None;
-            }
-            // Construct a `SELECT *` with the `DELETE` selection as a `WHERE`.
-            let from = ast::TableWithJoins {
-                relation: ast::TableFactor::Table {
-                    name: ct_name.clone(),
-                    alias: alias.clone(),
-                },
-                joins: Vec::new(),
-            };
-            let select = ast::Select {
-                from: vec![from],
-                selection: selection.clone(),
-                distinct: None,
-                projection: vec![ast::SelectItem::Wildcard],
-                group_by: Vec::new(),
-                having: None,
-                qualify: None,
-                options: Vec::new(),
-            };
-            let query = ast::Query {
-                ctes: ast::CteBlock::Simple(Vec::new()),
-                body: ast::SetExpr::Select(Box::new(select)),
-                order_by: Vec::new(),
-                limit: None,
-                offset: None,
-            };
-            // Then negate it to turn it into retractions (after planning it).
-            Some(query)
-        }
-    }
-}
-
-generate_extracted_config!(ContinualTaskOption, (Snapshot, bool));
-
 pub fn describe_create_sink(
     _: &StatementContext,
     _: CreateSinkStatement<Aug>,
@@ -3517,7 +3207,7 @@ fn plan_sink(
     {
         use CatalogItemType::*;
         match from.item_type() {
-            Table | Source | MaterializedView | ContinualTask => {
+            Table | Source | MaterializedView => {
                 if from.replacement_target().is_some() {
                     let name = scx.catalog.minimal_qualification(from.name());
                     return Err(PlanError::InvalidSinkFrom {
@@ -4317,7 +4007,7 @@ pub fn plan_create_index(
     {
         use CatalogItemType::*;
         match on.item_type() {
-            Table | Source | View | MaterializedView | ContinualTask => {
+            Table | Source | View | MaterializedView => {
                 if on.replacement_target().is_some() {
                     sql_bail!(
                         "index cannot be created on {} because it is a replacement {}",
@@ -5898,7 +5588,6 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::ContinualTask
         | ObjectType::NetworkPolicy => match dep.item_type() {
             CatalogItemType::Func
             | CatalogItemType::Table
@@ -5908,8 +5597,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::Sink
             | CatalogItemType::Type
             | CatalogItemType::Secret
-            | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => true,
+            | CatalogItemType::Connection => true,
             CatalogItemType::Index => false,
         },
     }
@@ -6635,7 +6323,6 @@ pub fn plan_alter_item_set_cluster(
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::ContinualTask
         | ObjectType::NetworkPolicy => {
             bail_never_supported!(
                 format!("ALTER {object_type} SET CLUSTER"),
@@ -7076,7 +6763,6 @@ pub fn plan_alter_object_swap(
             | ObjectType::Connection
             | ObjectType::Database
             | ObjectType::Func
-            | ObjectType::ContinualTask
             | ObjectType::NetworkPolicy,
             _,
             _,
@@ -7869,8 +7555,7 @@ pub fn plan_comment(
         | com_ty @ CommentObjectType::Connection { name }
         | com_ty @ CommentObjectType::Source { name }
         | com_ty @ CommentObjectType::Sink { name }
-        | com_ty @ CommentObjectType::Secret { name }
-        | com_ty @ CommentObjectType::ContinualTask { name } => {
+        | com_ty @ CommentObjectType::Secret { name } => {
             let item = scx.get_item_by_resolved_name(name)?;
             match (com_ty, item.item_type()) {
                 (CommentObjectType::Table { .. }, CatalogItemType::Table) => {
@@ -7899,9 +7584,6 @@ pub fn plan_comment(
                 }
                 (CommentObjectType::Secret { .. }, CatalogItemType::Secret) => {
                     (CommentObjectId::Secret(item.id()), None)
-                }
-                (CommentObjectType::ContinualTask { .. }, CatalogItemType::ContinualTask) => {
-                    (CommentObjectId::ContinualTask(item.id()), None)
                 }
                 (com_ty, cat_ty) => {
                     let expected_type = match com_ty {
@@ -8100,7 +7782,6 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::Database
         | ObjectType::Schema
         | ObjectType::Func
-        | ObjectType::ContinualTask
         | ObjectType::NetworkPolicy => scx.catalog.resolve_item(&name),
     };
 

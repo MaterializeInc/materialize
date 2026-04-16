@@ -549,13 +549,6 @@ pub static MAX_ROLES: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static MAX_CONTINUAL_TASKS: VarDefinition = VarDefinition::new(
-    "max_continual_tasks",
-    value!(u32; 100),
-    "The maximum number of continual tasks in the region, across all schemas (Materialize).",
-    true,
-);
-
 pub static MAX_NETWORK_POLICIES: VarDefinition = VarDefinition::new(
     "max_network_policies",
     value!(u32; 25),
@@ -2155,24 +2148,6 @@ feature_flags!(
         name: enable_aws_msk_iam_auth,
         desc: "Enable AWS MSK IAM authentication for Kafka connections",
         default: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_create,
-        desc: "CREATE CONTINUAL TASK",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_transform,
-        desc: "CREATE CONTINUAL TASK .. FROM TRANSFORM .. USING",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_continual_task_retain,
-        desc: "CREATE CONTINUAL TASK .. FROM RETAIN .. WHILE",
-        default: false,
         enable_for_item_parsing: true,
     },
     {

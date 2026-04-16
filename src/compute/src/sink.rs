@@ -13,5 +13,3 @@ mod correction_v2;
 mod materialized_view;
 mod refresh;
 mod subscribe;
-
-pub(crate) use correction::ConsolidatingVec;

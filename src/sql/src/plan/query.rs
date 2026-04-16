@@ -182,57 +182,6 @@ pub fn plan_root_query(
     })
 }
 
-/// TODO(ct2): Dedup this with [plan_root_query].
-#[mz_ore::instrument(target = "compiler", level = "trace", name = "ast_to_hir")]
-pub fn plan_ct_query(
-    qcx: &mut QueryContext,
-    mut query: Query<Aug>,
-) -> Result<PlannedRootQuery<HirRelationExpr>, PlanError> {
-    transform_ast::transform(qcx.scx, &mut query)?;
-    let PlannedQuery {
-        mut expr,
-        scope,
-        order_by,
-        limit,
-        offset,
-        project,
-        group_size_hints,
-    } = plan_query(qcx, &query)?;
-
-    let mut finishing = RowSetFinishing {
-        limit,
-        offset,
-        project,
-        order_by,
-    };
-
-    // Attempt to push the finishing's ordering past its projection. This allows
-    // data to be projected down on the workers rather than the coordinator. It
-    // also improves the optimizer's demand analysis, as the optimizer can only
-    // reason about demand information in `expr` (i.e., it can't see
-    // `finishing.project`).
-    try_push_projection_order_by(&mut expr, &mut finishing.project, &mut finishing.order_by);
-
-    expr.finish_maintained(&mut finishing, group_size_hints);
-
-    let typ = qcx.relation_type(&expr);
-    let typ = SqlRelationType::new(
-        finishing
-            .project
-            .iter()
-            .map(|i| typ.column_types[*i].clone())
-            .collect(),
-    );
-    let desc = RelationDesc::new(typ, scope.column_names());
-
-    Ok(PlannedRootQuery {
-        expr,
-        desc,
-        finishing,
-        scope,
-    })
-}
-
 /// Attempts to push a projection through an order by.
 ///
 /// The returned bool indicates whether the pushdown was successful or not.
@@ -6647,17 +6596,6 @@ impl<'a> QueryContext<'a> {
             }
             ResolvedItemName::Cte { id, name } => {
                 let name = name.into();
-                let cte = self.ctes.get(&id).unwrap();
-                let expr = HirRelationExpr::Get {
-                    id: Id::Local(id),
-                    typ: cte.desc.typ().clone(),
-                };
-
-                let scope = Scope::from_source(Some(name), cte.desc.iter_names());
-
-                Ok((expr, scope))
-            }
-            ResolvedItemName::ContinualTask { id, name } => {
                 let cte = self.ctes.get(&id).unwrap();
                 let expr = HirRelationExpr::Get {
                     id: Id::Local(id),

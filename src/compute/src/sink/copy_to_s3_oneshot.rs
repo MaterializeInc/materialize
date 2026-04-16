@@ -41,7 +41,6 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
         _start_signal: StartSignal,
         sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
         err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
-        _ct_times: Option<VecCollection<'scope, Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Set up a callback to communicate the result of the copy-to operation to the controller.

@@ -43,7 +43,6 @@ max_aws_privatelink_connections          0                       "The maximum nu
 max_copy_from_row_size                   128MB                   "The maximum size in bytes for a single COPY FROM STDIN row (Materialize)."
 max_clusters                             25                      "The maximum number of clusters in the region (Materialize)."
 max_connections                          5000                    "The maximum number of concurrent connections (PostgreSQL)."
-max_continual_tasks                      100                     "The maximum number of continual tasks in the region, across all schemas (Materialize)."
 max_credit_consumption_rate              1024                    "The maximum rate of credit consumption in a region. Credits are consumed based on the size of cluster replicas in use (Materialize)."
 max_databases                            1000                    "The maximum number of databases in the region (Materialize)."
 max_identifier_length                    255                     "The maximum length of object identifiers in bytes (PostgreSQL)."

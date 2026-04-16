@@ -616,29 +616,6 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
-        Plan::CreateContinualTask(plan::CreateContinualTaskPlan {
-            name,
-            placeholder_id: _,
-            desc: _,
-            input_id: _,
-            with_snapshot: _,
-            continual_task,
-        }) => RbacRequirements {
-            privileges: vec![
-                (
-                    SystemObjectId::Object(name.qualifiers.clone().into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-                (
-                    SystemObjectId::Object(continual_task.cluster_id.into()),
-                    AclMode::CREATE,
-                    role_id,
-                ),
-            ],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
         Plan::CreateIndex(plan::CreateIndexPlan {
             name,
             index,
@@ -1687,9 +1664,7 @@ fn generate_read_privileges_inner(
                 privileges.push((SystemObjectId::Object(schema_id), AclMode::USAGE, role_id))
             }
             match item.item_type() {
-                CatalogItemType::View
-                | CatalogItemType::MaterializedView
-                | CatalogItemType::ContinualTask => {
+                CatalogItemType::View | CatalogItemType::MaterializedView => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::SELECT, role_id));
                     views.push((item.references().items().copied(), item.owner_id()));
                 }
@@ -1830,7 +1805,6 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Database) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
-        SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1848,8 +1822,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         ObjectType::Table
         | ObjectType::View
         | ObjectType::MaterializedView
-        | ObjectType::Source
-        | ObjectType::ContinualTask => AclMode::SELECT,
+        | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
         | ObjectType::Index

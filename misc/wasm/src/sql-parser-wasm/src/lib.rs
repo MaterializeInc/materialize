@@ -140,7 +140,6 @@ fn in_cluster(stmt: &Statement<mz_sql_parser::ast::Raw>) -> Option<String> {
         Statement::CreateSource(src) => src.in_cluster.clone(),
         Statement::CreateWebhookSource(src) => src.in_cluster.clone(),
         Statement::CreateSink(src) => src.in_cluster.clone(),
-        Statement::CreateContinualTask(ct) => ct.in_cluster.clone(),
         _ => None,
     };
 

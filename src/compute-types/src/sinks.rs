@@ -43,9 +43,6 @@ pub enum ComputeSinkConnection<S: 'static = ()> {
     Subscribe(SubscribeSinkConnection),
     /// TODO(database-issues#7533): Add documentation.
     MaterializedView(MaterializedViewSinkConnection<S>),
-    /// ContinualTask-specific information necessary for rendering a
-    /// ContinualTask sink.
-    ContinualTask(ContinualTaskConnection<S>),
     /// A compute sink to do a oneshot copy to s3.
     CopyToS3Oneshot(CopyToS3OneshotSinkConnection),
 }
@@ -56,7 +53,6 @@ impl<S> ComputeSinkConnection<S> {
         match self {
             ComputeSinkConnection::Subscribe(_) => "subscribe",
             ComputeSinkConnection::MaterializedView(_) => "materialized_view",
-            ComputeSinkConnection::ContinualTask(_) => "continual_task",
             ComputeSinkConnection::CopyToS3Oneshot(_) => "copy_to_s3_oneshot",
         }
     }
@@ -99,18 +95,5 @@ pub struct MaterializedViewSinkConnection<S> {
     /// TODO(database-issues#7533): Add documentation.
     pub value_desc: RelationDesc,
     /// TODO(database-issues#7533): Add documentation.
-    pub storage_metadata: S,
-}
-
-/// ContinualTask-specific information necessary for rendering a ContinualTask
-/// sink. (Shared-sink information is instead stored on ComputeSinkConnection.)
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ContinualTaskConnection<S> {
-    /// The id of the (for now) single input to this CT.
-    //
-    // TODO(ct3): This can be removed once we render the "input" sources without
-    // the hack.
-    pub input_id: GlobalId,
-    /// The necessary storage information for writing to the output collection.
     pub storage_metadata: S,
 }

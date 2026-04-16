@@ -143,7 +143,6 @@ pub enum Plan {
     CreateTable(CreateTablePlan),
     CreateView(CreateViewPlan),
     CreateMaterializedView(CreateMaterializedViewPlan),
-    CreateContinualTask(CreateContinualTaskPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
@@ -275,7 +274,6 @@ impl Plan {
             StatementKind::CreateIndex => &[PlanKind::CreateIndex],
             StatementKind::CreateNetworkPolicy => &[PlanKind::CreateNetworkPolicy],
             StatementKind::CreateMaterializedView => &[PlanKind::CreateMaterializedView],
-            StatementKind::CreateContinualTask => &[PlanKind::CreateContinualTask],
             StatementKind::CreateRole => &[PlanKind::CreateRole],
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
@@ -347,7 +345,6 @@ impl Plan {
             Plan::CreateTable(_) => "create table",
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
-            Plan::CreateContinualTask(_) => "create continual task",
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
@@ -370,7 +367,6 @@ impl Plan {
                 ObjectType::Database => "drop database",
                 ObjectType::Schema => "drop schema",
                 ObjectType::Func => "drop function",
-                ObjectType::ContinualTask => "drop continual task",
                 ObjectType::NetworkPolicy => "drop network policy",
             },
             Plan::DropOwned(_) => "drop owned",
@@ -411,7 +407,6 @@ impl Plan {
                 ObjectType::Database => "alter database",
                 ObjectType::Schema => "alter schema",
                 ObjectType::Func => "alter function",
-                ObjectType::ContinualTask => "alter continual task",
                 ObjectType::NetworkPolicy => "alter network policy",
             },
             Plan::AlterCluster(_) => "alter cluster",
@@ -447,7 +442,6 @@ impl Plan {
                 ObjectType::Database => "alter database owner",
                 ObjectType::Schema => "alter schema owner",
                 ObjectType::Func => "alter function owner",
-                ObjectType::ContinualTask => "alter continual task owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
@@ -763,20 +757,6 @@ pub struct CreateMaterializedViewPlan {
     /// True if the materialized view contains an expression that can make the exact column list
     /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
     pub ambiguous_columns: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct CreateContinualTaskPlan {
-    pub name: QualifiedItemName,
-    /// During initial creation, the `LocalId` placeholder for this CT in `continual_task.expr`.
-    /// None on restart.
-    pub placeholder_id: Option<mz_expr::LocalId>,
-    pub desc: RelationDesc,
-    /// ID of the collection we read into this continual task.
-    pub input_id: GlobalId,
-    pub with_snapshot: bool,
-    /// Definition for the continual task.
-    pub continual_task: MaterializedView,
 }
 
 #[derive(Debug, Clone)]

@@ -1170,11 +1170,6 @@ impl Catalog {
             .filter(|role| role.is_user())
     }
 
-    pub fn user_continual_tasks(&self) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries()
-            .filter(|entry| entry.is_continual_task() && entry.id().is_user())
-    }
-
     pub fn user_network_policies(&self) -> impl Iterator<Item = &NetworkPolicy> {
         self.state
             .network_policies_by_id
@@ -1445,7 +1440,6 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::Schema(_) => ObjectType::Schema,
         CommentObjectId::Cluster(_) => ObjectType::Cluster,
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-        CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
         CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
     }
 }
@@ -1476,7 +1470,6 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Database => ObjectType::Database,
             mz_sql::catalog::ObjectType::Schema => ObjectType::Schema,
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
-            mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         },
         SystemObjectType::System => ObjectType::System,
@@ -2255,7 +2248,7 @@ mod tests {
         CatalogItemId, Datum, GlobalId, RelationVersionSelector, Row, RowArena, SqlRelationType,
         SqlScalarType, Timestamp,
     };
-    use mz_sql::catalog::{BuiltinsConfig, CatalogSchema, CatalogType, SessionCatalog};
+    use mz_sql::catalog::{CatalogSchema, CatalogType, SessionCatalog};
     use mz_sql::func::{Func, FuncImpl, OP_IMPLS, Operation};
     use mz_sql::names::{
         self, DatabaseId, ItemQualifiers, ObjectId, PartialItemName, QualifiedItemName,
@@ -2695,10 +2688,7 @@ mod tests {
         Catalog::with_debug(|catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
-            let builtins_cfg = BuiltinsConfig {
-                include_continual_tasks: true,
-            };
-            for builtin in BUILTINS::iter(&builtins_cfg) {
+            for builtin in BUILTINS::iter() {
                 let (schema, name, expected_desc) = match builtin {
                     Builtin::Table(t) => (&t.schema, &t.name, &t.desc),
                     Builtin::View(v) => (&v.schema, &v.name, &v.desc),
@@ -2707,7 +2697,6 @@ mod tests {
                     Builtin::Log(_)
                     | Builtin::Type(_)
                     | Builtin::Func(_)
-                    | Builtin::ContinualTask(_)
                     | Builtin::Index(_)
                     | Builtin::Connection(_) => continue,
                 };
@@ -2896,10 +2885,7 @@ mod tests {
                 a == b
             };
 
-            let builtins_cfg = BuiltinsConfig {
-                include_continual_tasks: true,
-            };
-            for builtin in BUILTINS::iter(&builtins_cfg) {
+            for builtin in BUILTINS::iter() {
                 match builtin {
                     Builtin::Type(ty) => {
                         assert!(all_oids.insert(ty.oid), "{} reused oid {}", ty.name, ty.oid);
@@ -2955,7 +2941,7 @@ mod tests {
                         // Ensure the type matches.
                         match &ty.details.typ {
                             CatalogType::Array { element_reference } => {
-                                let elem_ty = BUILTINS::iter(&builtins_cfg)
+                                let elem_ty = BUILTINS::iter()
                                     .filter_map(|builtin| match builtin {
                                         Builtin::Type(ty @ BuiltinType { name, .. })
                                             if element_reference == name =>

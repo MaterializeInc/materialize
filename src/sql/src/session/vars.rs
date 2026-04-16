@@ -1098,7 +1098,6 @@ impl SystemVars {
             &MAX_OBJECTS_PER_SCHEMA,
             &MAX_SECRETS,
             &MAX_ROLES,
-            &MAX_CONTINUAL_TASKS,
             &MAX_NETWORK_POLICIES,
             &MAX_RULES_PER_NETWORK_POLICY,
             &MAX_RESULT_SIZE,
@@ -1621,11 +1620,6 @@ impl SystemVars {
     /// Returns the value of the `max_roles` configuration parameter.
     pub fn max_roles(&self) -> u32 {
         *self.expect_value(&MAX_ROLES)
-    }
-
-    /// Returns the value of the `max_continual_tasks` configuration parameter.
-    pub fn max_continual_tasks(&self) -> u32 {
-        *self.expect_value(&MAX_CONTINUAL_TASKS)
     }
 
     /// Returns the value of the `max_network_policies` configuration parameter.

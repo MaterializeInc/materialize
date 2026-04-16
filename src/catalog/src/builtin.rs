@@ -94,7 +94,6 @@ pub enum Builtin<T: 'static + TypeReference> {
     Type(&'static BuiltinType<T>),
     Func(BuiltinFunc),
     Source(&'static BuiltinSource),
-    ContinualTask(&'static BuiltinContinualTask),
     Index(&'static BuiltinIndex),
     Connection(&'static BuiltinConnection),
 }
@@ -109,7 +108,6 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.name,
             Builtin::Func(func) => func.name,
             Builtin::Source(coll) => coll.name,
-            Builtin::ContinualTask(ct) => ct.name,
             Builtin::Index(index) => index.name,
             Builtin::Connection(connection) => connection.name,
         }
@@ -124,7 +122,6 @@ impl<T: TypeReference> Builtin<T> {
             Builtin::Type(typ) => typ.schema,
             Builtin::Func(func) => func.schema,
             Builtin::Source(coll) => coll.schema,
-            Builtin::ContinualTask(ct) => ct.schema,
             Builtin::Index(index) => index.schema,
             Builtin::Connection(connection) => connection.schema,
         }
@@ -134,7 +131,6 @@ impl<T: TypeReference> Builtin<T> {
         match self {
             Builtin::Log(_) => CatalogItemType::Source,
             Builtin::Source(_) => CatalogItemType::Source,
-            Builtin::ContinualTask(_) => CatalogItemType::ContinualTask,
             Builtin::Table(_) => CatalogItemType::Table,
             Builtin::View(_) => CatalogItemType::View,
             Builtin::MaterializedView(_) => CatalogItemType::MaterializedView,
@@ -189,17 +185,6 @@ pub struct BuiltinSource {
     /// Whether the source's retention policy is controlled by
     /// the system variable `METRICS_RETENTION`
     pub is_retained_metrics_object: bool,
-    /// ACL items to apply to the object
-    pub access: Vec<MzAclItem>,
-}
-
-#[derive(Hash, Debug, PartialEq, Eq)]
-pub struct BuiltinContinualTask {
-    pub name: &'static str,
-    pub schema: &'static str,
-    pub oid: u32,
-    pub desc: RelationDesc,
-    pub sql: &'static str,
     /// ACL items to apply to the object
     pub access: Vec<MzAclItem>,
 }
@@ -287,15 +272,6 @@ impl BuiltinIndex {
     }
 }
 
-impl BuiltinContinualTask {
-    pub fn create_sql(&self) -> String {
-        format!(
-            "CREATE CONTINUAL TASK {}.{}\n{}",
-            self.schema, self.name, self.sql
-        )
-    }
-}
-
 #[derive(Hash, Debug)]
 pub struct BuiltinConnection {
     pub name: &'static str,
@@ -355,7 +331,6 @@ impl<T: TypeReference> Fingerprint for &Builtin<T> {
             Builtin::Type(typ) => typ.fingerprint(),
             Builtin::Func(func) => func.fingerprint(),
             Builtin::Source(coll) => coll.fingerprint(),
-            Builtin::ContinualTask(ct) => ct.fingerprint(),
             Builtin::Index(index) => index.fingerprint(),
             Builtin::Connection(connection) => connection.fingerprint(),
         }
@@ -400,12 +375,6 @@ impl Fingerprint for &BuiltinSource {
 }
 
 impl Fingerprint for &BuiltinMaterializedView {
-    fn fingerprint(&self) -> String {
-        self.create_sql()
-    }
-}
-
-impl Fingerprint for &BuiltinContinualTask {
     fn fingerprint(&self) -> String {
         self.create_sql()
     }
@@ -3128,31 +3097,6 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_CONTINUAL_TASKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_continual_tasks",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::TABLE_MZ_CONTINUAL_TASKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("definition", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_column("create_sql", SqlScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::new(),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-});
 
 pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
     BuiltinMaterializedView {
@@ -3912,24 +3856,6 @@ pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock
         access: vec![PUBLIC_SELECT],
     }
 });
-
-pub static MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT: LazyLock<BuiltinContinualTask> = LazyLock::new(
-    || {
-        BuiltinContinualTask {
-            name: "mz_cluster_replica_status_history_ct",
-            schema: MZ_INTERNAL_SCHEMA,
-            oid: oid::CT_MZ_CLUSTER_REPLICA_STATUS_HISTORY_OID,
-            desc: REPLICA_STATUS_HISTORY_DESC.clone(),
-            sql: "
-IN CLUSTER mz_catalog_server
-ON INPUT mz_internal.mz_cluster_replica_status_history AS (
-    DELETE FROM mz_internal.mz_cluster_replica_status_history_ct WHERE occurred_at + '30d' < mz_now();
-    INSERT INTO mz_internal.mz_cluster_replica_status_history_ct SELECT * FROM mz_internal.mz_cluster_replica_status_history;
-)",
-            access: vec![PUBLIC_SELECT],
-        }
-    },
-);
 
 pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_statuses",
@@ -5247,24 +5173,6 @@ pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY: LazyLock<BuiltinSource> =
         access: vec![PUBLIC_SELECT],
     });
 
-pub static MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT: LazyLock<BuiltinContinualTask> = LazyLock::new(
-    || {
-        BuiltinContinualTask {
-            name: "mz_cluster_replica_metrics_history_ct",
-            schema: MZ_INTERNAL_SCHEMA,
-            oid: oid::CT_MZ_CLUSTER_REPLICA_METRICS_HISTORY_OID,
-            desc: REPLICA_METRICS_HISTORY_DESC.clone(),
-            sql: "
-IN CLUSTER mz_catalog_server
-ON INPUT mz_internal.mz_cluster_replica_metrics_history AS (
-    DELETE FROM mz_internal.mz_cluster_replica_metrics_history_ct WHERE occurred_at + '30d' < mz_now();
-    INSERT INTO mz_internal.mz_cluster_replica_metrics_history_ct SELECT * FROM mz_internal.mz_cluster_replica_metrics_history;
-)",
-            access: vec![PUBLIC_SELECT],
-        }
-    },
-);
-
 pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_cluster_replica_metrics",
     schema: MZ_INTERNAL_SCHEMA,
@@ -5416,22 +5324,6 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     ]),
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
-});
-
-pub static MZ_WALLCLOCK_LAG_HISTORY_CT: LazyLock<BuiltinContinualTask> = LazyLock::new(|| {
-    BuiltinContinualTask {
-    name: "mz_wallclock_lag_history_ct",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::CT_MZ_WALLCLOCK_LAG_HISTORY_OID,
-    desc: WALLCLOCK_LAG_HISTORY_DESC.clone(),
-    sql: "
-IN CLUSTER mz_catalog_server
-ON INPUT mz_internal.mz_wallclock_lag_history AS (
-    DELETE FROM mz_internal.mz_wallclock_lag_history_ct WHERE occurred_at + '30d' < mz_now();
-    INSERT INTO mz_internal.mz_wallclock_lag_history_ct SELECT * FROM mz_internal.mz_wallclock_lag_history;
-)",
-            access: vec![PUBLIC_SELECT],
-        }
 });
 
 pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -6076,8 +5968,7 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
       SELECT id, oid, schema_id, name, 'table' AS type, owner_id, NULL::text AS cluster_id, privileges FROM mz_catalog.mz_tables
 UNION ALL SELECT id, oid, schema_id, name, 'source', owner_id, cluster_id, privileges FROM mz_catalog.mz_sources
 UNION ALL SELECT id, oid, schema_id, name, 'view', owner_id, NULL::text, privileges FROM mz_catalog.mz_views
-UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluster_id, privileges FROM mz_catalog.mz_materialized_views
-UNION ALL SELECT id, oid, schema_id, name, 'continual-task', owner_id, cluster_id, privileges FROM mz_internal.mz_continual_tasks",
+UNION ALL SELECT id, oid, schema_id, name, 'materialized-view', owner_id, cluster_id, privileges FROM mz_catalog.mz_materialized_views",
         access: vec![PUBLIC_SELECT],
     }
 });
@@ -8689,23 +8580,10 @@ WITH
         FROM mz_materialized_views mv
         JOIN mz_catalog.mz_cluster_replica_frontiers f ON f.object_id = mv.id
         WHERE f.write_frontier IS NULL
-    ),
-    -- Ditto CTs
-    complete_cts AS (
-        SELECT
-            ct.id,
-            f.replica_id,
-            true AS hydrated,
-            NULL::interval AS hydration_time
-        FROM mz_internal.mz_continual_tasks ct
-        JOIN mz_catalog.mz_cluster_replica_frontiers f ON f.object_id = ct.id
-        WHERE f.write_frontier IS NULL
     )
 SELECT * FROM dataflows
 UNION ALL
-SELECT * FROM complete_mvs
-UNION ALL
-SELECT * FROM complete_cts",
+SELECT * FROM complete_mvs",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -11641,39 +11519,6 @@ ORDER BY 1, 2"#,
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_SHOW_CONTINUAL_TASKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
-    name: "mz_show_continual_tasks",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::VIEW_MZ_SHOW_CONTINUAL_TASKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("cluster", SqlScalarType::String.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("comment", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::new(),
-    sql: "
-WITH comments AS (
-    SELECT id, comment
-    FROM mz_internal.mz_comments
-    WHERE object_type = 'continual-task' AND object_sub_id IS NULL
-)
-SELECT
-    cts.id as id,
-    cts.name,
-    clusters.name AS cluster,
-    schema_id,
-    cluster_id,
-    COALESCE(comments.comment, '') as comment
-FROM
-    mz_internal.mz_continual_tasks AS cts
-    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = cts.cluster_id
-    LEFT JOIN comments ON cts.id = comments.id",
-    access: vec![PUBLIC_SELECT],
-});
-
 /// Lightweight data product discovery for MCP (Model Context Protocol).
 ///
 /// Lists materialized views and indexed views that the current user has
@@ -12654,15 +12499,6 @@ materialized_views AS (
     LEFT JOIN mz_internal.mz_compute_hydration_statuses h
         ON (h.object_id = i.id)
 ),
-continual_tasks AS (
-    SELECT
-        i.id AS object_id,
-        h.replica_id,
-        COALESCE(h.hydrated, false) AS hydrated
-    FROM mz_internal.mz_continual_tasks i
-    LEFT JOIN mz_internal.mz_compute_hydration_statuses h
-        ON (h.object_id = i.id)
-),
 -- Hydration is a dataflow concept and not all sources are maintained by
 -- dataflows, so we need to find the ones that are. Generally, sources that
 -- have a cluster ID are maintained by a dataflow running on that cluster.
@@ -12698,8 +12534,6 @@ sinks AS (
 SELECT * FROM indexes
 UNION ALL
 SELECT * FROM materialized_views
-UNION ALL
-SELECT * FROM continual_tasks
 UNION ALL
 SELECT * FROM sources
 UNION ALL
@@ -12791,8 +12625,6 @@ WITH MUTUALLY RECURSIVE
         SELECT id FROM mz_catalog.mz_indexes
         UNION ALL
         SELECT id FROM mz_catalog.mz_materialized_views
-        UNION ALL
-        SELECT id FROM mz_internal.mz_continual_tasks
         UNION ALL
         SELECT id FROM mz_catalog.mz_sinks
     ),
@@ -13567,15 +13399,6 @@ ON mz_catalog.mz_materialized_views (id)",
     is_retained_metrics_object: false,
 };
 
-pub const MZ_CONTINUAL_TASKS_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_continual_tasks_ind",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::INDEX_MZ_CONTINUAL_TASKS_IND_OID,
-    sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.mz_continual_tasks (id)",
-    is_retained_metrics_object: false,
-};
-
 pub const MZ_SOURCE_STATUSES_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_source_statuses_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -13609,15 +13432,6 @@ pub const MZ_SINK_STATUS_HISTORY_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_SINK_STATUS_HISTORY_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_sink_status_history (sink_id)",
-    is_retained_metrics_object: false,
-};
-
-pub const MZ_SHOW_CONTINUAL_TASKS_IND: BuiltinIndex = BuiltinIndex {
-    name: "mz_show_continual_tasks_ind",
-    schema: MZ_INTERNAL_SCHEMA,
-    oid: oid::INDEX_MZ_SHOW_CONTINUAL_TASKS_OID,
-    sql: "IN CLUSTER mz_catalog_server
-ON mz_internal.mz_show_continual_tasks (id)",
     is_retained_metrics_object: false,
 };
 
@@ -14433,7 +14247,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
-        Builtin::Table(&MZ_CONTINUAL_TASKS),
         Builtin::MaterializedView(&MZ_NETWORK_POLICIES),
         Builtin::MaterializedView(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
@@ -14503,7 +14316,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
         Builtin::View(&MZ_SHOW_INDEXES),
-        Builtin::View(&MZ_SHOW_CONTINUAL_TASKS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
         Builtin::View(&MZ_CLUSTER_REPLICA_NAME_HISTORY),
         Builtin::View(&MZ_TIMEZONE_NAMES),
@@ -14670,7 +14482,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_SOURCES_IND),
         Builtin::Index(&MZ_SINKS_IND),
         Builtin::Index(&MZ_MATERIALIZED_VIEWS_IND),
-        Builtin::Index(&MZ_CONTINUAL_TASKS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),
         Builtin::Index(&MZ_SINK_STATUSES_IND),
@@ -14709,9 +14520,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_RECENT_STORAGE_USAGE),
         Builtin::Index(&MZ_RECENT_STORAGE_USAGE_IND),
         Builtin::Connection(&MZ_ANALYTICS),
-        Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_METRICS_HISTORY_CT),
-        Builtin::ContinualTask(&MZ_CLUSTER_REPLICA_STATUS_HISTORY_CT),
-        Builtin::ContinualTask(&MZ_WALLCLOCK_LAG_HISTORY_CT),
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
@@ -14754,8 +14562,6 @@ pub const BUILTIN_CLUSTER_REPLICAS: &[&BuiltinClusterReplica] = &[
 
 #[allow(non_snake_case)]
 pub mod BUILTINS {
-    use mz_sql::catalog::BuiltinsConfig;
-
     use super::*;
 
     pub fn logs() -> impl Iterator<Item = &'static BuiltinLog> {
@@ -14793,12 +14599,8 @@ pub mod BUILTINS {
         })
     }
 
-    pub fn iter(cfg: &BuiltinsConfig) -> impl Iterator<Item = &'static Builtin<NameReference>> {
-        let include_continual_tasks = cfg.include_continual_tasks;
-        BUILTINS_STATIC.iter().filter(move |x| match x {
-            Builtin::ContinualTask(_) if !include_continual_tasks => false,
-            _ => true,
-        })
+    pub fn iter() -> impl Iterator<Item = &'static Builtin<NameReference>> {
+        BUILTINS_STATIC.iter()
     }
 }
 
@@ -14809,10 +14611,6 @@ pub static BUILTIN_LOG_LOOKUP: LazyLock<HashMap<&'static str, &'static BuiltinLo
 pub static BUILTIN_LOOKUP: LazyLock<
     HashMap<SystemObjectDescription, (usize, &'static Builtin<NameReference>)>,
 > = LazyLock::new(|| {
-    // BUILTIN_LOOKUP is only ever used for lookups by key, it's not iterated,
-    // so it's safe to include all of them, regardless of BuiltinConfig. We
-    // enforce this statically by using the mz_ore HashMap which disallows
-    // iteration.
     BUILTINS_STATIC
         .iter()
         .enumerate()
@@ -14928,7 +14726,6 @@ mod tests {
                 Builtin::View(v) => Some(v.create_sql()),
                 Builtin::MaterializedView(mv) => Some(mv.create_sql()),
                 Builtin::Index(idx) => Some(idx.create_sql()),
-                Builtin::ContinualTask(ct) => Some(ct.create_sql()),
                 _ => None,
             }
         };

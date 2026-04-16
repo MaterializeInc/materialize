@@ -404,7 +404,6 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "materialized-view"
             }
-            CreateContinualTask(_) => "continual-task",
             CreateTable(_) | CreateTableFromSource(_) => "table",
             CreateSource(_) | CreateWebhookSource(_) => "source",
             CreateSubsource(_) => "subsource",

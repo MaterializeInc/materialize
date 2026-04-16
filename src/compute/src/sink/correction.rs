@@ -428,15 +428,6 @@ pub(crate) struct ConsolidatingVec<D> {
 }
 
 impl<D: Ord> ConsolidatingVec<D> {
-    /// Creates a new instance from the necessary configuration arguments.
-    pub fn new(min_capacity: usize, growth_dampener: usize) -> Self {
-        ConsolidatingVec {
-            data: Vec::new(),
-            min_capacity,
-            growth_dampener,
-        }
-    }
-
     /// Return the length of the vector.
     pub fn len(&self) -> usize {
         self.data.len()
@@ -492,11 +483,6 @@ impl<D: Ord> ConsolidatingVec<D> {
     /// Return an iterator over the borrowed items.
     pub fn iter(&self) -> impl Iterator<Item = &(D, Diff)> {
         self.data.iter()
-    }
-
-    /// Returns mutable access to the underlying items.
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut (D, Diff)> {
-        self.data.iter_mut()
     }
 }
 

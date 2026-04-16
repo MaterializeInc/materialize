@@ -152,7 +152,7 @@ pub struct CollectionDescription {
     pub data_source: DataSource,
     /// An optional frontier to which the collection's `since` should be advanced.
     pub since: Option<Antichain<Timestamp>>,
-    /// The timeline of the source. Absent for materialized views, continual tasks, etc.
+    /// The timeline of the source. Absent for materialized views, etc.
     pub timeline: Option<Timeline>,
     /// The primary of this collections.
     ///

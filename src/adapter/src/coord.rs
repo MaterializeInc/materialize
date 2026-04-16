@@ -2323,40 +2323,6 @@ impl Coordinator {
                         );
                     }
                 }
-                CatalogItem::ContinualTask(ct) => {
-                    policies_to_set
-                        .entry(policy.expect("continual tasks have a compaction window"))
-                        .or_insert_with(Default::default)
-                        .storage_ids
-                        .insert(ct.global_id());
-
-                    let mut df_desc = self
-                        .catalog()
-                        .try_get_physical_plan(&ct.global_id())
-                        .expect("added in `bootstrap_dataflow_plans`")
-                        .clone();
-
-                    if let Some(initial_as_of) = ct.initial_as_of.clone() {
-                        df_desc.set_initial_as_of(initial_as_of);
-                    }
-
-                    let df_meta = self
-                        .catalog()
-                        .try_get_dataflow_metainfo(&ct.global_id())
-                        .expect("added in `bootstrap_dataflow_plans`");
-
-                    if self.catalog().state().system_config().enable_mz_notices() {
-                        // Collect optimization hint updates.
-                        self.catalog().state().pack_optimizer_notices(
-                            &mut builtin_table_updates,
-                            df_meta.optimizer_notices.iter(),
-                            Diff::ONE,
-                        );
-                    }
-
-                    self.ship_dataflow(df_desc, ct.cluster_id, None).await;
-                    self.allow_writes(ct.cluster_id, ct.global_id());
-                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
@@ -2988,12 +2954,6 @@ impl Coordinator {
                     collections.extend(collection_descs);
                     compute_collections.push((mv.global_id_writes(), mv.desc.latest()));
                 }
-                CatalogItem::ContinualTask(ct) => {
-                    let collection_desc =
-                        CollectionDescription::for_other(ct.desc.clone(), ct.initial_as_of.clone());
-                    compute_collections.push((ct.global_id(), ct.desc.clone()));
-                    collections.push((ct.global_id(), collection_desc));
-                }
                 CatalogItem::Sink(sink) => {
                     let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
                     let from_desc = storage_sink_from_entry
@@ -3420,61 +3380,6 @@ impl Coordinator {
 
                     compute_instance.insert_collection(mv.global_id_writes());
                 }
-                CatalogItem::ContinualTask(ct) => {
-                    let compute_instance =
-                        instance_snapshots.entry(ct.cluster_id).or_insert_with(|| {
-                            self.instance_snapshot(ct.cluster_id)
-                                .expect("compute instance exists")
-                        });
-                    let global_id = ct.global_id();
-
-                    let optimizer_config = optimizer_config(&self.catalog, ct.cluster_id);
-
-                    let (optimized_plan, physical_plan, metainfo) =
-                        match cached_global_exprs.remove(&global_id) {
-                            Some(global_expressions)
-                                if global_expressions.optimizer_features
-                                    == optimizer_config.features =>
-                            {
-                                debug!("global expression cache hit for {global_id:?}");
-                                (
-                                    global_expressions.global_mir,
-                                    global_expressions.physical_plan,
-                                    global_expressions.dataflow_metainfos,
-                                )
-                            }
-                            Some(_) | None => {
-                                let debug_name = self
-                                    .catalog()
-                                    .resolve_full_name(entry.name(), None)
-                                    .to_string();
-                                let (optimized_plan, physical_plan, metainfo, optimizer_features) =
-                                    self.optimize_create_continual_task(
-                                        ct,
-                                        global_id,
-                                        self.owned_catalog(),
-                                        debug_name,
-                                    )?;
-                                uncached_expressions.insert(
-                                    global_id,
-                                    GlobalExpressions {
-                                        global_mir: optimized_plan.clone(),
-                                        physical_plan: physical_plan.clone(),
-                                        dataflow_metainfos: metainfo.clone(),
-                                        optimizer_features,
-                                    },
-                                );
-                                (optimized_plan, physical_plan, metainfo)
-                            }
-                        };
-
-                    let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(ct.global_id(), optimized_plan);
-                    catalog.set_physical_plan(ct.global_id(), physical_plan);
-                    catalog.set_dataflow_metainfo(ct.global_id(), metainfo);
-
-                    compute_instance.insert_collection(ct.global_id());
-                }
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)
@@ -3507,7 +3412,6 @@ impl Coordinator {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
                 CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
-                CatalogItem::ContinualTask(ct) => ct.global_id(),
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)

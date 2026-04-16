@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use futures::future::{BoxFuture, FutureExt};
 use itertools::{Either, Itertools};
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
-use mz_adapter_types::dyncfgs::{ENABLE_CONTINUAL_TASK_BUILTINS, ENABLE_EXPRESSION_CACHE};
+use mz_adapter_types::dyncfgs::ENABLE_EXPRESSION_CACHE;
 use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
 };
@@ -50,9 +50,7 @@ use mz_ore::{instrument, soft_assert_no_log};
 use mz_repr::adt::mz_acl_item::PrivilegeMap;
 use mz_repr::namespaces::is_unstable_schema;
 use mz_repr::{CatalogItemId, Diff, GlobalId, Timestamp};
-use mz_sql::catalog::{
-    BuiltinsConfig, CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars,
-};
+use mz_sql::catalog::{CatalogError as SqlCatalogError, CatalogItemType, RoleMembership, RoleVars};
 use mz_sql::func::OP_IMPLS;
 use mz_sql::names::CommentObjectId;
 use mz_sql::rbac;
@@ -163,16 +161,6 @@ impl Catalog {
                 build_info: config.build_info,
                 now: config.now.clone(),
                 connection_context: config.connection_context,
-                builtins_cfg: BuiltinsConfig {
-                    // This will fall back to the default in code (false) if we timeout on the
-                    // initial LD sync. We're just using this to get some additional testing in on
-                    // CTs so a false negative is fine, we're only worried about false positives.
-                    include_continual_tasks: get_dyncfg_val_from_defaults_and_remote(
-                        &config.system_parameter_defaults,
-                        config.remote_system_parameters.as_ref(),
-                        &ENABLE_CONTINUAL_TASK_BUILTINS,
-                    ),
-                },
                 helm_chart_version: config.helm_chart_version,
             },
             cluster_replica_sizes: config.cluster_replica_sizes,
@@ -206,8 +194,7 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let new_builtin_collections =
-                add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
+            let new_builtin_collections = add_new_remove_old_builtin_items_migration(&mut txn)?;
             let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
                 system_cluster: config.builtin_system_cluster_config,
                 catalog_server_cluster: config.builtin_catalog_server_cluster_config,
@@ -756,7 +743,6 @@ impl CatalogState {
 ///
 /// Returns the list of new builtin [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
-    builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
 ) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
@@ -766,7 +752,7 @@ fn add_new_remove_old_builtin_items_migration(
     // We compare the builtin items that are compiled into the binary with the builtin items that
     // are persisted in the catalog to discover new and deleted builtin items.
     let mut builtins = Vec::new();
-    for builtin in BUILTINS::iter(builtins_cfg) {
+    for builtin in BUILTINS::iter() {
         let desc = SystemObjectDescription {
             schema_name: builtin.schema().to_string(),
             object_type: builtin.catalog_item_type(),
@@ -892,7 +878,6 @@ fn add_new_remove_old_builtin_items_migration(
             Builtin::Log(_)
             | Builtin::Type(_)
             | Builtin::Func(_)
-            | Builtin::ContinualTask(_)
             | Builtin::Index(_)
             | Builtin::Connection(_) => continue,
         };
@@ -933,8 +918,7 @@ fn add_new_remove_old_builtin_items_migration(
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
-            | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => continue,
+            | CatalogItemType::Connection => continue,
         };
         deleted_comments.insert(comment_id);
     }
@@ -1421,29 +1405,4 @@ pub(crate) fn into_consolidatable_updates_startup(
             (kind, ts, Diff::from(diff))
         })
         .collect()
-}
-
-fn get_dyncfg_val_from_defaults_and_remote<T: mz_dyncfg::ConfigDefault>(
-    defaults: &BTreeMap<String, String>,
-    remote: Option<&BTreeMap<String, String>>,
-    cfg: &mz_dyncfg::Config<T>,
-) -> T::ConfigType {
-    let mut val = T::into_config_type(cfg.default().clone());
-    let get_fn = |map: &BTreeMap<String, String>| {
-        let val = map.get(cfg.name())?;
-        match <T::ConfigType as mz_dyncfg::ConfigType>::parse(val) {
-            Ok(x) => Some(x),
-            Err(err) => {
-                tracing::warn!("could not parse {} value [{}]: {}", cfg.name(), val, err);
-                None
-            }
-        }
-    };
-    if let Some(x) = get_fn(defaults) {
-        val = x;
-    }
-    if let Some(x) = remote.and_then(get_fn) {
-        val = x;
-    }
-    val
 }

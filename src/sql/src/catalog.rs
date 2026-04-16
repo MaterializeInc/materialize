@@ -430,8 +430,6 @@ pub struct CatalogConfig {
     pub now: NowFn,
     /// Context for source and sink connections.
     pub connection_context: ConnectionContext,
-    /// Which system builtins to include. Not allowed to change dynamically.
-    pub builtins_cfg: BuiltinsConfig,
     /// Helm chart version
     pub helm_chart_version: Option<String>,
 }
@@ -948,8 +946,6 @@ pub enum CatalogItemType {
     Secret,
     /// A connection.
     Connection,
-    /// A continual task.
-    ContinualTask,
 }
 
 impl CatalogItemType {
@@ -983,7 +979,6 @@ impl CatalogItemType {
             CatalogItemType::Func => false,
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
-            CatalogItemType::ContinualTask => true,
         }
     }
 }
@@ -1001,7 +996,6 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Func => f.write_str("func"),
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
-            CatalogItemType::ContinualTask => f.write_str("continual task"),
         }
     }
 }
@@ -1019,7 +1013,6 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Func => ObjectType::Func,
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
-            CatalogItemType::ContinualTask => ObjectType::ContinualTask,
         }
     }
 }
@@ -1037,7 +1030,6 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Func => mz_audit_log::ObjectType::Func,
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
-            CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
         }
     }
 }
@@ -1564,7 +1556,6 @@ pub enum ObjectType {
     Database,
     Schema,
     Func,
-    ContinualTask,
     NetworkPolicy,
 }
 
@@ -1575,8 +1566,7 @@ impl ObjectType {
             ObjectType::Table
             | ObjectType::View
             | ObjectType::MaterializedView
-            | ObjectType::Source
-            | ObjectType::ContinualTask => true,
+            | ObjectType::Source => true,
             ObjectType::Sink
             | ObjectType::Index
             | ObjectType::Type
@@ -1612,7 +1602,6 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Database => ObjectType::Database,
             mz_sql_parser::ast::ObjectType::Schema => ObjectType::Schema,
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
-            mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
         }
     }
@@ -1636,7 +1625,6 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::Schema(_) => ObjectType::Schema,
             CommentObjectId::Cluster(_) => ObjectType::Cluster,
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
-            CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
         }
     }
@@ -1660,7 +1648,6 @@ impl Display for ObjectType {
             ObjectType::Database => "DATABASE",
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
-            ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
@@ -1902,17 +1889,6 @@ impl DefaultPrivilegeAclItem {
             acl_mode: self.acl_mode,
         }
     }
-}
-
-/// Which builtins to return in `BUILTINS::iter`.
-///
-/// All calls to `BUILTINS::iter` within the lifetime of an environmentd process
-/// must provide an equal `BuiltinsConfig`. It is not allowed to change
-/// dynamically.
-#[derive(Debug, Clone)]
-pub struct BuiltinsConfig {
-    /// If true, include system builtin continual tasks.
-    pub include_continual_tasks: bool,
 }
 
 #[cfg(test)]

@@ -240,7 +240,7 @@ macro_rules! objects {
     }
 }
 
-objects!([v74, v75, v76, v77, v78], [v79, v80, v81]);
+objects!([v74, v75, v76, v77, v78], [v79, v80, v81, v82]);
 
 /// The current version of the `Catalog`.
 pub use mz_catalog_protos::CATALOG_VERSION;
@@ -259,6 +259,7 @@ mod v77_to_v78;
 mod v78_to_v79;
 mod v79_to_v80;
 mod v80_to_v81;
+mod v81_to_v82;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -401,6 +402,15 @@ async fn run_upgrade(
                 version,
                 commit_ts,
                 v80_to_v81::upgrade,
+            )
+            .await
+        }
+        81 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v81_to_v82::upgrade,
             )
             .await
         }

@@ -1348,10 +1348,6 @@ pub fn item_type(create_sql: &str) -> CatalogItemType {
             assert_eq!(tokens.next(), Some("VIEW"));
             CatalogItemType::MaterializedView
         }
-        Some("CONTINUAL") => {
-            assert_eq!(tokens.next(), Some("TASK"));
-            CatalogItemType::ContinualTask
-        }
         Some("INDEX") => CatalogItemType::Index,
         Some("TYPE") => CatalogItemType::Type,
         Some("FUNCTION") => CatalogItemType::Func,

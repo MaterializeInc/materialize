@@ -41,7 +41,6 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{assert_contains, assert_err, assert_ok};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
-use mz_sql::catalog::BuiltinsConfig;
 use mz_sql::session::user::{INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, SUPPORT_USER, SYSTEM_USER};
 use mz_storage_types::sources::Timeline;
 use postgres::Row;
@@ -3768,11 +3767,8 @@ async fn test_builtin_schemas() {
     let server = test_util::TestHarness::default().start().await;
     let client = server.connect().await.unwrap();
 
-    let builtins_cfg = BuiltinsConfig {
-        include_continual_tasks: true,
-    };
     let mut builtins = BTreeMap::new();
-    for builtin in BUILTINS::iter(&builtins_cfg) {
+    for builtin in BUILTINS::iter() {
         builtins.insert(builtin.name(), builtin.schema());
     }
 

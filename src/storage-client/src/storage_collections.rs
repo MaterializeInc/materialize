@@ -1949,7 +1949,7 @@ impl StorageCollections for StorageCollectionsImpl {
                         Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
                             Some(TimeDependence::default())
                         }
-                        // Materialized views, continual tasks, etc, aren't managed by storage.
+                        // Materialized views, etc, aren't managed by storage.
                         Other => None,
                         Sink { .. } => None,
                     }

@@ -159,13 +159,11 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::context::{ArrangementFlavor, Context};
-use crate::render::continual_task::ContinualTaskCtx;
 use crate::render::errors::DataflowErrorSer;
 use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 
 pub mod context;
-pub(crate) mod continual_task;
 pub(crate) mod errors;
 mod flat_map;
 mod join;
@@ -222,10 +220,6 @@ pub fn build_compute_dataflow(
     timely_worker.dataflow_core(&name, worker_logging, Box::new(()), |_, scope| {
         let scope = scope.with_label();
 
-        // TODO(ct3): This should be a config of the source instead, but at least try
-        // to contain the hacks.
-        let mut ct_ctx = ContinualTaskCtx::new(&dataflow);
-
         // The scope.clone() occurs to allow import in the region.
         // We build a region here to establish a pattern of a scope inside the dataflow,
         // so that other similar uses (e.g. with iterative scopes) do not require weird
@@ -263,20 +257,14 @@ pub fn build_compute_dataflow(
                             .expect("Linear operators should always be valid")
                     });
 
-                    let mut snapshot_mode =
-                        if import.with_snapshot || !subscribe_snapshot_optimization {
-                            SnapshotMode::Include
-                        } else {
-                            compute_state.metrics.inc_subscribe_snapshot_optimization();
-                            SnapshotMode::Exclude
-                        };
-                    let mut suppress_early_progress_as_of = dataflow.as_of.clone();
-                    let ct_source_transformer = ct_ctx.get_ct_source_transformer(*source_id);
-                    if let Some(x) = ct_source_transformer.as_ref() {
-                        snapshot_mode = x.snapshot_mode();
-                        suppress_early_progress_as_of = suppress_early_progress_as_of
-                            .map(|as_of| x.suppress_early_progress_as_of(as_of));
-                    }
+                    let snapshot_mode = if import.with_snapshot || !subscribe_snapshot_optimization
+                    {
+                        SnapshotMode::Include
+                    } else {
+                        compute_state.metrics.inc_subscribe_snapshot_optimization();
+                        SnapshotMode::Exclude
+                    };
+                    let suppress_early_progress_as_of = dataflow.as_of.clone();
 
                     // Note: For correctness, we require that sources only emit times advanced by
                     // `dataflow.as_of`. `persist_source` is documented to provide this guarantee.
@@ -332,23 +320,6 @@ pub fn build_compute_dataflow(
                     let input_probe =
                         compute_state.input_probe_for(*source_id, dataflow.export_ids());
                     ok_stream = ok_stream.probe_with(&input_probe);
-
-                    // The `suppress_early_progress` operator and the input
-                    // probe both want to work on the untransformed ct input,
-                    // make sure this stays after them.
-                    let (ok_stream, err_stream) = match ct_source_transformer {
-                        None => (ok_stream, err_stream),
-                        Some(ct_source_transformer) => {
-                            let (oks, errs, ct_times) = ct_source_transformer
-                                .transform(ok_stream.as_collection(), err_stream.as_collection());
-                            // TODO(ct3): Ideally this would be encapsulated by
-                            // ContinualTaskCtx, but the types are tricky.
-                            ct_ctx
-                                .ct_times
-                                .push(ct_times.leave_region(region).leave_region(scope));
-                            (oks.inner, errs.inner)
-                        }
-                    };
 
                     let (oks, errs) = (
                         ok_stream
@@ -466,7 +437,6 @@ pub fn build_compute_dataflow(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(scope),
                         &output_probe,
                         scope,
                     );
@@ -570,7 +540,6 @@ pub fn build_compute_dataflow(
                         sink_id,
                         &sink,
                         start_signal.clone(),
-                        ct_ctx.input_times(scope),
                         &output_probe,
                         scope,
                     );

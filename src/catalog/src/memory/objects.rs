@@ -843,7 +843,6 @@ pub enum CatalogItem {
     Func(Func),
     Secret(Secret),
     Connection(Connection),
-    ContinualTask(ContinualTask),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -1644,52 +1643,6 @@ impl Connection {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ContinualTask {
-    /// Parse-able SQL that defines this continual task.
-    pub create_sql: String,
-    /// [`GlobalId`] used to reference this continual task from outside the catalog.
-    pub global_id: GlobalId,
-    /// [`GlobalId`] of the collection that we read into this continual task.
-    pub input_id: GlobalId,
-    pub with_snapshot: bool,
-    /// ContinualTasks are self-referential. We make this work by using a
-    /// placeholder `LocalId` for the CT itself through name resolution and
-    /// planning. Then we fill in the real `GlobalId` before constructing this
-    /// catalog item.
-    pub raw_expr: Arc<HirRelationExpr>,
-    /// Columns for this continual task.
-    pub desc: RelationDesc,
-    /// Other catalog items that this continual task references, determined at name resolution.
-    pub resolved_ids: ResolvedIds,
-    /// All of the catalog objects that are referenced by this continual task.
-    pub dependencies: DependencyIds,
-    /// Cluster that this continual task runs on.
-    pub cluster_id: ClusterId,
-    /// See the comment on [MaterializedView::initial_as_of].
-    pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
-    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
-    // consistency checks do two dumps and compare them. One of these states comes from the durable
-    // catalog, but the following fields are not restored when the consistency check loads the
-    // durable catalog, hence we need `#[serde(skip)]`.
-    /// Optimized global MIR plan, set after global optimization.
-    #[serde(skip)]
-    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
-    /// Physical (LIR) plan, set after physical optimization.
-    #[serde(skip)]
-    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
-    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
-    #[serde(skip)]
-    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
-}
-
-impl ContinualTask {
-    /// The single [`GlobalId`] used to reference this continual task.
-    pub fn global_id(&self) -> GlobalId {
-        self.global_id
-    }
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct NetworkPolicy {
     pub name: String,
@@ -1771,7 +1724,6 @@ impl CatalogItem {
             CatalogItem::Func(_) => CatalogItemType::Func,
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
-            CatalogItem::ContinualTask(_) => CatalogItemType::ContinualTask,
         }
     }
 
@@ -1785,7 +1737,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mv) => {
                 return itertools::Either::Left(mv.collections.values().copied());
             }
-            CatalogItem::ContinualTask(ct) => ct.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1808,7 +1759,6 @@ impl CatalogItem {
             CatalogItem::Sink(sink) => sink.global_id,
             CatalogItem::View(view) => view.global_id,
             CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
-            CatalogItem::ContinualTask(ct) => ct.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
@@ -1823,7 +1773,6 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.optimized_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.optimized_plan.as_ref(),
-            CatalogItem::ContinualTask(ct) => ct.optimized_plan.as_ref(),
             _ => None,
         }
     }
@@ -1833,7 +1782,6 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
-            CatalogItem::ContinualTask(ct) => ct.physical_plan.as_ref(),
             _ => None,
         }
     }
@@ -1843,14 +1791,13 @@ impl CatalogItem {
         match self {
             CatalogItem::Index(idx) => idx.dataflow_metainfo.as_ref(),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_ref(),
-            CatalogItem::ContinualTask(ct) => ct.dataflow_metainfo.as_ref(),
             _ => None,
         }
     }
 
     /// Returns mutable references to the plan fields (`optimized_plan`,
     /// `physical_plan`, `dataflow_metainfo`) on plan-bearing items
-    /// (`Index`, `MaterializedView`, `ContinualTask`), or `None` for
+    /// (`Index`, `MaterializedView`), or `None` for
     /// other item kinds.
     pub fn plan_fields_mut(
         &mut self,
@@ -1870,11 +1817,6 @@ impl CatalogItem {
                 &mut mv.physical_plan,
                 &mut mv.dataflow_metainfo,
             )),
-            CatalogItem::ContinualTask(ct) => Some((
-                &mut ct.optimized_plan,
-                &mut ct.physical_plan,
-                &mut ct.dataflow_metainfo,
-            )),
             _ => None,
         }
     }
@@ -1885,8 +1827,7 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::ContinualTask(_) => true,
+            | CatalogItem::Sink(_) => true,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
@@ -1914,7 +1855,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 Some(Cow::Owned(mview.desc.at_version(version)))
             }
-            CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
@@ -1987,7 +1927,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => &mview.resolved_ids,
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
-            CatalogItem::ContinualTask(ct) => &ct.resolved_ids,
         }
     }
 
@@ -2012,7 +1951,6 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 uses.extend(mview.dependencies.0.iter().copied())
             }
-            CatalogItem::ContinualTask(ct) => uses.extend(ct.dependencies.0.iter().copied()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
         }
@@ -2033,8 +1971,7 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2052,8 +1989,7 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => (),
+            | CatalogItem::Connection(_) => (),
         }
     }
 
@@ -2133,11 +2069,6 @@ impl CatalogItem {
                 Ok(CatalogItem::Type(i))
             }
             CatalogItem::Func(i) => Ok(CatalogItem::Func(i.clone())),
-            CatalogItem::ContinualTask(i) => {
-                let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::ContinualTask(i))
-            }
         }
     }
 
@@ -2208,11 +2139,6 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::Connection(i))
             }
-            CatalogItem::ContinualTask(i) => {
-                let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql)?;
-                Ok(CatalogItem::ContinualTask(i))
-            }
         }
     }
 
@@ -2274,11 +2200,6 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql);
                 CatalogItem::Connection(i)
-            }
-            CatalogItem::ContinualTask(i) => {
-                let mut i = i.clone();
-                i.create_sql = do_rewrite(i.create_sql);
-                CatalogItem::ContinualTask(i)
             }
         }
     }
@@ -2455,8 +2376,7 @@ impl CatalogItem {
             | CatalogItem::MaterializedView(MaterializedView { create_sql, .. })
             | CatalogItem::Index(Index { create_sql, .. })
             | CatalogItem::Secret(Secret { create_sql, .. })
-            | CatalogItem::Connection(Connection { create_sql, .. })
-            | CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => Some(create_sql),
+            | CatalogItem::Connection(Connection { create_sql, .. }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2491,8 +2411,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2513,7 +2432,6 @@ impl CatalogItem {
                 | DataSourceDesc::Catalog => None,
             },
             CatalogItem::Sink(sink) => Some(sink.cluster_id),
-            CatalogItem::ContinualTask(ct) => Some(ct.cluster_id),
             CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
@@ -2538,8 +2456,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2560,8 +2477,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => return None,
+            | CatalogItem::Connection(_) => return None,
         };
         Some(cw)
     }
@@ -2578,8 +2494,7 @@ impl CatalogItem {
             CatalogItem::Table(_)
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::ContinualTask(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::MaterializedView(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2606,8 +2521,7 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => false,
+            | CatalogItem::Connection(_) => false,
         }
     }
 
@@ -2664,9 +2578,6 @@ impl CatalogItem {
                 BTreeMap::new(),
             ),
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => {
-                (ct.create_sql.clone(), ct.global_id, BTreeMap::new())
-            }
         }
     }
 
@@ -2712,7 +2623,6 @@ impl CatalogItem {
                 (connection.create_sql, connection.global_id, BTreeMap::new())
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
-            CatalogItem::ContinualTask(ct) => (ct.create_sql, ct.global_id, BTreeMap::new()),
         }
     }
 
@@ -2731,7 +2641,6 @@ impl CatalogItem {
             CatalogItem::Func(func) => return Some(func.global_id),
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
-            CatalogItem::ContinualTask(ct) => return Some(ct.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -2936,8 +2845,7 @@ impl CatalogEntry {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::Connection(_) => None,
         }
     }
 
@@ -2969,11 +2877,6 @@ impl CatalogEntry {
     /// Reports whether this catalog entry is an index.
     pub fn is_index(&self) -> bool {
         matches!(self.item(), CatalogItem::Index(_))
-    }
-
-    /// Reports whether this catalog entry is a continual task.
-    pub fn is_continual_task(&self) -> bool {
-        matches!(self.item(), CatalogItem::ContinualTask(_))
     }
 
     /// Reports whether this catalog entry can be treated as a relation, it can produce rows.
@@ -3071,7 +2974,6 @@ impl CatalogEntry {
             Connection => CommentObjectId::Connection(self.id),
             Type => CommentObjectId::Type(self.id),
             Secret => CommentObjectId::Secret(self.id),
-            ContinualTask => CommentObjectId::ContinualTask(self.id),
         }
     }
 }
@@ -3684,7 +3586,6 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Connection(Connection { create_sql, .. }) => create_sql,
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
-            CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => create_sql,
         }
     }
 

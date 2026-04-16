@@ -12,7 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_catalog::memory::objects::{CatalogItem, ContinualTask, MaterializedView, View};
+use mz_catalog::memory::objects::{CatalogItem, MaterializedView, View};
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, GlobalId};
@@ -83,9 +83,6 @@ impl Catalog {
                         }
                         CatalogItem::MaterializedView(mv) => {
                             id_bundle.storage_ids.insert(mv.global_id_writes());
-                        }
-                        CatalogItem::ContinualTask(ct) => {
-                            id_bundle.storage_ids.insert(ct.global_id());
                         }
                         CatalogItem::Index(index) => {
                             id_bundle
@@ -219,15 +216,6 @@ impl Catalog {
                         // need to block and wait for the materialized view to advance.
                         timelines.insert(TimelineContext::TimestampDependent);
                         let item_ids = optimized_expr
-                            .depends_on()
-                            .into_iter()
-                            .map(|gid| self.resolve_item_id(&gid));
-                        ids.extend(item_ids);
-                    }
-                    CatalogItem::ContinualTask(ContinualTask { raw_expr, .. }) => {
-                        // See comment in MaterializedView
-                        timelines.insert(TimelineContext::TimestampDependent);
-                        let item_ids = raw_expr
                             .depends_on()
                             .into_iter()
                             .map(|gid| self.resolve_item_id(&gid));

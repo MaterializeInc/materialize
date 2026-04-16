@@ -41,7 +41,6 @@ impl<'scope> SinkRender<'scope> for SubscribeSinkConnection {
         _start_signal: StartSignal,
         sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
         err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
-        _ct_times: Option<VecCollection<'scope, Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.

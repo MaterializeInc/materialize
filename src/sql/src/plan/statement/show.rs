@@ -419,9 +419,6 @@ pub fn show_objects<'a>(
             assert_none!(from, "parser should reject from");
             show_role_membership(scx, role, filter)
         }
-        ShowObjectType::ContinualTask { in_cluster } => {
-            show_continual_tasks(scx, from, in_cluster, filter)
-        }
         ShowObjectType::NetworkPolicy => {
             assert_none!(from, "parser should reject from");
             show_network_policies(scx, filter)
@@ -711,8 +708,7 @@ pub fn show_columns<'a>(
         CatalogItemType::Source
         | CatalogItemType::Table
         | CatalogItemType::View
-        | CatalogItemType::MaterializedView
-        | CatalogItemType::ContinualTask => (),
+        | CatalogItemType::MaterializedView => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
         | ty @ CatalogItemType::Func
@@ -917,35 +913,6 @@ pub fn show_role_membership<'a>(
     )
 }
 
-fn show_continual_tasks<'a>(
-    scx: &'a StatementContext<'a>,
-    from: Option<ResolvedSchemaName>,
-    in_cluster: Option<ResolvedClusterName>,
-    filter: Option<ShowStatementFilter<Aug>>,
-) -> Result<ShowSelect<'a>, PlanError> {
-    let schema_spec = scx.resolve_optional_schema(&from)?;
-    let mut where_clause = format!("schema_id = '{schema_spec}'");
-
-    if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
-            .expect("write on string cannot fail");
-    }
-
-    let query = format!(
-        "SELECT name, cluster, comment
-        FROM mz_internal.mz_show_continual_tasks
-        WHERE {where_clause}"
-    );
-
-    ShowSelect::new(
-        scx,
-        query,
-        filter,
-        None,
-        Some(&["name", "cluster", "comment"]),
-    )
-}
-
 /// An intermediate result when planning a `SHOW` query.
 ///
 /// Can be interrogated for its columns, or converted into a proper [`Plan`].
@@ -1085,7 +1052,6 @@ fn humanize_sql_for_show_create(
     match &mut resolved {
         // Strip internal `AS OF` syntax.
         Statement::CreateMaterializedView(stmt) => stmt.as_of = None,
-        Statement::CreateContinualTask(stmt) => stmt.as_of = None,
         // `CREATE SOURCE` statements should roundtrip. However, sources and
         // their subsources have a complex relationship, so we need to do a lot
         // of work to reconstruct the statement for multi-output sources.

@@ -51,7 +51,6 @@ mod util;
 pub mod catalog;
 pub mod client;
 pub mod config;
-pub mod continual_task;
 pub mod flags;
 pub mod metrics;
 pub mod peek_client;

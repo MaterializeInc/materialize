@@ -43,7 +43,6 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
-        ct_times: Option<VecCollection<'g, mz_repr::Timestamp, (), Diff>>,
         output_probe: &Handle<mz_repr::Timestamp>,
         outer_scope: Scope<'g, mz_repr::Timestamp>,
     ) {
@@ -134,9 +133,6 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             ComputeSinkConnection::MaterializedView(_) => {
                 format!("MaterializedViewSink({:?})", sink_id)
             }
-            ComputeSinkConnection::ContinualTask(_) => {
-                format!("ContinualTaskSink({:?})", sink_id)
-            }
             ComputeSinkConnection::CopyToS3Oneshot(_) => {
                 format!("CopyToS3OneshotSink({:?})", sink_id)
             }
@@ -152,7 +148,6 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
                 start_signal,
                 ok_collection.enter_region(inner),
                 err_collection.enter_region(inner),
-                ct_times.map(|x| x.enter_region(inner)),
                 output_probe,
             );
 
@@ -177,9 +172,6 @@ pub(crate) trait SinkRender<'scope> {
         start_signal: StartSignal,
         sinked_collection: VecCollection<'scope, mz_repr::Timestamp, Row, Diff>,
         err_collection: VecCollection<'scope, mz_repr::Timestamp, DataflowErrorSer, Diff>,
-        // TODO(ct2): Figure out a better way to smuggle this in, potentially by
-        // removing the `SinkRender` trait entirely.
-        ct_times: Option<VecCollection<'scope, mz_repr::Timestamp, (), Diff>>,
         output_probe: &Handle<mz_repr::Timestamp>,
     ) -> Option<Rc<dyn Any>>;
 }
@@ -190,7 +182,6 @@ fn get_sink_render_for<'scope>(
     match connection {
         ComputeSinkConnection::Subscribe(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::MaterializedView(connection) => Box::new(connection.clone()),
-        ComputeSinkConnection::ContinualTask(connection) => Box::new(connection.clone()),
         ComputeSinkConnection::CopyToS3Oneshot(connection) => Box::new(connection.clone()),
     }
 }

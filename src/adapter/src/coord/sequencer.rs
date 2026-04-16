@@ -281,12 +281,6 @@ impl Coordinator {
                     self.sequence_create_materialized_view(ctx, plan, resolved_ids)
                         .await;
                 }
-                Plan::CreateContinualTask(plan) => {
-                    let res = self
-                        .sequence_create_continual_task(&mut ctx, plan, resolved_ids)
-                        .await;
-                    ctx.retire(res);
-                }
                 Plan::CreateIndex(plan) => {
                     self.sequence_create_index(ctx, plan, resolved_ids).await;
                 }
