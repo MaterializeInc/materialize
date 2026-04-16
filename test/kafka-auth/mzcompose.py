@@ -261,6 +261,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     add_acl(c, user, "allow", "Read", "group=no-create", pattern_type="prefixed")
 
+    # Regression test for rust-rdkafka DescribeConfigsFuture swallowing
+    # per-resource errors. This user has AlterConfigs but NOT DescribeConfigs
+    # on topics. With the bug, get_topic_config returns Ok([]) instead of
+    # Err(TopicAuthorizationFailed), so ensure_topic_config proceeds to alter
+    # the topic (wiping existing config) instead of bailing out.
+    user = "materialize_rdkafka_config_bug"
+    for op in ["Read", "Write", "Describe", "AlterConfigs"]:
+        add_acl(
+            c,
+            user,
+            "allow",
+            op,
+            "topic=testdrive-rdkafka-bug",
+            pattern_type="prefixed",
+        )
+    add_acl(
+        c, user, "allow", "Write", "transactional-id=rdkafka-bug", pattern_type="prefixed"
+    )
+    add_acl(c, user, "allow", "Read", "group=rdkafka-bug", pattern_type="prefixed")
+
     # Now that the Kafka topic has been bootstrapped, it's safe to bring up all
     # the other schema registries in parallel.
     c.up(
