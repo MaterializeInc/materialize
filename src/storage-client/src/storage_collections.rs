@@ -289,7 +289,7 @@ pub trait StorageCollections: Debug + Sync {
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Timestamp>>, CollectionMissing>;
+    ) -> Result<Vec<ReadHold>, CollectionMissing>;
 
     /// Get the time dependence for a storage collection. Returns no value if unknown or if
     /// the object isn't managed by storage.
@@ -2238,7 +2238,7 @@ impl StorageCollections for StorageCollectionsImpl {
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Timestamp>>, CollectionMissing> {
+    ) -> Result<Vec<ReadHold>, CollectionMissing> {
         if desired_holds.is_empty() {
             return Ok(vec![]);
         }

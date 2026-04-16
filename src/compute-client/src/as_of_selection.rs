@@ -104,7 +104,7 @@ pub fn run(
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
-) -> BTreeMap<GlobalId, ReadHold<Timestamp>> {
+) -> BTreeMap<GlobalId, ReadHold> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
     let mut storage_read_holds = BTreeMap::new();
@@ -427,7 +427,7 @@ impl<'a> Context<'a> {
     /// not be able to hydrate successfully.
     fn apply_upstream_storage_constraints(
         &self,
-        storage_read_holds: &BTreeMap<GlobalId, ReadHold<Timestamp>>,
+        storage_read_holds: &BTreeMap<GlobalId, ReadHold>,
     ) {
         // Apply direct constraints from storage inputs.
         for (id, collection) in &self.collections {
@@ -1034,7 +1034,7 @@ mod tests {
         fn acquire_read_holds(
             &self,
             desired_holds: Vec<GlobalId>,
-        ) -> Result<Vec<ReadHold<Timestamp>>, CollectionMissing> {
+        ) -> Result<Vec<ReadHold>, CollectionMissing> {
             let mut holds = Vec::with_capacity(desired_holds.len());
             for id in desired_holds {
                 let (read, _write) = self.0.get(&id).ok_or(CollectionMissing(id))?;

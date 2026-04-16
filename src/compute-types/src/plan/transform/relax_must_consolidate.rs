@@ -21,7 +21,7 @@ use crate::plan::{Plan, PlanNode, ReducePlan};
 /// flag in monotonic `Plan` nodes with forced consolidation.
 #[derive(Debug)]
 pub struct RelaxMustConsolidate;
- 
+
 impl BottomUpTransform for RelaxMustConsolidate {
     type Info = PhysicallyMonotonic;
 

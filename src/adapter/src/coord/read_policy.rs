@@ -42,8 +42,8 @@ use crate::util::ResultExt;
 /// relinquishes the associated read capabilities.
 #[derive(Debug, Default, Clone)]
 pub struct ReadHolds {
-    pub storage_holds: BTreeMap<GlobalId, ReadHold<Timestamp>>,
-    pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold<Timestamp>>,
+    pub storage_holds: BTreeMap<GlobalId, ReadHold>,
+    pub compute_holds: BTreeMap<(ComputeInstanceId, GlobalId), ReadHold>,
 }
 
 impl ReadHolds {

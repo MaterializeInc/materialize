@@ -10,15 +10,18 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use mz_repr::GlobalId;
+use mz_repr::{GlobalId, Timestamp};
 use thiserror::Error;
 use timely::PartialOrder;
-use timely::progress::{Antichain, ChangeBatch, Timestamp as TimelyTimestamp};
+use timely::progress::{Antichain, ChangeBatch};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::mpsc::error::SendError;
 
-pub type ChangeTx<T> = Arc<
-    dyn Fn(GlobalId, ChangeBatch<T>) -> Result<(), SendError<(GlobalId, ChangeBatch<T>)>>
+pub type ChangeTx = Arc<
+    dyn Fn(
+            GlobalId,
+            ChangeBatch<Timestamp>,
+        ) -> Result<(), SendError<(GlobalId, ChangeBatch<Timestamp>)>>
         + Send
         + Sync,
 >;
@@ -29,18 +32,18 @@ pub type ChangeTx<T> = Arc<
 ///
 /// This [ReadHold] is safe to drop. The installed read hold will be returned to
 /// the issuer behind the scenes.
-pub struct ReadHold<T: TimelyTimestamp> {
+pub struct ReadHold {
     /// Identifies that collection that we have a hold on.
     id: GlobalId,
 
     /// The times at which we hold.
-    since: Antichain<T>,
+    since: Antichain<Timestamp>,
 
     /// For communicating changes to this read hold back to whoever issued it.
-    change_tx: ChangeTx<T>,
+    change_tx: ChangeTx,
 }
 
-impl<T: TimelyTimestamp> Debug for ReadHold<T> {
+impl Debug for ReadHold {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ReadHold")
             .field("id", &self.id)
@@ -51,19 +54,19 @@ impl<T: TimelyTimestamp> Debug for ReadHold<T> {
 
 /// Errors for manipulating read holds.
 #[derive(Error, Debug)]
-pub enum ReadHoldDowngradeError<T> {
+pub enum ReadHoldDowngradeError {
     /// The new frontier is not beyond the current since.
     #[error("since violation: new frontier {frontier:?} is not beyond current since {since:?}")]
     SinceViolation {
         /// The frontier to downgrade to.
-        frontier: Antichain<T>,
+        frontier: Antichain<Timestamp>,
         /// The since of the collection.
-        since: Antichain<T>,
+        since: Antichain<Timestamp>,
     },
 }
 
-impl<T: TimelyTimestamp> ReadHold<T> {
-    pub fn new(id: GlobalId, since: Antichain<T>, change_tx: ChangeTx<T>) -> Self {
+impl ReadHold {
+    pub fn new(id: GlobalId, since: Antichain<Timestamp>, change_tx: ChangeTx) -> Self {
         Self {
             id,
             since,
@@ -73,8 +76,8 @@ impl<T: TimelyTimestamp> ReadHold<T> {
 
     pub fn with_channel(
         id: GlobalId,
-        since: Antichain<T>,
-        channel_tx: UnboundedSender<(GlobalId, ChangeBatch<T>)>,
+        since: Antichain<Timestamp>,
+        channel_tx: UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
     ) -> Self {
         let tx = Arc::new(move |id, changes| channel_tx.send((id, changes)));
         Self::new(id, since, tx)
@@ -89,7 +92,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     /// of the collection identified by `id`. This does not mean that the
     /// overall since of the collection is what we report here. Only that it is
     /// _at least_ held back to the reported frontier by this read hold.
-    pub fn since(&self) -> &Antichain<T> {
+    pub fn since(&self) -> &Antichain<Timestamp> {
         &self.since
     }
 
@@ -99,7 +102,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     ///
     /// Panics when trying to merge a [ReadHold] for a different collection
     /// (different [GlobalId]).
-    pub fn merge_assign(&mut self, mut other: ReadHold<T>) {
+    pub fn merge_assign(&mut self, mut other: ReadHold) {
         assert_eq!(
             self.id, other.id,
             "can only merge ReadHolds for the same ID"
@@ -134,8 +137,8 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     /// holding.
     pub fn try_downgrade(
         &mut self,
-        frontier: Antichain<T>,
-    ) -> Result<(), ReadHoldDowngradeError<T>> {
+        frontier: Antichain<Timestamp>,
+    ) -> Result<(), ReadHoldDowngradeError> {
         if PartialOrder::less_than(&frontier, &self.since) {
             return Err(ReadHoldDowngradeError::SinceViolation {
                 frontier,
@@ -164,7 +167,7 @@ impl<T: TimelyTimestamp> ReadHold<T> {
     }
 }
 
-impl<T: TimelyTimestamp> Clone for ReadHold<T> {
+impl Clone for ReadHold {
     fn clone(&self) -> Self {
         if self.id.is_user() {
             tracing::trace!("cloning ReadHold on {}: {:?}", self.id, self.since);
@@ -194,7 +197,7 @@ impl<T: TimelyTimestamp> Clone for ReadHold<T> {
     }
 }
 
-impl<T: TimelyTimestamp> Drop for ReadHold<T> {
+impl Drop for ReadHold {
     fn drop(&mut self) {
         if self.id.is_user() {
             tracing::trace!("dropping ReadHold on {}: {:?}", self.id, self.since);

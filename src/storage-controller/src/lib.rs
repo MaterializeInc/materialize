@@ -3925,7 +3925,7 @@ struct IngestionState {
     pub derived_since: Antichain<Timestamp>,
 
     /// Holds that this ingestion (or ingestion export) has on its dependencies.
-    pub dependency_read_holds: Vec<ReadHold<Timestamp>>,
+    pub dependency_read_holds: Vec<ReadHold>,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<Timestamp>,
