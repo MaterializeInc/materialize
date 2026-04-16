@@ -10,6 +10,10 @@ publish = false
 workspace = true
 
 [[bench]]
+name = "factorized"
+harness = false
+
+[[bench]]
 name = "reclock"
 harness = false
 
