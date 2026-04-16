@@ -576,12 +576,14 @@ where
         let range = child_range(source.rest.rest.bounds.borrow(), val_idx);
         let times = source.rest.rest.values.0.borrow();
         let diffs = source.rest.rest.values.1.borrow();
-        for i in range {
+        let since = self.description.since().borrow();
+        self.staging.reserve(range.len());
+        self.staging.extend(range.map(|i| {
             let mut time = T::into_owned(times.get(i));
-            time.advance_by(self.description.since().borrow());
+            time.advance_by(since);
             let diff = R::into_owned(diffs.get(i));
-            self.staging.push((time, diff));
-        }
+            (time, diff)
+        }));
     }
 
     /// Consolidate staged updates, push non-zero results. Returns true if non-empty.
