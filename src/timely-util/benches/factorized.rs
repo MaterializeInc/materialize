@@ -588,6 +588,168 @@ fn bench_builder_pipeline(c: &mut Criterion) {
     group.finish();
 }
 
+/// Single-pass counting sort by one byte of a u64 key.
+/// Partitions `src` into `dst` by the byte at `shift`, returns number of non-empty buckets.
+fn counting_sort_pass<T: Copy>(src: &[T], dst: &mut Vec<T>, key: &impl Fn(&T) -> u64, shift: u32) {
+    dst.clear();
+    dst.resize_with(src.len(), || src[0]); // safe fill, no unsafe
+
+    let mut counts = [0u32; 256];
+    for item in src.iter() {
+        counts[((key(item) >> shift) & 0xFF) as usize] += 1;
+    }
+
+    let mut offsets = [0u32; 256];
+    for i in 1..256 {
+        offsets[i] = offsets[i - 1] + counts[i - 1];
+    }
+
+    for item in src.iter() {
+        let byte = ((key(item) >> shift) & 0xFF) as usize;
+        let pos = offsets[byte] as usize;
+        offsets[byte] += 1;
+        dst[pos] = *item;
+    }
+}
+
+/// Radix sort on first-column prefix, then comparison sort within runs.
+///
+/// For `(K, V, (T, D))` tuples: radix sort by K (u64), then std sort
+/// each run of equal K by (V, T, D). For variable-length keys (Row),
+/// the prefix would be the first 8 bytes.
+/// Single MSB byte pass to bucket by first column prefix, then comparison sort each bucket.
+fn radix_then_comparison_sort<T: Ord + Copy>(data: &mut Vec<T>, prefix_key: impl Fn(&T) -> u64) {
+    if data.len() <= 1 {
+        return;
+    }
+    let mut buf = Vec::new();
+    // Sort by top byte of the prefix key (MSB pass).
+    counting_sort_pass(data, &mut buf, &prefix_key, 56);
+    std::mem::swap(data, &mut buf);
+
+    // Identify runs of equal top byte and comparison sort each.
+    let mut start = 0;
+    while start < data.len() {
+        let top_byte = (prefix_key(&data[start]) >> 56) & 0xFF;
+        let mut end = start + 1;
+        while end < data.len() && ((prefix_key(&data[end]) >> 56) & 0xFF) == top_byte {
+            end += 1;
+        }
+        if end - start > 1 {
+            data[start..end].sort();
+        }
+        start = end;
+    }
+}
+
+/// Full LSB radix sort (all 8 bytes) on first column, then comparison sort within runs.
+fn full_radix_then_comparison_sort<T: Ord + Copy>(
+    data: &mut Vec<T>,
+    prefix_key: impl Fn(&T) -> u64,
+) {
+    if data.len() <= 1 {
+        return;
+    }
+    // Count bytes at all 8 positions in one scan (datatoad approach).
+    let mut counts = [[0u32; 256]; 8];
+    for item in data.iter() {
+        let k = prefix_key(item);
+        for pass in 0..8u32 {
+            counts[pass as usize][((k >> (pass * 8)) & 0xFF) as usize] += 1;
+        }
+    }
+
+    // Only do passes where >1 distinct byte value exists.
+    let active: Vec<u32> = (0..8u32)
+        .filter(|&pass| counts[pass as usize].iter().filter(|&&c| c > 0).count() > 1)
+        .collect();
+
+    let mut buf = Vec::new();
+    let mut swapped = false;
+    for &pass in &active {
+        counting_sort_pass(data, &mut buf, &prefix_key, pass * 8);
+        std::mem::swap(data, &mut buf);
+        swapped = !swapped;
+    }
+    // If odd number of swaps, result is in the wrong vec.
+    if swapped {
+        data.clear();
+        data.append(&mut buf);
+    }
+
+    // Within runs of equal prefix, sort remaining columns.
+    let mut start = 0;
+    while start < data.len() {
+        let prefix = prefix_key(&data[start]);
+        let mut end = start + 1;
+        while end < data.len() && prefix_key(&data[end]) == prefix {
+            end += 1;
+        }
+        if end - start > 1 {
+            data[start..end].sort();
+        }
+        start = end;
+    }
+}
+
+fn bench_radix_sort(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/radix_sort");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+        let data = generate_kv_data(n, nk, nv, nt);
+
+        // Build flat in reversed order (unsorted).
+        let mut shuffled = data.clone();
+        shuffled.reverse();
+        let mut flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &shuffled {
+            flat.push_flat(k, v, (&td.0, &td.1));
+        }
+
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        // Baseline: std sort.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("std_sort", &label), |b| {
+            b.iter(|| {
+                let mut refs: Vec<_> = flat.iter().collect();
+                refs.sort();
+                refs.len()
+            })
+        });
+
+        // 1-pass MSB radix (top byte of K) + comparison sort within buckets.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("msb1_then_cmp", &label), |b| {
+            b.iter(|| {
+                let mut refs: Vec<_> = flat.iter().collect();
+                radix_then_comparison_sort(&mut refs, |&(k, _, _)| *k);
+                refs.len()
+            })
+        });
+
+        // Smart radix: skip uniform bytes (datatoad approach) + comparison within runs.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("smart_radix_then_cmp", &label), |b| {
+            b.iter(|| {
+                let mut refs: Vec<_> = flat.iter().collect();
+                full_radix_then_comparison_sort(&mut refs, |&(k, _, _)| *k);
+                refs.len()
+            })
+        });
+
+        // MSB1 radix + form.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("radix_k_then_cmp_form", &label), |b| {
+            b.iter(|| {
+                let mut refs: Vec<_> = flat.iter().collect();
+                radix_then_comparison_sort(&mut refs, |&(k, _, _)| *k);
+                KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter())
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_push_flat,
@@ -599,5 +761,6 @@ criterion_group!(
     bench_kv_serialized,
     bench_sort_cost,
     bench_builder_pipeline,
+    bench_radix_sort,
 );
 criterion_main!(benches);
