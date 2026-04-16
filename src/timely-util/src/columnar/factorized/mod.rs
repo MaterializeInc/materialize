@@ -41,6 +41,9 @@ use columnar::primitive::offsets::Strides;
 use columnar::{
     AsBytes, Borrow, ContainerOf, FromBytes, Index, IndexAs, Len, Lookbacks, Push, Repeats, Vecs,
 };
+use differential_dataflow::trace::implementations::chunker::ContainerChunker;
+use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
+use differential_dataflow::trace::implementations::merge_batcher::container::VecInternalMerger;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 
@@ -48,6 +51,16 @@ use batch::{FactBatch, FactBuilder};
 
 /// A spine of factorized columnar batches.
 pub type FactValSpine<K, V, T, R> = Spine<Rc<FactBatch<K, V, T, R>>>;
+
+/// A batcher that sorts and merges `Vec<((K, V), T, R)>` chunks for factorized batches.
+///
+/// Uses the standard DD merge batcher with Vec containers. The factorization
+/// (trie building) happens in [`FactBuilder`], not in the batcher.
+pub type FactValBatcher<K, V, T, R> = MergeBatcher<
+    Vec<((K, V), T, R)>,
+    ContainerChunker<Vec<((K, V), T, R)>>,
+    VecInternalMerger<(K, V), T, R>,
+>;
 
 /// A builder producing `Rc<FactBatch>` for use with [`FactValSpine`].
 pub type FactValBuilder<K, V, T, R> = RcBuilder<FactBuilder<K, V, T, R>>;
