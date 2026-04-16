@@ -45,7 +45,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::healthcheck::HealthStatusUpdate;
 use crate::metrics::upsert::UpsertMetrics;
 use crate::storage_state::StorageInstanceContext;
-use crate::upsert_continual_feedback;
+use crate::{upsert_continual_feedback, upsert_continual_feedback_v2};
 use types::{
     BincodeOpts, StateValue, UpsertState, UpsertStateBackend, consolidating_merge_function,
     upsert_bincode_opts,
@@ -342,6 +342,56 @@ where
         storage_configuration,
         prevent_snapshot_buffering,
         snapshot_buffering_max,
+    )
+}
+
+/// An experimental upsert implementation loosely described in this doc:
+/// [Upsert V2 Much Simpler Boogaloo](https://www.notion.so/materialize/Upsert-V2-Much-Simpler-Boogaloo-31913f48d37b807fa88bdeafc27c02d9?source=copy_link)
+///
+/// Instead of using rocksdb as a state backend, this implementation uses a differential dataflow collection to hold the key state,
+/// and performs consolidation of updates with matching keys and MZ timestamps, using max FromTime to choose winners,
+/// resulting in only one record per key per time.
+pub(crate) fn upsert_v2<'scope, T, FromTime>(
+    input: VecCollection<'scope, T, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    upsert_envelope: UpsertEnvelope,
+    resume_upper: Antichain<T>,
+    previous: VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    previous_token: Option<Vec<PressOnDropButton>>,
+    source_config: crate::source::SourceExportCreationConfig,
+    backpressure_metrics: Option<BackpressureMetrics>,
+) -> (
+    VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
+    StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
+    StreamVec<'scope, T, Infallible>,
+    PressOnDropButton,
+)
+where
+    T: Timestamp + TotalOrder + Sync,
+    T: Refines<mz_repr::Timestamp> + TotalOrder + differential_dataflow::lattice::Lattice + Sync,
+    FromTime: Timestamp + Clone + Sync,
+{
+    let upsert_metrics = source_config.metrics.get_upsert_metrics(
+        source_config.id,
+        source_config.worker_id,
+        backpressure_metrics,
+    );
+
+    let thin_input = upsert_thinning(input);
+
+    tracing::info!(
+        worker_id = %source_config.worker_id,
+        source_id = %source_config.id,
+        "rendering upsert source (btreemap backend)"
+    );
+
+    upsert_continual_feedback_v2::upsert_inner(
+        thin_input,
+        upsert_envelope.key_indices,
+        resume_upper,
+        previous,
+        previous_token,
+        upsert_metrics,
+        source_config,
     )
 }
 
