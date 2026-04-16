@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan.rs
-revision: 2982634c0d
+revision: a72f9ef080
 ---
 
 # mz-sql::plan

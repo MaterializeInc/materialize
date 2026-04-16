@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/service.rs
-revision: f4f99cbc37
+revision: 217c45ad34
 ---
 
 # mz-compute-client::service
