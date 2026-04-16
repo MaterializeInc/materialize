@@ -2837,7 +2837,7 @@ where
     // This is really only used when dropping things, where we set the
     // ReadPolicy to the empty Antichain.
     #[instrument(level = "debug")]
-    fn set_hold_policies(&mut self, policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>) {
+    fn set_hold_policies(&mut self, policies: Vec<(GlobalId, ReadPolicy)>) {
         let mut read_capability_changes = BTreeMap::default();
 
         for (id, policy) in policies.into_iter() {
@@ -3936,7 +3936,7 @@ struct IngestionState {
     /// This is a _storage-controller-internal_ policy used to derive its
     /// personal read hold on the collection. It should not be confused with any
     /// read policies that the adapter might install at [StorageCollections].
-    pub hold_policy: ReadPolicy<Timestamp>,
+    pub hold_policy: ReadPolicy,
 
     /// The ID of the instance in which the ingestion is running.
     pub instance_id: StorageInstanceId,

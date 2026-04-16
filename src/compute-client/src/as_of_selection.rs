@@ -100,7 +100,7 @@ use tracing::{info, warn};
 /// with the compute controller.
 pub fn run(
     dataflows: &mut [DataflowDescription<Plan, ()>],
-    read_policies: &BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
+    read_policies: &BTreeMap<GlobalId, ReadPolicy>,
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
@@ -321,7 +321,7 @@ impl Constraint<'_> {
 struct Collection<'a> {
     storage_inputs: Vec<GlobalId>,
     compute_inputs: Vec<GlobalId>,
-    read_policy: Option<&'a ReadPolicy<Timestamp>>,
+    read_policy: Option<&'a ReadPolicy>,
     /// The currently known as-of bounds.
     ///
     /// Shared between collections exported by the same dataflow.
@@ -342,7 +342,7 @@ impl<'a> Context<'a> {
     fn new(
         dataflows: &[DataflowDescription<Plan, ()>],
         storage_collections: &'a dyn StorageCollections,
-        read_policies: &'a BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
+        read_policies: &'a BTreeMap<GlobalId, ReadPolicy>,
         current_time: Timestamp,
     ) -> Self {
         // Construct initial collection state for each dataflow export. Dataflows might have their
@@ -1027,7 +1027,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>) {
+        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy)>) {
             unimplemented!()
         }
 

@@ -943,7 +943,7 @@ impl ComputeController {
     pub fn set_read_policy(
         &self,
         instance_id: ComputeInstanceId,
-        policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>,
+        policies: Vec<(GlobalId, ReadPolicy)>,
     ) -> Result<(), ReadPolicyError> {
         use ReadPolicyError::*;
 

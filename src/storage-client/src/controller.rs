@@ -770,7 +770,7 @@ pub struct ExportState {
     pub read_holds: [ReadHold; 2],
 
     /// The policy to use to downgrade `self.read_capability`.
-    pub read_policy: ReadPolicy<Timestamp>,
+    pub read_policy: ReadPolicy,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<Timestamp>,
@@ -782,7 +782,7 @@ impl ExportState {
         read_hold: ReadHold,
         self_hold: ReadHold,
         write_frontier: Antichain<Timestamp>,
-        read_policy: ReadPolicy<Timestamp>,
+        read_policy: ReadPolicy,
     ) -> Self {
         let mut dependency_since = Antichain::from_elem(Timestamp::MIN);
         for read_hold in [&read_hold, &self_hold] {

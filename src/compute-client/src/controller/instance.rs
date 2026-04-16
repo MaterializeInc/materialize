@@ -1724,7 +1724,7 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     pub fn set_read_policy(
         &mut self,
-        policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>,
+        policies: Vec<(GlobalId, ReadPolicy)>,
     ) -> Result<(), ReadPolicyError> {
         // Do error checking upfront, to avoid introducing inconsistencies between a collection's
         // `implied_capability` and `read_capabilities`.
@@ -2411,7 +2411,7 @@ struct CollectionState {
     /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
     /// collections, the `implied_read_hold` is only required for maintaining read holds on the
     /// inputs, so we can immediately downgrade it to the `write_frontier`.
-    read_policy: Option<ReadPolicy<Timestamp>>,
+    read_policy: Option<ReadPolicy>,
 
     /// Storage identifiers on which this collection depends, and read holds this collection
     /// requires on them.

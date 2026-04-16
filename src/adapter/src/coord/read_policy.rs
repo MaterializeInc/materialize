@@ -308,10 +308,7 @@ impl crate::coord::Coordinator {
         }
     }
 
-    pub(crate) fn update_storage_read_policies(
-        &self,
-        policies: Vec<(CatalogItemId, ReadPolicy<Timestamp>)>,
-    ) {
+    pub(crate) fn update_storage_read_policies(&self, policies: Vec<(CatalogItemId, ReadPolicy)>) {
         let policies = policies
             .into_iter()
             .map(|(item_id, policy)| {
@@ -330,7 +327,7 @@ impl crate::coord::Coordinator {
 
     pub(crate) fn update_compute_read_policies(
         &self,
-        mut policies: Vec<(ComputeInstanceId, CatalogItemId, ReadPolicy<Timestamp>)>,
+        mut policies: Vec<(ComputeInstanceId, CatalogItemId, ReadPolicy)>,
     ) {
         policies.sort_by_key(|&(cluster_id, _, _)| cluster_id);
         for (cluster_id, group) in &policies
@@ -357,7 +354,7 @@ impl crate::coord::Coordinator {
         &self,
         compute_instance: ComputeInstanceId,
         item_id: CatalogItemId,
-        base_policy: ReadPolicy<Timestamp>,
+        base_policy: ReadPolicy,
     ) {
         self.update_compute_read_policies(vec![(compute_instance, item_id, base_policy)])
     }
