@@ -750,6 +750,202 @@ fn bench_radix_sort(c: &mut Criterion) {
     group.finish();
 }
 
+// --- Arrangement stack benchmarks ---
+
+use differential_dataflow::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+use mz_timely_util::columnar::factorized::batch::{FactBatch, FactBuilder};
+use mz_timely_util::columnar::factorized::column::FactColumn;
+use timely::container::{DrainContainer, PushInto};
+use timely::dataflow::channels::ContainerBytes;
+use timely::progress::frontier::AntichainRef;
+use timely::progress::Antichain;
+
+/// Generate sorted `((K,V),T,R)` data for arrangement benchmarks.
+fn generate_kv_updates(
+    n: usize,
+    n_keys: usize,
+    n_vals: usize,
+    n_times: usize,
+) -> Vec<((u64, u64), u64, i64)> {
+    let mut data: Vec<((u64, u64), u64, i64)> = Vec::with_capacity(n);
+    for i in 0..n {
+        data.push((
+            ((i % n_keys) as u64, (i % n_vals) as u64),
+            (i % n_times) as u64,
+            1i64,
+        ));
+    }
+    data.sort();
+    data
+}
+
+fn build_fact_batch(
+    data: &[((u64, u64), u64, i64)],
+    lower: u64,
+    upper: u64,
+) -> FactBatch<u64, u64, u64, i64> {
+    let mut chunk: Vec<_> = data.to_vec();
+    let mut builder = FactBuilder::with_capacity(0, 0, 0);
+    builder.push(&mut chunk);
+    builder.done(Description::new(
+        Antichain::from_elem(lower),
+        Antichain::from_elem(upper),
+        Antichain::from_elem(0u64),
+    ))
+}
+
+fn bench_arrangement_builder(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/arrangement/builder");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+        let data = generate_kv_updates(n, nk, nv, nt);
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("fact_builder", &label), |b| {
+            b.iter(|| {
+                let mut chunk = data.clone();
+                let mut builder = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
+                builder.push(&mut chunk);
+                builder.done(Description::new(
+                    Antichain::from_elem(0u64),
+                    Antichain::from_elem(1000u64),
+                    Antichain::from_elem(0u64),
+                ))
+            })
+        });
+    }
+    group.finish();
+}
+
+fn bench_arrangement_cursor(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/arrangement/cursor");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+        let data = generate_kv_updates(n, nk, nv, nt);
+        let batch = build_fact_batch(&data, 0, 1000);
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        // Full cursor traversal.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("traverse", &label), |b| {
+            b.iter(|| {
+                let mut count = 0usize;
+                let mut cursor = batch.cursor();
+                while cursor.key_valid(&batch) {
+                    while cursor.val_valid(&batch) {
+                        cursor.map_times(&batch, |_, _| count += 1);
+                        cursor.step_val(&batch);
+                    }
+                    cursor.step_key(&batch);
+                }
+                count
+            })
+        });
+
+        // Seek every 10th key.
+        group.throughput(Throughput::Elements(nk as u64 / 10));
+        group.bench_function(BenchmarkId::new("seek_key", &label), |b| {
+            b.iter(|| {
+                let mut cursor = batch.cursor();
+                let mut found = 0usize;
+                for target in (0..nk as u64).step_by(10) {
+                    cursor.rewind_keys(&batch);
+                    cursor.seek_key(&batch, &target);
+                    if cursor.key_valid(&batch) {
+                        found += 1;
+                    }
+                }
+                found
+            })
+        });
+    }
+    group.finish();
+}
+
+fn bench_arrangement_merge(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/arrangement/merge");
+    for (n, nk, nv, nt) in [(50_000, 100, 1_000, 5), (50_000, 10, 100, 5)] {
+        let data1 = generate_kv_updates(n, nk, nv, nt);
+        let mut data2: Vec<_> = (0..n)
+            .map(|i| {
+                (
+                    ((i % nk) as u64, (i % nv) as u64),
+                    (nt + i % nt) as u64,
+                    1i64,
+                )
+            })
+            .collect();
+        data2.sort();
+
+        let batch1 = build_fact_batch(&data1, 0, 500);
+        let batch2 = build_fact_batch(&data2, 500, 1000);
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        // Merge without compaction.
+        group.throughput(Throughput::Elements(2 * n as u64));
+        group.bench_function(BenchmarkId::new("no_compaction", &label), |b| {
+            b.iter(|| {
+                let mut merger = batch1.begin_merge(&batch2, AntichainRef::new(&[]));
+                merger.work(&batch1, &batch2, &mut 1_000_000);
+                merger.done()
+            })
+        });
+
+        // Merge with compaction.
+        let frontier = Antichain::from_elem(500u64);
+        group.throughput(Throughput::Elements(2 * n as u64));
+        group.bench_function(BenchmarkId::new("with_compaction", &label), |b| {
+            b.iter(|| {
+                let mut merger = batch1.begin_merge(&batch2, frontier.borrow());
+                merger.work(&batch1, &batch2, &mut 1_000_000);
+                merger.done()
+            })
+        });
+    }
+    group.finish();
+}
+
+fn bench_fact_column_serialization(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/arrangement/container_bytes");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5)] {
+        let data = generate_kv_updates(n, nk, nv, nt);
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        // Build a FactColumn.
+        let mut col = FactColumn::<u64, u64, u64, i64>::default();
+        for item in &data {
+            col.push_into(item.clone());
+        }
+
+        let byte_len = col.length_in_bytes();
+        eprintln!("  [{label}] FactColumn serialized size: {byte_len} bytes ({n} updates)");
+
+        // Serialize.
+        group.throughput(Throughput::Bytes(byte_len as u64));
+        group.bench_function(BenchmarkId::new("serialize", &label), |b| {
+            b.iter(|| {
+                let mut buf = Vec::with_capacity(byte_len);
+                col.into_bytes(&mut buf);
+                buf.len()
+            })
+        });
+
+        // Serialize once for deserialization benchmark.
+        let mut buf = Vec::with_capacity(byte_len);
+        col.into_bytes(&mut buf);
+        let bytes = timely::bytes::arc::BytesMut::from(buf).freeze();
+
+        // Deserialize + drain.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("deserialize_drain", &label), |b| {
+            b.iter(|| {
+                let mut col2 = FactColumn::<u64, u64, u64, i64>::from_bytes(bytes.clone());
+                col2.drain().count()
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_push_flat,
@@ -762,5 +958,9 @@ criterion_group!(
     bench_sort_cost,
     bench_builder_pipeline,
     bench_radix_sort,
+    bench_arrangement_builder,
+    bench_arrangement_cursor,
+    bench_arrangement_merge,
+    bench_fact_column_serialization,
 );
 criterion_main!(benches);
