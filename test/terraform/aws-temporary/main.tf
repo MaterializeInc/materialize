@@ -31,7 +31,7 @@ module "eks" {
   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//aws/modules/eks?ref=main"
 
   name_prefix                              = var.name_prefix
-  cluster_version                          = "1.32"
+  cluster_version                          = "1.34"
   vpc_id                                   = module.networking.vpc_id
   private_subnet_ids                       = module.networking.private_subnet_ids
   cluster_enabled_log_types                = ["api", "audit"]
