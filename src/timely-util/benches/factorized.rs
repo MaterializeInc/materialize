@@ -16,7 +16,7 @@
 //! Benchmarks for factorized columnar storage.
 
 use columnar::bytes::indexed;
-use columnar::{Borrow, FromBytes, Index, IndexAs, Len};
+use columnar::{Borrow, FromBytes, Index, Len};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mz_timely_util::columnar::factorized::{
     FactorizedColumns, KVUpdates, KVUpdatesRepeats, Lists, child_range,
@@ -34,9 +34,10 @@ fn generate_sorted_data(n: usize, distinct_a: usize, distinct_b: usize) -> Vec<(
 
 /// Compute total serialized size of a `FactorizedColumns` in u64 words.
 fn total_words(fc: &FactorizedColumns<u64, u64, i64>) -> usize {
-    indexed::length_in_words(&fc.lists.borrow())
-        + indexed::length_in_words(&fc.rest.lists.borrow())
-        + indexed::length_in_words(&fc.rest.rest.borrow())
+    let b = fc.borrowed();
+    indexed::length_in_words(&b.lists)
+        + indexed::length_in_words(&b.rest.lists)
+        + indexed::length_in_words(&b.rest.rest)
 }
 
 fn bench_push_flat(c: &mut Criterion) {
@@ -193,21 +194,23 @@ fn generate_kv_data(
 }
 
 /// Compute total words for a KVUpdates structure.
-fn kv_total_words<CC: Borrow + columnar::Container>(
+fn kv_total_words<
+    KV: columnar::ContainerBytes,
+    VV: columnar::ContainerBytes,
+    CC: columnar::ContainerBytes,
+>(
     fc: &mz_timely_util::columnar::factorized::Level<
-        u64,
+        columnar::Vecs<KV, columnar::primitive::offsets::Strides>,
         mz_timely_util::columnar::factorized::Level<
-            u64,
+            columnar::Vecs<VV, columnar::primitive::offsets::Strides>,
             columnar::Vecs<CC, columnar::primitive::offsets::Strides>,
         >,
     >,
-) -> usize
-where
-    for<'a> <CC as Borrow>::Borrowed<'a>: columnar::AsBytes<'a>,
-{
-    indexed::length_in_words(&fc.lists.borrow())
-        + indexed::length_in_words(&fc.rest.lists.borrow())
-        + indexed::length_in_words(&fc.rest.rest.borrow())
+) -> usize {
+    let b = fc.borrowed();
+    indexed::length_in_words(&b.lists)
+        + indexed::length_in_words(&b.rest.lists)
+        + indexed::length_in_words(&b.rest.rest)
 }
 
 fn bench_kv_form(c: &mut Criterion) {

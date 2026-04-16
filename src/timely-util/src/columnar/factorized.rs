@@ -31,7 +31,7 @@
 
 use columnar::primitive::offsets::Strides;
 use columnar::{
-    Borrow, Columnar, ContainerOf, Index, IndexAs, Len, Lookbacks, Push, Repeats, Vecs,
+    AsBytes, Borrow, ContainerOf, FromBytes, Index, IndexAs, Len, Lookbacks, Push, Repeats, Vecs,
 };
 
 /// A [`Vecs`] using [`Strides`] for offset bounds.
@@ -43,13 +43,17 @@ pub type Lists<C> = Vecs<C, Strides>;
 
 /// A single level in a factorized column structure.
 ///
-/// Stores values at this level in `lists.values`, with `lists.bounds` mapping
-/// each value's index to a range of children in `rest`. For example, if
-/// `lists.bounds = [3, 5]`, then value 0 maps to children 0..3 in `rest`,
-/// and value 1 maps to children 3..5.
-pub struct Level<C: Columnar, Rest> {
+/// Generic over the lists type `L` and the child level `Rest`. When `L` is
+/// `Lists<ContainerOf<C>>`, this level stores values of type `C` with bounds
+/// mapping into `Rest`. The same struct is used for both owned and borrowed forms,
+/// enabling natural `Borrow`/`AsBytes`/`FromBytes` implementations.
+///
+/// For example, if `lists.bounds = [3, 5]`, then value 0 maps to children 0..3
+/// in `rest`, and value 1 maps to children 3..5.
+#[derive(Copy)]
+pub struct Level<L, Rest> {
     /// Values at this level, with cumulative bounds into `rest`.
-    pub lists: Lists<ContainerOf<C>>,
+    pub lists: L,
     /// The next level of the factorized structure.
     pub rest: Rest,
 }
@@ -60,30 +64,38 @@ pub struct Level<C: Columnar, Rest> {
 /// * `level.lists` — A values + bounds mapping outer groups to A ranges.
 /// * `level.rest.lists` — B values + bounds mapping A indices to B ranges.
 /// * `level.rest.rest` — C values (leaf) + bounds mapping B indices to C ranges.
-pub type FactorizedColumns<A, B, C> = Level<A, Level<B, Lists<ContainerOf<C>>>>;
+pub type FactorizedColumns<A, B, C> =
+    Level<Lists<ContainerOf<A>>, Level<Lists<ContainerOf<B>>, Lists<ContainerOf<C>>>>;
 
 /// A factorized 4-level column store for `((K, V), Time, Diff)` data.
 ///
 /// Trie structure: K values → V values → (Time, Diff) leaf pairs.
 /// The leaf is a tuple of two parallel columns sharing the same bounds.
-pub type KVUpdates<K, V, T, R> = Level<K, Level<V, Lists<(ContainerOf<T>, ContainerOf<R>)>>>;
+pub type KVUpdates<K, V, T, R> = Level<
+    Lists<ContainerOf<K>>,
+    Level<Lists<ContainerOf<V>>, Lists<(ContainerOf<T>, ContainerOf<R>)>>,
+>;
 
 /// Like [`KVUpdates`] but with [`Repeats`] on both leaf columns.
 ///
 /// [`Repeats`] encodes consecutive identical values as 1-bit `None` markers,
 /// compressing runs of repeated timestamps or diffs (e.g., many `+1` diffs).
-pub type KVUpdatesRepeats<K, V, T, R> =
-    Level<K, Level<V, Lists<(Repeats<ContainerOf<T>>, Repeats<ContainerOf<R>>)>>>;
+pub type KVUpdatesRepeats<K, V, T, R> = Level<
+    Lists<ContainerOf<K>>,
+    Level<Lists<ContainerOf<V>>, Lists<(Repeats<ContainerOf<T>>, Repeats<ContainerOf<R>>)>>,
+>;
 
 /// Like [`KVUpdates`] but with [`Lookbacks`] on both leaf columns.
 ///
 /// [`Lookbacks`] scans up to N previous distinct values for matches, encoding
 /// hits as 1-byte back-references. More powerful than [`Repeats`] for non-consecutive
 /// repetition, at the cost of O(N) per push.
-pub type KVUpdatesLookbacks<K, V, T, R> =
-    Level<K, Level<V, Lists<(Lookbacks<ContainerOf<T>>, Lookbacks<ContainerOf<R>>)>>>;
+pub type KVUpdatesLookbacks<K, V, T, R> = Level<
+    Lists<ContainerOf<K>>,
+    Level<Lists<ContainerOf<V>>, Lists<(Lookbacks<ContainerOf<T>>, Lookbacks<ContainerOf<R>>)>>,
+>;
 
-impl<C: Columnar, Rest: Default> Default for Level<C, Rest> {
+impl<L: Default, Rest: Default> Default for Level<L, Rest> {
     fn default() -> Self {
         Level {
             lists: Default::default(),
@@ -92,10 +104,7 @@ impl<C: Columnar, Rest: Default> Default for Level<C, Rest> {
     }
 }
 
-impl<C: Columnar, Rest: Clone> Clone for Level<C, Rest>
-where
-    ContainerOf<C>: Clone,
-{
+impl<L: Clone, Rest: Clone> Clone for Level<L, Rest> {
     fn clone(&self) -> Self {
         Level {
             lists: self.lists.clone(),
@@ -104,15 +113,77 @@ where
     }
 }
 
-impl<C: Columnar, Rest: std::fmt::Debug> std::fmt::Debug for Level<C, Rest>
-where
-    ContainerOf<C>: std::fmt::Debug,
-{
+impl<L: std::fmt::Debug, Rest: std::fmt::Debug> std::fmt::Debug for Level<L, Rest> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Level")
             .field("lists", &self.lists)
             .field("rest", &self.rest)
             .finish()
+    }
+}
+
+impl<L: PartialEq, Rest: PartialEq> PartialEq for Level<L, Rest> {
+    fn eq(&self, other: &Self) -> bool {
+        self.lists == other.lists && self.rest == other.rest
+    }
+}
+
+// --- Serialization support ---
+//
+// `Level` does not implement `Borrow` (which requires `Borrowed: Index`, unsuited
+// for a trie). Instead, it provides a `borrowed()` helper and implements
+// `AsBytes`/`FromBytes` directly, enabling serialization as one contiguous
+// indexed blob via `indexed::encode`/`indexed::decode`.
+
+impl<L: Borrow, RL: Borrow, Leaf: Borrow> Level<L, Level<RL, Leaf>> {
+    /// Borrow all levels recursively, producing a `Level` with borrowed inner types.
+    #[inline(always)]
+    pub fn borrowed(&self) -> Level<L::Borrowed<'_>, Level<RL::Borrowed<'_>, Leaf::Borrowed<'_>>> {
+        Level {
+            lists: self.lists.borrow(),
+            rest: Level {
+                lists: self.rest.lists.borrow(),
+                rest: self.rest.rest.borrow(),
+            },
+        }
+    }
+}
+
+impl<'a, L: AsBytes<'a>, Rest: AsBytes<'a>> AsBytes<'a> for Level<L, Rest> {
+    const SLICE_COUNT: usize = L::SLICE_COUNT + Rest::SLICE_COUNT;
+
+    #[inline]
+    fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+        debug_assert!(index < Self::SLICE_COUNT);
+        if index < L::SLICE_COUNT {
+            self.lists.get_byte_slice(index)
+        } else {
+            self.rest.get_byte_slice(index - L::SLICE_COUNT)
+        }
+    }
+}
+
+impl<'a, L: FromBytes<'a>, Rest: FromBytes<'a>> FromBytes<'a> for Level<L, Rest> {
+    const SLICE_COUNT: usize = L::SLICE_COUNT + Rest::SLICE_COUNT;
+
+    #[inline(always)]
+    fn from_bytes(bytes: &mut impl Iterator<Item = &'a [u8]>) -> Self {
+        Self {
+            lists: FromBytes::from_bytes(bytes),
+            rest: FromBytes::from_bytes(bytes),
+        }
+    }
+    #[inline(always)]
+    fn from_store(store: &columnar::bytes::indexed::DecodedStore<'a>, offset: &mut usize) -> Self {
+        Self {
+            lists: L::from_store(store, offset),
+            rest: Rest::from_store(store, offset),
+        }
+    }
+    fn element_sizes(sizes: &mut Vec<usize>) -> Result<(), String> {
+        L::element_sizes(sizes)?;
+        Rest::element_sizes(sizes)?;
+        Ok(())
     }
 }
 
@@ -131,8 +202,10 @@ pub fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usiz
     lower..upper
 }
 
-impl<A: Columnar, B: Columnar, CC> Level<A, Level<B, Vecs<CC, Strides>>>
+impl<AV, BV, CC> Level<Vecs<AV, Strides>, Level<Vecs<BV, Strides>, Vecs<CC, Strides>>>
 where
+    AV: columnar::Container,
+    BV: columnar::Container,
     CC: columnar::Container,
 {
     /// Push a single `(a, b, c)` element as a stride-1 entry at every level.
@@ -141,8 +214,8 @@ where
     /// Used for accumulating unsorted data before form.
     pub fn push_flat<AP, BP, CP>(&mut self, a: AP, b: BP, c: CP)
     where
-        ContainerOf<A>: Push<AP>,
-        ContainerOf<B>: Push<BP>,
+        AV: Push<AP>,
+        BV: Push<BP>,
         CC: Push<CP>,
     {
         self.lists.values.push(a);
@@ -167,18 +240,13 @@ where
         &self,
     ) -> impl Iterator<
         Item = (
-            columnar::Ref<'_, A>,
-            columnar::Ref<'_, B>,
+            <AV as Borrow>::Ref<'_>,
+            <BV as Borrow>::Ref<'_>,
             <CC as Borrow>::Ref<'_>,
         ),
-    >
-    where
-        CC: Borrow,
-    {
+    > {
         let a_lists = self.lists.borrow();
         let b_lists = self.rest.lists.borrow();
-        // c_lists is Vecs<CC::Borrowed<'_>, Strides::Borrowed<'_>>; its `.values`
-        // field is CC::Borrowed<'_> which implements Index<Ref = CC::Ref<'_>>.
         let c_lists = self.rest.rest.borrow();
 
         (0..Len::len(&a_lists))
@@ -205,10 +273,8 @@ where
     /// incompatible with `flat_map`'s `FnMut` closure requirement.
     pub fn for_each_cursor(
         &self,
-        mut f: impl FnMut(columnar::Ref<'_, A>, columnar::Ref<'_, B>, <CC as Borrow>::Ref<'_>),
-    ) where
-        CC: Borrow,
-    {
+        mut f: impl FnMut(<AV as Borrow>::Ref<'_>, <BV as Borrow>::Ref<'_>, <CC as Borrow>::Ref<'_>),
+    ) {
         let a_lists = self.lists.borrow();
         let b_lists = self.rest.lists.borrow();
         let c_lists = self.rest.rest.borrow();
@@ -235,21 +301,14 @@ where
     /// responsible for deduplication or diff accumulation if needed.
     ///
     /// Produces a single outer group containing all A values.
-    pub fn form<'a>(
-        sorted: impl Iterator<
-            Item = (
-                columnar::Ref<'a, A>,
-                columnar::Ref<'a, B>,
-                <CC as Borrow>::Ref<'a>,
-            ),
-        >,
-    ) -> Self
+    pub fn form<AR, BR, CR>(sorted: impl Iterator<Item = (AR, BR, CR)>) -> Self
     where
-        ContainerOf<A>: Push<columnar::Ref<'a, A>>,
-        ContainerOf<B>: Push<columnar::Ref<'a, B>>,
-        CC: columnar::Container,
-        columnar::Ref<'a, A>: Eq,
-        columnar::Ref<'a, B>: Eq,
+        AR: Copy + Eq,
+        BR: Copy + Eq,
+        CR: Copy,
+        AV: Push<AR>,
+        BV: Push<BR>,
+        CC: Push<CR>,
     {
         let mut output = Self::default();
         let mut sorted = sorted.peekable();
@@ -589,6 +648,53 @@ mod tests {
 
         // Diff should compress massively (all +1).
         assert!(repeat_diff_somes < plain_diff_len / 2);
+    }
+
+    /// Test serialization roundtrip: encode to bytes, decode, iterate, verify same data.
+    #[mz_ore::test]
+    fn test_serialization_roundtrip() {
+        use columnar::bytes::indexed;
+
+        let input: Vec<(u64, u64, i64)> =
+            vec![(1, 10, 100), (1, 10, 200), (1, 20, 300), (2, 30, 400)];
+        let refs: Vec<_> = input.iter().map(|(a, b, c)| (a, b, c)).collect();
+        let fc = FactorizedColumns::<u64, u64, i64>::form(refs.into_iter());
+
+        // Encode the entire trie as one indexed blob.
+        let borrowed = fc.borrowed();
+        let mut store = Vec::new();
+        indexed::encode(&mut store, &borrowed);
+
+        // Decode borrowed view from the store.
+        let ds = indexed::DecodedStore::new(&store);
+        type BorrowedFC<'a> = Level<
+            Vecs<&'a [u64], Strides<&'a [u64], &'a [u64]>>,
+            Level<
+                Vecs<&'a [u64], Strides<&'a [u64], &'a [u64]>>,
+                Vecs<&'a [i64], Strides<&'a [u64], &'a [u64]>>,
+            >,
+        >;
+        let decoded: BorrowedFC<'_> = FromBytes::from_store(&ds, &mut 0);
+
+        // Iterate decoded data using child_range.
+        let mut result = Vec::new();
+        for outer in 0..Len::len(&decoded.lists) {
+            for a_idx in child_range(decoded.lists.bounds, outer) {
+                let a_val = *Index::get(&decoded.lists.values, a_idx);
+                for b_idx in child_range(decoded.rest.lists.bounds, a_idx) {
+                    let b_val = *Index::get(&decoded.rest.lists.values, b_idx);
+                    for c_idx in child_range(decoded.rest.rest.bounds, b_idx) {
+                        let c_val = *Index::get(&decoded.rest.rest.values, c_idx);
+                        result.push((a_val, b_val, c_val));
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            result,
+            vec![(1, 10, 100), (1, 10, 200), (1, 20, 300), (2, 30, 400)]
+        );
     }
 
     #[mz_ore::test]
