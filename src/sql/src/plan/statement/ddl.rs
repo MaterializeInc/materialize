@@ -1186,7 +1186,7 @@ fn plan_postgres_source_connection(
     Ok(PostgresSourceConnection {
         connection: connection_item.id(),
         connection_id: connection_item.id(),
-        publication: publication.expect("validated exists during purification"),
+        publication: publication.ok_or_else(|| sql_err!("PUBLICATION option is required"))?,
         publication_details,
     })
 }
@@ -1212,7 +1212,7 @@ fn plan_kafka_source_connection(
         start_offset,
         seen: _,
     }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
-    let topic = topic.expect("validated exists during purification");
+    let topic = topic.ok_or_else(|| sql_err!("TOPIC option is required"))?;
     let mut start_offsets = BTreeMap::new();
     if let Some(offsets) = start_offset {
         for (part, offset) in offsets.iter().enumerate() {
@@ -1606,14 +1606,9 @@ pub fn plan_create_subsource(
         seen: _,
     } = with_options.clone().try_into()?;
 
-    // This invariant is enforced during purification; we are responsible for
-    // creating the AST for subsources as a response to CREATE SOURCE
-    // statements, so this would fire in integration testing if we failed to
-    // uphold it.
-    assert!(
-        progress ^ (external_reference.is_some() && of_source.is_some()),
-        "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
-    );
+    if !(progress ^ (external_reference.is_some() && of_source.is_some())) {
+        sql_bail!("CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option");
+    }
 
     let desc = plan_source_export_desc(scx, name, columns, constraints)?;
 
@@ -1631,7 +1626,9 @@ pub fn plan_create_subsource(
         // This is a subsource with the "natural" dependency order, i.e. it is
         // not a legacy subsource with the inverted structure.
         let ingestion_id = *source_reference.item_id();
-        let external_reference = external_reference.unwrap();
+        let external_reference = external_reference.ok_or_else(|| {
+            sql_err!("CREATE SUBSOURCE with REFERENCES requires EXTERNAL REFERENCE option")
+        })?;
 
         // Decode the details option stored on the subsource statement, which contains information
         // created during the purification process.
@@ -1703,7 +1700,7 @@ pub fn plan_create_subsource(
     } else if progress {
         DataSourceDesc::Progress
     } else {
-        panic!("subsources must specify one of `external_reference`, `progress`, or `references`")
+        sql_bail!("CREATE SUBSOURCE must specify one of PROGRESS or REFERENCES option")
     };
 
     let if_not_exists = *if_not_exists;
@@ -1906,7 +1903,10 @@ pub fn plan_create_table_from_source(
         }
     };
 
-    let source_connection = &source_item.source_desc()?.expect("is source").connection;
+    let source_connection = &source_item
+        .source_desc()?
+        .ok_or_else(|| sql_err!("item is not a source"))?
+        .connection;
 
     // Some source-types (e.g. postgres, mysql, multi-output load-gen sources) define a value_schema
     // during purification and define the `columns` and `constraints` fields for the statement,
@@ -1916,7 +1916,7 @@ pub fn plan_create_table_from_source(
         if matches!(columns, TableFromSourceColumns::Defined(_)) || !constraints.is_empty() {
             let columns = match columns {
                 TableFromSourceColumns::Defined(columns) => columns,
-                _ => unreachable!(),
+                _ => sql_bail!("internal error: expected column definitions to be present"),
             };
             let desc = plan_source_export_desc(scx, name, columns, constraints)?;
             (None, desc)
@@ -1972,7 +1972,7 @@ pub fn plan_create_table_from_source(
         ingestion_id,
         external_reference: external_reference
             .as_ref()
-            .expect("populated in purification")
+            .ok_or_else(|| sql_err!("EXTERNAL REFERENCE is required"))?
             .clone(),
         details,
         data_config: SourceExportDataConfig { envelope, encoding },
@@ -2362,7 +2362,7 @@ fn get_encoding_inner(
                             confluent_wire_format: true,
                         }
                     } else {
-                        unreachable!("CSR seed resolution should already have been called: Avro")
+                        sql_bail!("Avro CSR seed resolution has not been performed")
                     }
                 }
             };
@@ -2439,7 +2439,7 @@ fn get_encoding_inner(
                     }
                     value
                 } else {
-                    unreachable!("CSR seed resolution should already have been called: Proto")
+                    sql_bail!("Protobuf CSR seed resolution has not been performed")
                 }
             }
             ProtobufSchema::InlineSchema {
@@ -3231,7 +3231,9 @@ fn plan_sink(
         bail_unsupported!("creating a sink directly on a catalog object");
     }
 
-    let desc = from.relation_desc().expect("item type checked above");
+    let desc = from
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
         | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
@@ -3598,7 +3600,7 @@ impl std::convert::TryFrom<Vec<CsrConfigOption<Aug>>> for CsrConfigOptionExtract
                         DocOnIdentifier::Type(ResolvedItemName::Item { id, .. }) => {
                             DocTarget::Type(id)
                         }
-                        _ => unreachable!(),
+                        _ => sql_bail!("invalid DOC ON identifier"),
                     };
 
                     match doc_on.for_schema {
@@ -4035,7 +4037,9 @@ pub fn plan_create_index(
         }
     }
 
-    let on_desc = on.relation_desc().expect("item type checked above");
+    let on_desc = on
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
@@ -5335,11 +5339,9 @@ pub fn plan_drop_objects(
         cascade,
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
-    assert_ne!(
-        object_type,
-        mz_sql_parser::ast::ObjectType::Func,
-        "rejected in parser"
-    );
+    if object_type == mz_sql_parser::ast::ObjectType::Func {
+        sql_bail!("DROP FUNCTION is not supported");
+    }
     let object_type = object_type.into();
 
     let mut referenced_ids = Vec::new();
@@ -6237,9 +6239,12 @@ pub fn plan_alter_cluster(
                 // The `DISK` option is a no-op for legacy cluster sizes and was never allowed for
                 // `cc` sizes. The long term plan is to phase out the legacy sizes, at which point
                 // we'll be able to remove the `DISK` option entirely.
-                let size = size.as_deref().unwrap_or_else(|| {
-                    cluster.managed_size().expect("cluster known to be managed")
-                });
+                let size = match size.as_deref() {
+                    Some(s) => s,
+                    None => cluster
+                        .managed_size()
+                        .ok_or_else(|| sql_err!("cluster is not managed"))?,
+                };
                 if scx.catalog.is_cluster_size_cc(size) {
                     sql_bail!(
                         "DISK option not supported for modern cluster sizes because disk is always enabled"
@@ -6409,7 +6414,7 @@ pub fn plan_alter_object_rename(
             plan_alter_schema_rename(scx, name, to_item_name, if_exists)
         }
         (object_type, name) => {
-            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+            sql_bail!("invalid object type '{object_type}' for ALTER RENAME with name {name}")
         }
     }
 }
@@ -6756,7 +6761,7 @@ pub fn plan_alter_object_swap(
             plan_alter_cluster_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
         (ObjectType::Schema | ObjectType::Cluster, _, _) => {
-            unreachable!("parser ensures name type matches object type")
+            sql_bail!("internal error: name type does not match object type for ALTER SWAP")
         }
         (
             ObjectType::Table
@@ -7076,7 +7081,7 @@ pub fn plan_alter_connection(
         .map(|action: &AlterConnectionAction<Aug>| match action {
             AlterConnectionAction::SetOption(option) => option.name.clone(),
             AlterConnectionAction::DropOption(name) => name.clone(),
-            AlterConnectionAction::RotateKeys => unreachable!(),
+            AlterConnectionAction::RotateKeys => unreachable!("RotateKeys is handled separately"),
         })
         .collect();
 
@@ -7093,7 +7098,7 @@ pub fn plan_alter_connection(
         actions.into_iter().partition_map(|action| match action {
             AlterConnectionAction::SetOption(option) => Either::Left(option),
             AlterConnectionAction::DropOption(name) => Either::Right(name),
-            AlterConnectionAction::RotateKeys => unreachable!(),
+            AlterConnectionAction::RotateKeys => unreachable!("RotateKeys is handled separately"),
         });
 
     let set_options: BTreeMap<_, _> = set_options_vec
@@ -7203,11 +7208,11 @@ pub fn plan_alter_sink(
             // First we reconstruct the original CREATE SINK statement
             let create_sql = item.create_sql();
             let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
-            let [stmt]: [StatementParseResult; 1] = stmts
-                .try_into()
-                .expect("create sql of sink was not exactly one statement");
+            let [stmt]: [StatementParseResult; 1] = stmts.try_into().map_err(|_| {
+                sql_err!("internal error: create SQL of sink was not exactly one statement")
+            })?;
             let Statement::CreateSink(stmt) = stmt.ast else {
-                unreachable!("invalid create SQL for sink item");
+                sql_bail!("internal error: create SQL of sink is not a CREATE SINK statement");
             };
 
             // Then resolve and swap the resolved from relation to the new one
@@ -7216,7 +7221,7 @@ pub fn plan_alter_sink(
 
             // Finally re-plan the modified create sink statement to verify the new configuration is valid
             let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
-                unreachable!("invalid plan for CREATE SINK statement");
+                sql_bail!("internal error: plan_sink did not produce a CreateSink plan");
             };
 
             plan.sink.version += 1;
@@ -7272,7 +7277,9 @@ pub fn plan_alter_source(
     match action {
         AlterSourceAction::SetOptions(options) => {
             let mut options = options.into_iter();
-            let option = options.next().unwrap();
+            let option = options
+                .next()
+                .ok_or_else(|| sql_err!("ALTER SOURCE SET requires at least one option"))?;
             if option.name == CreateSourceOptionName::RetainHistory {
                 if options.next().is_some() {
                     sql_bail!("RETAIN HISTORY must be only option");
@@ -7300,7 +7307,9 @@ pub fn plan_alter_source(
         }
         AlterSourceAction::ResetOptions(reset) => {
             let mut options = reset.into_iter();
-            let option = options.next().unwrap();
+            let option = options
+                .next()
+                .ok_or_else(|| sql_err!("ALTER SOURCE RESET requires at least one option"))?;
             if option == CreateSourceOptionName::RetainHistory {
                 if options.next().is_some() {
                     sql_bail!("RETAIN HISTORY must be only option");
@@ -7328,10 +7337,10 @@ pub fn plan_alter_source(
             sql_bail!("ALTER SOURCE...DROP SUBSOURCE no longer supported; use DROP SOURCE")
         }
         AlterSourceAction::AddSubsources { .. } => {
-            unreachable!("ALTER SOURCE...ADD SUBSOURCE must be purified")
+            sql_bail!("ALTER SOURCE...ADD SUBSOURCE must be purified before planning")
         }
         AlterSourceAction::RefreshReferences => {
-            unreachable!("ALTER SOURCE...REFRESH REFERENCES must be purified")
+            sql_bail!("ALTER SOURCE...REFRESH REFERENCES must be purified before planning")
         }
     };
 }
@@ -7440,7 +7449,10 @@ pub fn plan_alter_table_add_column(
                 // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
                 let item = item.at_version(RelationVersionSelector::Latest);
-                let desc = item.relation_desc().expect("table has desc").into_owned();
+                let desc = item
+                    .relation_desc()
+                    .ok_or_else(|| sql_err!("item does not have a relation description"))?
+                    .into_owned();
                 (item.id(), item_name, desc)
             }
             None => {
@@ -7511,7 +7523,7 @@ pub fn plan_alter_materialized_view_apply_replacement(
     };
 
     let replacement = resolve_item_or_type(scx, object_type, replacement_name, false)?
-        .expect("if_exists not set");
+        .ok_or_else(|| sql_err!("replacement materialized view does not exist"))?;
 
     if replacement.replacement_target() != Some(mv.id()) {
         return Err(PlanError::InvalidReplacement {
@@ -7605,7 +7617,7 @@ pub fn plan_comment(
                         CommentObjectType::Source { .. } => ObjectType::Source,
                         CommentObjectType::Sink { .. } => ObjectType::Sink,
                         CommentObjectType::Secret { .. } => ObjectType::Secret,
-                        _ => unreachable!("these are the only types we match on"),
+                        _ => sql_bail!("cannot comment on this object type"),
                     };
 
                     return Err(PlanError::InvalidObjectType {
@@ -7626,7 +7638,7 @@ pub fn plan_comment(
                 }
                 (CommentObjectId::Type(*id), None)
             }
-            ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedDataType::Error => sql_bail!("internal error: unresolved data type"),
         },
         CommentObjectType::Column { name } => {
             let (item, pos) = scx.get_column_by_resolved_name(name)?;

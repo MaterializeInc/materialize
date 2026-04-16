@@ -474,7 +474,7 @@ pub fn create_statement(
                 .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
         }
 
-        _ => unreachable!(),
+        _ => sql_bail!("unexpected statement type for normalization"),
     }
 
     Ok(stmt.to_ast_string_stable())

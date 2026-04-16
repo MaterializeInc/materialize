@@ -241,7 +241,9 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.relation_desc().expect("table has desc");
+    let desc = table
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
     let mut defaults = table
         .writable_table_details()
         .ok_or_else(|| {
@@ -633,7 +635,9 @@ pub fn plan_copy_from_rows(
         transform_ast::transform(&scx, default)?;
     }
 
-    let desc = table.relation_desc().expect("table has desc");
+    let desc = table
+        .relation_desc()
+        .ok_or_else(|| sql_err!("item does not have a relation description"))?;
     let column_types = columns
         .iter()
         .map(|x| desc.get_type(x).clone())
@@ -2010,7 +2014,9 @@ fn plan_set_expr(
                 desc: StatementDesc,
             ) -> Result<(HirRelationExpr, Scope), PlanError> {
                 let rows = vec![plan.row.iter().collect::<Vec<_>>()];
-                let desc = desc.relation_desc.expect("must exist");
+                let desc = desc.relation_desc.ok_or_else(|| {
+                    sql_err!("internal error: statement description missing relation descriptor")
+                })?;
                 let scope = Scope::from_source(None, desc.iter_names());
                 let expr = HirRelationExpr::constant(rows, desc.into_typ());
                 Ok((expr, scope))
@@ -3533,7 +3539,7 @@ fn invent_column_name(
                         full_name,
                         ..
                     } => (&qualifiers.schema_spec, full_name.item.clone()),
-                    _ => unreachable!(),
+                    _ => return None,
                 };
 
                 if schema == &SchemaSpecifier::from(ecx.qcx.scx.catalog.get_mz_internal_schema_id())
@@ -4094,13 +4100,25 @@ fn plan_expr_inner<'a>(
         Expr::MapSubquery(query) => plan_map_subquery(ecx, query),
         Expr::ArraySubquery(query) => plan_array_subquery(ecx, query),
         Expr::Collate { expr, collation } => plan_collate(ecx, expr, collation),
-        Expr::Nested(_) => unreachable!("Expr::Nested not desugared"),
-        Expr::InSubquery { .. } => unreachable!("Expr::InSubquery not desugared"),
-        Expr::AnyExpr { .. } => unreachable!("Expr::AnyExpr not desugared"),
-        Expr::AllExpr { .. } => unreachable!("Expr::AllExpr not desugared"),
-        Expr::AnySubquery { .. } => unreachable!("Expr::AnySubquery not desugared"),
-        Expr::AllSubquery { .. } => unreachable!("Expr::AllSubquery not desugared"),
-        Expr::Between { .. } => unreachable!("Expr::Between not desugared"),
+        Expr::Nested(_) => sql_bail!("internal error: Expr::Nested should have been desugared"),
+        Expr::InSubquery { .. } => {
+            sql_bail!("internal error: Expr::InSubquery should have been desugared")
+        }
+        Expr::AnyExpr { .. } => {
+            sql_bail!("internal error: Expr::AnyExpr should have been desugared")
+        }
+        Expr::AllExpr { .. } => {
+            sql_bail!("internal error: Expr::AllExpr should have been desugared")
+        }
+        Expr::AnySubquery { .. } => {
+            sql_bail!("internal error: Expr::AnySubquery should have been desugared")
+        }
+        Expr::AllSubquery { .. } => {
+            sql_bail!("internal error: Expr::AllSubquery should have been desugared")
+        }
+        Expr::Between { .. } => {
+            sql_bail!("internal error: Expr::Between should have been desugared")
+        }
     }
 }
 
@@ -5158,7 +5176,7 @@ fn plan_aggregate_common(
 
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(impls) => impls,
-        _ => unreachable!("plan_aggregate_common called on non-aggregate function,"),
+        _ => sql_bail!("internal error: plan_aggregate_common called on non-aggregate function"),
     };
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
@@ -5178,7 +5196,8 @@ fn plan_aggregate_common(
                     ecx.qcx
                         .scx
                         .humanize_resolved_name(name)
-                        .expect("name actually resolved")
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|_| "<unknown>".into())
                 );
             }
             let args = plan_exprs(ecx, args)?;
@@ -5246,7 +5265,11 @@ fn plan_aggregate_common(
 
 fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, PlanError> {
     let mut names = names.to_vec();
-    let col_name = normalize::column_name(names.pop().unwrap());
+    let col_name = normalize::column_name(
+        names
+            .pop()
+            .ok_or_else(|| sql_err!("internal error: empty identifier"))?,
+    );
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {
@@ -5526,7 +5549,7 @@ fn plan_function<'a>(
     };
 
     if over.is_some() {
-        unreachable!("If there is an OVER clause, we should have returned already above.");
+        sql_bail!("internal error: OVER clause should have been handled");
     }
 
     if *distinct {
@@ -5535,7 +5558,8 @@ fn plan_function<'a>(
             ecx.qcx
                 .scx
                 .humanize_resolved_name(name)
-                .expect("already resolved")
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "<unknown>".into())
         );
     }
     if filter.is_some() {
@@ -5544,7 +5568,8 @@ fn plan_function<'a>(
             ecx.qcx
                 .scx
                 .humanize_resolved_name(name)
-                .expect("already resolved")
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "<unknown>".into())
         );
     }
 
@@ -5555,7 +5580,8 @@ fn plan_function<'a>(
                 ecx.qcx
                     .scx
                     .humanize_resolved_name(name)
-                    .expect("already resolved")
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|_| "<unknown>".into())
             )
         }
         FunctionArgs::Args { args, order_by } => {
@@ -5565,7 +5591,8 @@ fn plan_function<'a>(
                     ecx.qcx
                         .scx
                         .humanize_resolved_name(name)
-                        .expect("already resolved")
+                        .map(|n| n.to_string())
+                        .unwrap_or_else(|_| "<unknown>".into())
                 );
             }
             plan_exprs(ecx, args)?
@@ -6010,7 +6037,7 @@ pub fn scalar_type_from_sql(
         ResolvedDataType::Named { id, modifiers, .. } => {
             scalar_type_from_catalog(scx.catalog, *id, modifiers)
         }
-        ResolvedDataType::Error => unreachable!("should have been caught in name resolution"),
+        ResolvedDataType::Error => sql_bail!("internal error: unresolved data type"),
     }
 }
 
@@ -6606,7 +6633,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            ResolvedItemName::Error => unreachable!("should have been caught in name resolution"),
+            ResolvedItemName::Error => sql_bail!("internal error: unresolved item name"),
         }
     }
 

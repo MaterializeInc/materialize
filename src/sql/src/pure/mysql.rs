@@ -132,7 +132,9 @@ pub(super) fn generate_source_export_statement_values(
         initial_gtid_set,
     } = purified_export.details
     else {
-        unreachable!("purified export details must be mysql")
+        return Err(sql_err!(
+            "internal error: purified export details must be mysql"
+        ));
     };
 
     // Figure out the schema of the subsource

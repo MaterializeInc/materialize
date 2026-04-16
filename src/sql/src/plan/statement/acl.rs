@@ -79,7 +79,9 @@ pub fn plan_alter_owner(
         (ObjectType::NetworkPolicy, UnresolvedObjectName::NetworkPolicy(name)) => {
             plan_alter_network_policy_owner(scx, if_exists, name, new_owner.id)
         }
-        (ObjectType::Role, UnresolvedObjectName::Role(_)) => unreachable!("rejected by the parser"),
+        (ObjectType::Role, UnresolvedObjectName::Role(_)) => {
+            sql_bail!("cannot ALTER OWNER of a role")
+        }
         (
             object_type @ ObjectType::Cluster
             | object_type @ ObjectType::ClusterReplica
@@ -97,7 +99,7 @@ pub fn plan_alter_owner(
             | name @ UnresolvedObjectName::NetworkPolicy(_)
             | name @ UnresolvedObjectName::Role(_),
         ) => {
-            unreachable!("parser set the wrong object type '{object_type:?}' for name {name:?}")
+            sql_bail!("invalid object type '{object_type}' for ALTER OWNER with name {name}")
         }
         (object_type, UnresolvedObjectName::Item(name)) => {
             plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
@@ -500,13 +502,16 @@ fn plan_update_privilege(
                     .map(|item_id| item_id.into())
                     .filter(|object_id| object_type_filter(object_id, &object_type, scx))
                     .collect(),
-                GrantTargetSpecificationInner::Objects { names } => names
-                    .into_iter()
-                    .map(|name| {
-                        name.try_into()
-                            .expect("name resolution should handle invalid objects")
-                    })
-                    .collect(),
+                GrantTargetSpecificationInner::Objects { names } => {
+                    let mut ids = Vec::with_capacity(names.len());
+                    for name in names {
+                        ids.push(
+                            name.try_into()
+                                .map_err(|e| sql_err!("invalid object name: {}", e))?,
+                        );
+                    }
+                    ids
+                }
             };
             let target_ids = object_ids.into_iter().map(|id| id.into()).collect();
             (SystemObjectType::Object(object_type), target_ids)
@@ -580,7 +585,7 @@ fn plan_update_privilege(
             SystemObjectId::Object(object_id) => scx
                 .catalog
                 .get_owner_id(object_id)
-                .expect("cannot revoke privileges on objects without owners"),
+                .ok_or_else(|| sql_err!("cannot revoke privileges on objects without owners"))?,
             SystemObjectId::System => scx.catalog.mz_system_role_id(),
         };
 
