@@ -476,6 +476,118 @@ fn bench_kv_serialized(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark 1: Sort cost in isolation.
+///
+/// Measures the cost of collecting refs from a flat FactorizedColumns and sorting them.
+/// This is the new overhead the builder pays that the current ColumnBuilder does not.
+fn bench_sort_cost(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/sort_cost");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+        let data = generate_kv_data(n, nk, nv, nt);
+
+        // Build flat (unsorted — simulate random arrival order).
+        let mut shuffled = data.clone();
+        // Deterministic unshuffle: reverse to break sortedness.
+        shuffled.reverse();
+
+        let mut flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &shuffled {
+            flat.push_flat(k, v, (&td.0, &td.1));
+        }
+
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        // Just the sort (collect + sort, no form).
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("sort_refs", &label), |b| {
+            b.iter(|| {
+                let mut refs: Vec<_> = flat.iter().collect();
+                refs.sort();
+                refs.len()
+            })
+        });
+
+        // Sort + form (the full builder path minus serialization).
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("sort_and_form", &label), |b| {
+            b.iter(|| {
+                let mut refs: Vec<_> = flat.iter().collect();
+                refs.sort();
+                KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter())
+            })
+        });
+    }
+    group.finish();
+}
+
+/// Benchmark 2: Full builder pipeline comparison.
+///
+/// Compares the proposed factorized path (push → sort → form → serialize) against
+/// the current flat path (push → serialize without sort). Measures wall time and
+/// reports output sizes.
+fn bench_builder_pipeline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/builder_pipeline");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+        let data = generate_kv_data(n, nk, nv, nt);
+
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        // Current path: push flat → serialize (no sort, no form).
+        // Simulates what ColumnBuilder does today.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("flat_serialize", &label), |b| {
+            b.iter(|| {
+                let mut flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+                for (k, v, td) in &data {
+                    flat.push_flat(k, v, (&td.0, &td.1));
+                }
+                let borrowed = flat.borrowed();
+                let mut store = Vec::new();
+                indexed::encode(&mut store, &borrowed);
+                store.len()
+            })
+        });
+
+        // Proposed path: push flat → sort → form → serialize.
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("sort_form_serialize", &label), |b| {
+            b.iter(|| {
+                let mut flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+                for (k, v, td) in &data {
+                    flat.push_flat(k, v, (&td.0, &td.1));
+                }
+                let mut refs: Vec<_> = flat.iter().collect();
+                refs.sort();
+                let formed = KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter());
+                let borrowed = formed.borrowed();
+                let mut store = Vec::new();
+                indexed::encode(&mut store, &borrowed);
+                store.len()
+            })
+        });
+
+        // Measure output sizes for comparison.
+        let mut flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        let mut refs: Vec<_> = flat.iter().collect();
+        refs.sort();
+        let formed = KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        let flat_words = kv_total_words(&flat);
+        let formed_words = kv_total_words(&formed);
+
+        eprintln!(
+            "  [{label}] flat output: {} bytes, formed output: {} bytes, ratio: {:.1}x",
+            flat_words * 8,
+            formed_words * 8,
+            flat_words as f64 / formed_words as f64,
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_push_flat,
@@ -485,5 +597,7 @@ criterion_group!(
     bench_kv_form,
     bench_kv_iter,
     bench_kv_serialized,
+    bench_sort_cost,
+    bench_builder_pipeline,
 );
 criterion_main!(benches);
