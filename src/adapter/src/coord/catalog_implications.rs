@@ -34,8 +34,9 @@ use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, ClusterVariant, Connection, ContinualTask, DataSourceDesc,
-    Index, MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    CatalogItem, Cluster, ClusterReplica, ClusterVariant, Connection, ContinualTask,
+    DataSourceDesc, Index, MaterializedView, Secret, Sink, Source, StateDiff, Table,
+    TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
