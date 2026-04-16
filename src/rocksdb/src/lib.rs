@@ -64,7 +64,7 @@ pub enum Error {
     #[error("failed to cleanup in time")]
     CleanupTimeout(#[from] tokio::time::error::Elapsed),
 
-    /// An error occured with a provided value.
+    /// An error occurred with a provided value.
     #[error("error with value: {0}")]
     ValueError(String),
 }
