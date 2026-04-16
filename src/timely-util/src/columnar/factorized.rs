@@ -30,7 +30,9 @@
 //! * [`FactorizedColumns::form`] — build a trie from a sorted iterator, deduplicating at each level.
 
 use columnar::primitive::offsets::Strides;
-use columnar::{Borrow, Columnar, ContainerOf, Index, IndexAs, Len, Push, Vecs};
+use columnar::{
+    Borrow, Columnar, ContainerOf, Index, IndexAs, Len, Lookbacks, Push, Repeats, Vecs,
+};
 
 /// A [`Vecs`] using [`Strides`] for offset bounds.
 ///
@@ -59,6 +61,27 @@ pub struct Level<C: Columnar, Rest> {
 /// * `level.rest.lists` — B values + bounds mapping A indices to B ranges.
 /// * `level.rest.rest` — C values (leaf) + bounds mapping B indices to C ranges.
 pub type FactorizedColumns<A, B, C> = Level<A, Level<B, Lists<ContainerOf<C>>>>;
+
+/// A factorized 4-level column store for `((K, V), Time, Diff)` data.
+///
+/// Trie structure: K values → V values → (Time, Diff) leaf pairs.
+/// The leaf is a tuple of two parallel columns sharing the same bounds.
+pub type KVUpdates<K, V, T, R> = Level<K, Level<V, Lists<(ContainerOf<T>, ContainerOf<R>)>>>;
+
+/// Like [`KVUpdates`] but with [`Repeats`] on both leaf columns.
+///
+/// [`Repeats`] encodes consecutive identical values as 1-bit `None` markers,
+/// compressing runs of repeated timestamps or diffs (e.g., many `+1` diffs).
+pub type KVUpdatesRepeats<K, V, T, R> =
+    Level<K, Level<V, Lists<(Repeats<ContainerOf<T>>, Repeats<ContainerOf<R>>)>>>;
+
+/// Like [`KVUpdates`] but with [`Lookbacks`] on both leaf columns.
+///
+/// [`Lookbacks`] scans up to N previous distinct values for matches, encoding
+/// hits as 1-byte back-references. More powerful than [`Repeats`] for non-consecutive
+/// repetition, at the cost of O(N) per push.
+pub type KVUpdatesLookbacks<K, V, T, R> =
+    Level<K, Level<V, Lists<(Lookbacks<ContainerOf<T>>, Lookbacks<ContainerOf<R>>)>>>;
 
 impl<C: Columnar, Rest: Default> Default for Level<C, Rest> {
     fn default() -> Self {
@@ -192,7 +215,6 @@ where
         ContainerOf<A>: Push<columnar::Ref<'a, A>>,
         ContainerOf<B>: Push<columnar::Ref<'a, B>>,
         CC: columnar::Container,
-        <CC as Borrow>::Ref<'a>: Eq,
         columnar::Ref<'a, A>: Eq,
         columnar::Ref<'a, B>: Eq,
     {
@@ -432,6 +454,108 @@ mod tests {
         assert_eq!(Len::len(&fc.lists.values), 1);
         assert_eq!(Len::len(&fc.rest.lists.values), 2);
         assert_eq!(Len::len(&fc.rest.rest.values), 4);
+    }
+
+    /// Test KVUpdates with tuple leaf: K → V → (Time, Diff).
+    #[mz_ore::test]
+    fn test_kv_updates_tuple_leaf() {
+        // Sorted ((K, V), Time, Diff) data stored as K → V → (Time, Diff).
+        // K=1, V=10: times [100, 200], diffs [1, 1]
+        // K=1, V=20: times [100], diffs [1]
+        // K=2, V=30: times [100], diffs [-1]
+        let input: Vec<(u64, u64, (u64, i64))> = vec![
+            (1, 10, (100, 1)),
+            (1, 10, (200, 1)),
+            (1, 20, (100, 1)),
+            (2, 30, (100, -1)),
+        ];
+        let refs: Vec<_> = input.iter().map(|(k, v, (t, d))| (k, v, (t, d))).collect();
+        let fc = KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        let result: Vec<_> = fc.iter().map(|(k, v, (t, d))| (*k, *v, (*t, *d))).collect();
+        assert_eq!(
+            result,
+            vec![
+                (1, 10, (100, 1)),
+                (1, 10, (200, 1)),
+                (1, 20, (100, 1)),
+                (2, 30, (100, -1)),
+            ]
+        );
+
+        // K dedup: 2 distinct keys.
+        assert_eq!(Len::len(&fc.lists.values), 2);
+        // V dedup: 3 distinct vals.
+        assert_eq!(Len::len(&fc.rest.lists.values), 3);
+        // Leaf: 4 (time, diff) pairs.
+        assert_eq!(fc.len(), 4);
+    }
+
+    /// Test KVUpdatesRepeats: Repeats compresses consecutive identical leaf values.
+    #[mz_ore::test]
+    fn test_kv_updates_repeats_compression() {
+        // Simulate real pattern: few distinct times, mostly +1 diffs.
+        let n = 1000usize;
+        let n_keys = 10usize;
+        let n_vals = 100usize;
+        let n_times = 5usize;
+
+        let mut data: Vec<(u64, u64, (u64, i64))> = Vec::with_capacity(n);
+        for i in 0..n {
+            data.push((
+                (i % n_keys) as u64,
+                (i % n_vals) as u64,
+                ((i % n_times) as u64, 1i64), // few times, all +1 diffs
+            ));
+        }
+        data.sort();
+
+        // Plain KVUpdates.
+        let mut plain_flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            plain_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        let refs: Vec<_> = plain_flat.iter().collect();
+        let plain = KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        // KVUpdatesRepeats.
+        let mut repeat_flat: KVUpdatesRepeats<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            repeat_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        let refs: Vec<_> = repeat_flat.iter().collect();
+        let repeat = KVUpdatesRepeats::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        // Both should produce same logical data.
+        let plain_result: Vec<_> = plain
+            .iter()
+            .map(|(k, v, (t, d))| (*k, *v, (*t, *d)))
+            .collect();
+        let repeat_result: Vec<_> = repeat
+            .iter()
+            .map(|(k, v, (t, d))| (*k, *v, (*t, *d)))
+            .collect();
+        assert_eq!(plain_result, repeat_result);
+
+        // Repeats should compress the leaf columns.
+        // Time: n_times distinct values cycling → many consecutive repeats after sort.
+        // Diff: all +1 → first is Some, rest are None.
+        let plain_time_len = Len::len(&plain.rest.rest.values.0);
+        let plain_diff_len = Len::len(&plain.rest.rest.values.1);
+        let repeat_time_somes = Len::len(&repeat.rest.rest.values.0.inner.somes);
+        let repeat_diff_somes = Len::len(&repeat.rest.rest.values.1.inner.somes);
+
+        println!("--- KVUpdatesRepeats compression ---");
+        println!("Plain leaf:   time={plain_time_len}, diff={plain_diff_len}");
+        println!("Repeat somes: time={repeat_time_somes}, diff={repeat_diff_somes}");
+        println!(
+            "Compression:  time {:.1}x, diff {:.1}x",
+            plain_time_len as f64 / repeat_time_somes as f64,
+            plain_diff_len as f64 / repeat_diff_somes as f64,
+        );
+
+        // Diff should compress massively (all +1).
+        assert!(repeat_diff_somes < plain_diff_len / 2);
     }
 
     #[mz_ore::test]

@@ -18,7 +18,7 @@
 use columnar::bytes::indexed;
 use columnar::{Borrow, Len};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use mz_timely_util::columnar::factorized::FactorizedColumns;
+use mz_timely_util::columnar::factorized::{FactorizedColumns, KVUpdates, KVUpdatesRepeats};
 
 /// Generate sorted data with controllable repetition.
 fn generate_sorted_data(n: usize, distinct_a: usize, distinct_b: usize) -> Vec<(u64, u64, i64)> {
@@ -171,11 +171,142 @@ fn bench_dedup_ratio(c: &mut Criterion) {
     group.finish();
 }
 
+/// Generate sorted K → V → (Time, Diff) data simulating real update patterns.
+fn generate_kv_data(
+    n: usize,
+    n_keys: usize,
+    n_vals: usize,
+    n_times: usize,
+) -> Vec<(u64, u64, (u64, i64))> {
+    let mut data: Vec<(u64, u64, (u64, i64))> = Vec::with_capacity(n);
+    for i in 0..n {
+        data.push((
+            (i % n_keys) as u64,
+            (i % n_vals) as u64,
+            ((i % n_times) as u64, 1i64),
+        ));
+    }
+    data.sort();
+    data
+}
+
+/// Compute total words for a KVUpdates structure.
+fn kv_total_words<CC: Borrow + columnar::Container>(
+    fc: &mz_timely_util::columnar::factorized::Level<
+        u64,
+        mz_timely_util::columnar::factorized::Level<
+            u64,
+            columnar::Vecs<CC, columnar::primitive::offsets::Strides>,
+        >,
+    >,
+) -> usize
+where
+    for<'a> <CC as Borrow>::Borrowed<'a>: columnar::AsBytes<'a>,
+{
+    indexed::length_in_words(&fc.lists.borrow())
+        + indexed::length_in_words(&fc.rest.lists.borrow())
+        + indexed::length_in_words(&fc.rest.rest.borrow())
+}
+
+fn bench_kv_form(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/kv_form");
+    // Realistic: 100 keys, 1000 vals, 5 distinct times, all +1 diffs.
+    for (n, nk, nv, nt) in [
+        (100_000, 100, 1_000, 5),
+        (100_000, 100, 1_000, 100),
+        (100_000, 10, 100, 5),
+    ] {
+        let data = generate_kv_data(n, nk, nv, nt);
+
+        // Build plain flat.
+        let mut plain_flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            plain_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        // Build repeats flat.
+        let mut repeat_flat: KVUpdatesRepeats<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            repeat_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+
+        // Form both.
+        let plain_refs: Vec<_> = plain_flat.iter().collect();
+        let plain = KVUpdates::<u64, u64, u64, i64>::form(plain_refs.into_iter());
+        let repeat_refs: Vec<_> = repeat_flat.iter().collect();
+        let repeat = KVUpdatesRepeats::<u64, u64, u64, i64>::form(repeat_refs.into_iter());
+
+        let plain_words = kv_total_words(&plain);
+        let repeat_words = kv_total_words(&repeat);
+
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("plain", &label), |b| {
+            b.iter(|| {
+                let refs: Vec<_> = plain_flat.iter().collect();
+                KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter())
+            });
+        });
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("repeats", &label), |b| {
+            b.iter(|| {
+                let refs: Vec<_> = repeat_flat.iter().collect();
+                KVUpdatesRepeats::<u64, u64, u64, i64>::form(refs.into_iter())
+            });
+        });
+
+        eprintln!(
+            "  [{label}] plain: {plain_words} words ({} bytes), repeats: {repeat_words} words ({} bytes), ratio: {:.1}x",
+            plain_words * 8,
+            repeat_words * 8,
+            plain_words as f64 / repeat_words as f64,
+        );
+    }
+    group.finish();
+}
+
+fn bench_kv_iter(c: &mut Criterion) {
+    let mut group = c.benchmark_group("factorized/kv_iter");
+    for (n, nk, nv, nt) in [(100_000, 100, 1_000, 5), (100_000, 10, 100, 5)] {
+        let data = generate_kv_data(n, nk, nv, nt);
+
+        let mut plain_flat: KVUpdates<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            plain_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        let refs: Vec<_> = plain_flat.iter().collect();
+        let plain = KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        let mut repeat_flat: KVUpdatesRepeats<u64, u64, u64, i64> = Default::default();
+        for (k, v, td) in &data {
+            repeat_flat.push_flat(k, v, (&td.0, &td.1));
+        }
+        let refs: Vec<_> = repeat_flat.iter().collect();
+        let repeat = KVUpdatesRepeats::<u64, u64, u64, i64>::form(refs.into_iter());
+
+        let label = format!("n={n}/k={nk}/v={nv}/t={nt}");
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("plain", &label), |b| {
+            b.iter(|| plain.iter().count())
+        });
+
+        group.throughput(Throughput::Elements(n as u64));
+        group.bench_function(BenchmarkId::new("repeats", &label), |b| {
+            b.iter(|| repeat.iter().count())
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_push_flat,
     bench_form,
     bench_iter,
     bench_dedup_ratio,
+    bench_kv_form,
+    bench_kv_iter,
 );
 criterion_main!(benches);
