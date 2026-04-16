@@ -25,6 +25,7 @@ use mz_timely_util::replay::MzReplay;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::core::Filter;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::operator::empty;
@@ -87,19 +88,22 @@ pub(super) fn construct(
             let (storage_logs, s_token) =
                 [reader].mz_replay(scope, "storage timely logs", config.interval, activator);
 
-            // Remap storage IDs so they don't collide with compute IDs.
-            let storage_logs = storage_logs.unary(Pipeline, "Remap Storage IDs", |_cap, _info| {
-                move |input, output| {
-                    input.for_each(|time, data| {
-                        output.session(&time).give_iterator(data.drain(..).map(
-                            |(t, mut event)| {
-                                remap_timely_event_ids(&mut event);
-                                (t, event)
-                            },
-                        ));
-                    });
-                }
-            });
+            let storage_logs = storage_logs
+                // Ignore storage park/unpark events.
+                .filter(|(_, x)| !matches!(x, TimelyEvent::Park { .. }))
+                // Remap storage IDs so they don't collide with compute IDs.
+                .unary(Pipeline, "Remap Storage IDs", |_cap, _info| {
+                    move |input, output| {
+                        input.for_each(|time, data| {
+                            output.session(&time).give_iterator(data.drain(..).map(
+                                |(t, mut event)| {
+                                    remap_timely_event_ids(&mut event);
+                                    (t, event)
+                                },
+                            ));
+                        });
+                    }
+                });
 
             let merged = scope.concatenate([logs, storage_logs]);
             (merged, Some(s_token))
