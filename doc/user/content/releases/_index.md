@@ -30,7 +30,7 @@ Materialize environments now include a built-in [Model Context Protocol
 (MCP)](https://modelcontextprotocol.io/) Developer endpoint
 (`/api/mcp/developer`). Connecting an MCP-compatible coding
 agent (such as Claude Code, Claude Desktop, or Cursor) to this endpoint lets
-you ask natural language questions about your environment. 
+you ask natural language questions about your environment.
 
 For example, you could ask *why is my materialized view stale?* or *how much memory is my cluster using?*. You'll receive a diagnosis, and recommendations on how to fix isssues.
 
