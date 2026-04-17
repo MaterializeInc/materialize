@@ -16,6 +16,7 @@ openssl.workspace = true
 reqwest.workspace = true
 mz-tls-util = { path = "../tls-util" }
 proptest.workspace = true
+zeroize.workspace = true
 proptest-derive.workspace = true
 serde.workspace = true
 serde_json.workspace = true

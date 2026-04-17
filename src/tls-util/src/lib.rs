@@ -114,6 +114,15 @@ impl Drop for Pkcs12Archive {
     }
 }
 
+impl Pkcs12Archive {
+    pub fn into_parts(self) -> (Vec<u8>, String) {
+        let mut md = std::mem::ManuallyDrop::new(self);
+        let der = std::mem::take(&mut md.der);
+        let pass = std::mem::take(&mut md.pass);
+        (der, pass)
+    }
+}
+
 /// Constructs an identity from a PEM-formatted key and certificate using OpenSSL.
 pub fn pkcs12der_from_pem(
     key: &[u8],
