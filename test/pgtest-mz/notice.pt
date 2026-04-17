@@ -417,3 +417,91 @@ ReadyForQuery {"status":"I"}
 NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42704"},{"typ":"M","value":"CLUSTER REPLICA \"quickstart.quickstart\" does not exist, skipping"}]}
 CommandComplete {"tag":"ALTER CLUSTER REPLICA"}
 ReadyForQuery {"status":"I"}
+
+
+# Regression: a CREATE INDEX / CREATE MATERIALIZED VIEW that fails
+# (e.g. name collision) must NOT emit optimizer notices to the user
+# before the ErrorResponse. Pre-fix, notice rendering happened before
+# the catalog transaction, so a stray NoticeResponse was sent even
+# when the transaction then failed, misleading the user about an
+# object that wasn't actually created.
+
+send
+Query {"query": "CREATE DATABASE IF NOT EXISTS materialize"}
+Query {"query": "SET DATABASE = materialize"}
+Query {"query": "SET CLUSTER = quickstart"}
+Query {"query": "DROP TABLE IF EXISTS nt CASCADE"}
+Query {"query": "CREATE TABLE nt(a int, b int)"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE DATABASE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"SET"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+# Index case: CREATE INDEX IF NOT EXISTS for a name that already
+# exists passes plan-stage, runs the optimizer, and then fails in the
+# catalog transaction with ItemAlreadyExists. The `IF NOT EXISTS`
+# branch swallows the error and turns it into a success. Pre-fix, the
+# pre-transaction `emit_raw_optimizer_notices_to_user` call had
+# already enqueued the optimizer's "identical index already exists"
+# notice onto the session, so the user saw that confusing notice on
+# top of the expected "already exists, skipping" notice — as if the
+# duplicate had really been created. Post-fix, only the
+# "already exists, skipping" notice appears.
+send
+Query {"query": "CREATE INDEX nt_idx_a ON nt(a)"}
+Query {"query": "CREATE INDEX IF NOT EXISTS nt_idx_a ON nt(a)"}
+----
+
+until err_field_typs=SCM
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE INDEX"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42710"},{"typ":"M","value":"index \"nt_idx_a\" already exists, skipping"}]}
+CommandComplete {"tag":"CREATE INDEX"}
+ReadyForQuery {"status":"I"}
+
+# Materialized view case: same structure. A second
+# `CREATE MATERIALIZED VIEW IF NOT EXISTS` with the same name passes
+# plan-stage and fails at catalog-transact time; the `IF NOT EXISTS`
+# branch turns the error into a success. We assert that the only
+# notice the user sees on that second call is the expected
+# "already exists, skipping" notice. This pins the invariant even if
+# `CREATE MATERIALIZED VIEW` starts producing wire-level optimizer
+# notices in the future — pre-fix any such notice would leak through
+# to the user even though the MV was not re-created.
+send
+Query {"query": "CREATE MATERIALIZED VIEW nmv AS SELECT * FROM nt WHERE a = 5"}
+Query {"query": "CREATE MATERIALIZED VIEW IF NOT EXISTS nmv AS SELECT * FROM nt WHERE a = 5"}
+Query {"query": "DROP TABLE nt CASCADE"}
+----
+
+until err_field_typs=SCM
+ReadyForQuery
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"42710"},{"typ":"M","value":"materialized view \"nmv\" already exists, skipping"}]}
+CommandComplete {"tag":"CREATE MATERIALIZED VIEW"}
+ReadyForQuery {"status":"I"}
+NoticeResponse {"fields":[{"typ":"S","value":"NOTICE"},{"typ":"C","value":"00000"},{"typ":"M","value":"drop cascades to 2 other objects"}]}
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}

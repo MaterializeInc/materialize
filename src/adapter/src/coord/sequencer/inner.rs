@@ -90,6 +90,7 @@ use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::{OptimizerNotice, RawOptimizerNotice};
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
@@ -4778,24 +4779,35 @@ impl Coordinator {
 }
 
 impl Coordinator {
-    /// Process the metainfo from a newly created non-transient dataflow.
-    async fn process_dataflow_metainfo(
+    /// Emit the raw optimizer notices in `notices` to the user's session, if
+    /// any.
+    ///
+    /// This intentionally consumes `RawOptimizerNotice`s (not pre-rendered
+    /// ones) because the user-facing rendering goes through the user's
+    /// session-aware humanizer, which produces e.g. schema-qualified names
+    /// relative to the user's current database/schema.
+    pub(crate) fn emit_raw_optimizer_notices_to_user(
+        &self,
+        ctx: &ExecuteContext,
+        notices: &[RawOptimizerNotice],
+    ) {
+        emit_optimizer_notices(&*self.catalog, ctx.session(), notices);
+    }
+
+    /// Persist already-rendered optimizer notices for a newly created
+    /// non-transient dataflow.
+    ///
+    /// This:
+    /// - packs builtin-table updates for `mz_optimizer_notices` (if enabled),
+    /// - stores the rendered metainfo on the catalog object via
+    ///   `set_dataflow_metainfo`,
+    /// - and returns a future that resolves once the builtin-table append
+    ///   has been observed, or `None` if nothing was appended.
+    async fn persist_dataflow_metainfo(
         &mut self,
-        df_meta: DataflowMetainfo,
+        df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,
-        ctx: Option<&mut ExecuteContext>,
-        notice_ids: Vec<GlobalId>,
     ) -> Option<BuiltinTableAppendNotify> {
-        // Emit raw notices to the user.
-        if let Some(ctx) = ctx {
-            emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
-        }
-
-        // Create a metainfo with rendered notices.
-        let df_meta = self
-            .catalog()
-            .render_notices(df_meta, notice_ids, Some(export_id));
-
         // Attend to optimization notice builtin tables and save the metainfo in the catalog's
         // in-memory state.
         if self.catalog().state().system_config().enable_mz_notices()
