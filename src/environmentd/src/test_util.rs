@@ -876,6 +876,7 @@ impl Listeners {
                 now: config.now,
                 environment_id: config.environment_id,
                 cors_allowed_origin: AllowOrigin::list([]),
+                cors_allowed_origin_list: Vec::new(),
                 cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
                 bootstrap_default_cluster_replica_size: config.default_cluster_replica_size,
                 bootstrap_default_cluster_replication_factor: config

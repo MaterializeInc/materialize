@@ -150,6 +150,9 @@ pub struct HttpConfig {
     pub oidc_rx: Delayed<mz_authenticator::GenericOidcAuthenticator>,
     pub adapter_client_rx: Shared<Receiver<Client>>,
     pub allowed_origin: AllowOrigin,
+    /// Raw list of allowed CORS origins, used by the MCP endpoints for
+    /// server-side Origin validation to defend against DNS rebinding.
+    pub allowed_origin_list: Vec<HeaderValue>,
     pub active_connection_counter: ConnectionCounter,
     pub helm_chart_version: Option<String>,
     pub concurrent_webhook_req: Arc<tokio::sync::Semaphore>,
@@ -201,6 +204,7 @@ impl HttpServer {
             oidc_rx,
             adapter_client_rx,
             allowed_origin,
+            allowed_origin_list,
             active_connection_counter,
             helm_chart_version,
             concurrent_webhook_req,
@@ -497,15 +501,23 @@ impl HttpServer {
                 );
             }
 
+            // The MCP handlers perform a server-side Origin check against this
+            // allowlist to defend against DNS rebinding attacks (see
+            // database-issues#11311). The CorsLayer alone is not enough: in a
+            // DNS rebinding attack the browser considers the request
+            // same-origin, so no preflight fires and CORS enforcement is
+            // bypassed.
+            let mcp_allowed_origins = Arc::new(allowed_origin_list.clone());
             mcp_router = mcp_router
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()))
+                .layer(Extension(mcp_allowed_origins))
                 .layer(
                     CorsLayer::new()
                         .allow_methods(Method::POST)
-                        .allow_origin(AllowOrigin::mirror_request())
-                        .allow_headers(Any),
+                        .allow_origin(allowed_origin.clone())
+                        .allow_headers([AUTHORIZATION, CONTENT_TYPE]),
                 );
             router = router.merge(mcp_router);
         }

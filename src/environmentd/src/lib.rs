@@ -13,6 +13,7 @@
 //! [differential dataflow]: ../differential_dataflow/index.html
 //! [timely dataflow]: ../timely/index.html
 
+use ::http::HeaderValue;
 use std::collections::BTreeMap;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
@@ -109,6 +110,11 @@ pub struct Config {
     /// Origins for which cross-origin resource sharing (CORS) for HTTP requests
     /// is permitted.
     pub cors_allowed_origin: AllowOrigin,
+    /// Raw list of allowed CORS origins. Retained alongside `cors_allowed_origin`
+    /// (which is the computed predicate) so that endpoints like MCP can perform
+    /// server-side Origin validation to defend against DNS rebinding attacks
+    /// (where same-origin requests bypass CORS enforcement).
+    pub cors_allowed_origin_list: Vec<HeaderValue>,
     /// Public IP addresses which the cloud environment has configured for
     /// egress.
     pub egress_addresses: Vec<IpNet>,
@@ -397,6 +403,7 @@ impl Listeners {
                 frontegg: config.frontegg.clone(),
                 oidc_rx: authenticator_oidc_rx.clone(),
                 allowed_origin: config.cors_allowed_origin.clone(),
+                allowed_origin_list: config.cors_allowed_origin_list.clone(),
                 concurrent_webhook_req: webhook_concurrency_limit.semaphore(),
                 metrics: metrics.clone(),
                 metrics_registry: metrics_registry.clone(),

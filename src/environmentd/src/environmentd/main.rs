@@ -782,6 +782,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
         allowed_origins
     };
     let cors_allowed_origin = mz_http_util::build_cors_allowed_origin(&allowed_origins);
+    let cors_allowed_origin_list = allowed_origins.clone();
 
     // Configure controller.
     let entered = info_span!("environmentd::configure_controller").entered();
@@ -1087,6 +1088,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 external_login_password_mz_system: args.external_login_password_mz_system,
                 frontegg,
                 cors_allowed_origin,
+                cors_allowed_origin_list,
                 egress_addresses: args.announce_egress_address,
                 http_host_name: args.http_host_name,
                 internal_console_redirect_url: args.internal_console_redirect_url,

@@ -156,6 +156,37 @@ pub async fn handle_tracing() -> impl IntoResponse {
     )
 }
 
+/// Returns true if `origin` matches any entry in `allowed`. Supports bare `*`
+/// (any origin), exact match, and wildcard subdomains (`*.example.com`).
+pub fn origin_is_allowed(origin: &HeaderValue, allowed: &[HeaderValue]) -> bool {
+    fn wildcard_origin_match(origin: &HeaderValue, wildcard: &[u8]) -> bool {
+        let Some(origin) = origin.to_str().ok() else {
+            return false;
+        };
+        let Ok(origin) = origin.parse::<Uri>() else {
+            return false;
+        };
+        let Some(host) = origin.host() else {
+            return false;
+        };
+
+        host.as_bytes().ends_with(wildcard)
+    }
+
+    if allowed.iter().any(|o| o.as_bytes() == b"*") {
+        return true;
+    }
+    for val in allowed {
+        if (val.as_bytes().starts_with(b"*.")
+            && wildcard_origin_match(origin, &val.as_bytes()[1..]))
+            || origin == val
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// Construct a CORS policy to allow origins to query us via HTTP. If any bare
 /// '*' is passed, this allows any origin; otherwise, allows a list of origins,
 /// which can include wildcard subdomains. If the allowed origin starts with a
