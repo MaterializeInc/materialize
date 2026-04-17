@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// TODO: Switch to @materializeinc/sql-parser when published.
-import { parse } from "@sjwiesman/sql-parser";
+import { parse } from "@materializeinc/sql-parser";
 import { useSetAtom } from "jotai";
 import type { editor } from "monaco-editor";
 import { useCallback, useEffect, useRef } from "react";
