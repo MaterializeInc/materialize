@@ -257,18 +257,6 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
     "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
 );
 
-/// Whether to materialize local arrangements produced by `ArrangeBy` as
-/// factorized (trie-structured) spines.
-///
-/// Currently unused — the renderer unconditionally builds `RowRowSpine`-backed
-/// arrangements via `ArrangementFlavor::Local`. Pending removal in tier-8 cleanup.
-pub const ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT: Config<bool> = Config::new(
-    "enable_compute_factorized_arrangement",
-    true,
-    "When enabled, local arrangements built by ArrangeBy use the factorized \
-     (trie-structured) spine RowRowSpine.",
-);
-
 /// Whether to apply logical backpressure in compute dataflows.
 pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
@@ -423,7 +411,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_FLAT_MAP_FUEL)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
         .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
-        .add(&ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
