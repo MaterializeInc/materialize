@@ -915,7 +915,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     ).timestamp()
 
     toxiproxy_start(c, args.jitter)
-    c.up(*SERVICE_NAMES, Service("testdrive", idle=True))
+    c.up(
+        *SERVICE_NAMES,
+        Service("testdrive", idle=True),
+        Service("polaris-bootstrap", idle=True),
+        Service("polaris", idle=True),
+    )
     setup_sql_server_testing(c)
 
     iceberg_credentials = setup_polaris_for_iceberg(c)

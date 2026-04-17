@@ -125,7 +125,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         Toxiproxy(seed=random.randrange(2**63)),
     ):
         toxiproxy_start(c, external)
-        c.up(*service_names)
+        c.up(
+            *service_names,
+            Service("polaris-bootstrap", idle=True),
+            Service("polaris", idle=True),
+        )
         setup_sql_server_testing(c)
 
         c.up(Service("mc", idle=True))
