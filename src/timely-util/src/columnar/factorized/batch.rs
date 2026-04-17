@@ -1031,4 +1031,63 @@ mod tests {
             vec![(1, 10, vec![(100, 1)]), (2, 20, vec![(200, 1)]),]
         );
     }
+
+    /// Validate bounds for variable-length byte-vector keys/values.
+    ///
+    /// `Vec<u8>` has the same columnar shape as `mz_repr::Row`: owned type
+    /// is a heap-allocated sequence, `Ref<'a>` is a borrowed slice view
+    /// (`Slice<&[u8]>` here; `&RowRef` for Row). If bounds satisfy for
+    /// `Vec<u8>`, they satisfy for `Row`.
+    #[mz_ore::test]
+    fn test_byte_vec_keyed_batch() {
+        let mut chunk: Vec<((Vec<u8>, Vec<u8>), u64, i64)> = vec![
+            ((b"a".to_vec(), b"x".to_vec()), 100, 1),
+            ((b"a".to_vec(), b"x".to_vec()), 200, 1),
+            ((b"a".to_vec(), b"y".to_vec()), 100, -1),
+            ((b"b".to_vec(), b"z".to_vec()), 100, 2),
+        ];
+        chunk.sort();
+
+        let mut builder = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
+        builder.push(&mut chunk);
+        let batch = builder.done(Description::new(
+            Antichain::from_elem(0u64),
+            Antichain::from_elem(1000u64),
+            Antichain::from_elem(0u64),
+        ));
+
+        // Count entries via cursor traversal (avoids Slice equality).
+        let mut key_count = 0usize;
+        let mut val_count = 0usize;
+        let mut update_count = 0usize;
+        let mut cursor = batch.cursor();
+        while cursor.key_valid(&batch) {
+            key_count += 1;
+            while cursor.val_valid(&batch) {
+                val_count += 1;
+                cursor.map_times(&batch, |_, _| update_count += 1);
+                cursor.step_val(&batch);
+            }
+            cursor.step_key(&batch);
+        }
+        assert_eq!(key_count, 2, "keys: a, b");
+        assert_eq!(val_count, 3, "vals: (a,x), (a,y), (b,z)");
+        assert_eq!(update_count, 4);
+
+        // Merge two Vec<u8>-keyed batches.
+        let mut chunk2: Vec<((Vec<u8>, Vec<u8>), u64, i64)> =
+            vec![((b"a".to_vec(), b"x".to_vec()), 300, 1)];
+        chunk2.sort();
+        let mut b2 = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
+        b2.push(&mut chunk2);
+        let batch2 = b2.done(Description::new(
+            Antichain::from_elem(1000u64),
+            Antichain::from_elem(2000u64),
+            Antichain::from_elem(0u64),
+        ));
+        let mut merger = batch.begin_merge(&batch2, AntichainRef::new(&[]));
+        merger.work(&batch, &batch2, &mut 1_000_000);
+        let merged = merger.done();
+        assert_eq!(merged.len(), 5);
+    }
 }
