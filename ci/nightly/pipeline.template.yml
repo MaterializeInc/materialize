@@ -1208,7 +1208,7 @@ steps:
         agents:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64
+          queue: linux-aarch64-medium
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -1264,7 +1264,7 @@ steps:
         agents:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64
+          queue: linux-aarch64-medium
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
@@ -1292,7 +1292,7 @@ steps:
         agents:
           # TODO(def-): Debezium DNS flakiness doesn't allow running on hetzner
           # queue: hetzner-aarch64-4cpu-8gb
-          queue: linux-aarch64
+          queue: linux-aarch64-medium
         inputs:
           - test/cloudtest
           - misc/python/materialize/cloudtest
