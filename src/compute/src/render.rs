@@ -733,13 +733,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(..)) => {
-                unreachable!(
-                    "index export: ArrangementFlavor::Local no longer emitted, \
-                     pending tier-5 cleanup"
-                )
-            }
-            Some(ArrangementFlavor::FactLocal(mut oks, mut errs)) => {
+            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -818,13 +812,7 @@ where
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(..)) => {
-                unreachable!(
-                    "index export iterative: ArrangementFlavor::Local no longer emitted, \
-                     pending tier-5 cleanup"
-                )
-            }
-            Some(ArrangementFlavor::FactLocal(oks, errs)) => {
+            Some(ArrangementFlavor::Local(oks, errs)) => {
                 // The `leave(outer)` region boundary loses trace identity, so we
                 // still need to re-arrange on the way out. Produce a Fact spine
                 // directly now that TraceBundle stores FactRowRowAgent.
@@ -1423,9 +1411,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                 match arrangement {
                     Local(a, _) => {
-                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
-                    }
-                    FactLocal(a, _) => {
                         a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                     Trace(_, a, _) => {

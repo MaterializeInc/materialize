@@ -59,7 +59,7 @@ pub type FactRowRowAgent<T, R> = TraceAgent<FactRowRowSpine<T, R>>;
 /// Arranged trace for [`FactRowRowAgent`].
 pub type FactRowRowArrangement<'scope, T> = Arranged<'scope, FactRowRowAgent<T, Diff>>;
 /// Imported `FactRowRow` trace used by
-/// [`ArrangementFlavor::FactLocal`](crate::render::context::ArrangementFlavor).
+/// [`ArrangementFlavor::Local`](crate::render::context::ArrangementFlavor).
 pub type FactRowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<FactRowRowAgent<T, R>>, TEnter>;
 
 pub(crate) mod spines {

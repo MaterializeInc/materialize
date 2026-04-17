@@ -18,9 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Data, VecCollection};
-use mz_compute_types::dyncfgs::{
-    ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT, ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING,
-};
+use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
@@ -28,7 +26,7 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -38,10 +36,8 @@ use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{
     FactRowRowAgent, FactRowRowBuilder, FactRowRowColBatcher, FactRowRowEnter, FactRowRowSpine,
-    RowRowAgent,
 };
 
 /// Available linear join implementations.
@@ -189,17 +185,9 @@ impl YieldSpec {
 enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// Streamed data as a collection.
     Collection(VecCollection<'scope, T, Row, Diff>),
-    /// A dataflow-local arrangement.
-    Local(Arranged<'scope, RowRowAgent<T, Diff>>),
-    /// A dataflow-local factorized arrangement.
-    ///
-    /// Opt-in counterpart to [`JoinedFlavor::Local`] backed by
-    /// [`crate::typedefs::FactRowRowAgent`]. Currently unused — nothing in the
-    /// linear-join path produces this variant yet. Introduced alongside
-    /// [`ArrangementFlavor::FactLocal`] so the render plumbing compiles with the
-    /// factorized spine threaded through.
-    #[allow(dead_code)]
-    FactLocal(Arranged<'scope, FactRowRowAgent<T, Diff>>),
+    /// A dataflow-local factorized arrangement backed by
+    /// [`crate::typedefs::FactRowRowAgent`].
+    Local(Arranged<'scope, FactRowRowAgent<T, Diff>>),
     /// An imported arrangement.
     Trace(Arranged<'scope, FactRowRowEnter<mz_repr::Timestamp, Diff, T>>),
 }
@@ -240,10 +228,6 @@ where
             (Some(ArrangementFlavor::Local(oks, errs)), None) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
                 JoinedFlavor::Local(oks.enter_region(inner))
-            }
-            (Some(ArrangementFlavor::FactLocal(oks, errs)), None) => {
-                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
-                JoinedFlavor::FactLocal(oks.enter_region(inner))
             }
             (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
@@ -398,33 +382,18 @@ where
 
             errors.push(errs.as_collection());
 
-            if ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT.get(&self.config_set) {
-                let arranged = keyed.mz_arrange_core::<
-                    _,
-                    FactRowRowColBatcher<_, _>,
-                    FactRowRowBuilder<_, _>,
-                    FactRowRowSpine<_, _>,
-                >(
-                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                        columnar_exchange::<Row, Row, T, Diff>,
-                    ),
-                    "JoinStage",
-                );
-                joined = JoinedFlavor::FactLocal(arranged);
-            } else {
-                let arranged = keyed.mz_arrange_core::<
-                    _,
-                    Col2ValBatcher<_, _, _, _>,
-                    RowRowBuilder<_, _>,
-                    RowRowSpine<_, _>,
-                >(
-                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                        columnar_exchange::<Row, Row, T, Diff>,
-                    ),
-                    "JoinStage",
-                );
-                joined = JoinedFlavor::Local(arranged);
-            }
+            let arranged = keyed.mz_arrange_core::<
+                _,
+                FactRowRowColBatcher<_, _>,
+                FactRowRowBuilder<_, _>,
+                FactRowRowSpine<_, _>,
+            >(
+                ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, T, Diff>,
+                ),
+                "JoinStage",
+            );
+            joined = JoinedFlavor::Local(arranged);
         }
 
         // Demultiplex the four different cross products of arrangement types we might have.
@@ -439,34 +408,6 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                            local, oks, closure,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
-                }
-                ArrangementFlavor::FactLocal(..) => {
-                    unreachable!(
-                        "FactLocal lookup arrangement currently unsupported against \
-                         RowRow-keyed JoinedFlavor::Local — mixed key types (DatumSeq vs &RowRef)",
-                    );
-                }
-                ArrangementFlavor::Trace(_gid, oks, errs1) => {
-                    let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, FactRowRowEnter<_, _, _>>(
-                            local, oks, closure,
-                        );
-
-                    errors.push(errs1.as_collection(|k, _v| k.clone()));
-                    errors.extend(errs2);
-                    oks
-                }
-            },
-            JoinedFlavor::FactLocal(local) => match arrangement {
-                ArrangementFlavor::FactLocal(oks, errs1) => {
-                    let (oks, errs2) = self
                         .differential_join_inner::<FactRowRowAgent<_, _>, FactRowRowAgent<_, _>>(
                             local, oks, closure,
                         );
@@ -475,29 +416,27 @@ where
                     errors.extend(errs2);
                     oks
                 }
-                ArrangementFlavor::Local(..) | ArrangementFlavor::Trace(..) => {
-                    unreachable!(
-                        "FactLocal streamed input requires FactLocal lookup — mixed key types \
-                         (&RowRef vs DatumSeq) cannot share a differential-join spine",
-                    );
-                }
-            },
-            JoinedFlavor::Trace(trace) => match arrangement {
-                ArrangementFlavor::Local(oks, errs1) => {
+                ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<FactRowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                            trace, oks, closure,
+                        .differential_join_inner::<FactRowRowAgent<_, _>, FactRowRowEnter<_, _, _>>(
+                            local, oks, closure,
                         );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
                     oks
                 }
-                ArrangementFlavor::FactLocal(..) => {
-                    unreachable!(
-                        "FactLocal lookup arrangement currently unsupported against \
-                         RowRow-keyed JoinedFlavor::Trace — mixed key types (DatumSeq vs &RowRef)",
-                    );
+            },
+            JoinedFlavor::Trace(trace) => match arrangement {
+                ArrangementFlavor::Local(oks, errs1) => {
+                    let (oks, errs2) = self
+                        .differential_join_inner::<FactRowRowEnter<_, _, _>, FactRowRowAgent<_, _>>(
+                            trace, oks, closure,
+                        );
+
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.extend(errs2);
+                    oks
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self

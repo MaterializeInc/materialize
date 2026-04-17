@@ -176,7 +176,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let errs: KeyCollection<_, _, _> = err_input.concatenate(errors).into();
         CollectionBundle::from_columns(
             0..key_arity,
-            ArrangementFlavor::FactLocal(
+            ArrangementFlavor::Local(
                 arrangement,
                 errs.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange bundle err"),
             ),

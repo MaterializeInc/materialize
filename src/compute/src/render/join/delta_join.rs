@@ -85,13 +85,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                         lookup_idx, lookup_key,
                                     )
                                 }) {
-                                ArrangementFlavor::Local(_, _) => {
-                                    unreachable!(
-                                        "delta-join: ArrangementFlavor::Local no longer emitted, \
-                                         pending tier-5 cleanup"
-                                    )
-                                }
-                                ArrangementFlavor::FactLocal(oks, errs) => {
+                                ArrangementFlavor::Local(oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         inner_errs.push(
                                             errs.enter_region(inner)

@@ -260,12 +260,8 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
 /// Whether to materialize local arrangements produced by `ArrangeBy` as
 /// factorized (trie-structured) spines instead of the default `RowRowSpine`.
 ///
-/// When enabled, new local arrangements are built atop `FactRowRowSpine`, which
-/// deduplicates keys and values via a trie. Consumers that do not yet handle
-/// `ArrangementFlavor::FactLocal` (threshold, reduce, delta-join, index export,
-/// and mixed linear-join cross products) will panic — the flag is intended for
-/// experimental end-to-end comparison against the `RowRowSpine` baseline on
-/// linear-join workloads.
+/// Currently unused — the renderer unconditionally builds `FactRowRowSpine`-backed
+/// arrangements via `ArrangementFlavor::Local`. Pending removal in tier-7 cleanup.
 pub const ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT: Config<bool> = Config::new(
     "enable_compute_factorized_arrangement",
     true,

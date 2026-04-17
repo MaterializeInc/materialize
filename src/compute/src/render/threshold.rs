@@ -25,7 +25,6 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::row_spine::RowRowBuilder;
 use crate::typedefs::{ErrBatcher, ErrBuilder, FactRowRowReduceBuilder, MzData, MzTimestamp};
 
 /// Shared function to compute an arrangement of values matching `logic`.
@@ -87,23 +86,15 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
         .expect("Arrangement ensured to exist");
     match arrangement {
         ArrangementFlavor::Local(oks, errs) => {
-            let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
+            let oks = threshold_arrangement::<_, _, FactRowRowReduceBuilder<_, _>, _, _>(
                 oks,
                 "Threshold local",
                 |count| count.is_positive(),
             );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
-        ArrangementFlavor::FactLocal(oks, errs) => {
-            let oks = threshold_arrangement::<_, _, FactRowRowReduceBuilder<_, _>, _, _>(
-                oks,
-                "Threshold local (factorized)",
-                |count| count.is_positive(),
-            );
-            CollectionBundle::from_expressions(key, ArrangementFlavor::FactLocal(oks, errs))
-        }
         ArrangementFlavor::Trace(_, oks, errs) => {
-            let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
+            let oks = threshold_arrangement::<_, _, FactRowRowReduceBuilder<_, _>, _, _>(
                 oks,
                 "Threshold trace",
                 |count| count.is_positive(),
