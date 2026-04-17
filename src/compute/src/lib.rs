@@ -23,4 +23,4 @@ mod metrics;
 mod render;
 mod row_spine;
 mod sink;
-mod typedefs;
+pub mod typedefs;
