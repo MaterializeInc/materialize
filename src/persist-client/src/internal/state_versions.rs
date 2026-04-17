@@ -55,7 +55,7 @@ use crate::{Metrics, PersistConfig, ShardId};
 /// The following invariants are maintained at all times:
 /// - A shard is initialized iff there is at least one version of it in
 ///   Consensus.
-/// - The first version of state is written to `SeqNo(1)`. Each successive state
+/// - The first version of state is written to `SeqNo(0)`. Each successive state
 ///   version is assigned its predecessor's SeqNo +1.
 /// - `current`: The latest version of state. By definition, the largest SeqNo
 ///   present in Consensus.
