@@ -13,13 +13,16 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use differential_dataflow::Hashable;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
-use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT, ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION,
+};
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
@@ -32,7 +35,7 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::CollectionExt;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::{Exchange, ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
@@ -832,6 +835,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 config_set,
             ));
         }
+        let factorized = ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT.get(config_set);
         for (key, _, thinning) in collections.arranged {
             if !self.arranged.contains_key(&key) {
                 // TODO: Consider allowing more expressive names.
@@ -841,16 +845,31 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed, passthrough) =
-                    Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
+                let (flavor, errs_keyed, passthrough) = if factorized {
+                    let (oks_fact, errs_keyed, passthrough) = Self::arrange_collection_factorized(
+                        &name,
+                        oks,
+                        key.clone(),
+                        thinning.clone(),
+                    );
+                    // Build the err arrangement below; attach the factorized oks.
+                    (Ok(oks_fact), errs_keyed, passthrough)
+                } else {
+                    let (oks, errs_keyed, passthrough) =
+                        Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
+                    (Err(oks), errs_keyed, passthrough)
+                };
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
                 let errs =
                     errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         &format!("{}-errors", name),
                     );
-                self.arranged
-                    .insert(key, ArrangementFlavor::Local(oks, errs));
+                let arrangement = match flavor {
+                    Ok(oks_fact) => ArrangementFlavor::FactLocal(oks_fact, errs),
+                    Err(oks) => ArrangementFlavor::Local(oks, errs),
+                };
+                self.arranged.insert(key, arrangement);
             }
         }
         self
@@ -933,6 +952,90 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     columnar_exchange::<Row, Row, T, Diff>,
                 ),
                 name
+            );
+        (
+            oks,
+            err_stream.as_collection(),
+            passthrough_stream.as_collection(),
+        )
+    }
+
+    /// Factorized counterpart to [`Self::arrange_collection`].
+    ///
+    /// Emits the keyed `(Row, Row)` updates as a stream of owned
+    /// `Vec<((Row, Row), T, Diff)>` chunks (the input form consumed by
+    /// [`crate::typedefs::FactRowRowBatcher`]) and arranges them into a
+    /// [`crate::typedefs::FactRowRowAgent`] backed by the trie-structured
+    /// factorized spine.
+    ///
+    /// The key-extraction pipeline is identical to `arrange_collection`; only
+    /// the per-update output encoding differs (owned `Row`s in a `Vec` rather
+    /// than columnar `ColumnBuilder` sessions). This avoids a separate columnar
+    /// → owned conversion in the batcher pipeline at the cost of
+    /// re-allocating the key/value `Row`s per update.
+    fn arrange_collection_factorized(
+        name: &String,
+        oks: VecCollection<'scope, T, Row, Diff>,
+        key: Vec<MirScalarExpr>,
+        thinning: Vec<usize>,
+    ) -> (
+        Arranged<'scope, crate::typedefs::FactRowRowAgent<T, Diff>>,
+        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, Row, Diff>,
+    ) {
+        let mut builder =
+            OperatorBuilder::new("FormArrangementKeyFact".to_string(), oks.inner.scope());
+        let (ok_output, ok_stream) = builder.new_output();
+        let mut ok_output =
+            OutputBuilder::<_, CapacityContainerBuilder<Vec<((Row, Row), T, Diff)>>>::from(
+                ok_output,
+            );
+        let (err_output, err_stream) = builder.new_output();
+        let mut err_output = OutputBuilder::from(err_output);
+        let (passthrough_output, passthrough_stream) = builder.new_output();
+        let mut passthrough_output = OutputBuilder::from(passthrough_output);
+        let mut input = builder.new_input(oks.inner, Pipeline);
+        builder.set_notify_for(0, FrontierInterest::Never);
+        builder.build(move |_capabilities| {
+            let mut datums = DatumVec::new();
+            let mut temp_storage = RowArena::new();
+            move |_frontiers| {
+                let mut ok_output = ok_output.activate();
+                let mut err_output = err_output.activate();
+                let mut passthrough_output = passthrough_output.activate();
+                input.for_each(|time, data| {
+                    let mut ok_session = ok_output.session_with_builder(&time);
+                    let mut err_session = err_output.session(&time);
+                    for (row, time, diff) in data.iter() {
+                        temp_storage.clear();
+                        let datums = datums.borrow_with(row);
+                        let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
+                        let mut key_row = Row::default();
+                        match key_row.packer().try_extend(key_iter) {
+                            Ok(()) => {
+                                let mut val_row = Row::default();
+                                val_row.packer().extend(thinning.iter().map(|c| datums[*c]));
+                                ok_session.give(((key_row, val_row), time.clone(), *diff));
+                            }
+                            Err(e) => {
+                                err_session.give((e.into(), time.clone(), *diff));
+                            }
+                        }
+                    }
+                    passthrough_output.session(&time).give_container(data);
+                });
+            }
+        });
+
+        let oks = ok_stream
+            .mz_arrange_core::<
+                _,
+                crate::typedefs::FactRowRowBatcher<T, Diff>,
+                crate::typedefs::FactRowRowBuilder<T, Diff>,
+                crate::typedefs::FactRowRowSpine<T, Diff>,
+            >(
+                Exchange::new(|update: &((Row, Row), T, Diff)| update.0.0.hashed().into()),
+                name,
             );
         (
             oks,
