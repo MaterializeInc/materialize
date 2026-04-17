@@ -285,6 +285,7 @@ fn make_builtin_table(name: String) -> (SystemObjectDescription, &'static Builti
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
         access: Vec::new(),
+        ontology: None,
     };
     let builtin = leak(Builtin::Table(leak(builtin)));
 
@@ -309,6 +310,7 @@ fn make_builtin_source(name: String) -> (SystemObjectDescription, &'static Built
         column_comments: BTreeMap::new(),
         is_retained_metrics_object: false,
         access: Vec::new(),
+        ontology: None,
     };
     let builtin = leak(Builtin::Source(leak(builtin)));
 

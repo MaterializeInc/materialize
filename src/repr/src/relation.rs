@@ -902,10 +902,30 @@ struct ColumnMetadata {
 /// the index in [`SqlRelationType`] that corresponds to a given column, and the
 /// version at which this column was added or dropped.
 ///
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(Clone, Debug, Serialize, Deserialize, MzReflect)]
 pub struct RelationDesc {
     typ: SqlRelationType,
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,
+    /// Optional semantic type annotations for columns (e.g., "CatalogItemId", "RoleId").
+    /// Keyed by column index. Only populated for builtin catalog objects.
+    /// Excluded from Eq/Hash/serialization — it's ontology metadata, not schema.
+    #[serde(skip)]
+    semantic_types: BTreeMap<usize, &'static str>,
+}
+
+impl PartialEq for RelationDesc {
+    fn eq(&self, other: &Self) -> bool {
+        self.typ == other.typ && self.metadata == other.metadata
+    }
+}
+
+impl Eq for RelationDesc {}
+
+impl std::hash::Hash for RelationDesc {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.typ.hash(state);
+        self.metadata.hash(state);
+    }
 }
 
 impl RustType<ProtoRelationDesc> for RelationDesc {
@@ -978,6 +998,7 @@ impl RustType<ProtoRelationDesc> for RelationDesc {
         Ok(RelationDesc {
             typ: proto.typ.into_rust_if_some("ProtoRelationDesc::typ")?,
             metadata,
+            semantic_types: BTreeMap::default(),
         })
     }
 }
@@ -994,6 +1015,7 @@ impl RelationDesc {
         RelationDesc {
             typ: SqlRelationType::empty(),
             metadata: BTreeMap::default(),
+            semantic_types: BTreeMap::default(),
         }
     }
 
@@ -1037,7 +1059,11 @@ impl RelationDesc {
         // TODO(parkmycar): Add better validation here.
         assert_eq!(typ.column_types.len(), metadata.len());
 
-        RelationDesc { typ, metadata }
+        RelationDesc {
+            typ,
+            metadata,
+            semantic_types: BTreeMap::default(),
+        }
     }
 
     pub fn from_names_and_types<I, T, N>(iter: I) -> Self
@@ -1198,6 +1224,11 @@ impl RelationDesc {
     pub fn get_name(&self, i: usize) -> &ColumnName {
         // TODO(parkmycar): Refactor this to use `ColumnIndex`.
         self.get_name_idx(&ColumnIndex(i))
+    }
+
+    /// Gets the semantic type annotation for column `i`, if any.
+    pub fn get_semantic_type(&self, i: usize) -> Option<&'static str> {
+        self.semantic_types.get(&i).copied()
     }
 
     /// Gets the name of the column at `idx`.
@@ -1520,6 +1551,8 @@ pub struct RelationDescBuilder {
     columns: Vec<(ColumnName, SqlColumnType)>,
     /// Sets of indices that are "keys" for the collection.
     keys: Vec<Vec<usize>>,
+    /// Semantic type annotations for columns.
+    semantic_types: BTreeMap<usize, &'static str>,
 }
 
 impl RelationDescBuilder {
@@ -1555,6 +1588,17 @@ impl RelationDescBuilder {
         self
     }
 
+    /// Annotates the most recently added column with a semantic type.
+    pub fn with_semantic_type(mut self, semantic_type: &'static str) -> RelationDescBuilder {
+        let idx = self
+            .columns
+            .len()
+            .checked_sub(1)
+            .expect("no column to annotate");
+        self.semantic_types.insert(idx, semantic_type);
+        self
+    }
+
     /// Removes all previously inserted keys.
     pub fn without_keys(mut self) -> RelationDescBuilder {
         self.keys.clear();
@@ -1579,6 +1623,7 @@ impl RelationDescBuilder {
     pub fn finish(self) -> RelationDesc {
         let mut desc = RelationDesc::from_names_and_types(self.columns);
         desc.typ = desc.typ.with_keys(self.keys);
+        desc.semantic_types = self.semantic_types;
         desc
     }
 }
@@ -1765,6 +1810,7 @@ impl VersionedRelationDesc {
         RelationDesc {
             typ: relation_type,
             metadata: column_metas,
+            semantic_types: BTreeMap::default(),
         }
     }
 

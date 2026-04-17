@@ -787,6 +787,10 @@ mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies
 mz_objects_id_namespace_types
+mz_ontology_entity_types
+mz_ontology_link_types
+mz_ontology_properties
+mz_ontology_semantic_types
 mz_optimizer_notices
 mz_pending_cluster_replicas
 mz_postgres_source_tables
