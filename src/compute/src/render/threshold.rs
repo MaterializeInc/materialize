@@ -14,7 +14,6 @@
 use differential_dataflow::Data;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace, TraceReader};
 use mz_compute_types::plan::threshold::{BasicThresholdPlan, ThresholdPlan};
 use mz_expr::MirScalarExpr;
@@ -27,7 +26,7 @@ use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::row_spine::RowRowBuilder;
-use crate::typedefs::{ErrBatcher, ErrBuilder, MzData, MzTimestamp};
+use crate::typedefs::{ErrBatcher, ErrBuilder, FactRowRowReduceBuilder, MzData, MzTimestamp};
 
 /// Shared function to compute an arrangement of values matching `logic`.
 fn threshold_arrangement<'scope, Ts, T1, Bu2, T2, L>(
@@ -47,7 +46,6 @@ where
     Bu2: Builder<
             Time = Ts,
             Input: Container
-                       + InternalMerge
                        + ClearContainer
                        + PushInto<(
                 (<T1::KeyContainer as BatchContainer>::Owned, T1::ValOwn),
@@ -96,11 +94,13 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
             );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
-        ArrangementFlavor::FactLocal(..) => {
-            unreachable!(
-                "threshold does not yet consume ArrangementFlavor::FactLocal — reduce path \
-                 still runs on RowRowBuilder",
+        ArrangementFlavor::FactLocal(oks, errs) => {
+            let oks = threshold_arrangement::<_, _, FactRowRowReduceBuilder<_, _>, _, _>(
+                oks,
+                "Threshold local (factorized)",
+                |count| count.is_positive(),
             );
+            CollectionBundle::from_expressions(key, ArrangementFlavor::FactLocal(oks, errs))
         }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(

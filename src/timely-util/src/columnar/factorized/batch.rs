@@ -33,6 +33,7 @@ use mz_ore::cast::CastFrom;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
 
+use super::column::FactColumn;
 use super::layout::FactLayout;
 use super::{KVUpdates, child_range};
 
@@ -680,6 +681,72 @@ where
 
     fn push(&mut self, chunk: &mut Self::Input) {
         self.chunks.push(std::mem::take(chunk));
+    }
+
+    fn done(self, description: Description<T>) -> FactBatch<K, V, T, R> {
+        let updates: usize = self.chunks.iter().map(|c| c.len()).sum();
+        let storage = KVUpdates::<K, V, T, R>::form(self.chunks.iter().flat_map(|c| c.iter()));
+        FactBatch {
+            storage,
+            description,
+            updates,
+        }
+    }
+
+    fn seal(chain: &mut Vec<Self::Input>, description: Description<T>) -> FactBatch<K, V, T, R> {
+        let mut builder = Self::with_capacity(0, 0, 0);
+        for mut chunk in chain.drain(..) {
+            builder.push(&mut chunk);
+        }
+        builder.done(description)
+    }
+}
+
+// --- Column-input Builder ---
+
+/// A builder for [`FactBatch`] that accepts [`FactColumn`] chunks.
+///
+/// Parallel to [`FactBuilder`]. `FactBuilder::Input` is `KVUpdates` (fed by
+/// the batcher pipeline); `FactColBuilder::Input` is `FactColumn` (fed by
+/// `reduce_abelian` / `threshold_arrangement`, which need a `Bu::Input` that
+/// implements `Container + Default + ClearContainer + PushInto<((K, V), T, R)>`).
+///
+/// On `push`, the builder unwraps the `Typed` variant and takes ownership of
+/// its inner `KVUpdates`. `Bytes`/`Align` variants are not expected in this
+/// path (they arise from deserialization, not from reduce output) and panic.
+/// `done` flattens the chain through [`KVUpdates::form`] exactly like
+/// [`FactBuilder::done`].
+pub struct FactColBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
+    /// Accumulated trie chunks; flattened in `done()`.
+    chunks: Vec<KVUpdates<K, V, T, R>>,
+}
+
+impl<K, V, T, R> Builder for FactColBuilder<K, V, T, R>
+where
+    K: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, K>: Ord + Copy,
+    V: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, V>: Ord + Copy,
+    T: Columnar + Ord + Clone + Lattice + timely::progress::Timestamp + 'static,
+    for<'a> columnar::Ref<'a, T>: Ord + Copy,
+    R: Columnar + Ord + Clone + Semigroup + 'static,
+    for<'a> columnar::Ref<'a, R>: Ord + Copy,
+{
+    type Input = FactColumn<K, V, T, R>;
+    type Time = T;
+    type Output = FactBatch<K, V, T, R>;
+
+    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
+        FactColBuilder { chunks: Vec::new() }
+    }
+
+    fn push(&mut self, chunk: &mut Self::Input) {
+        match std::mem::take(chunk) {
+            FactColumn::Typed(storage) => self.chunks.push(storage),
+            FactColumn::Bytes(_) | FactColumn::Align(_) => {
+                panic!("FactColBuilder::push received a non-Typed FactColumn variant");
+            }
+        }
     }
 
     fn done(self, description: Description<T>) -> FactBatch<K, V, T, R> {

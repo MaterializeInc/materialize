@@ -23,7 +23,6 @@ use differential_dataflow::difference::{IsZero, Multiply, Semigroup};
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
@@ -731,7 +730,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         Bu: Builder<
                 Time = T,
                 Input: Container
-                           + InternalMerge
                            + ClearContainer
                            + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,
@@ -1057,7 +1055,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         Bu: Builder<
                 Time = T,
                 Input: Container
-                           + InternalMerge
                            + ClearContainer
                            + PushInto<((Row, Tr::ValOwn), Tr::Time, Tr::Diff)>,
                 Output = Tr::Batch,

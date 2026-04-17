@@ -67,6 +67,21 @@ impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> FactColumn<K, V, T, R> 
             FactColumn::Align(a) => Level::from_bytes(&mut indexed::decode(a)),
         }
     }
+
+    /// Clear the container, resetting it to an empty [`FactColumn::Typed`].
+    ///
+    /// For `Typed`, this reuses existing storage via [`KVUpdates::clear`]. For
+    /// `Bytes`/`Align`, the backing allocation is dropped and replaced with a
+    /// fresh empty `Typed` variant — we can't mutate `Bytes`/`Align` in place.
+    #[inline]
+    pub fn clear(&mut self) {
+        match self {
+            FactColumn::Typed(t) => t.clear(),
+            FactColumn::Bytes(_) | FactColumn::Align(_) => {
+                *self = Self::default();
+            }
+        }
+    }
 }
 
 impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> Default for FactColumn<K, V, T, R> {

@@ -48,6 +48,19 @@ where
     }
 }
 
+impl<K, V, T, R> ClearContainer
+    for mz_timely_util::columnar::factorized::column::FactColumn<K, V, T, R>
+where
+    K: columnar::Columnar,
+    V: columnar::Columnar,
+    T: columnar::Columnar,
+    R: columnar::Columnar,
+{
+    fn clear(&mut self) {
+        mz_timely_util::columnar::factorized::column::FactColumn::clear(self)
+    }
+}
+
 /// Extension trait for the `reduce_abelian` differential dataflow method.
 pub(crate) trait MzReduce<'scope, T1: TraceReader> {
     /// Applies `reduce` to arranged data, and returns an arrangement of output data.

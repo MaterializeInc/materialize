@@ -49,7 +49,7 @@ use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 use mz_ore::cast::CastFrom;
 
-use batch::{FactBatch, FactBuilder};
+use batch::{FactBatch, FactBuilder, FactColBuilder};
 use batcher::FactTrieInternalMerger;
 use chunker::FactTrieChunker;
 
@@ -81,6 +81,16 @@ pub type FactColValBatcher<K, V, T, R> = MergeBatcher<
 
 /// A builder producing `Rc<FactBatch>` for use with [`FactValSpine`].
 pub type FactValBuilder<K, V, T, R> = RcBuilder<FactBuilder<K, V, T, R>>;
+
+/// Column-input builder producing `Rc<FactBatch>`.
+///
+/// Like [`FactValBuilder`] but consumes [`FactColumn`] chunks. Intended for
+/// `reduce_abelian` / `threshold_arrangement` callsites, where `Bu::Input`
+/// must be a timely `Container` with `Default`, `ClearContainer`, and
+/// `PushInto<((K, V), T, R)>` — all of which [`FactColumn`] provides.
+///
+/// [`FactColumn`]: column::FactColumn
+pub type FactColValBuilder<K, V, T, R> = RcBuilder<FactColBuilder<K, V, T, R>>;
 
 /// A [`Vecs`] using [`Strides`] for offset bounds.
 ///

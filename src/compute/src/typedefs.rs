@@ -49,6 +49,11 @@ pub type FactRowRowColBatcher<T, R> =
 /// Builder for [`FactRowRowSpine`].
 pub type FactRowRowBuilder<T, R> =
     mz_timely_util::columnar::factorized::FactValBuilder<mz_repr::Row, mz_repr::Row, T, R>;
+/// Column-input builder for [`FactRowRowSpine`], used by reduce-style callsites
+/// (`reduce_abelian`, `threshold_arrangement`) whose `Bu::Input` must be a
+/// `PushInto`-capable `Container`.
+pub type FactRowRowReduceBuilder<T, R> =
+    mz_timely_util::columnar::factorized::FactColValBuilder<mz_repr::Row, mz_repr::Row, T, R>;
 /// Trace agent for [`FactRowRowSpine`].
 pub type FactRowRowAgent<T, R> = TraceAgent<FactRowRowSpine<T, R>>;
 /// Arranged trace for [`FactRowRowAgent`].

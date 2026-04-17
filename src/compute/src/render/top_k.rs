@@ -21,7 +21,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::plan::top_k::{
@@ -532,10 +531,7 @@ where
     T: MzTimestamp,
     Bu: Builder<
             Time = T,
-            Input: Container
-                       + InternalMerge
-                       + ClearContainer
-                       + PushInto<((Row, Tr::ValOwn), T, Diff)>,
+            Input: Container + ClearContainer + PushInto<((Row, Tr::ValOwn), T, Diff)>,
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<
