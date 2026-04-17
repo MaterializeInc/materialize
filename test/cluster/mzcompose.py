@@ -1208,6 +1208,87 @@ def workflow_test_github_7645(c: Composition) -> None:
         )
 
 
+def workflow_test_notice_drop_restart(c: Composition) -> None:
+    """
+    Test optimizer notice cleanup on DROP ... CASCADE and across an envd
+    restart.
+
+    This exercises the code path that moves dataflow plans and optimizer
+    notice bookkeeping onto catalog objects and drops them during
+    `apply_updates`:
+
+    1. Create a duplicate index that triggers an
+       "An identical index already exists" optimizer notice.
+    2. Verify the notice is visible in `mz_internal.mz_optimizer_notices`
+       and `mz_internal.mz_notices`.
+    3. Restart envd; verify the notice is re-generated on bootstrap
+       (optimizer notices are not persisted, but they are recomputed
+       when dataflow plans are rebuilt at startup).
+    4. `DROP SCHEMA ... CASCADE` (so the index with the notice is
+       dropped indirectly via cascade).
+    5. Verify the notice was retracted from the builtin table.
+    """
+
+    with c.override(Materialized()):
+        c.up("materialized")
+
+        c.sql(
+            "ALTER SYSTEM SET enable_mz_notices TO true",
+            port=6877,
+            user="mz_system",
+        )
+        c.sql(
+            "ALTER SYSTEM SET enable_rbac_checks TO false",
+            port=6877,
+            user="mz_system",
+        )
+
+        c.sql("""
+            CREATE SCHEMA notice_drop_restart;
+            SET SCHEMA = notice_drop_restart;
+            CREATE TABLE t (a int, b int);
+            CREATE INDEX t_idx1 ON t(a + 7);
+            CREATE INDEX t_idx2 ON t(a + 7);
+            """)
+
+        def notice_count() -> int:
+            rows = c.sql_query("""
+                SELECT count(*)
+                FROM mz_internal.mz_optimizer_notices
+                WHERE notice_type = 'An identical index already exists'
+                """)
+            return int(rows[0][0])
+
+        assert notice_count() == 1, "expected the duplicate-index notice"
+
+        # Also check via the join-based view.
+        rows = c.sql_query("""
+            SELECT count(*)
+            FROM mz_internal.mz_notices n
+            JOIN mz_catalog.mz_indexes idx ON (n.object_id = idx.id)
+            WHERE idx.name = 't_idx2'
+            """)
+        assert int(rows[0][0]) == 1, "expected notice joined to t_idx2"
+
+        # Restart envd. Optimizer notices are not persisted, but they
+        # are regenerated when dataflow plans are rebuilt during
+        # bootstrap, so the count should still be 1 after the restart.
+        c.kill("materialized")
+        c.up("materialized")
+
+        assert (
+            notice_count() == 1
+        ), "expected the duplicate-index notice to be regenerated after restart"
+
+        # Drop the schema with CASCADE: the index with the notice is
+        # dropped indirectly. The notice should be retracted.
+        c.sql("DROP SCHEMA notice_drop_restart CASCADE")
+
+        assert (
+            notice_count() == 0
+        ), "expected the notice to be retracted after DROP SCHEMA ... CASCADE"
+
+
 def workflow_test_upsert(c: Composition) -> None:
     """Test creating upsert sources and continuing to ingest them after a restart."""
     with c.override(

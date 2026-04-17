@@ -353,12 +353,12 @@ impl<'a> DataflowBuilder<'a> {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
                     }
                     CatalogItem::View(view) => {
-                        let expr = view.optimized_expr.as_ref();
+                        let expr = view.locally_optimized_expr.as_ref();
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
                         // Can't read from replacements, use the view definition directly.
-                        let expr = mview.optimized_expr.as_ref();
+                        let expr = mview.locally_optimized_expr.as_ref();
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
@@ -509,7 +509,10 @@ impl<'a> DataflowBuilder<'a> {
                         Ok(self.monotonic_source(desc))
                     }
                 },
-                CatalogItem::View(View { optimized_expr, .. }) => {
+                CatalogItem::View(View {
+                    locally_optimized_expr: optimized_expr,
+                    ..
+                }) => {
                     let view_expr = optimized_expr.as_ref().clone().into_inner();
 
                     // Inspect global ids that occur in the Gets in view_expr, and collect the ids

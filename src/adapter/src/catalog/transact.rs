@@ -458,10 +458,6 @@ impl Catalog {
                 }
             })
             .collect();
-        let dropped_global_ids = drop_ids
-            .iter()
-            .flat_map(|item_id| self.get_global_ids(item_id))
-            .collect();
 
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
@@ -502,17 +498,6 @@ impl Catalog {
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
             self.state = new_state;
-        }
-
-        // Drop in-memory planning metadata.
-        let dropped_notices = self.drop_plans_and_metainfos(&dropped_global_ids);
-        if self.state.system_config().enable_mz_notices() {
-            // Generate retractions for the Builtin tables.
-            self.state().pack_optimizer_notices(
-                &mut builtin_table_updates,
-                dropped_notices.iter(),
-                Diff::MINUS_ONE,
-            );
         }
 
         Ok(TransactionResult {
@@ -611,7 +596,7 @@ impl Catalog {
                         exprs.insert(
                             view.global_id,
                             LocalExpressions {
-                                local_mir: (*view.optimized_expr).clone(),
+                                local_mir: (*view.locally_optimized_expr).clone(),
                                 optimizer_features: optimizer_features.clone(),
                             },
                         );
@@ -620,7 +605,7 @@ impl Catalog {
                         exprs.insert(
                             mv.global_id_writes(),
                             LocalExpressions {
-                                local_mir: (*mv.optimized_expr).clone(),
+                                local_mir: (*mv.locally_optimized_expr).clone(),
                                 optimizer_features: optimizer_features.clone(),
                             },
                         );
