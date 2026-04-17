@@ -2403,4 +2403,63 @@ mod tests {
             testcase(desc);
         });
     }
+
+    #[mz_ore::test]
+    fn test_semantic_type_annotations() {
+        let desc = RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_semantic_type("CatalogItemId")
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(true))
+            .with_semantic_type("ClusterId")
+            .finish();
+
+        // Annotated columns return their semantic type.
+        assert_eq!(desc.get_semantic_type(0), Some("CatalogItemId"));
+        assert_eq!(desc.get_semantic_type(2), Some("ClusterId"));
+
+        // Unannotated columns return None.
+        assert_eq!(desc.get_semantic_type(1), None);
+
+        // Out-of-bounds returns None.
+        assert_eq!(desc.get_semantic_type(99), None);
+    }
+
+    #[mz_ore::test]
+    fn test_semantic_types_excluded_from_eq_and_hash() {
+        let desc_a = RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_semantic_type("CatalogItemId")
+            .finish();
+
+        let desc_b = RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .finish();
+
+        // semantic_types is excluded from Eq.
+        assert_eq!(desc_a, desc_b);
+
+        // semantic_types is excluded from Hash.
+        use std::hash::{Hash, Hasher};
+        let hash = |d: &RelationDesc| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            d.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash(&desc_a), hash(&desc_b));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_semantic_types_excluded_from_serialization() {
+        let desc = RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_semantic_type("CatalogItemId")
+            .finish();
+
+        // Roundtrip through protobuf should lose semantic types (serde skip).
+        let proto = desc.into_proto();
+        let roundtripped = RelationDesc::from_proto(proto).unwrap();
+        assert_eq!(roundtripped.get_semantic_type(0), None);
+    }
 }

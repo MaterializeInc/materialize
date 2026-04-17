@@ -16509,4 +16509,129 @@ mod tests {
             violations.join("\n"),
         );
     }
+
+    /// Validates ontology metadata consistency:
+    /// - Every link target references an entity that exists.
+    /// - Every semantic type annotation references a type in SEMANTIC_TYPE_DEFS.
+    /// - No duplicate entity names.
+    /// - Every annotated builtin has a non-empty entity_name and description.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_ontology_consistency() {
+        use super::ontology::SEMANTIC_TYPE_DEFS;
+
+        let valid_semantic_types: BTreeSet<&str> = SEMANTIC_TYPE_DEFS
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect();
+
+        // Collect all entity names from builtins with ontology annotations.
+        let mut entity_names: BTreeSet<String> = BTreeSet::new();
+        let mut duplicate_entities = Vec::new();
+
+        for builtin in BUILTINS_STATIC.iter() {
+            let ontology = match builtin {
+                Builtin::Table(t) => t.ontology.as_ref(),
+                Builtin::View(v) => v.ontology.as_ref(),
+                Builtin::MaterializedView(mv) => mv.ontology.as_ref(),
+                Builtin::Source(s) => s.ontology.as_ref(),
+                _ => None,
+            };
+            if let Some(ont) = ontology {
+                assert!(
+                    !ont.entity_name.is_empty(),
+                    "builtin {} has empty ontology entity_name",
+                    builtin.name()
+                );
+                assert!(
+                    !ont.description.is_empty(),
+                    "builtin {} ({}) has empty ontology description",
+                    builtin.name(),
+                    ont.entity_name
+                );
+                if !entity_names.insert(ont.entity_name.to_string()) {
+                    duplicate_entities.push(format!(
+                        "duplicate entity_name {:?} on builtin {}",
+                        ont.entity_name,
+                        builtin.name()
+                    ));
+                }
+            }
+        }
+        assert!(
+            duplicate_entities.is_empty(),
+            "ontology has duplicate entity names:\n{}",
+            duplicate_entities.join("\n"),
+        );
+
+        // Validate link targets reference existing entities.
+        let mut bad_targets = Vec::new();
+        for builtin in BUILTINS_STATIC.iter() {
+            let ontology = match builtin {
+                Builtin::Table(t) => t.ontology.as_ref(),
+                Builtin::View(v) => v.ontology.as_ref(),
+                Builtin::MaterializedView(mv) => mv.ontology.as_ref(),
+                Builtin::Source(s) => s.ontology.as_ref(),
+                _ => None,
+            };
+            if let Some(ont) = ontology {
+                for link in ont.links {
+                    if !entity_names.contains(link.target) {
+                        bad_targets.push(format!(
+                            "entity {:?} link {:?} targets {:?} which is not a known entity",
+                            ont.entity_name, link.name, link.target
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            bad_targets.is_empty(),
+            "ontology has links targeting unknown entities:\n{}",
+            bad_targets.join("\n"),
+        );
+
+        // Validate semantic type annotations use known types.
+        let mut bad_sem_types = Vec::new();
+        for builtin in BUILTINS_STATIC.iter() {
+            let (name, desc, ontology) = match builtin {
+                Builtin::Table(t) => (t.name, &t.desc, t.ontology.as_ref()),
+                Builtin::View(v) => (v.name, &v.desc, v.ontology.as_ref()),
+                Builtin::MaterializedView(mv) => (mv.name, &mv.desc, mv.ontology.as_ref()),
+                Builtin::Source(s) => (s.name, &s.desc, s.ontology.as_ref()),
+                _ => continue,
+            };
+            for (idx, _col) in desc.iter_names().enumerate() {
+                if let Some(sem) = desc.get_semantic_type(idx) {
+                    if !valid_semantic_types.contains(sem) {
+                        bad_sem_types.push(format!(
+                            "builtin {} column {} has semantic type {:?} not in SEMANTIC_TYPE_DEFS",
+                            name,
+                            desc.get_name(idx),
+                            sem
+                        ));
+                    }
+                }
+            }
+            // Also check: if a builtin has semantic types but no ontology, warn.
+            let has_sem = (0..desc.arity()).any(|i| desc.get_semantic_type(i).is_some());
+            if has_sem && ontology.is_none() {
+                // This is not necessarily wrong (some builtins have semantic
+                // types for internal use without being ontology entities),
+                // but we track it for awareness.
+            }
+        }
+        assert!(
+            bad_sem_types.is_empty(),
+            "builtins have semantic types not in SEMANTIC_TYPE_DEFS:\n{}",
+            bad_sem_types.join("\n"),
+        );
+
+        // Sanity check: we have a reasonable number of annotated entities.
+        assert!(
+            entity_names.len() > 90,
+            "expected > 90 ontology entities, found {}",
+            entity_names.len()
+        );
+    }
 }

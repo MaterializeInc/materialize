@@ -481,6 +481,22 @@ mz_objects_id_namespace_types
 VIEW
 materialize
 mz_internal
+mz_ontology_entity_types
+VIEW
+materialize
+mz_internal
+mz_ontology_link_types
+VIEW
+materialize
+mz_internal
+mz_ontology_properties
+VIEW
+materialize
+mz_internal
+mz_ontology_semantic_types
+VIEW
+materialize
+mz_internal
 mz_optimizer_notices
 BASE TABLE
 materialize

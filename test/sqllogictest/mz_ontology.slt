@@ -1,0 +1,148 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Smoke tests for the mz_ontology built-in views in mz_internal.
+
+mode cockroach
+
+# Verify the four ontology views exist and have the expected columns.
+
+query TTTT
+SELECT name, relation, properties->>'primary_key', description
+FROM mz_internal.mz_ontology_entity_types
+WHERE name = 'cluster'
+----
+cluster  mz_catalog.mz_clusters  ["id"]  A␠compute␠cluster␠that␠runs␠dataflows␠for␠sources,␠sinks,␠MVs,␠and␠indexes
+
+query TTT
+SELECT name, sql_type, description
+FROM mz_internal.mz_ontology_semantic_types
+WHERE name = 'CatalogItemId'
+----
+CatalogItemId  text  SQL-layer␠object␠ID.␠Format:␠s{n}/u{n}.
+
+query TTTT
+SELECT entity_type, column_name, semantic_type, description
+FROM mz_internal.mz_ontology_properties
+WHERE entity_type = 'cluster' AND column_name = 'id'
+----
+cluster  id  ClusterId  Materialize's␠unique␠ID␠for␠the␠cluster.
+
+query TTTTT
+SELECT name, source_entity, target_entity, properties->>'kind', description
+FROM mz_internal.mz_ontology_link_types
+WHERE name = 'belongs_to_cluster' AND source_entity = 'replica'
+----
+belongs_to_cluster  replica  cluster  foreign_key  NULL
+
+# Verify basic row counts are in expected ranges.
+
+query B
+SELECT count(*) > 90 FROM mz_internal.mz_ontology_entity_types
+----
+true
+
+query B
+SELECT count(*) >= 15 FROM mz_internal.mz_ontology_semantic_types
+----
+true
+
+query B
+SELECT count(*) > 300 FROM mz_internal.mz_ontology_properties
+----
+true
+
+query B
+SELECT count(*) > 80 FROM mz_internal.mz_ontology_link_types
+----
+true
+
+# Verify referential integrity: every entity_type in properties exists in entity_types.
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_ontology_properties p
+WHERE NOT EXISTS (
+    SELECT 1 FROM mz_internal.mz_ontology_entity_types e
+    WHERE e.name = p.entity_type
+)
+----
+0
+
+# Verify referential integrity: every semantic_type in properties exists in semantic_types.
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_ontology_properties p
+WHERE p.semantic_type IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM mz_internal.mz_ontology_semantic_types s
+    WHERE s.name = p.semantic_type
+)
+----
+0
+
+# Verify referential integrity: link type source/target entities exist in entity_types.
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_ontology_link_types l
+WHERE NOT EXISTS (
+    SELECT 1 FROM mz_internal.mz_ontology_entity_types e
+    WHERE e.name = l.source_entity
+)
+----
+0
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_ontology_link_types l
+WHERE NOT EXISTS (
+    SELECT 1 FROM mz_internal.mz_ontology_entity_types e
+    WHERE e.name = l.target_entity
+)
+----
+0
+
+# Verify link_types properties column has structured JSON (not empty).
+
+query B
+SELECT count(*) > 0
+FROM mz_internal.mz_ontology_link_types
+WHERE properties->>'kind' IS NOT NULL
+----
+true
+
+# Verify semantic type annotations are populated in properties.
+
+query B
+SELECT count(*) > 200
+FROM mz_internal.mz_ontology_properties
+WHERE semantic_type IS NOT NULL
+----
+true
+
+# Verify key entity types exist.
+
+query T rowsort
+SELECT name FROM mz_internal.mz_ontology_entity_types
+WHERE name IN ('database', 'schema', 'role', 'cluster', 'replica', 'table', 'source', 'view', 'mv', 'index', 'sink', 'connection')
+----
+cluster
+connection
+database
+index
+mv
+replica
+role
+schema
+sink
+source
+table
+view
