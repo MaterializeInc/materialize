@@ -47,6 +47,7 @@ use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
 use differential_dataflow::trace::implementations::merge_batcher::container::VecInternalMerger;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+use mz_ore::cast::CastFrom;
 
 use batch::{FactBatch, FactBuilder};
 
@@ -228,9 +229,9 @@ pub fn child_range<B: IndexAs<u64>>(bounds: B, i: usize) -> std::ops::Range<usiz
     let lower = if i == 0 {
         0
     } else {
-        bounds.index_as(i - 1) as usize
+        usize::cast_from(bounds.index_as(i - 1))
     };
-    let upper = bounds.index_as(i) as usize;
+    let upper = usize::cast_from(bounds.index_as(i));
     lower..upper
 }
 
@@ -251,16 +252,19 @@ where
         CC: Push<CP>,
     {
         self.lists.values.push(a);
-        Push::push(&mut self.lists.bounds, self.lists.values.len() as u64);
+        Push::push(
+            &mut self.lists.bounds,
+            u64::cast_from(self.lists.values.len()),
+        );
         self.rest.lists.values.push(b);
         Push::push(
             &mut self.rest.lists.bounds,
-            self.rest.lists.values.len() as u64,
+            u64::cast_from(self.rest.lists.values.len()),
         );
         self.rest.rest.values.push(c);
         Push::push(
             &mut self.rest.rest.bounds,
-            self.rest.rest.values.len() as u64,
+            u64::cast_from(self.rest.rest.values.len()),
         );
     }
 
@@ -354,11 +358,11 @@ where
                     // New A: seal C bounds (for prev B) and B bounds (for prev A).
                     Push::push(
                         &mut output.rest.rest.bounds,
-                        output.rest.rest.values.len() as u64,
+                        u64::cast_from(output.rest.rest.values.len()),
                     );
                     Push::push(
                         &mut output.rest.lists.bounds,
-                        output.rest.lists.values.len() as u64,
+                        u64::cast_from(output.rest.lists.values.len()),
                     );
                     output.lists.values.push(a);
                     output.rest.lists.values.push(b);
@@ -366,7 +370,7 @@ where
                     // Same A, new B: seal C bounds (for prev B).
                     Push::push(
                         &mut output.rest.rest.bounds,
-                        output.rest.rest.values.len() as u64,
+                        u64::cast_from(output.rest.rest.values.len()),
                     );
                     output.rest.lists.values.push(b);
                 }
@@ -380,13 +384,16 @@ where
             // Seal all open bounds.
             Push::push(
                 &mut output.rest.rest.bounds,
-                output.rest.rest.values.len() as u64,
+                u64::cast_from(output.rest.rest.values.len()),
             );
             Push::push(
                 &mut output.rest.lists.bounds,
-                output.rest.lists.values.len() as u64,
+                u64::cast_from(output.rest.lists.values.len()),
             );
-            Push::push(&mut output.lists.bounds, output.lists.values.len() as u64);
+            Push::push(
+                &mut output.lists.bounds,
+                u64::cast_from(output.lists.values.len()),
+            );
         }
 
         output
