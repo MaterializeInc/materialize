@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/lib.rs
-revision: 7a2c827874
+revision: 3da45d073d
 ---
 
 # mz-storage
@@ -16,6 +16,7 @@ The storage layer of Materialize: ingests data from external systems into persis
 * `source` — raw-source framework (`create_raw_source`, `ReclockOperator`) and connector implementations: `kafka`, `postgres`, `mysql`, `sql_server`, `generator`.
 * `decode` — decoding operators (`render_decode_delimited`, `render_decode_cdcv2`) with per-format sub-decoders (avro, csv, protobuf).
 * `upsert` — upsert operator with pluggable backends (`memory`, `rocksdb`) and continual-feedback variant.
+* `upsert_continual_feedback_v2` — alternative upsert implementation using a differential dataflow collection for key state.
 * `sink` — sink implementations: `kafka`, `iceberg`.
 * `metrics` — `StorageMetrics` plus per-subsystem metric definitions.
 * `statistics` — source/sink statistics aggregation and prometheus mirroring.
