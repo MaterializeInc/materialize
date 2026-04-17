@@ -13,7 +13,7 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
-{% macro deploy_promote(wait=False, poll_interval=15, lag_threshold='1s', dry_run=False) %}
+{% macro deploy_promote(wait=False, poll_interval=15, lag_threshold='1s', dry_run=False, max_retries=3, retry_backoff=1.0) %}
 {#
   Performs atomic deployment of current dbt targets to production,
   based on the deployment configuration specified in the dbt_project.yml file.
@@ -34,6 +34,13 @@
   - `dry_run` (boolean, optional): When `true`, prints out the sequence of
     commands dbt would execute without actually promoting the deployment, for
     validation.
+  - `max_retries` (integer, optional): Maximum number of times to retry the
+    atomic swap transaction when it is aborted by a concurrent-DDL conflict
+    (Materialize SQLSTATE 40001). Other errors (permissions, syntax, missing
+    objects) are surfaced immediately and are not retried. Default: 3.
+  - `retry_backoff` (number, optional): Seconds to sleep before each retry
+    of the atomic swap. Gives concurrent DDL a chance to complete before
+    retrying. Default: 1.0.
 
   ## Returns
   None: This macro performs deployment actions but does not return a value.
@@ -81,24 +88,47 @@
 {% endif %}
 
 {% if not dry_run %}
-    {% call statement('swap', fetch_result=True, auto_begin=False) -%}
-    BEGIN;
-
+    {# Build the ordered list of ALTER ... SWAP statements. Schemas are
+       swapped before clusters so that cluster renames don't strand objects
+       referencing the old schema name. #}
+    {% set swap_statements = [] %}
     {% for schema in schemas %}
         {% set deploy_schema = schema ~ "_dbt_deploy" %}
         {{ log("Swapping schemas " ~ schema ~ " and " ~ deploy_schema, info=True) }}
-        ALTER SCHEMA {{ adapter.quote(schema) }} SWAP WITH {{ adapter.quote(deploy_schema) }};
+        {% do swap_statements.append("ALTER SCHEMA " ~ adapter.quote(schema) ~ " SWAP WITH " ~ adapter.quote(deploy_schema)) %}
     {% endfor %}
 
     {% for cluster in clusters %}
         {% set deploy_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=True) %}
         {% set origin_cluster = adapter.generate_final_cluster_name(cluster, force_deploy_suffix=False) %}
         {{ log("Swapping clusters " ~ origin_cluster ~ " and " ~ deploy_cluster, info=True) }}
-        ALTER CLUSTER {{ adapter.quote(origin_cluster) }} SWAP WITH {{ adapter.quote(deploy_cluster) }};
+        {% do swap_statements.append("ALTER CLUSTER " ~ adapter.quote(origin_cluster) ~ " SWAP WITH " ~ adapter.quote(deploy_cluster)) %}
     {% endfor %}
 
-    COMMIT;
-    {%- endcall %}
+    {% set swap_sql = "BEGIN; " ~ (swap_statements | join("; ")) ~ "; COMMIT;" %}
+
+    {% set ns = namespace(success=False) %}
+    {% for attempt in range(max_retries + 1) %}
+        {% if attempt > 0 %}
+            {% if retry_backoff > 0 %}
+                {% do adapter.sleep(retry_backoff) %}
+            {% endif %}
+            {{ log("Retrying atomic swap (attempt " ~ (attempt + 1) ~ " of " ~ (max_retries + 1) ~ ") due to concurrent-DDL conflict", info=True) }}
+        {% endif %}
+
+        {% if adapter.try_atomic_swap(swap_sql) %}
+            {% if attempt > 0 %}
+                {{ log("Atomic swap succeeded on attempt " ~ (attempt + 1), info=True) }}
+            {% endif %}
+            {% set ns.success = True %}
+            {% break %}
+        {% endif %}
+    {% endfor %}
+
+    {% if not ns.success %}
+        {{ exceptions.raise_compiler_error("Atomic swap transaction failed after " ~ (max_retries + 1) ~ " attempts due to concurrent-DDL conflicts. Consider increasing max_retries or reducing concurrent DDL activity during the deploy.") }}
+    {% endif %}
+
     {{ tag_deployed_schemas(schemas) }}
 {% else %}
     {{ log("Starting dry run...", info=True) }}
