@@ -18,7 +18,9 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Data, VecCollection};
-use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
+use mz_compute_types::dyncfgs::{
+    ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT, ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING,
+};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
 use mz_dyncfg::ConfigSet;
@@ -37,7 +39,10 @@ use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{FactRowRowAgent, RowRowAgent, RowRowEnter};
+use crate::typedefs::{
+    FactRowRowAgent, FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine, RowRowAgent,
+    RowRowEnter,
+};
 
 /// Available linear join implementations.
 ///
@@ -236,6 +241,10 @@ where
                 errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
                 JoinedFlavor::Local(oks.enter_region(inner))
             }
+            (Some(ArrangementFlavor::FactLocal(oks, errs)), None) => {
+                errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
+                JoinedFlavor::FactLocal(oks.enter_region(inner))
+            }
             (Some(ArrangementFlavor::Trace(_gid, oks, errs)), None) => {
                 errors.push(errs.as_collection(|k, _v| k.clone()).enter_region(inner));
                 JoinedFlavor::Trace(oks.enter_region(inner))
@@ -389,8 +398,21 @@ where
 
             errors.push(errs.as_collection());
 
-            let arranged = keyed
-                .mz_arrange_core::<
+            if ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT.get(&self.config_set) {
+                let arranged = keyed.mz_arrange_core::<
+                    _,
+                    FactRowRowColBatcher<_, _>,
+                    FactRowRowBuilder<_, _>,
+                    FactRowRowSpine<_, _>,
+                >(
+                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                        columnar_exchange::<Row, Row, T, Diff>,
+                    ),
+                    "JoinStage",
+                );
+                joined = JoinedFlavor::FactLocal(arranged);
+            } else {
+                let arranged = keyed.mz_arrange_core::<
                     _,
                     Col2ValBatcher<_, _, _, _>,
                     RowRowBuilder<_, _>,
@@ -399,9 +421,10 @@ where
                     ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                         columnar_exchange::<Row, Row, T, Diff>,
                     ),
-                    "JoinStage"
+                    "JoinStage",
                 );
-            joined = JoinedFlavor::Local(arranged);
+                joined = JoinedFlavor::Local(arranged);
+            }
         }
 
         // Demultiplex the four different cross products of arrangement types we might have.
