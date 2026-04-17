@@ -501,6 +501,7 @@ class State:
                 )
                 if status == "Running":
                     break
+                time.sleep(1)
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:
@@ -526,6 +527,7 @@ class State:
                 )
                 if status == "Running":
                     break
+                time.sleep(1)
             except subprocess.CalledProcessError:
                 time.sleep(1)
         else:

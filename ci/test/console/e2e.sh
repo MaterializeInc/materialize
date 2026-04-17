@@ -187,7 +187,7 @@ cd console
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack enable
 retry yarn install --immutable --network-timeout 30000
-yarn playwright install --with-deps
+retry yarn playwright install --with-deps
 
 # --- Run tests ---
 

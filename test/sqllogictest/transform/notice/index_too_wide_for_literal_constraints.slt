@@ -444,6 +444,6 @@ Notices:
 
 EOF
 
-# This further tests `drop_plans_and_metainfos`
+# This further tests `drop_optimizer_notices`
 statement ok
 DROP SCHEMA notices CASCADE;

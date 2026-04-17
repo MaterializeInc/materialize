@@ -190,7 +190,10 @@ impl Catalog {
                         let on_id = self.resolve_item_id(&index.on);
                         ids.push(on_id);
                     }
-                    CatalogItem::View(View { optimized_expr, .. }) => {
+                    CatalogItem::View(View {
+                        locally_optimized_expr: optimized_expr,
+                        ..
+                    }) => {
                         // If the definition contains a temporal function, the timeline must
                         // be timestamp dependent.
                         if optimized_expr.contains_temporal() {
@@ -204,7 +207,10 @@ impl Catalog {
                             .map(|gid| self.resolve_item_id(&gid));
                         ids.extend(item_ids);
                     }
-                    CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                    CatalogItem::MaterializedView(MaterializedView {
+                        locally_optimized_expr: optimized_expr,
+                        ..
+                    }) => {
                         // In some cases the timestamp selected may not affect the answer to a
                         // query, but it may affect our ability to query the materialized view.
                         // Materialized views must durably materialize the result of a query, even

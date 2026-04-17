@@ -24,6 +24,7 @@ import { useCanViewUsage } from "~/api/auth";
 import ConnectModal from "~/components/ConnectModal";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
 import OidcConnectModal from "~/components/OidcConnectModal";
+import PasswordConnectModal from "~/components/PasswordConnectModal";
 import { AppConfigSwitch, CloudRuntimeConfig } from "~/config/AppConfigSwitch";
 import { useFlags } from "~/hooks/useFlags";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
@@ -307,19 +308,26 @@ const NavMenuMobile = (props: {
               )
             }
             selfManagedConfigElement={({ appConfig }) =>
-              appConfig.authMode === "Oidc" ? (
+              appConfig.authMode === "None" ? null : (
                 <HideIfEnvironmentDisabled>
                   <ConnectMenuItem
                     width="100%"
                     onClick={onOpenConnectModal}
                     mb={{ base: 0, lg: 6 }}
                   />
-                  <OidcConnectModal
-                    onClose={onCloseConnectModal}
-                    isOpen={isConnectModalOpen}
-                  />
+                  {appConfig.authMode === "Oidc" ? (
+                    <OidcConnectModal
+                      onClose={onCloseConnectModal}
+                      isOpen={isConnectModalOpen}
+                    />
+                  ) : (
+                    <PasswordConnectModal
+                      onClose={onCloseConnectModal}
+                      isOpen={isConnectModalOpen}
+                    />
+                  )}
                 </HideIfEnvironmentDisabled>
-              ) : null
+              )
             }
           />
         </VStack>

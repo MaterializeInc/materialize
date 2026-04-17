@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use mz_catalog::builtin::BuiltinTable;
 use mz_catalog::builtin::notice::MZ_OPTIMIZER_NOTICES;
 use mz_repr::{Datum, Diff, GlobalId, Row};
 use mz_transform::dataflow::DataflowMetainfo;
@@ -104,6 +105,19 @@ impl CatalogState {
         notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
         diff: Diff,
     ) {
+        let mut resolved = Vec::new();
+        self.pack_optimizer_notice_updates(&mut resolved, notices, diff);
+        updates.extend(self.resolve_builtin_table_updates(resolved));
+    }
+
+    /// Like [`Self::pack_optimizer_notices`], but produces unresolved
+    /// [`BuiltinTableUpdate`]s keyed by `&'static BuiltinTable`.
+    pub(crate) fn pack_optimizer_notice_updates<'a>(
+        &self,
+        updates: &mut Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        notices: impl Iterator<Item = &'a Arc<OptimizerNotice>>,
+        diff: Diff,
+    ) {
         let mut row = Row::default();
 
         for notice in notices {
@@ -171,7 +185,7 @@ impl CatalogState {
             packer.push(Datum::TimestampTz(created_at));
 
             updates.push(BuiltinTableUpdate::row(
-                self.resolve_builtin_table(&MZ_OPTIMIZER_NOTICES),
+                &*MZ_OPTIMIZER_NOTICES,
                 row.clone(),
                 diff,
             ));

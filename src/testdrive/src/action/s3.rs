@@ -611,3 +611,109 @@ fn build_parquet_types_batch() -> Result<RecordBatch, anyhow::Error> {
 
     Ok(batch)
 }
+
+/// Upload a parquet file with map columns whose keys are deliberately unsorted.
+/// This is used to test that COPY FROM correctly handles unsorted map keys.
+pub async fn run_upload_parquet_unsorted_map(
+    mut cmd: BuiltinCommand,
+    state: &State,
+) -> Result<ControlFlow, anyhow::Error> {
+    let bucket = cmd.args.string("bucket")?;
+    let key = cmd.args.string("key")?;
+    cmd.args.done()?;
+
+    let batch =
+        build_parquet_unsorted_map_batch().context("building parquet unsorted map batch")?;
+
+    let client = mz_aws_util::s3::new_client(&state.aws_config);
+
+    println!("Uploading parquet unsorted-map file to S3 bucket {bucket}/{key}");
+
+    let props = WriterProperties::builder().build();
+    let mut buf = Vec::new();
+    {
+        let mut writer = ArrowWriter::try_new(&mut buf, batch.schema(), Some(props))
+            .context("creating parquet writer")?;
+        writer.write(&batch).context("writing parquet batch")?;
+        writer.close().context("closing parquet writer")?;
+    }
+
+    client
+        .put_object()
+        .bucket(&bucket)
+        .key(&key)
+        .body(buf.into())
+        .send()
+        .await
+        .context("s3 put")?;
+
+    Ok(ControlFlow::Continue)
+}
+
+/// Build a parquet record batch with map columns whose keys are deliberately
+/// unsorted, to test that the COPY FROM reader sorts them correctly.
+#[allow(clippy::as_conversions, clippy::disallowed_types)]
+fn build_parquet_unsorted_map_batch() -> Result<RecordBatch, anyhow::Error> {
+    // Row 0: id=1, map keys in reverse order: {"z": "val_z", "a": "val_a", "m": "val_m"}
+    // Row 1: id=2, map keys unsorted: {"b": "val_b", "a": "val_a"}
+    // Row 2: id=3, single key (trivially sorted): {"x": "val_x"}
+    // Row 3: id=4, empty map: {}
+
+    let mut map_builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+
+    // Row 0: keys deliberately in reverse order
+    map_builder.keys().append_value("z");
+    map_builder.values().append_value("val_z");
+    map_builder.keys().append_value("a");
+    map_builder.values().append_value("val_a");
+    map_builder.keys().append_value("m");
+    map_builder.values().append_value("val_m");
+    map_builder.append(true).context("appending map row 0")?;
+
+    // Row 1: keys unsorted
+    map_builder.keys().append_value("b");
+    map_builder.values().append_value("val_b");
+    map_builder.keys().append_value("a");
+    map_builder.values().append_value("val_a");
+    map_builder.append(true).context("appending map row 1")?;
+
+    // Row 2: single key (trivially sorted)
+    map_builder.keys().append_value("x");
+    map_builder.values().append_value("val_x");
+    map_builder.append(true).context("appending map row 2")?;
+
+    // Row 3: empty map
+    map_builder.append(true).context("appending map row 3")?;
+
+    let map_array = Arc::new(map_builder.finish());
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new(
+            "map_col",
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::Utf8, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false, // keys_sorted = false
+            ),
+            true,
+        ),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])), map_array],
+    )
+    .context("building record batch")?;
+
+    Ok(batch)
+}

@@ -21,6 +21,8 @@ use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_client::logging::LogVariant;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::Plan as ComputePlan;
 use mz_controller::clusters::{ClusterRole, ClusterStatus, ReplicaConfig, ReplicaLogging};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_expr::{MirScalarExpr, OptimizedMirRelationExpr};
@@ -65,6 +67,8 @@ use mz_storage_types::sources::{
     GenericSourceConnection, SourceConnection, SourceDesc, SourceEnvelope, SourceExportDataConfig,
     SourceExportDetails, Timeline,
 };
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
@@ -1372,7 +1376,7 @@ pub struct View {
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression from (locally) optimizing the `raw_expr`.
-    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// Columns of this view.
     pub desc: RelationDesc,
     /// If created in the `TEMPORARY` schema, the [`ConnectionId`] for that session.
@@ -1400,7 +1404,7 @@ pub struct MaterializedView {
     /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression, derived from the `raw_expr`.
-    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    pub locally_optimized_expr: Arc<OptimizedMirRelationExpr>,
     /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
     pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
@@ -1426,6 +1430,19 @@ pub struct MaterializedView {
     /// Note: This doesn't change upon restarts.
     /// (The dataflow's initial `as_of` can be different.)
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
+    // consistency checks do two dumps and compare them. One of these states comes from the durable
+    // catalog, but the following fields are not restored when the consistency check loads the
+    // durable catalog, hence we need `#[serde(skip)]`.
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
 }
 
 impl MaterializedView {
@@ -1516,7 +1533,7 @@ impl MaterializedView {
             create_sql,
             collections,
             raw_expr: replacement.raw_expr,
-            optimized_expr: replacement.optimized_expr,
+            locally_optimized_expr: replacement.locally_optimized_expr,
             desc: replacement.desc,
             resolved_ids,
             dependencies,
@@ -1527,6 +1544,9 @@ impl MaterializedView {
             custom_logical_compaction_window: replacement.custom_logical_compaction_window,
             refresh_schedule: replacement.refresh_schedule,
             initial_as_of: replacement.initial_as_of,
+            optimized_plan: replacement.optimized_plan,
+            physical_plan: replacement.physical_plan,
+            dataflow_metainfo: replacement.dataflow_metainfo,
         };
     }
 }
@@ -1554,6 +1574,19 @@ pub struct Index {
     ///
     /// ['metrics_retention']: mz_sql::session::vars::METRICS_RETENTION
     pub is_retained_metrics_object: bool,
+    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
+    // consistency checks do two dumps and compare them. One of these states comes from the durable
+    // catalog, but the following fields are not restored when the consistency check loads the
+    // durable catalog, hence we need `#[serde(skip)]`.
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
 }
 
 impl Index {
@@ -1635,6 +1668,19 @@ pub struct ContinualTask {
     pub cluster_id: ClusterId,
     /// See the comment on [MaterializedView::initial_as_of].
     pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+    // The catalog `dump` method uses serde to serialize catalog state, e.g., Testdrive catalog
+    // consistency checks do two dumps and compare them. One of these states comes from the durable
+    // catalog, but the following fields are not restored when the consistency check loads the
+    // durable catalog, hence we need `#[serde(skip)]`.
+    /// Optimized global MIR plan, set after global optimization.
+    #[serde(skip)]
+    pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+    /// Physical (LIR) plan, set after physical optimization.
+    #[serde(skip)]
+    pub physical_plan: Option<Arc<DataflowDescription<ComputePlan>>>,
+    /// Dataflow metainfo (optimizer notices, etc.), set after optimization.
+    #[serde(skip)]
+    pub dataflow_metainfo: Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
 }
 
 impl ContinualTask {
@@ -1769,6 +1815,36 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
+        }
+    }
+
+    /// Returns the optimized global MIR plan, if this item has one.
+    pub fn optimized_plan(&self) -> Option<&Arc<DataflowDescription<OptimizedMirRelationExpr>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.optimized_plan.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.optimized_plan.as_ref(),
+            CatalogItem::ContinualTask(ct) => ct.optimized_plan.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the physical (LIR) plan, if this item has one.
+    pub fn physical_plan(&self) -> Option<&Arc<DataflowDescription<ComputePlan>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.physical_plan.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.physical_plan.as_ref(),
+            CatalogItem::ContinualTask(ct) => ct.physical_plan.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the dataflow metainfo, if this item has one.
+    pub fn dataflow_metainfo(&self) -> Option<&DataflowMetainfo<Arc<OptimizerNotice>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo.as_ref(),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_ref(),
+            CatalogItem::ContinualTask(ct) => ct.dataflow_metainfo.as_ref(),
+            _ => None,
         }
     }
 
@@ -2892,6 +2968,12 @@ impl CatalogEntry {
     /// Returns the `CatalogItem` associated with this catalog entry.
     pub fn item(&self) -> &CatalogItem {
         &self.item
+    }
+
+    /// Returns a mutable reference to the `CatalogItem` associated with this
+    /// catalog entry.
+    pub fn item_mut(&mut self) -> &mut CatalogItem {
+        &mut self.item
     }
 
     /// Returns the [`CatalogItemId`] of this catalog entry.

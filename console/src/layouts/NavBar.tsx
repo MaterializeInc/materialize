@@ -28,6 +28,7 @@ import ConnectModal from "~/components/ConnectModal";
 import FreeTrialNotice from "~/components/FreeTrialNotice";
 import { MaterializeLogo } from "~/components/MaterializeLogo";
 import OidcConnectModal from "~/components/OidcConnectModal";
+import PasswordConnectModal from "~/components/PasswordConnectModal";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import EnvironmentSelectField from "~/layouts/EnvironmentSelect";
 import ProfileDropdown from "~/layouts/ProfileDropdown";
@@ -279,19 +280,26 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
               )
             }
             selfManagedConfigElement={({ appConfig }) =>
-              appConfig.authMode === "Oidc" ? (
+              appConfig.authMode === "None" ? null : (
                 <HideIfEnvironmentDisabled>
                   <ConnectMenuItem
                     isCollapsed={isCollapsed}
                     width="100%"
                     onClick={onOpenConnectModal}
                   />
-                  <OidcConnectModal
-                    onClose={onCloseConnectModal}
-                    isOpen={isConnectModalOpen}
-                  />
+                  {appConfig.authMode === "Oidc" ? (
+                    <OidcConnectModal
+                      onClose={onCloseConnectModal}
+                      isOpen={isConnectModalOpen}
+                    />
+                  ) : (
+                    <PasswordConnectModal
+                      onClose={onCloseConnectModal}
+                      isOpen={isConnectModalOpen}
+                    />
+                  )}
                 </HideIfEnvironmentDisabled>
-              ) : null
+              )
             }
           />
         )}

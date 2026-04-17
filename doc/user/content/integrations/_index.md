@@ -46,9 +46,9 @@ See also the following integration guides for BI tools:
 - [Connect to Materialize via HTTP](/integrations/http-api/)
 - [Connect to Materialize via WebSocket](/integrations/websocket-api/)
 
-## Coding agents
+## AI agents
 
-- [MCP Server](/integrations/llm/)
+- [MCP Server for Developers](/integrations/mcp-server/mcp-developer/) — built-in endpoint for AI-powered troubleshooting via system catalog
 - [Coding Agent Skills](/integrations/coding-agent-skills/)
 
 ## Foreign data wrapper

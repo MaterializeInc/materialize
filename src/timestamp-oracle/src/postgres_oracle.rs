@@ -941,7 +941,7 @@ where
                         err.display_with_causes()
                     );
                 } else {
-                    info!(
+                    debug!(
                         "external operation {} failed, retrying in {:?}: {}",
                         metrics.name,
                         retry.next_sleep(),

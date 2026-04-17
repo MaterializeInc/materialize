@@ -53,10 +53,10 @@ impl DataflowBuilder<'_> {
                 match self.catalog.get_entry(&id).item() {
                     // Unmaterialized view. Search its dependencies.
                     CatalogItem::View(view) => {
-                        todo.extend(view.optimized_expr.0.depends_on());
+                        todo.extend(view.locally_optimized_expr.0.depends_on());
                     }
                     CatalogItem::MaterializedView(mview) if mview.replacement_target.is_some() => {
-                        todo.extend(mview.optimized_expr.0.depends_on());
+                        todo.extend(mview.locally_optimized_expr.0.depends_on());
                     }
                     CatalogItem::Source(_)
                     | CatalogItem::Table(_)

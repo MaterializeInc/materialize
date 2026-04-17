@@ -40,7 +40,11 @@ import { Appearance, Stripe } from "@stripe/stripe-js";
 import { useQueryClient } from "@tanstack/react-query";
 import React, { useMemo, useState } from "react";
 
-import { queryKeys as authQueryKeys, useCurrentOrganization } from "~/api/auth";
+import {
+  hasEnvironmentWritePermission,
+  queryKeys as authQueryKeys,
+  useCurrentOrganization,
+} from "~/api/auth";
 import { Organization } from "~/api/cloudGlobalApi";
 import Alert, {
   AlertBanner,
@@ -56,12 +60,14 @@ import { CalendarIcon, PaymentIcon, PlusIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { MaterializeTheme } from "~/theme";
 import { buildStripeInputStyles } from "~/theme/components/Input";
+import { isApiError } from "~/util";
 import {
   formatDateInUtc,
   FRIENDLY_DATE_FORMAT,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
 
+import { FORBIDDEN_PAYMENT_ERROR_MESSAGE } from "./constants";
 import { EvaluationPlanDetails, UpgradedPlanDetails } from "./PlanDetails";
 import {
   useDetachPaymentMethod,
@@ -294,6 +300,7 @@ const PaymentMethod = ({
   onSetAsDefault,
   onDelete,
   isDeletable,
+  canManagePayments,
   containerProps,
 }: {
   last4: string;
@@ -301,6 +308,7 @@ const PaymentMethod = ({
   expYear: number;
   isDefault: boolean;
   isDeletable: boolean;
+  canManagePayments: boolean;
 
   onSetAsDefault?: () => void;
   onDelete?: () => void;
@@ -336,34 +344,36 @@ const PaymentMethod = ({
         </Text>
       </VStack>
 
-      <HStack justifyContent="space-between" width="100%" mb="1">
-        {isDefault ? (
-          <Text
-            textStyle="text-small"
-            color={colors.foreground.secondary}
-            as="i"
-          >
-            Default
-          </Text>
-        ) : (
-          <Button
-            variant="borderless"
-            size="xs"
-            ml="-2"
-            onClick={onSetAsDefault}
-          >
-            Set as default
-          </Button>
-        )}
+      {canManagePayments && (
+        <HStack justifyContent="space-between" width="100%" mb="1">
+          {isDefault ? (
+            <Text
+              textStyle="text-small"
+              color={colors.foreground.secondary}
+              as="i"
+            >
+              Default
+            </Text>
+          ) : (
+            <Button
+              variant="borderless"
+              size="xs"
+              ml="-2"
+              onClick={onSetAsDefault}
+            >
+              Set as default
+            </Button>
+          )}
 
-        {isDeletable ? (
-          deleteButton
-        ) : (
-          <Tooltip label="There must be at least one active payment method. In order to cancel a subscription, please contact support.">
-            {deleteButton}
-          </Tooltip>
-        )}
-      </HStack>
+          {isDeletable ? (
+            deleteButton
+          ) : (
+            <Tooltip label="There must be at least one active payment method. In order to cancel a subscription, please contact support.">
+              {deleteButton}
+            </Tooltip>
+          )}
+        </HStack>
+      )}
     </VStack>
   );
 };
@@ -416,12 +426,21 @@ const PlanText = ({ organization }: { organization: Organization }) => {
   }
 };
 
+function getPaymentErrorMessage(error: unknown, fallback: string): string {
+  if (isApiError(error) && error.status === 403) {
+    return FORBIDDEN_PAYMENT_ERROR_MESSAGE;
+  }
+  return fallback;
+}
+
 const BillingDetails = ({
   addPaymentMethodButtonProps,
   organization,
+  canManagePayments = false,
 }: {
   addPaymentMethodButtonProps?: ButtonProps;
   organization: Organization;
+  canManagePayments?: boolean;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const toast = useToast();
@@ -452,6 +471,10 @@ const BillingDetails = ({
         <PlanText organization={organization} />
       </HStack>
 
+      {!canManagePayments && (
+        <Alert variant="info" message={FORBIDDEN_PAYMENT_ERROR_MESSAGE} />
+      )}
+
       <HStack spacing="10" flexWrap="wrap">
         {paymentMethods.length > 0 &&
           paymentMethods.map((paymentMethod) => (
@@ -462,12 +485,16 @@ const BillingDetails = ({
               expYear={paymentMethod.card?.expYear ?? 0}
               isDefault={paymentMethod.defaultPaymentMethod}
               isDeletable={paymentMethods.length > 1}
+              canManagePayments={canManagePayments}
               onSetAsDefault={() => {
                 setDefaultPaymentMethod(paymentMethod.id, {
-                  onError: () => {
+                  onError: (error) => {
                     toast({
                       title: "Error",
-                      description: "Failed to set default payment method",
+                      description: getPaymentErrorMessage(
+                        error,
+                        "Failed to set default payment method",
+                      ),
                       status: "error",
                     });
                   },
@@ -476,10 +503,13 @@ const BillingDetails = ({
               }}
               onDelete={() => {
                 detachPaymentMethod(paymentMethod.id, {
-                  onError: () => {
+                  onError: (error) => {
                     toast({
                       title: "Error",
-                      description: "Failed to delete payment method",
+                      description: getPaymentErrorMessage(
+                        error,
+                        "Failed to delete payment method",
+                      ),
                       status: "error",
                     });
                   },
@@ -488,7 +518,7 @@ const BillingDetails = ({
               }}
             />
           ))}
-        {paymentMethods.length < MAX_PAYMENT_METHODS && (
+        {canManagePayments && paymentMethods.length < MAX_PAYMENT_METHODS && (
           <AddPaymentMethodButton {...addPaymentMethodButtonProps} />
         )}
       </HStack>
@@ -524,9 +554,11 @@ const OnDemandPricing = () => {
 const CTABanner = ({
   organization,
   onUpgradeAndPay,
+  canManagePayments,
 }: {
   organization: Organization;
   onUpgradeAndPay: () => void;
+  canManagePayments: boolean;
 }) => {
   const content = {
     title: null as React.ReactNode,
@@ -538,7 +570,7 @@ const CTABanner = ({
 
   const hasTrialEnded = getIsTrialExpired(organization);
 
-  const upgradeAndPayButton = (
+  const upgradeAndPayButton = canManagePayments ? (
     <Button
       variant="link"
       size="xs"
@@ -547,6 +579,10 @@ const CTABanner = ({
     >
       <Text textStyle="text-ui-med">Upgrade & Pay</Text>
     </Button>
+  ) : (
+    <Text textStyle="text-small" as="i">
+      Contact an organization admin to upgrade.
+    </Text>
   );
 
   const isUpgrading = getIsUpgrading(organization);
@@ -609,6 +645,7 @@ const BillingPage = ({
     refetchInterval: 5000,
   });
   const toast = useToast();
+  const canManagePayments = hasEnvironmentWritePermission(user);
 
   const { data: clientSecret, mutate: initializePayment } =
     useInitializeSetupIntent();
@@ -625,7 +662,10 @@ const BillingPage = ({
       onError: (error) => {
         toast({
           title: "Error",
-          description: "Failed to initialize payment form",
+          description: getPaymentErrorMessage(
+            error,
+            "Failed to initialize payment form",
+          ),
           status: "error",
         });
       },
@@ -638,7 +678,11 @@ const BillingPage = ({
 
   return (
     <>
-      <CTABanner organization={organization} onUpgradeAndPay={handleUpgrade} />
+      <CTABanner
+        organization={organization}
+        onUpgradeAndPay={handleUpgrade}
+        canManagePayments={canManagePayments}
+      />
       <MainContentContainer width="100%" maxWidth="1400px" mx="auto">
         <Grid
           templateAreas={`
@@ -653,12 +697,14 @@ const BillingPage = ({
           <GridItem area="billingDetails">
             <BillingDetails
               organization={organization}
+              canManagePayments={canManagePayments}
               addPaymentMethodButtonProps={{ onClick: handleUpgrade }}
             />
           </GridItem>
           <GridItem area="planDetails">
             {organization?.subscription?.type === "evaluation" ? (
               <EvaluationPlanDetails
+                canManagePayments={canManagePayments}
                 upgradeButtonProps={{ onClick: handleUpgrade }}
               />
             ) : (

@@ -22,7 +22,7 @@ import {
   useTheme,
   VStack,
 } from "@chakra-ui/react";
-import React from "react";
+import React, { useState } from "react";
 
 import ConnectInstructions from "~/components/ConnectInstructions";
 import { Modal } from "~/components/Modal";
@@ -31,6 +31,7 @@ import docUrls from "~/mz-doc-urls.json";
 import { useCreateApiToken } from "~/queries/frontegg";
 import { useListApiTokens } from "~/queries/frontegg";
 import { MaterializeTheme } from "~/theme";
+import { obfuscateSecret, toBase64 } from "~/utils/format";
 
 import { SecretCopyableBox } from "./copyableComponents";
 import SupportLink from "./SupportLink";
@@ -56,6 +57,17 @@ const ConnectModal = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const showCreateAppPassword = !forAppPassword;
+  const [activeTab, setActiveTab] = useState("External tools");
+  const {
+    mutate: createAppPassword,
+    isPending: createInProgress,
+    data: newPassword,
+  } = useCreateApiToken();
+
+  const mcpUser = forAppPassword?.user ?? user.email;
+  const mcpBase64Token = newPassword?.password
+    ? toBase64(`${mcpUser}:${newPassword.password}`)
+    : undefined;
 
   return (
     <Modal size="3xl" isOpen={isOpen} onClose={onClose}>
@@ -83,11 +95,20 @@ const ConnectModal = ({
           <ConnectInstructions
             user={user}
             userStr={forAppPassword?.user}
+            mcpBase64Token={mcpBase64Token}
+            onTabChange={setActiveTab}
             mt="4"
           />
           {showCreateAppPassword && (
             <Box mt="6">
-              <CreateAppPassword user={user} />
+              <CreateAppPassword
+                user={user}
+                createAppPassword={createAppPassword}
+                createInProgress={createInProgress}
+                newPassword={newPassword}
+                mcpBase64Token={mcpBase64Token}
+                showMcpToken={activeTab === "MCP Server"}
+              />
             </Box>
           )}
         </ModalBody>
@@ -96,7 +117,16 @@ const ConnectModal = ({
   );
 };
 
-const CreateAppPassword = ({ user }: { user: User }) => {
+interface CreateAppPasswordProps {
+  user: User;
+  createAppPassword: ReturnType<typeof useCreateApiToken>["mutate"];
+  createInProgress: boolean;
+  newPassword: ReturnType<typeof useCreateApiToken>["data"];
+  mcpBase64Token?: string;
+  showMcpToken: boolean;
+}
+
+const CreateAppPassword = (props: CreateAppPasswordProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
   return (
@@ -107,19 +137,21 @@ const CreateAppPassword = ({ user }: { user: User }) => {
         </Flex>
       }
     >
-      <CreateAppPasswordInner user={user} />
+      <CreateAppPasswordInner {...props} />
     </React.Suspense>
   );
 };
 
-const CreateAppPasswordInner = ({ user }: { user: User }) => {
+const CreateAppPasswordInner = ({
+  user,
+  createAppPassword,
+  createInProgress,
+  newPassword,
+  mcpBase64Token,
+  showMcpToken,
+}: CreateAppPasswordProps) => {
   const { data: appPasswords } = useListApiTokens({ user });
   const { colors } = useTheme<MaterializeTheme>();
-  const {
-    mutate: createAppPassword,
-    isPending: createInProgress,
-    data: newPassword,
-  } = useCreateApiToken();
 
   if (createInProgress) {
     return (
@@ -133,6 +165,26 @@ const CreateAppPasswordInner = ({ user }: { user: User }) => {
   if (newPassword?.password) {
     return (
       <>
+        {showMcpToken && mcpBase64Token && (
+          <VStack alignItems="stretch" mb="3">
+            <Text
+              as="span"
+              fontSize="sm"
+              lineHeight="16px"
+              fontWeight={500}
+              color={colors.foreground.primary}
+            >
+              MCP token
+            </Text>
+            <SecretCopyableBox
+              label="mcpToken"
+              contents={mcpBase64Token}
+              obfuscatedContent={obfuscateSecret(mcpBase64Token)}
+              overflow="hidden"
+              minWidth={0}
+            />
+          </VStack>
+        )}
         <VStack alignItems="stretch">
           <Text
             as="span"
@@ -141,7 +193,7 @@ const CreateAppPasswordInner = ({ user }: { user: User }) => {
             fontWeight={500}
             color={colors.foreground.primary}
           >
-            New app password
+            App password
           </Text>
           <SecretCopyableBox
             label="clientId"
@@ -156,8 +208,8 @@ const CreateAppPasswordInner = ({ user }: { user: User }) => {
           fontWeight={400}
           color={colors.foreground.secondary}
         >
-          Copy this app password to somewhere safe. App passwords cannot be
-          displayed after initial creation.
+          Copy this somewhere safe. App passwords cannot be displayed after
+          initial creation.
         </Text>
       </>
     );

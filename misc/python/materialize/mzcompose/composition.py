@@ -1189,6 +1189,8 @@ class Composition:
                 if service_name in idle:
                     service["entrypoint"] = ["sleep", "infinity"]
                     service["command"] = []
+                    service.pop("depends_on", None)
+                    service.pop("healthcheck", None)
             self.files = {}
 
         service_names = [

@@ -44,7 +44,7 @@ corepack enable
 
 ci_collapsed_heading "Installing dependencies"
 retry yarn install --immutable --network-timeout 30000
-yarn playwright install --with-deps
+retry yarn playwright install --with-deps
 ci_collapsed_heading "Pulling Vercel production environment"
 npx vercel@latest pull --yes --environment=production --token="$VERCEL_TOKEN"
 mv .vercel/.env.production.local .vercel/.env.preview.local

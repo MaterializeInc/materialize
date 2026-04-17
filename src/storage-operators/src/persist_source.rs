@@ -113,6 +113,21 @@ impl TimelyTimestamp for Subtime {
     }
 }
 
+impl differential_dataflow::lattice::Lattice for Subtime {
+    fn join(&self, other: &Self) -> Self {
+        Subtime(std::cmp::max(self.0, other.0))
+    }
+    fn meet(&self, other: &Self) -> Self {
+        Subtime(std::cmp::min(self.0, other.0))
+    }
+}
+
+impl differential_dataflow::lattice::Maximum for Subtime {
+    fn maximum() -> Self {
+        Subtime(u64::MAX)
+    }
+}
+
 impl Subtime {
     /// The smallest non-zero summary for the opaque timestamp type.
     pub const fn least_summary() -> Self {

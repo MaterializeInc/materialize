@@ -20,9 +20,14 @@ import {
 import React from "react";
 
 import ConnectInstructions from "~/components/ConnectInstructions";
-import { SecretCopyableBox } from "~/components/copyableComponents";
+import {
+  SecretCopyableBox,
+  TabbedCodeBlock,
+} from "~/components/copyableComponents";
+import McpConnectInstructions from "~/components/McpConnectInstructions";
 import { Modal } from "~/components/Modal";
 import { useAuth } from "~/external-library-wrappers/oidc";
+import ConnectionIcon from "~/svg/ConnectionIcon";
 import { MaterializeTheme } from "~/theme";
 import { obfuscateSecret } from "~/utils/format";
 
@@ -83,9 +88,26 @@ const OidcConnectModal = ({
               </VStack>
             </VStack>
           ) : (
-            <Text fontSize="sm" mt="4">
-              No ID token available. Please sign in again.
-            </Text>
+            <VStack alignItems="stretch" spacing={4} mt="4">
+              <Text fontSize="sm">
+                No ID token available. Please sign in again to access SQL
+                connection details.
+              </Text>
+              <TabbedCodeBlock
+                tabs={[
+                  {
+                    title: "MCP Server",
+                    children: (
+                      <McpConnectInstructions
+                        userStr={OIDC_USERNAME_PLACEHOLDER}
+                      />
+                    ),
+                    icon: <ConnectionIcon w="4" h="4" />,
+                  },
+                ]}
+                minHeight="208px"
+              />
+            </VStack>
           )}
         </ModalBody>
       </ModalContent>

@@ -1464,6 +1464,14 @@ def run_scenario(
             "clusterd",
             "minio",
             Service("testdrive", idle=True),
+            *(
+                [
+                    Service("polaris-bootstrap", idle=True),
+                    Service("polaris", idle=True),
+                ]
+                if scenario.needs_iceberg
+                else []
+            ),
         )
 
         c.sql(

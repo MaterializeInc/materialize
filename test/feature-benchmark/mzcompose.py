@@ -567,10 +567,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
-    c.up(*dependencies)
-
     iceberg_scenarios = [s for s in selected_scenarios if "Iceberg" in s.__name__]
     global iceberg_credentials
+
+    c.up(
+        *dependencies,
+        *(
+            [
+                Service("polaris-bootstrap", idle=True),
+                Service("polaris", idle=True),
+            ]
+            if iceberg_scenarios
+            else []
+        ),
+    )
+
     if iceberg_scenarios:
         iceberg_credentials = setup_polaris_for_iceberg(c)
 

@@ -36,12 +36,13 @@ use mz_catalog::memory::objects::{
     TableDataSource, TemporaryItem, Type, UpdateFrom,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::{ReplicaConfig, ReplicaLogging};
 use mz_controller_types::ClusterId;
 use mz_expr::MirScalarExpr;
 use mz_ore::collections::CollectionExt;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{instrument, soft_assert_no_log};
+use mz_ore::{instrument, soft_assert_eq_or_log, soft_assert_no_log, soft_assert_or_log};
 use mz_pgrepr::oid::INVALID_OID;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::role_id::RoleId;
@@ -57,6 +58,8 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::notice::OptimizerNotice;
 use tracing::{info_span, warn};
 
 use crate::AdapterError;
@@ -147,6 +150,24 @@ impl CatalogState {
                 .await;
             builtin_table_updates.extend(builtin_table_update);
             catalog_updates.extend(catalog_update);
+
+            // Clean up plans and optimizer notices for items that
+            // were retracted but not replaced (i.e., truly dropped).
+            let dropped_entries: Vec<CatalogEntry> = retractions
+                .items
+                .into_values()
+                .chain(retractions.temp_items.into_values())
+                .collect();
+            if !dropped_entries.is_empty() {
+                let dropped_notices = self.drop_optimizer_notices(dropped_entries);
+                if self.system_config().enable_mz_notices() {
+                    self.pack_optimizer_notice_updates(
+                        &mut builtin_table_updates,
+                        dropped_notices.iter(),
+                        Diff::MINUS_ONE,
+                    );
+                }
+            }
         }
 
         (builtin_table_updates, catalog_updates)
@@ -1476,6 +1497,192 @@ impl CatalogState {
             .unwrap_or_else(|| panic!("catalog out of sync, missing id {id}"))
     }
 
+    /// Set the optimized plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
+    pub(super) fn set_optimized_plan(
+        &mut self,
+        id: GlobalId,
+        plan: DataflowDescription<mz_expr::OptimizedMirRelationExpr>,
+    ) {
+        let item_id = self.entry_by_global_id[&id];
+        let entry = self.get_entry_mut(&item_id);
+        match entry.item_mut() {
+            CatalogItem::Index(idx) => idx.optimized_plan = Some(Arc::new(plan)),
+            CatalogItem::MaterializedView(mv) => mv.optimized_plan = Some(Arc::new(plan)),
+            CatalogItem::ContinualTask(ct) => ct.optimized_plan = Some(Arc::new(plan)),
+            other => panic!("set_optimized_plan called on {} ({:?})", id, other.typ()),
+        }
+    }
+
+    /// Set the physical plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
+    pub(super) fn set_physical_plan(
+        &mut self,
+        id: GlobalId,
+        plan: DataflowDescription<mz_compute_types::plan::Plan>,
+    ) {
+        let item_id = self.entry_by_global_id[&id];
+        let entry = self.get_entry_mut(&item_id);
+        match entry.item_mut() {
+            CatalogItem::Index(idx) => idx.physical_plan = Some(Arc::new(plan)),
+            CatalogItem::MaterializedView(mv) => mv.physical_plan = Some(Arc::new(plan)),
+            CatalogItem::ContinualTask(ct) => ct.physical_plan = Some(Arc::new(plan)),
+            other => panic!("set_physical_plan called on {} ({:?})", id, other.typ()),
+        }
+    }
+
+    /// Set the `DataflowMetainfo` for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
+    pub(super) fn set_dataflow_metainfo(
+        &mut self,
+        id: GlobalId,
+        metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
+    ) {
+        // Add entries to the `notices_by_dep_id` lookup map.
+        for notice in metainfo.optimizer_notices.iter() {
+            for dep_id in notice.dependencies.iter() {
+                self.notices_by_dep_id
+                    .entry(*dep_id)
+                    .or_default()
+                    .push(Arc::clone(notice));
+            }
+            if let Some(item_id) = notice.item_id {
+                soft_assert_eq_or_log!(
+                    item_id,
+                    id,
+                    "notice.item_id should match the id for whom we are saving the notice"
+                );
+            }
+        }
+        // Set the metainfo on the catalog object.
+        let item_id = self.entry_by_global_id[&id];
+        let entry = self.get_entry_mut(&item_id);
+        match entry.item_mut() {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo = Some(metainfo),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo = Some(metainfo),
+            CatalogItem::ContinualTask(ct) => ct.dataflow_metainfo = Some(metainfo),
+            other => panic!("set_dataflow_metainfo called on {} ({:?})", id, other.typ()),
+        }
+    }
+
+    /// Clean up optimizer notices for the given dropped catalog entries.
+    ///
+    /// This extracts notices directly from the owned entries (which
+    /// have already been removed from the catalog maps), cleans up
+    /// the `notices_by_dep_id` reverse index, and removes notices
+    /// from other (still-live) catalog objects that depended on the
+    /// dropped items.
+    ///
+    /// Returns the set of all dropped notices for builtin table
+    /// retraction.
+    #[mz_ore::instrument(level = "trace")]
+    pub(super) fn drop_optimizer_notices(
+        &mut self,
+        dropped_entries: Vec<CatalogEntry>,
+    ) -> BTreeSet<Arc<OptimizerNotice>> {
+        let mut dropped_notices = BTreeSet::new();
+        let mut drop_ids = BTreeSet::new();
+
+        // Extract notices directly from the owned dropped entries.
+        for mut entry in dropped_entries {
+            drop_ids.extend(entry.global_ids());
+            let metainfo = match entry.item_mut() {
+                CatalogItem::Index(idx) => idx.dataflow_metainfo.take(),
+                CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.take(),
+                CatalogItem::ContinualTask(ct) => ct.dataflow_metainfo.take(),
+                _ => None,
+            };
+            if let Some(mut metainfo) = metainfo {
+                soft_assert_or_log!(
+                    metainfo.optimizer_notices.iter().all_unique(),
+                    "should have been pushed there by \
+                     `push_optimizer_notice_dedup`"
+                );
+                for n in metainfo.optimizer_notices.drain(..) {
+                    // Clean up notices_by_dep_id for this notice's
+                    // dependencies.
+                    for dep_id in n.dependencies.iter() {
+                        if let Some(notices) = self.notices_by_dep_id.get_mut(dep_id) {
+                            notices.retain(|x| &n != x);
+                            if notices.is_empty() {
+                                self.notices_by_dep_id.remove(dep_id);
+                            }
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Remove notices_by_dep_id entries keyed by the dropped IDs.
+        // These are notices on OTHER items that depend on a dropped
+        // item. We need to remove them from those items' metainfo.
+        for id in &drop_ids {
+            if let Some(notices) = self.notices_by_dep_id.remove(id) {
+                for n in notices.into_iter() {
+                    // Remove the notice from the catalog object it
+                    // lives on (if that object still exists — it
+                    // may have been dropped too, in which case the
+                    // notice was already collected above).
+                    if let Some(item_id) = n.item_id.as_ref() {
+                        if let Some(entry) = self.try_get_entry_by_global_id(item_id) {
+                            let catalog_item_id = entry.id();
+                            let entry = self.get_entry_mut(&catalog_item_id);
+                            let item = entry.item_mut();
+                            match item {
+                                CatalogItem::Index(idx) => {
+                                    if let Some(ref mut m) = idx.dataflow_metainfo {
+                                        m.optimizer_notices.retain(|x| &n != x);
+                                    }
+                                }
+                                CatalogItem::MaterializedView(mv) => {
+                                    if let Some(ref mut m) = mv.dataflow_metainfo {
+                                        m.optimizer_notices.retain(|x| &n != x);
+                                    }
+                                }
+                                CatalogItem::ContinualTask(ct) => {
+                                    if let Some(ref mut m) = ct.dataflow_metainfo {
+                                        m.optimizer_notices.retain(|x| &n != x);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    dropped_notices.insert(n);
+                }
+            }
+        }
+
+        // Clean up notices_by_dep_id entries for dependency IDs
+        // that are NOT being dropped but had dropped notices.
+        let todo_dep_ids: BTreeSet<GlobalId> = dropped_notices
+            .iter()
+            .flat_map(|n| n.dependencies.iter())
+            .filter(|dep_id| !drop_ids.contains(dep_id))
+            .copied()
+            .collect();
+        for id in todo_dep_ids {
+            if let Some(notices) = self.notices_by_dep_id.get_mut(&id) {
+                notices.retain(|n| !dropped_notices.contains(n));
+                if notices.is_empty() {
+                    self.notices_by_dep_id.remove(&id);
+                }
+            }
+        }
+
+        dropped_notices
+    }
+
     fn get_schema_mut(
         &mut self,
         database_spec: &ResolvedDatabaseSpecifier,
@@ -1964,6 +2171,9 @@ impl CatalogState {
             cluster_id,
             is_retained_metrics_object: false,
             custom_logical_compaction_window: None,
+            optimized_plan: None,
+            physical_plan: None,
+            dataflow_metainfo: None,
         });
         (index_name, index)
     }

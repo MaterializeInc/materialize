@@ -382,7 +382,7 @@ impl LogVariant {
                 .with_column("id", SqlScalarType::UInt64.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("global_id", SqlScalarType::String.nullable(false))
-                .with_key(vec![0, 1])
+                .with_key(vec![0, 1, 2])
                 .finish(),
 
             LogVariant::Compute(ComputeLog::PrometheusMetrics) => RelationDesc::builder()

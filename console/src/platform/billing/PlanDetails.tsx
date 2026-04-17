@@ -261,9 +261,12 @@ export const UpgradedPlanDetails = ({
 
 export const EvaluationPlanDetails = ({
   upgradeButtonProps,
+  canManagePayments = true,
 }: {
   upgradeButtonProps?: ButtonProps;
+  canManagePayments?: boolean;
 }) => {
+  const { colors } = useTheme<MaterializeTheme>();
   return (
     <PlanDetailsContainer>
       <Heading as="h3" fontSize="sm" fontWeight="500" px="4" py="3">
@@ -275,9 +278,20 @@ export const EvaluationPlanDetails = ({
         </PlanSection>
       </VStack>
       <VStack width="100%" gap={0} alignItems="stretch" px="4" py="3">
-        <Button variant="primary" size="sm" {...upgradeButtonProps}>
-          Upgrade &amp; Pay
-        </Button>
+        {canManagePayments ? (
+          <Button variant="primary" size="sm" {...upgradeButtonProps}>
+            Upgrade &amp; Pay
+          </Button>
+        ) : (
+          <Text
+            textStyle="text-small"
+            color={colors.foreground.secondary}
+            textAlign="center"
+            as="i"
+          >
+            Contact an organization admin to upgrade.
+          </Text>
+        )}
       </VStack>
     </PlanDetailsContainer>
   );

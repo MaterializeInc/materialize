@@ -14,7 +14,7 @@ import time
 import urllib.error
 import urllib.request
 
-from materialize.mzcompose.composition import Composition
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.helpers.iceberg import (
     setup_polaris_for_iceberg,
 )
@@ -47,7 +47,12 @@ SERVICES = [
 def _setup(c: Composition) -> str:
     """Start fresh and return the S3 access key."""
     c.down(destroy_volumes=True)
-    c.up("postgres", "materialized")
+    c.up(
+        "postgres",
+        "materialized",
+        Service("polaris-bootstrap", idle=True),
+        Service("polaris", idle=True),
+    )
     _, key = setup_polaris_for_iceberg(c)
     return key
 

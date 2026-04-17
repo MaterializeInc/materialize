@@ -51,7 +51,7 @@ use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::result::ResultExt as _;
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
+use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -82,7 +82,6 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::{ConnectionResolver, InlinedConnection};
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
-use smallvec::SmallVec;
 use tokio::sync::MutexGuard;
 use tokio::sync::mpsc::UnboundedSender;
 use uuid::Uuid;
@@ -137,7 +136,6 @@ mod transact;
 #[derive(Debug)]
 pub struct Catalog {
     state: CatalogState,
-    plans: CatalogPlans,
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
@@ -149,7 +147,6 @@ impl Clone for Catalog {
     fn clone(&self) -> Self {
         Self {
             state: self.state.clone(),
-            plans: self.plans.clone(),
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
@@ -157,33 +154,33 @@ impl Clone for Catalog {
     }
 }
 
-#[derive(Default, Debug, Clone)]
-pub struct CatalogPlans {
-    optimized_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
-    physical_plan_by_id: BTreeMap<GlobalId, Arc<DataflowDescription<mz_compute_types::plan::Plan>>>,
-    dataflow_metainfos: BTreeMap<GlobalId, DataflowMetainfo<Arc<OptimizerNotice>>>,
-    notices_by_dep_id: BTreeMap<GlobalId, SmallVec<[Arc<OptimizerNotice>; 4]>>,
-}
-
 impl Catalog {
     /// Set the optimized plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_optimized_plan(
         &mut self,
         id: GlobalId,
         plan: DataflowDescription<OptimizedMirRelationExpr>,
     ) {
-        self.plans.optimized_plan_by_id.insert(id, plan.into());
+        self.state.set_optimized_plan(id, plan);
     }
 
     /// Set the physical plan for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_physical_plan(
         &mut self,
         id: GlobalId,
         plan: DataflowDescription<mz_compute_types::plan::Plan>,
     ) {
-        self.plans.physical_plan_by_id.insert(id, plan.into());
+        self.state.set_physical_plan(id, plan);
     }
 
     /// Try to get the optimized plan for the item identified by `id`.
@@ -192,7 +189,8 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<OptimizedMirRelationExpr>> {
-        self.plans.optimized_plan_by_id.get(id).map(AsRef::as_ref)
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        entry.item().optimized_plan().map(AsRef::as_ref)
     }
 
     /// Try to get the physical plan for the item identified by `id`.
@@ -201,32 +199,22 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowDescription<mz_compute_types::plan::Plan>> {
-        self.plans.physical_plan_by_id.get(id).map(AsRef::as_ref)
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        entry.item().physical_plan().map(AsRef::as_ref)
     }
 
     /// Set the `DataflowMetainfo` for the item identified by `id`.
+    ///
+    /// # Panics
+    /// If the item is not an `Index`, `MaterializedView`, or
+    /// `ContinualTask`.
     #[mz_ore::instrument(level = "trace")]
     pub fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
         metainfo: DataflowMetainfo<Arc<OptimizerNotice>>,
     ) {
-        // Add entries to the `notices_by_dep_id` lookup map.
-        for notice in metainfo.optimizer_notices.iter() {
-            for dep_id in notice.dependencies.iter() {
-                let entry = self.plans.notices_by_dep_id.entry(*dep_id).or_default();
-                entry.push(Arc::clone(notice))
-            }
-            if let Some(item_id) = notice.item_id {
-                soft_assert_eq_or_log!(
-                    item_id,
-                    id,
-                    "notice.item_id should match the id for whom we are saving the notice"
-                );
-            }
-        }
-        // Add the dataflow with the scoped entries.
-        self.plans.dataflow_metainfos.insert(id, metainfo);
+        self.state.set_dataflow_metainfo(id, metainfo);
     }
 
     /// Try to get the `DataflowMetainfo` for the item identified by `id`.
@@ -235,95 +223,8 @@ impl Catalog {
         &self,
         id: &GlobalId,
     ) -> Option<&DataflowMetainfo<Arc<OptimizerNotice>>> {
-        self.plans.dataflow_metainfos.get(id)
-    }
-
-    /// Drop all optimized and physical plans and `DataflowMetainfo`s for the
-    /// item identified by `id`.
-    ///
-    /// Ignore requests for non-existing plans or `DataflowMetainfo`s.
-    ///
-    /// Return a set containing all dropped notices. Note that if for some
-    /// reason we end up with two identical notices being dropped by the same
-    /// call, the result will contain only one instance of that notice.
-    #[mz_ore::instrument(level = "trace")]
-    pub fn drop_plans_and_metainfos(
-        &mut self,
-        drop_ids: &BTreeSet<GlobalId>,
-    ) -> BTreeSet<Arc<OptimizerNotice>> {
-        // Collect dropped notices in this set.
-        let mut dropped_notices = BTreeSet::new();
-
-        // Remove plans and metainfo.optimizer_notices entries.
-        for id in drop_ids {
-            self.plans.optimized_plan_by_id.remove(id);
-            self.plans.physical_plan_by_id.remove(id);
-            if let Some(mut metainfo) = self.plans.dataflow_metainfos.remove(id) {
-                soft_assert_or_log!(
-                    metainfo.optimizer_notices.iter().all_unique(),
-                    "should have been pushed there by `push_optimizer_notice_dedup`"
-                );
-                for n in metainfo.optimizer_notices.drain(..) {
-                    // Remove the corresponding notices_by_dep_id entries.
-                    for dep_id in n.dependencies.iter() {
-                        if let Some(notices) = self.plans.notices_by_dep_id.get_mut(dep_id) {
-                            soft_assert_or_log!(
-                                notices.iter().any(|x| &n == x),
-                                "corrupt notices_by_dep_id"
-                            );
-                            notices.retain(|x| &n != x)
-                        }
-                    }
-                    dropped_notices.insert(n);
-                }
-            }
-        }
-
-        // Remove notices_by_dep_id entries.
-        for id in drop_ids {
-            if let Some(mut notices) = self.plans.notices_by_dep_id.remove(id) {
-                for n in notices.drain(..) {
-                    // Remove the corresponding metainfo.optimizer_notices entries.
-                    if let Some(item_id) = n.item_id.as_ref() {
-                        if let Some(metainfo) = self.plans.dataflow_metainfos.get_mut(item_id) {
-                            metainfo.optimizer_notices.iter().for_each(|n2| {
-                                if let Some(item_id_2) = n2.item_id {
-                                    soft_assert_eq_or_log!(item_id_2, *item_id, "a notice's item_id should match the id for whom we have saved the notice");
-                                }
-                            });
-                            metainfo.optimizer_notices.retain(|x| &n != x);
-                        }
-                    }
-                    dropped_notices.insert(n);
-                }
-            }
-        }
-
-        // Collect dependency ids not in drop_ids with at least one dropped
-        // notice.
-        let mut todo_dep_ids = BTreeSet::new();
-        for notice in dropped_notices.iter() {
-            for dep_id in notice.dependencies.iter() {
-                if !drop_ids.contains(dep_id) {
-                    todo_dep_ids.insert(*dep_id);
-                }
-            }
-        }
-        // Remove notices in `dropped_notices` for all `notices_by_dep_id`
-        // entries in `todo_dep_ids`.
-        for id in todo_dep_ids {
-            if let Some(notices) = self.plans.notices_by_dep_id.get_mut(&id) {
-                notices.retain(|n| !dropped_notices.contains(n))
-            }
-        }
-
-        // (We used to have a sanity check here that
-        // `dropped_notices.iter().any(|n| Arc::strong_count(n) != 1)`
-        // but this is not a correct assertion: There might be other clones of the catalog (e.g. if
-        // a peek is running concurrently to an index drop), in which case those clones also hold
-        // references to the notices.)
-
-        dropped_notices
+        let entry = self.state.try_get_entry_by_global_id(id)?;
+        entry.item().dataflow_metainfo()
     }
 }
 

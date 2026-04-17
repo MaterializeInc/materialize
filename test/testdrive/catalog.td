@@ -866,3 +866,19 @@ $ psql-execute command="\dT"
  mz_catalog | uint4             |
  mz_catalog | uint8             |
  public     | type1             |
+
+# Test that optimizer notices don't break catalog consistency checks.
+# Creating a duplicate index generates an "identical index already
+# exists" notice with non-empty dependencies, which populates
+# notices_by_dep_id in CatalogState. The consistency check (which
+# compares in-memory vs on-disk catalog state) must not fail due to
+# this — notices_by_dep_id should be #[serde(skip)] since the on-disk
+# catalog doesn't run bootstrap.
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_mz_notices TO true;
+
+> CREATE TABLE notice_test_tbl (a int)
+
+> CREATE INDEX notice_test_idx ON notice_test_tbl (a)
+
+> CREATE INDEX notice_test_idx_dup ON notice_test_tbl (a)
