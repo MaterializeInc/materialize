@@ -542,9 +542,10 @@ each materialized view with a refresh strategy other than `on-commit`.
 
 ## `mz_mcp_data_products`
 
-The `mz_mcp_data_products` view lists data products (i.e., indexed materialized
-views) that are available through the Model Context Protocol (MCP) server and
-that the current user can access. This is a lightweight discovery view. Use
+The `mz_mcp_data_products` view lists data products (materialized views)
+that are available through the Model Context Protocol (MCP) server and
+that the current user has SELECT access on. Indexes and comments are optional
+enrichment. This is a lightweight discovery view. Use
 [`mz_mcp_data_product_details`](#mz_mcp_data_product_details) for full column
 schema information.
 
@@ -552,8 +553,8 @@ schema information.
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the index is hosted.                                                       |
-| `description` | [`text`] | Index comment (used as data product description).                                        |
+| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. The object can be read from any cluster. |
+| `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 
 ## `mz_mcp_data_product_details`
 
@@ -564,8 +565,8 @@ with a JSON Schema describing each data product's columns and types.
 | Field         | Type     | Meaning                                                                                  |
 | ------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `object_name` | [`text`] | Fully qualified object name (database.schema.name).                                      |
-| `cluster`     | [`text`] | Cluster where the index is hosted.                                                       |
-| `description` | [`text`] | Index comment (used as data product description).                                        |
+| `cluster`     | [`text`] | Cluster where the object computes or its index is hosted. The object can be read from any cluster. |
+| `description` | [`text`] | Index comment if available, otherwise object comment. Used as data product description.   |
 | `schema`      | [`jsonb`]| JSON Schema describing the object's columns and types.                                   |
 
 ## `mz_object_dependencies`
