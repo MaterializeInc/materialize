@@ -244,6 +244,7 @@ type CodeBlockExtraProps = {
 
 type TabbedCodeBlockProps = CodeBlockExtraProps & {
   tabs: Tab[];
+  onTabChange?: (title: string) => void;
 };
 
 type CodeBlockProps = CodeBlockTab & CodeBlockExtraProps;
@@ -267,6 +268,7 @@ export const TabbedCodeBlock: React.FC<
   lineNumbers,
   wrap,
   headingIcon,
+  onTabChange,
   ...props
 }: TabbedCodeBlockProps & BoxProps) => {
   const { colors, shadows } = useTheme<MaterializeTheme>();
@@ -314,7 +316,10 @@ export const TabbedCodeBlock: React.FC<
               <CodeBlockHeading
                 key={`codeblock-tab-${title}`}
                 as="button"
-                onClick={() => setActiveTabTitle(title)}
+                onClick={() => {
+                  setActiveTabTitle(title);
+                  onTabChange?.(title);
+                }}
                 borderBottom="1px solid"
                 borderColor={
                   title === activeTabTitle
