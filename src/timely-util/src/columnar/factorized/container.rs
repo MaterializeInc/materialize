@@ -15,10 +15,10 @@
 
 //! Columnar-backed [`BatchContainer`] implementation.
 //!
-//! [`Coltainer`] wraps a columnar [`Container`](columnar::Container) and provides
+//! [`Coltainer`] wraps a columnar [`Container`] and provides
 //! the [`BatchContainer`] interface required by differential-dataflow's trace
-//! infrastructure. Indexed access uses columnar's [`Borrow`](columnar::Borrow) +
-//! [`Index`](columnar::Index) traits.
+//! infrastructure. Indexed access uses columnar's [`Borrow`] +
+//! [`Index`] traits.
 
 use columnar::{Borrow, Columnar, Container, Index, Len};
 use differential_dataflow::trace::implementations::BatchContainer;

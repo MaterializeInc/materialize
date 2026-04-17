@@ -238,6 +238,7 @@ mod columnar {
     }
 
     /// Cursor for [`Overflows`]. Wraps inner cursor, converts each `TC::Ref` into `Overflowing<T>`.
+    #[derive(Debug)]
     pub struct OverflowsCursor<T, I> {
         inner: I,
         _phantom: std::marker::PhantomData<T>,

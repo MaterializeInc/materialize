@@ -303,10 +303,7 @@ where
     ///
     /// Uses `for_each` style because cursor iterators borrow the container, which is
     /// incompatible with `flat_map`'s `FnMut` closure requirement.
-    pub fn for_each_cursor(
-        &self,
-        mut f: impl FnMut(<AV as Borrow>::Ref<'_>, <BV as Borrow>::Ref<'_>, <CC as Borrow>::Ref<'_>),
-    ) {
+    pub fn for_each_cursor(&self, mut f: impl FnMut(AV::Ref<'_>, BV::Ref<'_>, CC::Ref<'_>)) {
         let a_lists = self.lists.borrow();
         let b_lists = self.rest.lists.borrow();
         let c_lists = self.rest.rest.borrow();
