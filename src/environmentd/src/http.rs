@@ -1230,11 +1230,11 @@ async fn auth(
         Authenticator::Oidc(oidc) => match creds {
             Some(Credentials::Token { token }) => {
                 // Validate JWT token
-                let (claims, authenticated) = oidc
+                let (mut claims, authenticated) = oidc
                     .authenticate(&token, None)
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
-                let name = claims.user;
+                let name = std::mem::take(&mut claims.user);
                 (name, None, authenticated)
             }
             _ => {

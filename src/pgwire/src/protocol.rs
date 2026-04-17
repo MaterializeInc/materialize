@@ -262,12 +262,12 @@ where
             };
             let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
             match auth_response {
-                Ok((claims, authenticated)) => {
+                Ok((mut claims, authenticated)) => {
                     let session = adapter_client.new_session(
                         SessionConfig {
                             conn_id: conn.conn_id().clone(),
                             uuid: conn_uuid,
-                            user: claims.user,
+                            user: std::mem::take(&mut claims.user),
                             client_ip: conn.peer_addr().clone(),
                             external_metadata_rx: None,
                             helm_chart_version,
