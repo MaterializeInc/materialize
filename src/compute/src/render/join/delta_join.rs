@@ -236,17 +236,18 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     }
                                 }
                                 Err(trace) => {
+                                    type Enter<T> = RowRowEnter<mz_repr::Timestamp, Diff, T>;
                                     fn cmp_le<T: RenderTimestamp>(
-                                        t1: <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
+                                        t1: <Enter<T> as LayoutExt>::TimeGat<'_>,
                                         t2: &T,
                                     ) -> bool {
-                                        <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).le(t2)
+                                        <Enter<T> as LayoutExt>::owned_time(t1).le(t2)
                                     }
                                     fn cmp_lt<T: RenderTimestamp>(
-                                        t1: <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
+                                        t1: <Enter<T> as LayoutExt>::TimeGat<'_>,
                                         t2: &T,
                                     ) -> bool {
-                                        <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).lt(t2)
+                                        <Enter<T> as LayoutExt>::owned_time(t1).lt(t2)
                                     }
                                     if source_relation < lookup_relation {
                                         build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
