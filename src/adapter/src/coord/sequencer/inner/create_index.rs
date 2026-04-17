@@ -508,6 +508,21 @@ impl Coordinator {
             )
         };
 
+        // Populate the durable expression cache before the catalog
+        // transaction and await the write. This way any other envd (or a
+        // subsequent bootstrap here) will observe the cached plans +
+        // rendered notices as soon as the item becomes visible.
+        self.catalog()
+            .cache_expressions(
+                global_id,
+                None,
+                global_mir_plan.df_desc().clone(),
+                df_desc.clone(),
+                df_meta.clone(),
+                optimizer_features,
+            )
+            .await;
+
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
@@ -521,10 +536,6 @@ impl Coordinator {
 
                     let notice_builtin_updates_fut =
                         coord.persist_dataflow_metainfo(df_meta, global_id).await;
-
-                    coord
-                        .catalog()
-                        .cache_expressions(global_id, None, optimizer_features);
 
                     // We're putting in place read holds, such that ship_dataflow,
                     // below, which calls update_read_capabilities, can successfully

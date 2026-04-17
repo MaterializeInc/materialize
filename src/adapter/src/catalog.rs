@@ -51,7 +51,6 @@ use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::result::ResultExt as _;
-use mz_ore::soft_panic_or_log;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -1311,32 +1310,28 @@ impl Catalog {
             .deserialize_plan_with_enable_for_item_parsing(create_sql, force_if_exists_skip)
     }
 
-    /// Cache global and, optionally, local expressions for the given `GlobalId`.
+    /// Cache global and, optionally, local expressions for the given
+    /// `GlobalId`.
     ///
-    /// This takes the required plans and metainfo from the catalog and expects that they were
-    /// previously stored via [`Catalog::set_optimized_plan`], [`Catalog::set_physical_plan`], and
-    /// [`Catalog::set_dataflow_metainfo`].
+    /// Takes the plans and metainfo directly as parameters (rather than
+    /// fishing them out of catalog state), so this can be called **before**
+    /// the catalog transaction that creates the item. Returns the future
+    /// returned by [`Catalog::update_expression_cache`]; callers should
+    /// `.await` it before the catalog transaction commits, so the durable
+    /// expression cache is observed to contain the entries by the time any
+    /// other process (or a subsequent bootstrap on this process) reads them.
     pub(crate) fn cache_expressions(
         &self,
         id: GlobalId,
         local_mir: Option<OptimizedMirRelationExpr>,
+        mut global_mir: DataflowDescription<OptimizedMirRelationExpr>,
+        mut physical_plan: DataflowDescription<mz_compute_types::plan::Plan>,
+        dataflow_metainfos: DataflowMetainfo<Arc<OptimizerNotice>>,
         optimizer_features: OptimizerFeatures,
-    ) {
-        let Some(mut global_mir) = self.try_get_optimized_plan(&id).cloned() else {
-            soft_panic_or_log!("optimized plan missing for ID {id}");
-            return;
-        };
-        let Some(mut physical_plan) = self.try_get_physical_plan(&id).cloned() else {
-            soft_panic_or_log!("physical plan missing for ID {id}");
-            return;
-        };
-        let Some(dataflow_metainfos) = self.try_get_dataflow_metainfo(&id).cloned() else {
-            soft_panic_or_log!("dataflow metainfo missing for ID {id}");
-            return;
-        };
-
-        // Make sure we're not caching the result of timestamp selection, as it will almost
-        // certainly be wrong if we re-install the dataflow at a later time.
+    ) -> BoxFuture<'static, ()> {
+        // Make sure we're not caching the result of timestamp selection, as
+        // it will almost certainly be wrong if we re-install the dataflow at
+        // a later time.
         global_mir.as_of = None;
         global_mir.until = Default::default();
         physical_plan.as_of = None;
@@ -1361,7 +1356,7 @@ impl Catalog {
                 optimizer_features,
             },
         )];
-        let _fut = self.update_expression_cache(local_exprs, global_exprs, Default::default());
+        self.update_expression_cache(local_exprs, global_exprs, Default::default())
     }
 
     pub(crate) fn update_expression_cache<'a, 'b>(
