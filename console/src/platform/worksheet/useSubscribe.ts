@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// TODO: Switch to @materializeinc/sql-parser when published.
-import { inject_progress } from "@sjwiesman/sql-parser";
+import { inject_progress } from "@materializeinc/sql-parser";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback, useEffect, useRef } from "react";
 

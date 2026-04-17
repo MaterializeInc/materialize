@@ -9,9 +9,8 @@
 
 import { useColorMode } from "@chakra-ui/react";
 import { getKeywords } from "@materializeinc/sql-lexer";
+import { parse } from "@materializeinc/sql-parser";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
-// TODO: Switch to @materializeinc/sql-parser when published.
-import { parse } from "@sjwiesman/sql-parser";
 import { useAtom, useAtomValue } from "jotai";
 import type * as monacoEditor from "monaco-editor";
 import React, { useCallback, useEffect, useRef } from "react";
