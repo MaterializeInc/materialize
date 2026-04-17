@@ -56,21 +56,10 @@ use chunker::FactTrieChunker;
 /// A spine of factorized columnar batches.
 pub type FactValSpine<K, V, T, R> = Spine<Rc<FactBatch<K, V, T, R>>>;
 
-/// A batcher that consolidates [`Column`](crate::columnar::Column) input and
-/// merges sorted chains as factorized [`KVUpdates`] trie chunks. Key/value
-/// dedup happens inside the batcher pipeline, not only at final-batch time.
-///
-/// Matches the [`Col2ValBatcher`](crate::columnar::Col2ValBatcher) input shape
-/// used by the production render path.
+/// A batcher that consolidates `Vec<((K, V), T, R)>` input and merges sorted
+/// chains as factorized [`KVUpdates`] trie chunks. Key/value dedup happens
+/// inside the batcher pipeline, not only at final-batch time.
 pub type FactValBatcher<K, V, T, R> = MergeBatcher<
-    crate::columnar::Column<((K, V), T, R)>,
-    FactTrieChunker<K, V, T, R>,
-    FactTrieInternalMerger<K, V, T, R>,
->;
-
-/// A `Vec<..>`-input variant of [`FactValBatcher`] for benches and examples
-/// that push flat tuple batches without going through a columnar channel.
-pub type FactVecValBatcher<K, V, T, R> = MergeBatcher<
     Vec<((K, V), T, R)>,
     FactTrieChunker<K, V, T, R>,
     FactTrieInternalMerger<K, V, T, R>,

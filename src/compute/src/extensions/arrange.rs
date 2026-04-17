@@ -356,54 +356,54 @@ where
     }
 }
 
-// impl<'scope, T, V, R> ArrangementSize for Arranged<'scope, RowValAgent<V, T, R>>
-// where
-//     T: MzTimestamp,
-//     V: Data + MzArrangeData,
-//     R: Semigroup + Ord + MzArrangeData + 'static,
-// {
-//     fn log_arrangement_size(self) -> Self {
-//         log_arrangement_size_inner(self, |batch| {
-//             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-//             let mut callback = |siz, cap| {
-//                 size += siz;
-//                 capacity += cap;
-//                 allocations += usize::from(cap > 0);
-//             };
-//             batch.storage.keys.heap_size(&mut callback);
-//             batch.storage.vals.offs.heap_size(&mut callback);
-//             batch.storage.vals.vals.heap_size(&mut callback);
-//             batch.storage.upds.offs.heap_size(&mut callback);
-//             batch.storage.upds.times.heap_size(&mut callback);
-//             batch.storage.upds.diffs.heap_size(&mut callback);
-//             (size, capacity, allocations)
-//         })
-//     }
-// }
+impl<'scope, T, V, R> ArrangementSize for Arranged<'scope, RowValAgent<V, T, R>>
+where
+    T: MzTimestamp,
+    V: Data + MzArrangeData,
+    R: Semigroup + Ord + MzArrangeData + 'static,
+{
+    fn log_arrangement_size(self) -> Self {
+        log_arrangement_size_inner(self, |batch| {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                size += siz;
+                capacity += cap;
+                allocations += usize::from(cap > 0);
+            };
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
+            (size, capacity, allocations)
+        })
+    }
+}
 
-// impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowRowAgent<T, R>>
-// where
-//     T: MzTimestamp,
-//     R: Semigroup + Ord + MzArrangeData + 'static,
-// {
-//     fn log_arrangement_size(self) -> Self {
-//         log_arrangement_size_inner(self, |batch| {
-//             let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-//             let mut callback = |siz, cap| {
-//                 size += siz;
-//                 capacity += cap;
-//                 allocations += usize::from(cap > 0);
-//             };
-//             batch.storage.keys.heap_size(&mut callback);
-//             batch.storage.vals.offs.heap_size(&mut callback);
-//             batch.storage.vals.vals.heap_size(&mut callback);
-//             batch.storage.upds.offs.heap_size(&mut callback);
-//             batch.storage.upds.times.heap_size(&mut callback);
-//             batch.storage.upds.diffs.heap_size(&mut callback);
-//             (size, capacity, allocations)
-//         })
-//     }
-// }
+impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowRowAgent<T, R>>
+where
+    T: MzTimestamp,
+    R: Semigroup + Ord + MzArrangeData + 'static,
+{
+    fn log_arrangement_size(self) -> Self {
+        log_arrangement_size_inner(self, |batch| {
+            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
+            let mut callback = |siz, cap| {
+                size += siz;
+                capacity += cap;
+                allocations += usize::from(cap > 0);
+            };
+            batch.storage.keys.heap_size(&mut callback);
+            batch.storage.vals.offs.heap_size(&mut callback);
+            batch.storage.vals.vals.heap_size(&mut callback);
+            batch.storage.upds.offs.heap_size(&mut callback);
+            batch.storage.upds.times.heap_size(&mut callback);
+            batch.storage.upds.diffs.heap_size(&mut callback);
+            (size, capacity, allocations)
+        })
+    }
+}
 
 impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowAgent<T, R>>
 where

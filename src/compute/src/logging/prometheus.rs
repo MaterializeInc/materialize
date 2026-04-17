@@ -30,7 +30,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
-use crate::row_spine::{RowRowBatcher, RowRowBuilder};
+use crate::row_spine::RowRowBuilder;
 use crate::typedefs::RowRowSpine;
 
 /// The return type of [`construct`].
@@ -174,19 +174,14 @@ pub(super) fn construct(
     });
 
     // Arrange into a trace.
-    let exchange = ExchangeCore::<
-        ColumnBuilder<((mz_repr::Row, mz_repr::Row), Timestamp, mz_repr::Diff)>,
-        _,
-    >::new_core(
+    let exchange = ExchangeCore::<ColumnBuilder<_>, _>::new_core(
         columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>,
     );
     let trace = stream
-        .mz_arrange_core::<
-            _,
-            RowRowBatcher<Timestamp, Diff>,
-            RowRowBuilder<Timestamp, Diff>,
-            RowRowSpine<Timestamp, Diff>,
-        >(exchange, "Arrange PrometheusMetrics")
+        .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            exchange,
+            "Arrange PrometheusMetrics",
+        )
         .trace;
     let token: Rc<dyn std::any::Any> = Rc::new(());
     let collection = LogCollection { trace, token };

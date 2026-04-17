@@ -12,7 +12,7 @@
 //! representations only need to commit to implementing these traits.
 
 use crate::row::DatumListIter;
-use crate::{Datum, Row, RowRef};
+use crate::{Datum, Row};
 
 /// A helper trait to turn a type into an iterator of datums.
 pub trait ToDatumIter: Sized {
@@ -39,17 +39,6 @@ impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
 impl ToDatumIter for Row {
     /// Datum iterator for `Row`.
     type DatumIter<'a> = DatumListIter<'a>;
-
-    /// Borrows `self` and gets an iterator from it.
-    #[inline]
-    fn to_datum_iter(&self) -> Self::DatumIter<'_> {
-        self.iter()
-    }
-}
-
-impl ToDatumIter for &RowRef {
-    /// Datum iterator for `Row`.
-    type DatumIter<'a> = DatumListIter<'a> where Self: 'a;
 
     /// Borrows `self` and gets an iterator from it.
     #[inline]

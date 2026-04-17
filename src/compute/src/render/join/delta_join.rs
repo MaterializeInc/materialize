@@ -207,7 +207,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                             local.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.le(*t2),
+                                            |t1, t2| t1.le(t2),
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
@@ -639,7 +639,7 @@ where
                                     // Collect contributing (time, diff) pairs before invoking the closure.
                                     cursor.map_times(batch, |time, diff| {
                                         if source_relation == 0
-                                            || inner_as_of.elements().iter().all(|e| e != &time)
+                                            || inner_as_of.elements().iter().all(|e| e != time)
                                         {
                                             // TODO: Consolidate as we push, defensively.
                                             times_diffs

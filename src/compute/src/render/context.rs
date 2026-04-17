@@ -25,7 +25,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, RowRef, SharedRow};
+use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -241,7 +241,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         VecCollection<'scope, T, DataflowError, Diff>,
     ) {
         let mut datums = DatumVec::new();
-        let logic = move |k: &RowRef, v: &RowRef| {
+        let logic = move |k: DatumSeq, v: DatumSeq| {
             let mut datums_borrow = datums.borrow();
             datums_borrow.extend(k);
             datums_borrow.extend(v);
@@ -291,7 +291,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         let refuel = 1000000;
 
         let mut datums = DatumVec::new();
-        let logic = move |k: &RowRef, v: &RowRef, t, d| {
+        let logic = move |k: DatumSeq, v: DatumSeq, t, d| {
             let mut datums_borrow = datums.borrow();
             datums_borrow.extend(k.to_datum_iter().take(max_demand));
             let max_demand = max_demand.saturating_sub(datums_borrow.len());
