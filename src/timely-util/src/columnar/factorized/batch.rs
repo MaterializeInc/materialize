@@ -649,14 +649,14 @@ where
 
 // --- Builder ---
 
-/// A builder for [`FactBatch`] that receives sorted `((K, V), T, R)` chunks.
+/// A builder for [`FactBatch`] that receives sorted factorized trie chunks.
 ///
-/// Accumulates items from sorted chunks, then builds the trie in [`done()`](Builder::done)
-/// using [`form()`](KVUpdates::form). Items within and across chunks must arrive
-/// in `(key, val, time)` order.
-pub struct FactBuilder<K, V, T, R> {
-    /// Accumulated sorted items. Built into a trie in `done()`.
-    buffer: Vec<((K, V), T, R)>,
+/// Chunks arrive pre-sorted and pre-consolidated from the batcher pipeline, with
+/// consecutive chunks holding disjoint key ranges. [`done`](Builder::done) flattens
+/// the chain through [`KVUpdates::form`] to produce a single fully-deduplicated trie.
+pub struct FactBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
+    /// Accumulated trie chunks; flattened in `done()`.
+    chunks: Vec<KVUpdates<K, V, T, R>>,
 }
 
 impl<K, V, T, R> Builder for FactBuilder<K, V, T, R>
@@ -670,23 +670,21 @@ where
     R: Columnar + Ord + Clone + Semigroup + 'static,
     for<'a> columnar::Ref<'a, R>: Ord + Copy,
 {
-    type Input = Vec<((K, V), T, R)>;
+    type Input = KVUpdates<K, V, T, R>;
     type Time = T;
     type Output = FactBatch<K, V, T, R>;
 
     fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        FactBuilder { buffer: Vec::new() }
+        FactBuilder { chunks: Vec::new() }
     }
 
     fn push(&mut self, chunk: &mut Self::Input) {
-        self.buffer.append(chunk);
+        self.chunks.push(std::mem::take(chunk));
     }
 
     fn done(self, description: Description<T>) -> FactBatch<K, V, T, R> {
-        let updates = self.buffer.len();
-        let refs = self.buffer.iter().map(|((k, v), t, r)| (k, v, (t, r)));
-        let storage = KVUpdates::<K, V, T, R>::form(refs);
-
+        let updates: usize = self.chunks.iter().map(|c| c.len()).sum();
+        let storage = KVUpdates::<K, V, T, R>::form(self.chunks.iter().flat_map(|c| c.iter()));
         FactBatch {
             storage,
             description,
@@ -696,8 +694,8 @@ where
 
     fn seal(chain: &mut Vec<Self::Input>, description: Description<T>) -> FactBatch<K, V, T, R> {
         let mut builder = Self::with_capacity(0, 0, 0);
-        for chunk in chain.drain(..) {
-            builder.push(&mut { chunk });
+        for mut chunk in chain.drain(..) {
+            builder.push(&mut chunk);
         }
         builder.done(description)
     }
@@ -944,14 +942,19 @@ mod tests {
         assert_eq!(result, vec![(1, 10, vec![(500, 2)])]);
     }
 
+    /// Helper: build a sorted `KVUpdates` chunk from `(K, V, T, R)` tuples.
+    fn make_chunk_u64(data: &[(u64, u64, u64, i64)]) -> KVUpdates<u64, u64, u64, i64> {
+        KVUpdates::<u64, u64, u64, i64>::form(data.iter().map(|(k, v, t, d)| (k, v, (t, d))))
+    }
+
     #[mz_ore::test]
     fn test_builder_single_chunk() {
-        let mut chunk = vec![
-            ((1u64, 10u64), 100u64, 1i64),
-            ((1, 10), 200, 1),
-            ((1, 20), 300, -1),
-            ((2, 30), 400, 1),
-        ];
+        let mut chunk = make_chunk_u64(&[
+            (1, 10, 100, 1),
+            (1, 10, 200, 1),
+            (1, 20, 300, -1),
+            (2, 30, 400, 1),
+        ]);
         let mut builder = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
         builder.push(&mut chunk);
         let batch = builder.done(Description::new(
@@ -973,8 +976,9 @@ mod tests {
 
     #[mz_ore::test]
     fn test_builder_multiple_chunks() {
-        let mut chunk1 = vec![((1u64, 10u64), 100u64, 1i64), ((1, 20), 200, 1)];
-        let mut chunk2 = vec![((2u64, 30u64), 300u64, 1i64), ((3, 40), 400, -1)];
+        // Chunks must hold disjoint key ranges, matching the batcher invariant.
+        let mut chunk1 = make_chunk_u64(&[(1, 10, 100, 1), (1, 20, 200, 1)]);
+        let mut chunk2 = make_chunk_u64(&[(2, 30, 300, 1), (3, 40, 400, -1)]);
 
         let mut builder = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
         builder.push(&mut chunk1);
@@ -1000,7 +1004,7 @@ mod tests {
     #[mz_ore::test]
     fn test_builder_empty() {
         let mut builder = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
-        builder.push(&mut vec![]);
+        builder.push(&mut KVUpdates::<u64, u64, u64, i64>::default());
         let batch = builder.done(Description::new(
             Antichain::from_elem(0u64),
             Antichain::from_elem(1000u64),
@@ -1014,8 +1018,8 @@ mod tests {
     #[mz_ore::test]
     fn test_builder_seal() {
         let mut chain = vec![
-            vec![((1u64, 10u64), 100u64, 1i64)],
-            vec![((2u64, 20u64), 200u64, 1i64)],
+            make_chunk_u64(&[(1, 10, 100, 1)]),
+            make_chunk_u64(&[(2, 20, 200, 1)]),
         ];
         let batch = FactBuilder::<u64, u64, u64, i64>::seal(
             &mut chain,
@@ -1040,13 +1044,16 @@ mod tests {
     /// `Vec<u8>`, they satisfy for `Row`.
     #[mz_ore::test]
     fn test_byte_vec_keyed_batch() {
-        let mut chunk: Vec<((Vec<u8>, Vec<u8>), u64, i64)> = vec![
+        let mut tuples: Vec<((Vec<u8>, Vec<u8>), u64, i64)> = vec![
             ((b"a".to_vec(), b"x".to_vec()), 100, 1),
             ((b"a".to_vec(), b"x".to_vec()), 200, 1),
             ((b"a".to_vec(), b"y".to_vec()), 100, -1),
             ((b"b".to_vec(), b"z".to_vec()), 100, 2),
         ];
-        chunk.sort();
+        tuples.sort();
+        let mut chunk = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+            tuples.iter().map(|((k, v), t, r)| (k, v, (t, r))),
+        );
 
         let mut builder = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
         builder.push(&mut chunk);
@@ -1075,9 +1082,11 @@ mod tests {
         assert_eq!(update_count, 4);
 
         // Merge two Vec<u8>-keyed batches.
-        let mut chunk2: Vec<((Vec<u8>, Vec<u8>), u64, i64)> =
+        let tuples2: Vec<((Vec<u8>, Vec<u8>), u64, i64)> =
             vec![((b"a".to_vec(), b"x".to_vec()), 300, 1)];
-        chunk2.sort();
+        let mut chunk2 = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+            tuples2.iter().map(|((k, v), t, r)| (k, v, (t, r))),
+        );
         let mut b2 = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
         b2.push(&mut chunk2);
         let batch2 = b2.done(Description::new(

@@ -30,6 +30,8 @@
 //! * [`FactorizedColumns::form`] — build a trie from a sorted iterator, deduplicating at each level.
 
 pub mod batch;
+pub mod batcher;
+pub mod chunker;
 pub mod column;
 pub mod container;
 pub mod layout;
@@ -42,26 +44,25 @@ use columnar::primitive::offsets::Strides;
 use columnar::{
     AsBytes, Borrow, ContainerOf, FromBytes, Index, IndexAs, Len, Lookbacks, Push, Repeats, Vecs,
 };
-use differential_dataflow::trace::implementations::chunker::ContainerChunker;
 use differential_dataflow::trace::implementations::merge_batcher::MergeBatcher;
-use differential_dataflow::trace::implementations::merge_batcher::container::VecInternalMerger;
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 use mz_ore::cast::CastFrom;
 
 use batch::{FactBatch, FactBuilder};
+use batcher::FactTrieInternalMerger;
+use chunker::FactTrieChunker;
 
 /// A spine of factorized columnar batches.
 pub type FactValSpine<K, V, T, R> = Spine<Rc<FactBatch<K, V, T, R>>>;
 
-/// A batcher that sorts and merges `Vec<((K, V), T, R)>` chunks for factorized batches.
-///
-/// Uses the standard DD merge batcher with Vec containers. The factorization
-/// (trie building) happens in [`FactBuilder`], not in the batcher.
+/// A batcher that consolidates `Vec<((K, V), T, R)>` input and merges sorted
+/// chains as factorized [`KVUpdates`] trie chunks. Key/value dedup happens
+/// inside the batcher pipeline, not only at final-batch time.
 pub type FactValBatcher<K, V, T, R> = MergeBatcher<
     Vec<((K, V), T, R)>,
-    ContainerChunker<Vec<((K, V), T, R)>>,
-    VecInternalMerger<(K, V), T, R>,
+    FactTrieChunker<K, V, T, R>,
+    FactTrieInternalMerger<K, V, T, R>,
 >;
 
 /// A builder producing `Rc<FactBatch>` for use with [`FactValSpine`].
@@ -796,11 +797,11 @@ mod tests {
         use batch::{FactBuilder, FactMerger};
 
         // Build two abutting batches.
-        let mut chunk1 = vec![
-            ((1u64, 10u64), 100u64, 1i64),
-            ((1, 20), 100, 1),
-            ((2, 30), 100, 1),
-        ];
+        let tuples1: Vec<(u64, u64, u64, i64)> =
+            vec![(1, 10, 100, 1), (1, 20, 100, 1), (2, 30, 100, 1)];
+        let mut chunk1 = KVUpdates::<u64, u64, u64, i64>::form(
+            tuples1.iter().map(|(k, v, t, d)| (k, v, (t, d))),
+        );
         let mut builder1 = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
         builder1.push(&mut chunk1);
         let batch1 = builder1.done(Description::new(
@@ -809,11 +810,11 @@ mod tests {
             Antichain::from_elem(0u64),
         ));
 
-        let mut chunk2 = vec![
-            ((1u64, 10u64), 300u64, 2i64),
-            ((2, 30), 300, -1),
-            ((3, 40), 300, 1),
-        ];
+        let tuples2: Vec<(u64, u64, u64, i64)> =
+            vec![(1, 10, 300, 2), (2, 30, 300, -1), (3, 40, 300, 1)];
+        let mut chunk2 = KVUpdates::<u64, u64, u64, i64>::form(
+            tuples2.iter().map(|(k, v, t, d)| (k, v, (t, d))),
+        );
         let mut builder2 = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
         builder2.push(&mut chunk2);
         let batch2 = builder2.done(Description::new(

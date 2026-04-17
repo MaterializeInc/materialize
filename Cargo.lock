@@ -6128,6 +6128,7 @@ dependencies = [
  "columnar",
  "columnation",
  "core_affinity",
+ "criterion",
  "dec",
  "differential-dataflow",
  "differential-dogs3",

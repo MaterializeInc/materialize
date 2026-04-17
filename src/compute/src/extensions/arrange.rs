@@ -435,9 +435,7 @@ where
 impl<'scope, T, K, V, R> ArrangementSize
     for Arranged<
         'scope,
-        TraceAgent<
-            Spine<Rc<mz_timely_util::columnar::factorized::batch::FactBatch<K, V, T, R>>>,
-        >,
+        TraceAgent<Spine<Rc<mz_timely_util::columnar::factorized::batch::FactBatch<K, V, T, R>>>>,
     >
 where
     T: MzTimestamp,

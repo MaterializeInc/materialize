@@ -83,7 +83,13 @@ where
 
 fn bench_rowrow_arrange(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute/arrange_row");
-    for (n, nk, nv) in [(10_000, 100, 1_000), (100_000, 1_000, 10_000)] {
+    // Third config: high dedup — few distinct keys, many updates per key.
+    // Exposes the structural win of the trie-aware batcher over the flat baseline.
+    for (n, nk, nv) in [
+        (10_000, 100, 1_000),
+        (100_000, 1_000, 10_000),
+        (100_000, 10, 100),
+    ] {
         let data = generate_row_data(n, nk, nv);
         let label = format!("n={n}/k={nk}/v={nv}");
 

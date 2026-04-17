@@ -752,8 +752,8 @@ fn bench_radix_sort(c: &mut Criterion) {
 
 // --- Arrangement stack benchmarks ---
 
-use differential_dataflow::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
 use columnar::Slice;
+use differential_dataflow::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
 use mz_timely_util::columnar::factorized::batch::{FactBatch, FactBuilder};
 use mz_timely_util::columnar::factorized::column::FactColumn;
 use timely::container::{DrainContainer, PushInto};
@@ -785,7 +785,8 @@ fn build_fact_batch(
     lower: u64,
     upper: u64,
 ) -> FactBatch<u64, u64, u64, i64> {
-    let mut chunk: Vec<_> = data.to_vec();
+    let mut chunk =
+        KVUpdates::<u64, u64, u64, i64>::form(data.iter().map(|((k, v), t, d)| (k, v, (t, d))));
     let mut builder = FactBuilder::with_capacity(0, 0, 0);
     builder.push(&mut chunk);
     builder.done(Description::new(
@@ -809,7 +810,9 @@ fn bench_arrangement_builder(c: &mut Criterion) {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_function(BenchmarkId::new("fact_builder", &label), |b| {
             b.iter(|| {
-                let mut chunk = data.clone();
+                let mut chunk = KVUpdates::<u64, u64, u64, i64>::form(
+                    data.iter().map(|((k, v), t, d)| (k, v, (t, d))),
+                );
                 let mut builder = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
                 builder.push(&mut chunk);
                 builder.done(Description::new(
@@ -992,7 +995,9 @@ fn build_row_like_batch(
     lower: u64,
     upper: u64,
 ) -> FactBatch<Vec<u8>, Vec<u8>, u64, i64> {
-    let mut chunk: Vec<_> = data.to_vec();
+    let mut chunk = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+        data.iter().map(|((k, v), t, d)| (k, v, (t, d))),
+    );
     let mut builder = FactBuilder::with_capacity(0, 0, 0);
     builder.push(&mut chunk);
     builder.done(Description::new(
@@ -1015,9 +1020,10 @@ fn bench_arrangement_rowlike_builder(c: &mut Criterion) {
         group.throughput(Throughput::Elements(n as u64));
         group.bench_function(BenchmarkId::new("fact_builder", &label), |b| {
             b.iter(|| {
-                let mut chunk = data.clone();
-                let mut builder =
-                    FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
+                let mut chunk = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+                    data.iter().map(|((k, v), t, d)| (k, v, (t, d))),
+                );
+                let mut builder = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
                 builder.push(&mut chunk);
                 builder.done(Description::new(
                     Antichain::from_elem(0u64),
