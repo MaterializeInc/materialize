@@ -27,6 +27,22 @@ use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColVa
 pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
 
+// --- Factorized (trie-structured) Row arrangement aliases ---
+//
+// Factorized analogues of RowRowSpine/RowRowBuilder/RowRowBatcher backed by
+// the KVUpdates trie from `mz_timely_util::columnar::factorized`. Keys and
+// values are deduplicated via the trie's K → V → (T, R) structure.
+
+/// Factorized trie-structured spine for `Row` keys and values.
+pub type FactRowRowSpine<T, R> =
+    mz_timely_util::columnar::factorized::FactValSpine<mz_repr::Row, mz_repr::Row, T, R>;
+/// Batcher for [`FactRowRowSpine`].
+pub type FactRowRowBatcher<T, R> =
+    mz_timely_util::columnar::factorized::FactValBatcher<mz_repr::Row, mz_repr::Row, T, R>;
+/// Builder for [`FactRowRowSpine`].
+pub type FactRowRowBuilder<T, R> =
+    mz_timely_util::columnar::factorized::FactValBuilder<mz_repr::Row, mz_repr::Row, T, R>;
+
 pub(crate) mod spines {
     use std::rc::Rc;
 
