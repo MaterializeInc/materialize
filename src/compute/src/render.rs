@@ -161,8 +161,11 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
-use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder, RowRowSpine};
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
+use crate::row_spine::DatumSeq;
+use crate::typedefs::{
+    ErrBatcher, ErrBuilder, ErrSpine, FactRowRowBatcher, FactRowRowBuilder, FactRowRowSpine,
+    KeyBatcher, MzTimestamp,
+};
 
 pub mod context;
 pub(crate) mod continual_task;
@@ -730,7 +733,13 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
+            Some(ArrangementFlavor::Local(..)) => {
+                unreachable!(
+                    "index export: ArrangementFlavor::Local no longer emitted, \
+                     pending tier-5 cleanup"
+                )
+            }
+            Some(ArrangementFlavor::FactLocal(mut oks, mut errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -751,35 +760,6 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
-                compute_state.traces.set(
-                    idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
-                );
-            }
-            Some(ArrangementFlavor::FactLocal(oks, mut errs)) => {
-                // TraceBundle is hardcoded to PaddedTrace<RowRowAgent>, so we bridge
-                // FactLocal → Local here by flattening the factorized trace and
-                // re-arranging under the RowRowSpine. This costs one extra arrangement
-                // pass per exported index; migrating TraceBundle itself would remove it.
-                let mut oks = oks
-                    .as_collection(|k, v| (k.to_row(), v.to_row()))
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        "Bridge FactLocal→Local for index export",
-                    );
-                if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.stream = oks.stream.expire_stream_at(
-                        &format!("{}_export_index_oks", self.debug_name),
-                        expiration,
-                    );
-                    errs.stream = errs.stream.expire_stream_at(
-                        &format!("{}_export_index_errs", self.debug_name),
-                        expiration,
-                    );
-                }
-                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
-                if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
-                }
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -838,14 +818,20 @@ where
         });
 
         match bundle.arrangement(&idx.key) {
-            Some(ArrangementFlavor::Local(oks, errs)) => {
-                // TODO: The following as_collection/leave/arrange sequence could be optimized.
-                //   * Combine as_collection and leave into a single function.
-                //   * Use columnar to extract columns from the batches to implement leave.
+            Some(ArrangementFlavor::Local(..)) => {
+                unreachable!(
+                    "index export iterative: ArrangementFlavor::Local no longer emitted, \
+                     pending tier-5 cleanup"
+                )
+            }
+            Some(ArrangementFlavor::FactLocal(oks, errs)) => {
+                // The `leave(outer)` region boundary loses trace identity, so we
+                // still need to re-arrange on the way out. Produce a Fact spine
+                // directly now that TraceBundle stores FactRowRowAgent.
                 let mut oks = oks
                     .as_collection(|k, v| (k.to_row(), v.to_row()))
                     .leave(outer)
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
+                    .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
                         "Arrange export iterative",
                     );
 
@@ -872,45 +858,6 @@ where
                 oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
 
                 // Attach logging of dataflow errors.
-                if let Some(logger) = compute_state.compute_logger.clone() {
-                    errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
-                }
-
-                compute_state.traces.set(
-                    idx_id,
-                    TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
-                );
-            }
-            Some(ArrangementFlavor::FactLocal(oks, errs)) => {
-                // Bridge FactLocal → Local across the region boundary. Same rationale
-                // as the non-iterative branch: TraceBundle expects RowRowAgent.
-                let mut oks = oks
-                    .as_collection(|k, v| (k.to_row(), v.to_row()))
-                    .leave(outer)
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
-                        "Bridge FactLocal→Local for iterative index export",
-                    );
-
-                let mut errs = errs
-                    .as_collection(|k, v| (k.clone(), v.clone()))
-                    .leave(outer)
-                    .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                        "Arrange export iterative err",
-                    );
-
-                if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    oks.stream = oks.stream.expire_stream_at(
-                        &format!("{}_export_index_iterative_oks", self.debug_name),
-                        expiration,
-                    );
-                    errs.stream = errs.stream.expire_stream_at(
-                        &format!("{}_export_index_iterative_err", self.debug_name),
-                        expiration,
-                    );
-                }
-
-                oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
-
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }

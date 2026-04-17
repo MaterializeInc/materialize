@@ -48,8 +48,8 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, FactRowRowAgent, RowRowAgent,
-    RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, FactRowRowAgent, FactRowRowEnter,
+    RowRowAgent, RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -240,7 +240,7 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>,
+        Arranged<'scope, FactRowRowEnter<mz_repr::Timestamp, Diff, T>>,
         Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
     ),
 }

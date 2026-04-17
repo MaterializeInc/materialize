@@ -21,7 +21,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::soft_panic_or_log;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::columnar_exchange;
 use prometheus::proto::MetricType;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::ExchangeCore;
@@ -30,8 +30,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::RowRowSpine;
+use crate::typedefs::{FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -178,10 +177,12 @@ pub(super) fn construct(
         columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, mz_repr::Diff>,
     );
     let trace = stream
-        .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-            exchange,
-            "Arrange PrometheusMetrics",
-        )
+        .mz_arrange_core::<
+            _,
+            FactRowRowColBatcher<Timestamp, Diff>,
+            FactRowRowBuilder<Timestamp, Diff>,
+            FactRowRowSpine<Timestamp, Diff>,
+        >(exchange, "Arrange PrometheusMetrics")
         .trace;
     let token: Rc<dyn std::any::Any> = Rc::new(());
     let collection = LogCollection { trace, token };

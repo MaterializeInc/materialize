@@ -29,8 +29,7 @@ use timely::dataflow::operators::generic::operator::empty;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
 use crate::logging::{EventQueue, LogCollection, LogVariant, TimelyLog, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::RowRowSpine;
+use crate::typedefs::{FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -126,9 +125,9 @@ pub(super) fn construct(
                     .clone()
                     .mz_arrange_core::<
                         _,
-                        Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
-                        RowRowSpine<_, _>,
+                        FactRowRowColBatcher<Timestamp, Diff>,
+                        FactRowRowBuilder<Timestamp, Diff>,
+                        FactRowRowSpine<Timestamp, Diff>,
                     >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {

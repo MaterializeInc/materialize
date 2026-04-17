@@ -20,7 +20,7 @@ use mz_compute_client::logging::LoggingConfig;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -41,8 +41,9 @@ use crate::logging::{
     Update,
 };
 use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::{KeyBatcher, KeyValBatcher, RowRowSpine};
+use crate::typedefs::{
+    FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine, KeyBatcher, KeyValBatcher,
+};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -357,10 +358,11 @@ pub(super) fn construct(
             let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
                 // Extract types to make rustfmt happy.
-                type Batcher<K, V, T, R> = Col2ValBatcher<K, V, T, R>;
-                type Builder<T, R> = RowRowBuilder<T, R>;
+                type Batcher = FactRowRowColBatcher<Timestamp, Diff>;
+                type Builder = FactRowRowBuilder<Timestamp, Diff>;
+                type Spine = FactRowRowSpine<Timestamp, Diff>;
                 let trace = collection
-                    .mz_arrange_core::<_, Batcher<_, _, _, _>, Builder<_, _>, RowRowSpine<_, _>>(
+                    .mz_arrange_core::<_, Batcher, Builder, Spine>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                             columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, Diff>,
                         ),

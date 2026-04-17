@@ -159,15 +159,14 @@ where
     }
 }
 
-impl<Tr> FusedIterator for PeekResultIterator<Tr>
-where
+impl<Tr> FusedIterator for PeekResultIterator<Tr> where
     for<'a> Tr: TraceReader<
             Key<'a>: ToDatumIter + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
             DiffGat<'a>: IntoDiff,
-        >,
+        >
 {
 }
 

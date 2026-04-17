@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::{BatchContainer, LayoutExt};
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dyncfgs::ENABLE_HALF_JOIN2;
@@ -38,11 +38,9 @@ use timely::dataflow::operators::generic::Session;
 use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 
-use crate::extensions::arrange::MzArrange;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
-use crate::typedefs::{RowRowAgent, RowRowEnter};
+use crate::typedefs::{FactRowRowAgent, FactRowRowEnter};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
@@ -87,14 +85,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                         lookup_idx, lookup_key,
                                     )
                                 }) {
-                                ArrangementFlavor::Local(oks, errs) => {
-                                    if err_dedup.insert((lookup_idx, lookup_key)) {
-                                        inner_errs.push(
-                                            errs.enter_region(inner)
-                                                .as_collection(|k, _v| k.clone()),
-                                        );
-                                    }
-                                    Ok(oks.enter_region(inner))
+                                ArrangementFlavor::Local(_, _) => {
+                                    unreachable!(
+                                        "delta-join: ArrangementFlavor::Local no longer emitted, \
+                                         pending tier-5 cleanup"
+                                    )
                                 }
                                 ArrangementFlavor::FactLocal(oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
@@ -103,21 +98,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                                 .as_collection(|k, _v| k.clone()),
                                         );
                                     }
-                                    // Bridge FactLocal → Local by flattening + re-arranging
-                                    // in the delta-join region. delta-join consumes
-                                    // RowRowAgent-shaped arrangements; migrating that
-                                    // contract would remove this bridge arrangement.
-                                    let oks = oks
-                                        .as_collection(|k, v| (k.to_row(), v.to_row()))
-                                        .enter_region(inner)
-                                        .mz_arrange::<
-                                            RowRowBatcher<_, _>,
-                                            RowRowBuilder<_, _>,
-                                            RowRowSpine<_, _>,
-                                        >(
-                                            "Bridge FactLocal→Local for delta-join",
-                                        );
-                                    Ok(oks)
+                                    Ok(oks.enter_region(inner))
                                 }
                                 ArrangementFlavor::Trace(_gid, oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
@@ -173,7 +154,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         Ok(local) => {
                             let arranged = local.clone().enter_region(region);
                             let (update_stream, err_stream) =
-                                build_update_stream::<_, RowRowAgent<_, _>>(
+                                build_update_stream::<_, FactRowRowAgent<_, _>>(
                                     arranged,
                                     as_of,
                                     source_relation,
@@ -185,7 +166,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         Err(trace) => {
                             let arranged = trace.clone().enter_region(region);
                             let (update_stream, err_stream) =
-                                build_update_stream::<_, RowRowEnter<_, _, _>>(
+                                build_update_stream::<_, FactRowRowEnter<_, _, _>>(
                                     arranged,
                                     as_of,
                                     source_relation,
@@ -226,46 +207,70 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         let (oks, errs) =
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
                                 Ok(local) => {
+                                    fn cmp_le<T: RenderTimestamp>(
+                                        t1: <FactRowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <FactRowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).le(t2)
+                                    }
+                                    fn cmp_lt<T: RenderTimestamp>(
+                                        t1: <FactRowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <FactRowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).lt(t2)
+                                    }
                                     if source_relation < lookup_relation {
-                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
+                                        build_halfjoin::<_, FactRowRowAgent<_, _>, _>(
                                             update_stream,
                                             local.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.le(t2),
+                                            cmp_le::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
                                     } else {
-                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
+                                        build_halfjoin::<_, FactRowRowAgent<_, _>, _>(
                                             update_stream,
                                             local.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.lt(t2),
+                                            cmp_lt::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
                                     }
                                 }
                                 Err(trace) => {
+                                    fn cmp_le<T: RenderTimestamp>(
+                                        t1: <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).le(t2)
+                                    }
+                                    fn cmp_lt<T: RenderTimestamp>(
+                                        t1: <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).lt(t2)
+                                    }
                                     if source_relation < lookup_relation {
-                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
+                                        build_halfjoin::<_, FactRowRowEnter<_, _, _>, _>(
                                             update_stream,
                                             trace.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.le(t2),
+                                            cmp_le::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
                                     } else {
-                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
+                                        build_halfjoin::<_, FactRowRowEnter<_, _, _>, _>(
                                             update_stream,
                                             trace.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.lt(t2),
+                                            cmp_lt::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
@@ -633,7 +638,6 @@ fn build_update_stream<'scope, T, Tr>(
 )
 where
     T: RenderTimestamp,
-    for<'a, 'b> &'a T: PartialEq<Tr::TimeGat<'b>>,
     Tr: for<'a> TraceReader<Time = T, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: ToDatumIter,
     for<'a> Tr::Val<'a>: ToDatumIter,
@@ -663,12 +667,15 @@ where
                                 while let Some(val) = cursor.get_val(batch) {
                                     // Collect contributing (time, diff) pairs before invoking the closure.
                                     cursor.map_times(batch, |time, diff| {
+                                        let owned_time = Tr::owned_time(time);
                                         if source_relation == 0
-                                            || inner_as_of.elements().iter().all(|e| e != time)
+                                            || inner_as_of
+                                                .elements()
+                                                .iter()
+                                                .all(|e| e != &owned_time)
                                         {
                                             // TODO: Consolidate as we push, defensively.
-                                            times_diffs
-                                                .push((Tr::owned_time(time), Tr::owned_diff(diff)));
+                                            times_diffs.push((owned_time, Tr::owned_diff(diff)));
                                         }
                                     });
                                     differential_dataflow::consolidation::consolidate(

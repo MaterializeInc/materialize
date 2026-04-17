@@ -40,8 +40,8 @@ use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{
-    FactRowRowAgent, FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine, RowRowAgent,
-    RowRowEnter,
+    FactRowRowAgent, FactRowRowBuilder, FactRowRowColBatcher, FactRowRowEnter, FactRowRowSpine,
+    RowRowAgent,
 };
 
 /// Available linear join implementations.
@@ -201,7 +201,7 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     #[allow(dead_code)]
     FactLocal(Arranged<'scope, FactRowRowAgent<T, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
+    Trace(Arranged<'scope, FactRowRowEnter<mz_repr::Timestamp, Diff, T>>),
 }
 
 impl<'scope, T> Context<'scope, T>
@@ -455,7 +455,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, FactRowRowEnter<_, _, _>>(
                             local, oks, closure,
                         );
 
@@ -485,7 +485,7 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
+                        .differential_join_inner::<FactRowRowEnter<_, _, _>, RowRowAgent<_, _>>(
                             trace, oks, closure,
                         );
 
@@ -501,7 +501,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
+                        .differential_join_inner::<FactRowRowEnter<_, _, _>, FactRowRowEnter<_, _, _>>(
                             trace, oks, closure,
                         );
 
