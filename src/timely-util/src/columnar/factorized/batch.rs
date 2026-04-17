@@ -157,6 +157,45 @@ where
     }
 }
 
+/// Galloping search over `[start..end)`.
+///
+/// Returns the count of indices from `start` where `pred(i)` is true, assuming
+/// `pred` is monotone (all true values come before all false ones). Doubles step
+/// size until `pred` flips, then binary-searches within the last interval.
+///
+/// For small ranges (< 8), falls back to linear scan.
+fn galloping_advance(start: usize, end: usize, pred: impl Fn(usize) -> bool) -> usize {
+    const SMALL: usize = 16;
+    if end - start < SMALL {
+        let mut i = start;
+        while i < end && pred(i) {
+            i += 1;
+        }
+        return i - start;
+    }
+    // Gallop: double step until predicate flips to false.
+    let mut step = 1usize;
+    let mut i = start;
+    while i + step < end && pred(i + step) {
+        i += step;
+        step <<= 1;
+    }
+    // Binary search within [i, min(i + step, end)).
+    step = step.min(end - i);
+    while step > 1 {
+        let half = step / 2;
+        if i + half < end && pred(i + half) {
+            i += half;
+        }
+        step -= half;
+    }
+    // Advance past last matching element.
+    if i < end && pred(i) {
+        i += 1;
+    }
+    i - start
+}
+
 // --- Cursor ---
 
 /// A cursor for navigating a [`FactBatch`].
@@ -264,9 +303,12 @@ where
     }
 
     fn seek_key(&mut self, storage: &Self::Storage, key: columnar::Ref<'_, K>) {
-        while self.key_valid(storage) && K::reborrow(self.key(storage)).lt(&K::reborrow(key)) {
-            self.key_cursor += 1;
-        }
+        let end = storage.key_count();
+        let keys = storage.storage.lists.values.borrow();
+        let count = galloping_advance(self.key_cursor, end, |i| {
+            K::reborrow(keys.get(i)).lt(&K::reborrow(key))
+        });
+        self.key_cursor += count;
         if self.key_valid(storage) {
             self.rewind_vals(storage);
         }
@@ -282,10 +324,10 @@ where
     fn seek_val(&mut self, storage: &Self::Storage, val: columnar::Ref<'_, V>) {
         let end = storage.val_range(self.key_cursor).end;
         let vals = storage.storage.rest.lists.values.borrow();
-        while self.val_cursor < end && V::reborrow(vals.get(self.val_cursor)).lt(&V::reborrow(val))
-        {
-            self.val_cursor += 1;
-        }
+        let count = galloping_advance(self.val_cursor, end, |i| {
+            V::reborrow(vals.get(i)).lt(&V::reborrow(val))
+        });
+        self.val_cursor += count;
     }
 
     fn rewind_keys(&mut self, storage: &Self::Storage) {
