@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/equivalence_propagation.rs
-revision: 52af3ba2a1
+revision: 9eff685d95
 ---
 
 # mz-transform::equivalence_propagation
