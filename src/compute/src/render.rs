@@ -163,8 +163,8 @@ use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::DatumSeq;
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, ErrSpine, RowRowBatcher, RowRowBuilder, RowRowSpine,
-    KeyBatcher, MzTimestamp,
+    ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp, RowRowBatcher, RowRowBuilder,
+    RowRowSpine,
 };
 
 pub mod context;

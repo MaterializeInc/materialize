@@ -24,9 +24,7 @@ use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
 use crate::row_spine::RowValBuilder;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
-pub use crate::row_spine::{
-    RowBatcher, RowBuilder, RowSpine, RowValBatcher, RowValSpine,
-};
+pub use crate::row_spine::{RowBatcher, RowBuilder, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
 
 // --- Factorized (trie-structured) Row arrangement aliases ---

@@ -36,9 +36,7 @@ use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::typedefs::{
-    RowRowAgent, RowRowBuilder, RowRowColBatcher, RowRowEnter, RowRowSpine,
-};
+use crate::typedefs::{RowRowAgent, RowRowBuilder, RowRowColBatcher, RowRowEnter, RowRowSpine};
 
 /// Available linear join implementations.
 ///

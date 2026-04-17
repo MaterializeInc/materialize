@@ -45,8 +45,8 @@ use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{DatumSeq, RowBatcher, RowBuilder, RowValBuilder, RowValSpine};
 use crate::typedefs::{
-    RowRowBatcher, RowRowBuilder, RowRowReduceBuilder, RowRowSpine, KeyBatcher,
-    MzTimestamp, RowSpine,
+    KeyBatcher, MzTimestamp, RowRowBatcher, RowRowBuilder, RowRowReduceBuilder, RowRowSpine,
+    RowSpine,
 };
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
@@ -430,11 +430,10 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.
-            let (input, stage) = build_topk_negated_stage::<
-                T,
-                RowRowReduceBuilder<_, _>,
-                RowRowSpine<_, _>,
-            >(&input, order_key, offset, limit, arity);
+            let (input, stage) =
+                build_topk_negated_stage::<T, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
+                    &input, order_key, offset, limit, arity,
+                );
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.to_row(), v.to_row()));
 

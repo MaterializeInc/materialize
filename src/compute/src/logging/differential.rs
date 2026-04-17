@@ -36,7 +36,7 @@ use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
     consolidate_and_pack,
 };
-use crate::typedefs::{RowRowBuilder, RowRowColBatcher, RowRowSpine, KeyBatcher};
+use crate::typedefs::{KeyBatcher, RowRowBuilder, RowRowColBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
