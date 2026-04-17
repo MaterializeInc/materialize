@@ -212,16 +212,19 @@ class Table(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
+            lambda: f"> INSERT INTO {self.name} VALUES ('foo', 'bar'), ('baz', 'qux')",
+            lambda: f"> UPDATE {self.name} SET b = b || 'bar'",
+            lambda: f"> DELETE FROM {self.name} WHERE length(b) > 12",
+            lambda: dedent(f"""
+                > DROP TABLE IF EXISTS {self.name}_tmp_table
+                > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
+                > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+"""),
         ]
         return manipulations[kind % len(manipulations)]()
 
     def verify(self) -> str:
         raise NotImplementedError
-
-
-# TODO: How to handle things like clusters, replicas?
-
-# TODO: Add more manipulations: inserts, updates, deletes, ALTER RENAME (twice)
 
 
 class PostgresSource(Object):
@@ -278,7 +281,7 @@ class PostgresSource(Object):
                 > DROP TABLE IF EXISTS {self.name}_tmp_table
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
-                """),
+"""),
             # Bounce cluster to force source restart (database-issues#8698)
             lambda: dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -355,7 +358,7 @@ class MySqlSource(Object):
                 > DROP TABLE IF EXISTS {self.name}_tmp_table
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
-                """),
+"""),
             # Bounce cluster to force source restart (database-issues#8698)
             lambda: dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -435,7 +438,7 @@ class SqlServerSource(Object):
                 > DROP TABLE IF EXISTS {self.name}_tmp_table
                 > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
                 > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
-                """),
+"""),
             # Bounce cluster to force source restart (database-issues#8698)
             lambda: dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -467,7 +470,102 @@ class LoadGeneratorSource(Object):
                 > DROP SOURCE IF EXISTS {self.name}_tmp_source
                 > ALTER SOURCE {self.name} RENAME TO {self.name}_tmp_source
                 > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}
+"""),
+            # Bounce cluster to force source restart (database-issues#8698)
+            lambda: dedent("""
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 2);
                 """),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
+class AuctionLoadGeneratorSource(Object):
+    AUCTION_TABLES = ["accounts", "auctions", "bids", "organizations", "users"]
+
+    def __init__(self, name: str, references: "Object | None", rng: random.Random):
+        super().__init__(name, references, rng)
+        self.tick_interval = rng.choice(["100ms", "1s", "10s"])
+        self.ref_table = rng.choice(self.AUCTION_TABLES)
+
+    def create(self) -> str:
+        return dedent(f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM LOAD GENERATOR AUCTION (TICK INTERVAL '{self.tick_interval}')
+            > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.ref_table})
+            > COMMIT""")
+
+    def destroy(self) -> str:
+        return dedent(f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source CASCADE""")
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: dedent(f"""
+                > DROP TABLE IF EXISTS {self.name}_tmp_table
+                > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
+                > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+"""),
+            # Bounce cluster to force source restart (database-issues#8698)
+            lambda: dedent("""
+                $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 1);
+                ALTER CLUSTER quickstart SET (REPLICATION FACTOR 2);
+                """),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
+class TpchLoadGeneratorSource(Object):
+    TPCH_TABLES = [
+        "customer",
+        "lineitem",
+        "nation",
+        "orders",
+        "part",
+        "partsupp",
+        "region",
+        "supplier",
+    ]
+
+    def __init__(self, name: str, references: "Object | None", rng: random.Random):
+        super().__init__(name, references, rng)
+        self.scale_factor = rng.choice([0.01, 0.1])
+        self.ref_table = rng.choice(self.TPCH_TABLES)
+
+    def create(self) -> str:
+        return dedent(f"""
+            > BEGIN
+            > CREATE SOURCE {self.name}_source
+              IN CLUSTER quickstart
+              FROM LOAD GENERATOR TPCH (SCALE FACTOR {self.scale_factor})
+            > CREATE TABLE {self.name} FROM SOURCE {self.name}_source (REFERENCE {self.ref_table})
+            > COMMIT""")
+
+    def destroy(self) -> str:
+        return dedent(f"""
+            > DROP TABLE {self.name} CASCADE
+            > DROP SOURCE IF EXISTS {self.name}_source CASCADE""")
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: dedent(f"""
+                > DROP TABLE IF EXISTS {self.name}_tmp_table
+                > ALTER TABLE {self.name} RENAME TO {self.name}_tmp_table
+                > ALTER TABLE {self.name}_tmp_table RENAME TO {self.name}
+"""),
             # Bounce cluster to force source restart (database-issues#8698)
             lambda: dedent("""
                 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
@@ -505,7 +603,7 @@ class WebhookSource(Object):
                 > DROP SOURCE IF EXISTS {self.name}_tmp_source
                 > ALTER SOURCE {self.name} RENAME TO {self.name}_tmp_source
                 > ALTER SOURCE {self.name}_tmp_source RENAME TO {self.name}
-                """),
+"""),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -568,7 +666,7 @@ class KafkaSink(Object):
                 > DROP SINK IF EXISTS {self.name}_tmp_sink
                 > ALTER SINK {self.name} RENAME TO {self.name}_tmp_sink
                 > ALTER SINK {self.name}_tmp_sink RENAME TO {self.name}
-                """),
+"""),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -624,7 +722,7 @@ class IcebergSink(Object):
                 > DROP SINK IF EXISTS {self.name}_tmp_sink
                 > ALTER SINK {self.name} RENAME TO {self.name}_tmp_sink
                 > ALTER SINK {self.name}_tmp_sink RENAME TO {self.name}
-                """),
+"""),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -655,7 +753,7 @@ class View(Object):
                 > DROP VIEW IF EXISTS {self.name}_tmp_view
                 > ALTER VIEW {self.name} RENAME TO {self.name}_tmp_view
                 > ALTER VIEW {self.name}_tmp_view RENAME TO {self.name}
-                """),
+"""),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -682,7 +780,7 @@ class MaterializedView(Object):
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
-                """),
+"""),
             # TODO: Deal with 'The materialized view has already computed its output until the end of time, so replacing its definition would have no effect.'
             # lambda: dedent(
             #     f"""
@@ -722,7 +820,7 @@ class ReplicaTargetedMaterializedView(Object):
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name} RENAME TO {self.name}_tmp_mv
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
-                """),
+"""),
             lambda: dedent(f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
                 > CREATE REPLACEMENT MATERIALIZED VIEW {self.name}_replacement FOR {self.name} AS SELECT {self.select}
@@ -755,6 +853,166 @@ class DefaultIndex(Object):
     def manipulate(self, kind: int) -> str:
         manipulations = [
             lambda: "",
+            lambda: dedent(f"""
+                > DROP INDEX IF EXISTS {self.references.name}_tmp_idx
+                > ALTER INDEX {self.references.name}_primary_idx RENAME TO {self.references.name}_tmp_idx
+                > ALTER INDEX {self.references.name}_tmp_idx RENAME TO {self.references.name}_primary_idx
+""") if self.references else "",
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
+class Cluster(Object):
+    can_refer: bool = False
+
+    def __init__(self, name: str, references: "Object | None", rng: random.Random):
+        super().__init__(name, references, rng)
+        self.size = rng.choice(["scale=1,workers=1", "scale=1,workers=2"])
+        self.replication_factor = rng.choice([1, 2])
+
+    def create(self) -> str:
+        return f"> CREATE CLUSTER {self.name} SIZE '{self.size}', REPLICATION FACTOR {self.replication_factor}"
+
+    def destroy(self) -> str:
+        return f"> DROP CLUSTER {self.name} CASCADE"
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: f"> ALTER CLUSTER {self.name} SET (REPLICATION FACTOR 1)",
+            lambda: f"> ALTER CLUSTER {self.name} SET (REPLICATION FACTOR 2)",
+            lambda: f"> ALTER CLUSTER {self.name} SET (SIZE 'scale=1,workers=1')",
+            lambda: f"> ALTER CLUSTER {self.name} SET (SIZE 'scale=1,workers=2')",
+            lambda: dedent(f"""
+                > DROP CLUSTER IF EXISTS {self.name}_tmp_cluster CASCADE
+                > ALTER CLUSTER {self.name} RENAME TO {self.name}_tmp_cluster
+                > ALTER CLUSTER {self.name}_tmp_cluster RENAME TO {self.name}
+"""),
+            lambda: dedent(f"""
+                > DROP CLUSTER IF EXISTS {self.name}_swap_partner CASCADE
+                > CREATE CLUSTER {self.name}_swap_partner SIZE '{self.size}', REPLICATION FACTOR {self.replication_factor}
+                > ALTER CLUSTER {self.name} SWAP WITH {self.name}_swap_partner
+                > ALTER CLUSTER {self.name} SWAP WITH {self.name}_swap_partner
+                > DROP CLUSTER {self.name}_swap_partner CASCADE
+                """),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
+class Secret(Object):
+    can_refer: bool = False
+
+    def create(self) -> str:
+        return f"> CREATE SECRET {self.name} AS 'initial_secret_value'"
+
+    def destroy(self) -> str:
+        return f"> DROP SECRET {self.name}"
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: f"> ALTER SECRET {self.name} AS 'rotated_secret_value'",
+            lambda: f"> ALTER SECRET {self.name} AS 'another_secret_value'",
+            lambda: dedent(f"""
+                > DROP SECRET IF EXISTS {self.name}_tmp_secret
+                > ALTER SECRET {self.name} RENAME TO {self.name}_tmp_secret
+                > ALTER SECRET {self.name}_tmp_secret RENAME TO {self.name}
+                """),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
+class Schema(Object):
+    can_refer: bool = False
+
+    def create(self) -> str:
+        return f"> CREATE SCHEMA {self.name}"
+
+    def destroy(self) -> str:
+        return f"> DROP SCHEMA {self.name} CASCADE"
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: dedent(f"""
+                > DROP SCHEMA IF EXISTS {self.name}_tmp_schema CASCADE
+                > ALTER SCHEMA {self.name} RENAME TO {self.name}_tmp_schema
+                > ALTER SCHEMA {self.name}_tmp_schema RENAME TO {self.name}
+                """),
+            lambda: dedent(f"""
+                > CREATE SCHEMA IF NOT EXISTS {self.name}_swap_partner
+                > ALTER SCHEMA {self.name} SWAP WITH {self.name}_swap_partner
+                > ALTER SCHEMA {self.name} SWAP WITH {self.name}_swap_partner
+                > DROP SCHEMA IF EXISTS {self.name}_swap_partner CASCADE
+                """),
+            lambda: dedent(f"""
+                > CREATE TABLE IF NOT EXISTS {self.name}.tmp_t (a TEXT)
+                > INSERT INTO {self.name}.tmp_t VALUES ('foo')
+                > DROP TABLE IF EXISTS {self.name}.tmp_t
+                """),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
+class Role(Object):
+    can_refer: bool = False
+
+    def create(self) -> str:
+        return f"> CREATE ROLE {self.name}"
+
+    def destroy(self) -> str:
+        # Route through mz_system: role may have been granted SUPERUSER
+        # or system privileges, and only a superuser can alter/drop it.
+        return dedent(f"""
+            $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+            REVOKE ALL PRIVILEGES ON SYSTEM FROM {self.name};
+            ALTER ROLE {self.name} NOSUPERUSER;
+            DROP ROLE {self.name};
+            """)
+
+    def manipulate(self, kind: int) -> str:
+        manipulations = [
+            lambda: "",
+            lambda: f"> ALTER ROLE {self.name} INHERIT",
+            lambda: f"> ALTER ROLE {self.name} LOGIN",
+            lambda: f"> ALTER ROLE {self.name} NOLOGIN",
+            # SUPERUSER/NOSUPERUSER require the caller to already be a
+            # superuser, so route through mz_system.
+            lambda: dedent(f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                ALTER ROLE {self.name} SUPERUSER;
+                ALTER ROLE {self.name} NOSUPERUSER;
+                """),
+            # CREATECLUSTER/CREATEDB/CREATEROLE are not supported as role
+            # attributes; system privileges must be granted explicitly
+            # (run as mz_system since only superusers can grant them).
+            lambda: dedent(f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                GRANT CREATECLUSTER ON SYSTEM TO {self.name};
+                REVOKE CREATECLUSTER ON SYSTEM FROM {self.name};
+                """),
+            lambda: dedent(f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                GRANT CREATEDB ON SYSTEM TO {self.name};
+                REVOKE CREATEDB ON SYSTEM FROM {self.name};
+                """),
+            lambda: dedent(f"""
+                $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+                GRANT CREATEROLE ON SYSTEM TO {self.name};
+                REVOKE CREATEROLE ON SYSTEM FROM {self.name};
+                """),
         ]
         return manipulations[kind % len(manipulations)]()
 
@@ -772,6 +1030,11 @@ class Scenario:
         self.c = c
         self.rng = rng
         self.num_objects = num_objects
+        # Set to True when a transient error was detected and the catalog
+        # may now be in an inconsistent state (e.g. a BEGIN/COMMIT transaction
+        # rolled back after testdrive's retry logic masked the COMMIT failure).
+        # The outer workflow loop must do a full reset before the next run.
+        self.needs_reset = False
 
     def _impl(self, num_executions: int) -> str:
         raise NotImplementedError
@@ -780,9 +1043,15 @@ class Scenario:
         print(self._impl(1))
 
     # Errors that are transient and safe to ignore in race-condition testing.
+    # When one of these is encountered the catalog is likely in an
+    # inconsistent state, so the scenario signals for a full reset.
     ignorable_errors: list[str] = [
         # TODO: https://github.com/MaterializeInc/database-issues/issues/9690
         "another session modified the catalog while this DDL transaction was open",
+        # Downstream effect: a prior catalog-conflict rolled back a
+        # BEGIN/COMMIT transaction, so the object never existed by the time
+        # destroy() tried to drop it.
+        "unknown catalog item",
     ]
 
     def run_fragment(self, text: str, tries: int = 1) -> None:
@@ -793,8 +1062,17 @@ class Scenario:
                 self.c.testdrive(text, quiet=True)
                 return
             except Exception as e:
-                if any(msg in str(e) for msg in self.ignorable_errors):
-                    print(f"Ignoring transient error: {e}")
+                # FailedTestExecutionError's str() is just a summary ("At least
+                # one test failed"); the actual testdrive error text lives in
+                # e.errors[].{message,details}. Check all of them.
+                haystack = str(e)
+                for err in getattr(e, "errors", []) or []:
+                    haystack += f"\n{getattr(err, 'message', '')}\n{getattr(err, 'details', '')}"
+                if any(msg in haystack for msg in self.ignorable_errors):
+                    print(
+                        f"Transient error detected, will reset state before next scenario: {e}"
+                    )
+                    self.needs_reset = True
                     return
                 print(e)
                 if i == tries - 1:
@@ -914,37 +1192,12 @@ class SubsequentChain(Scenario):
         return result
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
-    parser.add_argument("--seed", type=str, default=random.randrange(1000000))
-    parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
-    parser.add_argument(
-        "--repetitions", default=100, type=int, help="Repeatitions per scenario"
-    )
-    parser.add_argument(
-        "--scenario",
-        default="subsequent",
-        type=str,
-        choices=["subsequent", "subsequent-chain", "concurrent"],
-    )
-    parser.add_argument(
-        "--num-objects",
-        default=5,
-        type=int,
-    )
-    parser.add_argument(
-        "--jitter",
-        default=10,
-        type=int,
-    )
-    args = parser.parse_args()
+def setup(c: Composition) -> None:
+    """Bring services up and configure Materialize for the test.
 
-    print(f"--- Random seed is {args.seed}")
-
-    end_time = (
-        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
-    ).timestamp()
-
-    toxiproxy_start(c, args.jitter)
+    Called at startup and again after a reset (down + up), so the operations
+    here must be safe to run against a fresh volume-destroyed environment.
+    """
     c.up(
         *SERVICE_NAMES,
         Service("testdrive", idle=True),
@@ -989,9 +1242,55 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # additional_system_parameter_defaults on the Materialized service so it
     # survives c.down()/c.up() cycles in the Concurrent scenario.
 
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument("--seed", type=str, default=random.randrange(1000000))
+    parser.add_argument("--runtime", default=600, type=int, help="Runtime in seconds")
+    parser.add_argument(
+        "--repetitions", default=100, type=int, help="Repeatitions per scenario"
+    )
+    parser.add_argument(
+        "--scenario",
+        default="subsequent",
+        type=str,
+        choices=["subsequent", "subsequent-chain", "concurrent"],
+    )
+    parser.add_argument(
+        "--num-objects",
+        default=5,
+        type=int,
+    )
+    parser.add_argument(
+        "--jitter",
+        default=10,
+        type=int,
+    )
+    args = parser.parse_args()
+
+    print(f"--- Random seed is {args.seed}")
+
+    end_time = (
+        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+    ).timestamp()
+
+    toxiproxy_start(c, args.jitter)
+    setup(c)
+
     seed = args.seed
+    # Longest observed scenario runtime so far; used to decide whether a new
+    # scenario can safely start within the remaining budget. The whole scenario
+    # runs as a single testdrive invocation and cannot be interrupted mid-flight,
+    # so starting one without enough budget would overrun the CI wall-clock.
+    max_scenario_duration = 0.0
 
     while time.time() < end_time:
+        remaining = end_time - time.time()
+        if max_scenario_duration > 0 and remaining < max_scenario_duration:
+            print(
+                f"--- Remaining budget {remaining:.0f}s < longest observed scenario {max_scenario_duration:.0f}s, stopping early"
+            )
+            break
+
         rng = random.Random(seed)
 
         if args.scenario == "subsequent":
@@ -1007,7 +1306,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         scenario.print()
 
         print(f"--- Running scenario {args.repetitions} times")
+        start = time.time()
         scenario.run(args.repetitions)
+        duration = time.time() - start
+        max_scenario_duration = max(max_scenario_duration, duration)
+        print(f"--- Scenario finished in {duration:.0f}s")
+
+        if scenario.needs_reset:
+            print("--- Resetting state after transient error")
+            c.down(destroy_volumes=True)
+            toxiproxy_start(c, args.jitter)
+            setup(c)
+
         seed = rng.randrange(1000000)
 
 
