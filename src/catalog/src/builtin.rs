@@ -6473,7 +6473,7 @@ pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::UInt64.nullable(false))
         .with_column("global_id", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
+        .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The dataflow ID."),

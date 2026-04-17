@@ -576,5 +576,38 @@ idx3_div_by_zero 3
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 
+# Regression test for database-issues#11314: mz_dataflow_global_ids
+# declared a false unique key on `id`, which caused the optimizer to
+# drop `DISTINCT id` and return the wrong number of dataflows when a
+# single dataflow hosts multiple global IDs (e.g. an index that inlines
+# a view).
+
+> CREATE TABLE t_gid (x INT NOT NULL, y INT, z TEXT)
+> CREATE VIEW v_gid AS
+    SELECT t1.x, t1.z AS z1, t2.z AS z2
+    FROM t_gid AS t1, t_gid AS t2
+    WHERE t1.x = t2.y
+> CREATE INDEX v_gid_idx ON v_gid (x)
+
+# The index dataflow hosts two global IDs (the view and the index).
+> SELECT COUNT(*)
+  FROM mz_introspection.mz_dataflow_global_ids dgi
+  JOIN mz_introspection.mz_compute_exports ce ON dgi.id = ce.dataflow_id
+  JOIN mz_objects o ON ce.export_id = o.id
+  WHERE o.name = 'v_gid_idx'
+2
+
+# `DISTINCT id` must collapse those two rows to one.
+> SELECT COUNT(*) FROM (
+    SELECT DISTINCT dgi.id
+    FROM mz_introspection.mz_dataflow_global_ids dgi
+    JOIN mz_introspection.mz_compute_exports ce ON dgi.id = ce.dataflow_id
+    JOIN mz_objects o ON ce.export_id = o.id
+    WHERE o.name = 'v_gid_idx'
+  )
+1
+
+> DROP TABLE t_gid CASCADE
+
 # Cleanup.
 > DROP CLUSTER test CASCADE
