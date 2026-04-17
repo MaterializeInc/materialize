@@ -43,10 +43,11 @@ use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
+use crate::row_spine::{DatumSeq, RowBatcher, RowBuilder, RowValBuilder, RowValSpine};
+use crate::typedefs::{
+    FactRowRowBatcher, FactRowRowBuilder, FactRowRowReduceBuilder, FactRowRowSpine, KeyBatcher,
+    MzTimestamp, RowSpine,
 };
-use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
@@ -429,10 +430,11 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             (input, oks, Some(errs))
         } else {
             // Build non-validating topk stage.
-            let (input, stage) =
-                build_topk_negated_stage::<T, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                    &input, order_key, offset, limit, arity,
-                );
+            let (input, stage) = build_topk_negated_stage::<
+                T,
+                FactRowRowReduceBuilder<_, _>,
+                FactRowRowSpine<_, _>,
+            >(&input, order_key, offset, limit, arity);
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.to_row(), v.to_row()));
 
@@ -498,7 +500,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
                 "Arranged MonotonicTop1 partial [val: empty]",
             )
-            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
                 "MonotonicTop1",
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
@@ -524,7 +526,7 @@ fn build_topk_negated_stage<'s, T, Bu, Tr>(
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
 ) -> (
-    Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
+    Arranged<'s, TraceAgent<FactRowRowSpine<T, Diff>>>,
     Arranged<'s, TraceAgent<Tr>>,
 )
 where
@@ -551,7 +553,7 @@ where
     // built-in view mz_introspection.mz_expected_group_size_advice.
     let arranged = input
         .clone()
-        .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+        .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
             "Arranged TopK input",
         );
 
@@ -565,7 +567,9 @@ where
     let reduced = arranged
         .clone()
         .mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
-            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
+            move |mut hash_key,
+                  source: &[(DatumSeq<'_>, Diff)],
+                  target: &mut Vec<(Tr::ValOwn, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
                 let limit = match &limit {
                     Some(Ok(lit)) => Some(*lit),
