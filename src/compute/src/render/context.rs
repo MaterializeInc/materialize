@@ -13,7 +13,6 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use differential_dataflow::Hashable;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
@@ -35,7 +34,7 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::CollectionExt;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::{Exchange, ExchangeCore, Pipeline};
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
@@ -962,17 +961,16 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
 
     /// Factorized counterpart to [`Self::arrange_collection`].
     ///
-    /// Emits the keyed `(Row, Row)` updates as a stream of owned
-    /// `Vec<((Row, Row), T, Diff)>` chunks (the input form consumed by
-    /// [`crate::typedefs::FactRowRowBatcher`]) and arranges them into a
-    /// [`crate::typedefs::FactRowRowAgent`] backed by the trie-structured
-    /// factorized spine.
+    /// Mirrors `arrange_collection`'s `FormArrangementKey` operator exactly:
+    /// emits columnar `((Row, Row), T, Diff)` chunks via [`ColumnBuilder`] and
+    /// exchanges them with the same `columnar_exchange` PACT. The only
+    /// difference is the downstream batcher — [`FactRowRowColBatcher`] decodes
+    /// columnar input into owned tuples and produces factorized [`KVUpdates`]
+    /// trie chunks, landing in a [`FactRowRowSpine`].
     ///
-    /// The key-extraction pipeline is identical to `arrange_collection`; only
-    /// the per-update output encoding differs (owned `Row`s in a `Vec` rather
-    /// than columnar `ColumnBuilder` sessions). This avoids a separate columnar
-    /// → owned conversion in the batcher pipeline at the cost of
-    /// re-allocating the key/value `Row`s per update.
+    /// [`FactRowRowColBatcher`]: crate::typedefs::FactRowRowColBatcher
+    /// [`KVUpdates`]: mz_timely_util::columnar::factorized::KVUpdates
+    /// [`FactRowRowSpine`]: crate::typedefs::FactRowRowSpine
     fn arrange_collection_factorized(
         name: &String,
         oks: VecCollection<'scope, T, Row, Diff>,
@@ -987,9 +985,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
             OperatorBuilder::new("FormArrangementKeyFact".to_string(), oks.inner.scope());
         let (ok_output, ok_stream) = builder.new_output();
         let mut ok_output =
-            OutputBuilder::<_, CapacityContainerBuilder<Vec<((Row, Row), T, Diff)>>>::from(
-                ok_output,
-            );
+            OutputBuilder::<_, ColumnBuilder<((Row, Row), T, Diff)>>::from(ok_output);
         let (err_output, err_stream) = builder.new_output();
         let mut err_output = OutputBuilder::from(err_output);
         let (passthrough_output, passthrough_stream) = builder.new_output();
@@ -997,6 +993,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let mut input = builder.new_input(oks.inner, Pipeline);
         builder.set_notify_for(0, FrontierInterest::Never);
         builder.build(move |_capabilities| {
+            let mut key_buf = Row::default();
+            let mut val_buf = Row::default();
             let mut datums = DatumVec::new();
             let mut temp_storage = RowArena::new();
             move |_frontiers| {
@@ -1010,12 +1008,11 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         temp_storage.clear();
                         let datums = datums.borrow_with(row);
                         let key_iter = key.iter().map(|k| k.eval(&datums, &temp_storage));
-                        let mut key_row = Row::default();
-                        match key_row.packer().try_extend(key_iter) {
+                        match key_buf.packer().try_extend(key_iter) {
                             Ok(()) => {
-                                let mut val_row = Row::default();
-                                val_row.packer().extend(thinning.iter().map(|c| datums[*c]));
-                                ok_session.give(((key_row, val_row), time.clone(), *diff));
+                                let val_datum_iter = thinning.iter().map(|c| datums[*c]);
+                                val_buf.packer().extend(val_datum_iter);
+                                ok_session.give(((&*key_buf, &*val_buf), time, diff));
                             }
                             Err(e) => {
                                 err_session.give((e.into(), time.clone(), *diff));
@@ -1030,11 +1027,13 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let oks = ok_stream
             .mz_arrange_core::<
                 _,
-                crate::typedefs::FactRowRowBatcher<T, Diff>,
+                crate::typedefs::FactRowRowColBatcher<T, Diff>,
                 crate::typedefs::FactRowRowBuilder<T, Diff>,
                 crate::typedefs::FactRowRowSpine<T, Diff>,
             >(
-                Exchange::new(|update: &((Row, Row), T, Diff)| update.0.0.hashed().into()),
+                ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, T, Diff>,
+                ),
                 name,
             );
         (

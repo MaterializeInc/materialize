@@ -41,6 +41,11 @@ pub type FactRowRowSpine<T, R> =
 /// Batcher for [`FactRowRowSpine`].
 pub type FactRowRowBatcher<T, R> =
     mz_timely_util::columnar::factorized::FactValBatcher<mz_repr::Row, mz_repr::Row, T, R>;
+/// Columnar-input batcher for [`FactRowRowSpine`], consuming the
+/// `Column<((Row, Row), T, R)>` wire format used by the existing RowRow
+/// columnar arrange pipeline.
+pub type FactRowRowColBatcher<T, R> =
+    mz_timely_util::columnar::factorized::FactColValBatcher<mz_repr::Row, mz_repr::Row, T, R>;
 /// Builder for [`FactRowRowSpine`].
 pub type FactRowRowBuilder<T, R> =
     mz_timely_util::columnar::factorized::FactValBuilder<mz_repr::Row, mz_repr::Row, T, R>;

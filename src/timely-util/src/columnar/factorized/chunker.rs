@@ -27,6 +27,7 @@ use differential_dataflow::difference::Semigroup;
 use timely::container::{ContainerBuilder, PushInto};
 
 use super::KVUpdates;
+use crate::columnar::Column;
 
 /// Target leaf count for an emitted chunk.
 ///
@@ -116,6 +117,45 @@ where
 {
     fn push_into(&mut self, input: &mut Vec<((K, V), T, R)>) {
         self.pending.append(input);
+        if self.pending.len() >= 2 * CHUNK_TARGET {
+            self.flush_pending();
+        }
+    }
+}
+
+/// Accept a columnar `Column` wire container and drain it into `pending`.
+///
+/// Each columnar item is decoded into an owned `((K, V), T, R)` tuple and
+/// appended to `pending`. The ensuing consolidation (sort + dedup + zero-drop)
+/// is handled by [`FactTrieChunker::flush_pending`], matching the `Vec` path.
+///
+/// This impl lets the factorized batcher pipeline consume the same columnar
+/// wire format used by the existing `Col2ValBatcher`, avoiding the need to
+/// materialize a `Vec<((K, V), T, R)>` before exchange.
+impl<K, V, T, R> PushInto<&mut Column<((K, V), T, R)>> for FactTrieChunker<K, V, T, R>
+where
+    K: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, K>: Ord + Copy,
+    V: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, V>: Ord + Copy,
+    T: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, T>: Ord + Copy,
+    R: Columnar + Ord + Semigroup + Clone + 'static,
+    for<'a> columnar::Ref<'a, R>: Ord + Copy,
+{
+    fn push_into(&mut self, input: &mut Column<((K, V), T, R)>) {
+        use columnar::Len;
+        let borrowed = input.borrow();
+        let len = Len::len(&borrowed);
+        self.pending.reserve(len);
+        for idx in 0..len {
+            let ((k_ref, v_ref), t_ref, r_ref) = columnar::Index::get(&borrowed, idx);
+            let k = K::into_owned(k_ref);
+            let v = V::into_owned(v_ref);
+            let t = T::into_owned(t_ref);
+            let r = R::into_owned(r_ref);
+            self.pending.push(((k, v), t, r));
+        }
         if self.pending.len() >= 2 * CHUNK_TARGET {
             self.flush_pending();
         }

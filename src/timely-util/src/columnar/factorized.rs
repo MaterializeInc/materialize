@@ -65,6 +65,20 @@ pub type FactValBatcher<K, V, T, R> = MergeBatcher<
     FactTrieInternalMerger<K, V, T, R>,
 >;
 
+/// Columnar-input counterpart to [`FactValBatcher`].
+///
+/// Accepts `Column<((K, V), T, R)>` (the wire format used by the existing
+/// `Col2ValBatcher` pipeline), decodes each update into `pending` inside the
+/// chunker, and emits factorized [`KVUpdates`] chunks. This lets renderers
+/// that already produce columnar pre-exchange streams (e.g.,
+/// `FormArrangementKey` via `ColumnBuilder`) feed directly into a factorized
+/// spine without materializing an intermediate `Vec<((K, V), T, R)>`.
+pub type FactColValBatcher<K, V, T, R> = MergeBatcher<
+    crate::columnar::Column<((K, V), T, R)>,
+    FactTrieChunker<K, V, T, R>,
+    FactTrieInternalMerger<K, V, T, R>,
+>;
+
 /// A builder producing `Rc<FactBatch>` for use with [`FactValSpine`].
 pub type FactValBuilder<K, V, T, R> = RcBuilder<FactBuilder<K, V, T, R>>;
 

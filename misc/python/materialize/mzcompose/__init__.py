@@ -507,6 +507,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_prometheus_introspection_scrape_interval",
     "enable_compute_replica_expiration",
     "enable_compute_render_fueled_as_specific_collection",
+    "enable_compute_factorized_arrangement",
     "compute_logical_backpressure_max_retained_capabilities",
     "compute_logical_backpressure_inflight_slack",
     "persist_fetch_semaphore_cost_adjustment",
