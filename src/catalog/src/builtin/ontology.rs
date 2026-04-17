@@ -271,7 +271,7 @@ fn link_types_view(infos: &[Info]) -> BuiltinView {
 
 // ── Semantic type reference data ─────────────────────────────
 
-const SEMANTIC_TYPE_DEFS: &[(&str, &str, &str)] = &[
+pub(super) const SEMANTIC_TYPE_DEFS: &[(&str, &str, &str)] = &[
     (
         "CatalogItemId",
         "text",
