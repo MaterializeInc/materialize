@@ -16,6 +16,29 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
+/// Helper to convert a cursor diff (either `&Diff` or owned `Diff`) into an owned `Diff`.
+///
+/// The flat (RowRow) arrangement layout exposes `DiffGat<'a> = &'a Diff`, whereas the factorized
+/// layout exposes `DiffGat<'a> = Diff` by value. This trait abstracts over both so peek paths
+/// can be generic over the cursor's diff GAT.
+pub trait IntoDiff {
+    fn into_diff(self) -> Diff;
+}
+
+impl IntoDiff for Diff {
+    #[inline(always)]
+    fn into_diff(self) -> Diff {
+        self
+    }
+}
+
+impl IntoDiff for &'_ Diff {
+    #[inline(always)]
+    fn into_diff(self) -> Diff {
+        *self
+    }
+}
+
 pub struct PeekResultIterator<Tr>
 where
     Tr: TraceReader,
@@ -104,7 +127,7 @@ where
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
+            DiffGat<'a>: IntoDiff,
         >,
 {
     pub fn new(
@@ -136,14 +159,15 @@ where
     }
 }
 
-impl<Tr> FusedIterator for PeekResultIterator<Tr> where
+impl<Tr> FusedIterator for PeekResultIterator<Tr>
+where
     for<'a> Tr: TraceReader<
             Key<'a>: ToDatumIter + Eq,
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
-        >
+            DiffGat<'a>: IntoDiff,
+        >,
 {
 }
 
@@ -154,7 +178,7 @@ where
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
+            DiffGat<'a>: IntoDiff,
         >,
 {
     type Item = Result<(Row, NonZeroI64), String>;
@@ -199,7 +223,7 @@ where
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
+            DiffGat<'a>: IntoDiff,
         >,
 {
     /// Extracts and returns the row currently pointed at by our cursor. Returns
@@ -242,7 +266,7 @@ where
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
                 if time.less_equal(&self.peek_timestamp) {
-                    copies += diff;
+                    copies += diff.into_diff();
                 }
             });
             let copies: i64 = if copies.is_negative() {
