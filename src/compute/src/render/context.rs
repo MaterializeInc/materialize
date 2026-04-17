@@ -274,7 +274,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             ),
             ArrangementFlavor::FactLocal(oks, errs) => {
                 let mut datums = DatumVec::new();
-                let fact_logic = move |k: &mz_repr::RowRef, v: &mz_repr::RowRef| {
+                let fact_logic = move |k: DatumSeq, v: DatumSeq| {
                     let mut datums_borrow = datums.borrow();
                     datums_borrow.extend(k.to_datum_iter());
                     datums_borrow.extend(v.to_datum_iter());
@@ -339,7 +339,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
             }
             ArrangementFlavor::FactLocal(oks, errs) => {
                 let mut datums = DatumVec::new();
-                let wrapped = move |k: &mz_repr::RowRef, v: &mz_repr::RowRef, t, d| {
+                let wrapped = move |k: DatumSeq, v: DatumSeq, t, d| {
                     let mut datums_borrow = datums.borrow();
                     datums_borrow.extend(k.to_datum_iter().take(max_demand));
                     let remaining = max_demand.saturating_sub(datums_borrow.len());

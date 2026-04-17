@@ -11,7 +11,7 @@
 //! `Row` is the most obvious implementor, but other trace types that may use more advanced
 //! representations only need to commit to implementing these traits.
 
-use crate::row::{DatumListIter, RowRef};
+use crate::row::{DatumListIter, DatumSeq, RowRef};
 use crate::{Datum, Row};
 
 /// A helper trait to turn a type into an iterator of datums.
@@ -60,5 +60,19 @@ impl ToDatumIter for RowRef {
     #[inline]
     fn to_datum_iter(&self) -> Self::DatumIter<'_> {
         self.iter()
+    }
+}
+
+// Identity-like implementation for `DatumSeq` — `DatumSeq` is already a
+// `Copy` iterator over `Datum`s, so we just return a copy of self.
+impl<'long> ToDatumIter for DatumSeq<'long> {
+    type DatumIter<'short>
+        = DatumSeq<'short>
+    where
+        Self: 'short;
+
+    #[inline]
+    fn to_datum_iter(&self) -> Self::DatumIter<'_> {
+        *self
     }
 }

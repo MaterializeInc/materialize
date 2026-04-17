@@ -433,7 +433,7 @@ mod columnar {
     use mz_ore::cast::CastFrom;
     use std::ops::Range;
 
-    use crate::{Row, RowRef};
+    use crate::{DatumSeq, Row, RowRef};
 
     #[derive(
         Copy,
@@ -455,11 +455,11 @@ mod columnar {
         #[inline(always)]
         fn copy_from(&mut self, other: columnar::Ref<'_, Self>) {
             self.clear();
-            self.data.extend_from_slice(other.data());
+            self.data.extend_from_slice(other.as_bytes());
         }
         #[inline(always)]
         fn into_owned(other: columnar::Ref<'_, Self>) -> Self {
-            other.to_owned()
+            other.to_row()
         }
         type Container = Rows;
         #[inline(always)]
@@ -472,7 +472,7 @@ mod columnar {
     }
 
     impl<BC: PushIndexAs<u64>> Borrow for Rows<BC, Vec<u8>> {
-        type Ref<'a> = &'a RowRef;
+        type Ref<'a> = DatumSeq<'a>;
         type Borrowed<'a>
             = Rows<BC::Borrowed<'a>, &'a [u8]>
         where
@@ -573,7 +573,7 @@ mod columnar {
     }
 
     impl<'a, BC: Len + IndexAs<u64>> Index for Rows<BC, &'a [u8]> {
-        type Ref = &'a RowRef;
+        type Ref = DatumSeq<'a>;
         type Cursor<'b>
             = RowsCursor<'b, Self>
         where
@@ -588,9 +588,9 @@ mod columnar {
             let upper = self.bounds.index_as(index);
             let lower = usize::cast_from(lower);
             let upper = usize::cast_from(upper);
-            // SAFETY: self.values contains only valid row data, and self.metadata delimits only ranges
-            // that correspond to the original rows.
-            unsafe { RowRef::from_slice(&self.values[lower..upper]) }
+            // SAFETY: `self.values` contains only valid row data, and `self.bounds`
+            // delimits only ranges that correspond to the original rows.
+            unsafe { DatumSeq::from_bytes(&self.values[lower..upper]) }
         }
         #[inline(always)]
         fn cursor(&self, range: core::ops::Range<usize>) -> Self::Cursor<'_> {
@@ -598,7 +598,7 @@ mod columnar {
         }
     }
     impl<'a, BC: Len + IndexAs<u64>> Index for &'a Rows<BC, Vec<u8>> {
-        type Ref = &'a RowRef;
+        type Ref = DatumSeq<'a>;
         type Cursor<'b>
             = RowsCursor<'b, Self>
         where
@@ -613,9 +613,9 @@ mod columnar {
             let upper = self.bounds.index_as(index);
             let lower = usize::cast_from(lower);
             let upper = usize::cast_from(upper);
-            // SAFETY: self.values contains only valid row data, and self.metadata delimits only ranges
-            // that correspond to the original rows.
-            unsafe { RowRef::from_slice(&self.values[lower..upper]) }
+            // SAFETY: `self.values` contains only valid row data, and `self.bounds`
+            // delimits only ranges that correspond to the original rows.
+            unsafe { DatumSeq::from_bytes(&self.values[lower..upper]) }
         }
         #[inline(always)]
         fn cursor(&self, range: core::ops::Range<usize>) -> Self::Cursor<'_> {
@@ -654,12 +654,125 @@ mod columnar {
             self.bounds.push(&u64::cast_from(self.values.len()));
         }
     }
+    impl<BC: for<'a> Push<&'a u64>> Push<DatumSeq<'_>> for Rows<BC> {
+        #[inline(always)]
+        fn push(&mut self, item: DatumSeq<'_>) {
+            self.values.extend_from_slice(item.as_bytes());
+            self.bounds.push(&u64::cast_from(self.values.len()));
+        }
+    }
     impl<BC: Clear, VC: Clear> Clear for Rows<BC, VC> {
         #[inline(always)]
         fn clear(&mut self) {
             self.bounds.clear();
             self.values.clear();
         }
+    }
+}
+
+/// A lazy, zero-copy view over a single row's raw bytes.
+///
+/// `DatumSeq` is a `Copy` iterator over [`Datum`]s backed by a byte slice that
+/// is known to be a valid row encoding. It is the reference form produced by
+/// the [`Columnar`](columnar::Columnar) implementation of [`Row`] and the
+/// element type yielded by factorized arrangement cursors over `Row`-keyed
+/// spines.
+///
+/// Unlike [`&RowRef`](RowRef), a `DatumSeq` is `Copy` — consuming one by
+/// iterating doesn't require a clone. It also supports constant-time comparison
+/// via byte-slice length+lexicographic order, matching `RowRef`'s `Ord` rules.
+#[derive(Debug)]
+pub struct DatumSeq<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> DatumSeq<'a> {
+    /// Wrap a byte slice as a [`DatumSeq`].
+    ///
+    /// # Safety
+    ///
+    /// The caller must guarantee the bytes are a valid [`Row`] encoding
+    /// (matching the invariants upheld by [`Row::from_bytes_unchecked`]).
+    #[inline]
+    pub unsafe fn from_bytes(bytes: &'a [u8]) -> Self {
+        DatumSeq { bytes }
+    }
+
+    /// Append the underlying datums to `row` without re-encoding.
+    #[inline]
+    pub fn copy_into(&self, row: &mut RowPacker) {
+        // SAFETY: `self.bytes` is a correctly formatted row.
+        unsafe { row.extend_by_slice_unchecked(self.bytes) }
+    }
+
+    /// Underlying byte slice.
+    #[inline]
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    /// Decode the bytes into an owned [`Row`].
+    #[inline]
+    pub fn to_row(&self) -> Row {
+        // SAFETY: `self.bytes` is a correctly formatted row.
+        unsafe { Row::from_bytes_unchecked(self.bytes) }
+    }
+}
+
+impl<'a> Copy for DatumSeq<'a> {}
+impl<'a> Clone for DatumSeq<'a> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
+    #[inline]
+    fn eq(&self, other: &DatumSeq<'a>) -> bool {
+        self.bytes.eq(other.bytes)
+    }
+}
+impl<'a> PartialEq<&Row> for DatumSeq<'a> {
+    #[inline]
+    fn eq(&self, other: &&Row) -> bool {
+        self.bytes.eq(other.data())
+    }
+}
+impl<'a> Eq for DatumSeq<'a> {}
+impl<'a, 'b> PartialOrd<DatumSeq<'a>> for DatumSeq<'b> {
+    #[inline]
+    fn partial_cmp(&self, other: &DatumSeq<'a>) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl<'a> Ord for DatumSeq<'a> {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.bytes.len().cmp(&other.bytes.len()) {
+            std::cmp::Ordering::Less => std::cmp::Ordering::Less,
+            std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
+            std::cmp::Ordering::Equal => self.bytes.cmp(other.bytes),
+        }
+    }
+}
+impl<'a> Iterator for DatumSeq<'a> {
+    type Item = Datum<'a>;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.bytes.is_empty() {
+            None
+        } else {
+            let result = unsafe { read_datum(&mut self.bytes) };
+            Some(result)
+        }
+    }
+}
+
+impl<'a> std::hash::Hash for DatumSeq<'a> {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.bytes.hash(state)
     }
 }
 
