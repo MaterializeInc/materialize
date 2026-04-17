@@ -45,7 +45,7 @@ use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{DatumSeq, RowBatcher, RowBuilder, RowValBuilder, RowValSpine};
 use crate::typedefs::{
-    FactRowRowBatcher, FactRowRowBuilder, FactRowRowReduceBuilder, FactRowRowSpine, KeyBatcher,
+    RowRowBatcher, RowRowBuilder, RowRowReduceBuilder, RowRowSpine, KeyBatcher,
     MzTimestamp, RowSpine,
 };
 
@@ -432,8 +432,8 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             // Build non-validating topk stage.
             let (input, stage) = build_topk_negated_stage::<
                 T,
-                FactRowRowReduceBuilder<_, _>,
-                FactRowRowSpine<_, _>,
+                RowRowReduceBuilder<_, _>,
+                RowRowSpine<_, _>,
             >(&input, order_key, offset, limit, arity);
             // Turn arrangement into collection.
             let stage = stage.as_collection(|k, v| (k.to_row(), v.to_row()));
@@ -500,7 +500,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
                 "Arranged MonotonicTop1 partial [val: empty]",
             )
-            .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                 "MonotonicTop1",
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
@@ -526,7 +526,7 @@ fn build_topk_negated_stage<'s, T, Bu, Tr>(
     limit: Option<mz_expr::MirScalarExpr>,
     arity: usize,
 ) -> (
-    Arranged<'s, TraceAgent<FactRowRowSpine<T, Diff>>>,
+    Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
     Arranged<'s, TraceAgent<Tr>>,
 )
 where
@@ -553,7 +553,7 @@ where
     // built-in view mz_introspection.mz_expected_group_size_advice.
     let arranged = input
         .clone()
-        .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
+        .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
             "Arranged TopK input",
         );
 

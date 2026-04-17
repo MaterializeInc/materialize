@@ -37,7 +37,7 @@ use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::{
-    FactRowRowAgent, FactRowRowBuilder, FactRowRowColBatcher, FactRowRowEnter, FactRowRowSpine,
+    RowRowAgent, RowRowBuilder, RowRowColBatcher, RowRowEnter, RowRowSpine,
 };
 
 /// Available linear join implementations.
@@ -186,10 +186,10 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// Streamed data as a collection.
     Collection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local factorized arrangement backed by
-    /// [`crate::typedefs::FactRowRowAgent`].
-    Local(Arranged<'scope, FactRowRowAgent<T, Diff>>),
+    /// [`crate::typedefs::RowRowAgent`].
+    Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
-    Trace(Arranged<'scope, FactRowRowEnter<mz_repr::Timestamp, Diff, T>>),
+    Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
 }
 
 impl<'scope, T> Context<'scope, T>
@@ -384,9 +384,9 @@ where
 
             let arranged = keyed.mz_arrange_core::<
                 _,
-                FactRowRowColBatcher<_, _>,
-                FactRowRowBuilder<_, _>,
-                FactRowRowSpine<_, _>,
+                RowRowColBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
             >(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                     columnar_exchange::<Row, Row, T, Diff>,
@@ -408,7 +408,7 @@ where
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<FactRowRowAgent<_, _>, FactRowRowAgent<_, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, RowRowAgent<_, _>>(
                             local, oks, closure,
                         );
 
@@ -418,7 +418,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<FactRowRowAgent<_, _>, FactRowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
                             local, oks, closure,
                         );
 
@@ -430,7 +430,7 @@ where
             JoinedFlavor::Trace(trace) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<FactRowRowEnter<_, _, _>, FactRowRowAgent<_, _>>(
+                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
                             trace, oks, closure,
                         );
 
@@ -440,7 +440,7 @@ where
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
-                        .differential_join_inner::<FactRowRowEnter<_, _, _>, FactRowRowEnter<_, _, _>>(
+                        .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
                             trace, oks, closure,
                         );
 

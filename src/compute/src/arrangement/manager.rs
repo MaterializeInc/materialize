@@ -27,7 +27,7 @@ use timely::progress::Timestamp as _;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::metrics::WorkerMetrics;
-use crate::typedefs::{ErrAgent, FactRowRowAgent};
+use crate::typedefs::{ErrAgent, RowRowAgent};
 
 /// A `TraceManager` stores maps from global identifiers to the primary arranged
 /// representation of that collection.
@@ -242,7 +242,7 @@ where
 /// the lifetime of the bundled traces (`to_drop`).
 #[derive(Clone)]
 pub struct TraceBundle {
-    oks: PaddedTrace<FactRowRowAgent<Timestamp, Diff>>,
+    oks: PaddedTrace<RowRowAgent<Timestamp, Diff>>,
     errs: PaddedTrace<ErrAgent<Timestamp, Diff>>,
     to_drop: Option<Rc<dyn Any>>,
 }
@@ -251,7 +251,7 @@ impl TraceBundle {
     /// Constructs a new trace bundle out of an `oks` trace and `errs` trace.
     pub fn new<O, E>(oks: O, errs: E) -> TraceBundle
     where
-        O: Into<PaddedTrace<FactRowRowAgent<Timestamp, Diff>>>,
+        O: Into<PaddedTrace<RowRowAgent<Timestamp, Diff>>>,
         E: Into<PaddedTrace<ErrAgent<Timestamp, Diff>>>,
     {
         TraceBundle {
@@ -273,7 +273,7 @@ impl TraceBundle {
     }
 
     /// Returns a mutable reference to the `oks` trace.
-    pub fn oks_mut(&mut self) -> &mut PaddedTrace<FactRowRowAgent<Timestamp, Diff>> {
+    pub fn oks_mut(&mut self) -> &mut PaddedTrace<RowRowAgent<Timestamp, Diff>> {
         &mut self.oks
     }
 

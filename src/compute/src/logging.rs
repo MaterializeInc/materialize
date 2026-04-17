@@ -40,7 +40,7 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::consolidate_pact;
 
 use crate::logging::compute::Logger as ComputeLogger;
-use crate::typedefs::FactRowRowAgent;
+use crate::typedefs::RowRowAgent;
 
 pub use crate::logging::initialize::initialize;
 
@@ -214,7 +214,7 @@ impl PermutedRowPacker {
 /// Information about a collection exported from a logging dataflow.
 struct LogCollection {
     /// Trace handle providing access to the logged records.
-    trace: FactRowRowAgent<Timestamp, Diff>,
+    trace: RowRowAgent<Timestamp, Diff>,
     /// Token that should be dropped to drop this collection.
     token: Rc<dyn Any>,
 }

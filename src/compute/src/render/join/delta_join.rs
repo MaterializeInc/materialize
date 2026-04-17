@@ -40,7 +40,7 @@ use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
-use crate::typedefs::{FactRowRowAgent, FactRowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     /// Renders `MirRelationExpr:Join` using dogs^3 delta query dataflows.
@@ -148,7 +148,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         Ok(local) => {
                             let arranged = local.clone().enter_region(region);
                             let (update_stream, err_stream) =
-                                build_update_stream::<_, FactRowRowAgent<_, _>>(
+                                build_update_stream::<_, RowRowAgent<_, _>>(
                                     arranged,
                                     as_of,
                                     source_relation,
@@ -160,7 +160,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         Err(trace) => {
                             let arranged = trace.clone().enter_region(region);
                             let (update_stream, err_stream) =
-                                build_update_stream::<_, FactRowRowEnter<_, _, _>>(
+                                build_update_stream::<_, RowRowEnter<_, _, _>>(
                                     arranged,
                                     as_of,
                                     source_relation,
@@ -202,19 +202,19 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
                                 Ok(local) => {
                                     fn cmp_le<T: RenderTimestamp>(
-                                        t1: <FactRowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
+                                        t1: <RowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
                                         t2: &T,
                                     ) -> bool {
-                                        <FactRowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).le(t2)
+                                        <RowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).le(t2)
                                     }
                                     fn cmp_lt<T: RenderTimestamp>(
-                                        t1: <FactRowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
+                                        t1: <RowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
                                         t2: &T,
                                     ) -> bool {
-                                        <FactRowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).lt(t2)
+                                        <RowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).lt(t2)
                                     }
                                     if source_relation < lookup_relation {
-                                        build_halfjoin::<_, FactRowRowAgent<_, _>, _>(
+                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
                                             update_stream,
                                             local.clone().enter_region(region),
                                             stream_key,
@@ -224,7 +224,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                             Rc::clone(&self.config_set),
                                         )
                                     } else {
-                                        build_halfjoin::<_, FactRowRowAgent<_, _>, _>(
+                                        build_halfjoin::<_, RowRowAgent<_, _>, _>(
                                             update_stream,
                                             local.clone().enter_region(region),
                                             stream_key,
@@ -237,19 +237,19 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                 }
                                 Err(trace) => {
                                     fn cmp_le<T: RenderTimestamp>(
-                                        t1: <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
+                                        t1: <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
                                         t2: &T,
                                     ) -> bool {
-                                        <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).le(t2)
+                                        <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).le(t2)
                                     }
                                     fn cmp_lt<T: RenderTimestamp>(
-                                        t1: <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
+                                        t1: <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::TimeGat<'_>,
                                         t2: &T,
                                     ) -> bool {
-                                        <FactRowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).lt(t2)
+                                        <RowRowEnter<mz_repr::Timestamp, Diff, T> as LayoutExt>::owned_time(t1).lt(t2)
                                     }
                                     if source_relation < lookup_relation {
-                                        build_halfjoin::<_, FactRowRowEnter<_, _, _>, _>(
+                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                                             update_stream,
                                             trace.clone().enter_region(region),
                                             stream_key,
@@ -259,7 +259,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                             Rc::clone(&self.config_set),
                                         )
                                     } else {
-                                        build_halfjoin::<_, FactRowRowEnter<_, _, _>, _>(
+                                        build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                                             update_stream,
                                             trace.clone().enter_region(region),
                                             stream_key,

@@ -10,8 +10,7 @@
 pub use self::container::DatumContainer;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine,
+    RowBatcher, RowBuilder, RowSpine, RowValBatcher, RowValBuilder, RowValSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 pub use mz_repr::DatumSeq;
@@ -33,45 +32,32 @@ mod spines {
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
-    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
-    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
-    pub type RowRowBuilder<T, R> = RcBuilder<
-        OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, ColumnationStack<((Row, Row), T, R)>>,
-    >;
-
+    /// Spine for `Row` keys with arbitrary `Columnation` values.
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
+    /// Batcher for [`RowValSpine`].
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
+    /// Builder for [`RowValSpine`].
     pub type RowValBuilder<V, T, R> = RcBuilder<
         OrdValBuilder<RowValLayout<((Row, V), T, R)>, ColumnationStack<((Row, V), T, R)>>,
     >;
 
+    /// Key-only spine specialized for `Row` keys.
     pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    /// Batcher for [`RowSpine`].
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
+    /// Builder for [`RowSpine`].
     pub type RowBuilder<T, R> =
         RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, ColumnationStack<((Row, ()), T, R)>>>;
 
-    /// A layout based on timely stacks
-    pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
-        phantom: std::marker::PhantomData<U>,
-    }
+    /// Layout for [`RowValSpine`]: `DatumContainer` keys, `ColumnationStack` values.
     pub struct RowValLayout<U: Update<Key = Row>> {
         phantom: std::marker::PhantomData<U>,
     }
+    /// Layout for [`RowSpine`]: `DatumContainer` keys, unit values.
     pub struct RowLayout<U: Update<Key = Row, Val = ()>> {
         phantom: std::marker::PhantomData<U>,
     }
 
-    impl<U: Update<Key = Row, Val = Row>> Layout for RowRowLayout<U>
-    where
-        U::Time: Columnation,
-        U::Diff: Columnation,
-    {
-        type KeyContainer = DatumContainer;
-        type ValContainer = DatumContainer;
-        type TimeContainer = ColumnationStack<U::Time>;
-        type DiffContainer = ColumnationStack<U::Diff>;
-        type OffsetContainer = OffsetOptimized;
-    }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
     where
         U::Val: Columnation,

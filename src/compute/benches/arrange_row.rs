@@ -7,8 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Benchmarks comparing `RowRowSpine` (ColumnationStack-backed) against
-//! `FactRowRowSpine` (factorized trie) for arranging Row×Row data.
+//! Benchmarks for arranging Row×Row data via the factorized `RowRowSpine`.
 //!
 //! Each iteration runs a timely worker with a single dataflow:
 //!   input → arrange_core → drop arrangement.
@@ -18,10 +17,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use differential_dataflow::input::{Input, InputSession};
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
-use mz_compute::typedefs::{
-    FactRowRowBatcher, FactRowRowBuilder, FactRowRowSpine, KeyValBatcher, RowRowBuilder,
-    RowRowSpine,
-};
+use mz_compute::typedefs::{RowRowBatcher, RowRowBuilder, RowRowSpine};
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Probe;
@@ -97,21 +93,10 @@ fn bench_rowrow_arrange(c: &mut Criterion) {
         group.bench_function(BenchmarkId::new("row_row_spine", &label), |b| {
             b.iter(|| {
                 run_arrange::<
-                    KeyValBatcher<Row, Row, Timestamp, Diff>,
+                    RowRowBatcher<Timestamp, Diff>,
                     RowRowBuilder<Timestamp, Diff>,
                     RowRowSpine<Timestamp, Diff>,
                 >(&data, "BenchRowRow");
-            });
-        });
-
-        group.throughput(Throughput::Elements(n as u64));
-        group.bench_function(BenchmarkId::new("fact_row_row_spine", &label), |b| {
-            b.iter(|| {
-                run_arrange::<
-                    FactRowRowBatcher<Timestamp, Diff>,
-                    FactRowRowBuilder<Timestamp, Diff>,
-                    FactRowRowSpine<Timestamp, Diff>,
-                >(&data, "BenchFactRowRow");
             });
         });
     }

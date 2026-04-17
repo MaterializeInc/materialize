@@ -42,7 +42,7 @@ use crate::logging::{
 };
 use crate::logging::{LogCollection, SharedLoggingState, consolidate_and_pack};
 use crate::typedefs::{
-    FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine, KeyBatcher, KeyValBatcher,
+    RowRowBuilder, RowRowColBatcher, RowRowSpine, KeyBatcher, KeyValBatcher,
 };
 
 /// The return type of [`construct`].
@@ -358,9 +358,9 @@ pub(super) fn construct(
             let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
                 // Extract types to make rustfmt happy.
-                type Batcher = FactRowRowColBatcher<Timestamp, Diff>;
-                type Builder = FactRowRowBuilder<Timestamp, Diff>;
-                type Spine = FactRowRowSpine<Timestamp, Diff>;
+                type Batcher = RowRowColBatcher<Timestamp, Diff>;
+                type Builder = RowRowBuilder<Timestamp, Diff>;
+                type Spine = RowRowSpine<Timestamp, Diff>;
                 let trace = collection
                     .mz_arrange_core::<_, Batcher, Builder, Spine>(
                         ExchangeCore::<ColumnBuilder<_>, _>::new_core(

@@ -30,7 +30,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::{ComputeLog, LogCollection, LogVariant, PermutedRowPacker};
-use crate::typedefs::{FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine};
+use crate::typedefs::{RowRowBuilder, RowRowColBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -179,9 +179,9 @@ pub(super) fn construct(
     let trace = stream
         .mz_arrange_core::<
             _,
-            FactRowRowColBatcher<Timestamp, Diff>,
-            FactRowRowBuilder<Timestamp, Diff>,
-            FactRowRowSpine<Timestamp, Diff>,
+            RowRowColBatcher<Timestamp, Diff>,
+            RowRowBuilder<Timestamp, Diff>,
+            RowRowSpine<Timestamp, Diff>,
         >(exchange, "Arrange PrometheusMetrics")
         .trace;
     let token: Rc<dyn std::any::Any> = Rc::new(());

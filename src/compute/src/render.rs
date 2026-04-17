@@ -163,7 +163,7 @@ use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::DatumSeq;
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, ErrSpine, FactRowRowBatcher, FactRowRowBuilder, FactRowRowSpine,
+    ErrBatcher, ErrBuilder, ErrSpine, RowRowBatcher, RowRowBuilder, RowRowSpine,
     KeyBatcher, MzTimestamp,
 };
 
@@ -815,11 +815,11 @@ where
             Some(ArrangementFlavor::Local(oks, errs)) => {
                 // The `leave(outer)` region boundary loses trace identity, so we
                 // still need to re-arrange on the way out. Produce a Fact spine
-                // directly now that TraceBundle stores FactRowRowAgent.
+                // directly now that TraceBundle stores RowRowAgent.
                 let mut oks = oks
                     .as_collection(|k, v| (k.to_row(), v.to_row()))
                     .leave(outer)
-                    .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         "Arrange export iterative",
                     );
 

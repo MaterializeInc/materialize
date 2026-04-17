@@ -40,7 +40,7 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
     SharedLoggingState, Update,
 };
-use crate::typedefs::{FactRowRowBuilder, FactRowRowColBatcher, FactRowRowSpine};
+use crate::typedefs::{RowRowBuilder, RowRowColBatcher, RowRowSpine};
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
@@ -434,9 +434,9 @@ pub(super) fn construct<'scope>(
                 let trace = stream
                     .mz_arrange_core::<
                         _,
-                        FactRowRowColBatcher<Timestamp, Diff>,
-                        FactRowRowBuilder<Timestamp, Diff>,
-                        FactRowRowSpine<Timestamp, Diff>,
+                        RowRowColBatcher<Timestamp, Diff>,
+                        RowRowBuilder<Timestamp, Diff>,
+                        RowRowSpine<Timestamp, Diff>,
                     >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {

@@ -46,7 +46,7 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::DatumSeq;
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, FactRowRowAgent, FactRowRowEnter,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -211,11 +211,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
     /// A dataflow-local factorized (trie-structured) arrangement.
     ///
-    /// Backed by the [`crate::typedefs::FactRowRowSpine`]. Cursors surface
+    /// Backed by the [`crate::typedefs::RowRowSpine`]. Cursors surface
     /// `&RowRef` at `Key<'a>` / `Val<'a>`, so consumers walking keys/values do
     /// so via [`mz_repr::fixed_length::ToDatumIter`].
     Local(
-        Arranged<'scope, FactRowRowAgent<T, Diff>>,
+        Arranged<'scope, RowRowAgent<T, Diff>>,
         Arranged<'scope, ErrAgent<T, Diff>>,
     ),
     /// An imported trace from outside the dataflow.
@@ -224,7 +224,7 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
     /// can refer back to and depend on the original instance.
     Trace(
         GlobalId,
-        Arranged<'scope, FactRowRowEnter<mz_repr::Timestamp, Diff, T>>,
+        Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>,
         Arranged<'scope, ErrEnter<mz_repr::Timestamp, T>>,
     ),
 }
@@ -819,9 +819,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     ///
     /// Emits columnar `((Row, Row), T, Diff)` chunks via [`ColumnBuilder`] and exchanges them
     /// with the `columnar_exchange` PACT. The downstream batcher
-    /// ([`FactRowRowColBatcher`](crate::typedefs::FactRowRowColBatcher)) decodes columnar input
+    /// ([`RowRowColBatcher`](crate::typedefs::RowRowColBatcher)) decodes columnar input
     /// into owned tuples and produces factorized trie chunks, landing in a
-    /// [`FactRowRowSpine`](crate::typedefs::FactRowRowSpine).
+    /// [`RowRowSpine`](crate::typedefs::RowRowSpine).
     ///
     /// In addition to the ok and err streams, we produce a passthrough stream that forwards
     /// the input as-is, which allows downstream consumers to reuse the collection without
@@ -832,7 +832,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
-        Arranged<'scope, crate::typedefs::FactRowRowAgent<T, Diff>>,
+        Arranged<'scope, crate::typedefs::RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowError, Diff>,
         VecCollection<'scope, T, Row, Diff>,
     ) {
@@ -885,9 +885,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let oks = ok_stream
             .mz_arrange_core::<
                 _,
-                crate::typedefs::FactRowRowColBatcher<T, Diff>,
-                crate::typedefs::FactRowRowBuilder<T, Diff>,
-                crate::typedefs::FactRowRowSpine<T, Diff>,
+                crate::typedefs::RowRowColBatcher<T, Diff>,
+                crate::typedefs::RowRowBuilder<T, Diff>,
+                crate::typedefs::RowRowSpine<T, Diff>,
             >(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                     columnar_exchange::<Row, Row, T, Diff>,

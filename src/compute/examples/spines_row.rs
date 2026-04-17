@@ -18,21 +18,17 @@
 //!     cargo run --release --example spines_row -- <keys> <size> <mode> [timely-args..]
 //!
 //! Modes:
-//!     row_row       — baseline `RowRowSpine` (`ColumnationStack`-backed)
-//!     fact_row_row  — factorized `FactRowRowSpine` (trie-backed)
+//!     row_row  — factorized `RowRowSpine` (trie-backed)
 //!
 //! Example:
-//!     cargo run --release --example spines_row -- 1000 10000 fact_row_row -w 4
+//!     cargo run --release --example spines_row -- 1000 10000 row_row -w 4
 
 use std::time::Instant;
 
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::input::Input;
 use differential_dataflow::operators::arrange::arrangement::arrange_core;
-use mz_compute::typedefs::{
-    FactRowRowBatcher, FactRowRowBuilder, FactRowRowSpine, KeyValBatcher, RowRowBuilder,
-    RowRowSpine,
-};
+use mz_compute::typedefs::{RowRowBatcher, RowRowBuilder, RowRowSpine};
 use mz_repr::{Datum, Diff, Row, Timestamp};
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Probe;
@@ -72,7 +68,7 @@ fn main() {
                 "row_row" => {
                     let data_arranged = arrange_core::<
                         _,
-                        KeyValBatcher<Row, Row, Timestamp, Diff>,
+                        RowRowBatcher<Timestamp, Diff>,
                         RowRowBuilder<Timestamp, Diff>,
                         RowRowSpine<Timestamp, Diff>,
                     >(
@@ -84,39 +80,9 @@ fn main() {
                     );
                     let keys_arranged = arrange_core::<
                         _,
-                        KeyValBatcher<Row, Row, Timestamp, Diff>,
+                        RowRowBatcher<Timestamp, Diff>,
                         RowRowBuilder<Timestamp, Diff>,
                         RowRowSpine<Timestamp, Diff>,
-                    >(
-                        keys_stream,
-                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| {
-                            update.0.0.hashed().into()
-                        }),
-                        "ArrangeKeys",
-                    );
-                    keys_arranged
-                        .join_core(data_arranged, |_k, _v1, _v2| Option::<()>::None)
-                        .inner
-                        .probe_with(&mut probe);
-                }
-                "fact_row_row" => {
-                    let data_arranged = arrange_core::<
-                        _,
-                        FactRowRowBatcher<Timestamp, Diff>,
-                        FactRowRowBuilder<Timestamp, Diff>,
-                        FactRowRowSpine<Timestamp, Diff>,
-                    >(
-                        data_stream,
-                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| {
-                            update.0.0.hashed().into()
-                        }),
-                        "ArrangeData",
-                    );
-                    let keys_arranged = arrange_core::<
-                        _,
-                        FactRowRowBatcher<Timestamp, Diff>,
-                        FactRowRowBuilder<Timestamp, Diff>,
-                        FactRowRowSpine<Timestamp, Diff>,
                     >(
                         keys_stream,
                         Exchange::new(|update: &((Row, Row), Timestamp, Diff)| {

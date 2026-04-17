@@ -51,8 +51,8 @@ use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowBatcher, RowBuilder, RowValBatcher, RowValBuilder};
 use crate::typedefs::{
-    ErrBatcher, ErrBuilder, FactRowRowAgent, FactRowRowArrangement, FactRowRowBatcher,
-    FactRowRowBuilder, FactRowRowReduceBuilder, FactRowRowSpine, KeyBatcher, RowErrBuilder,
+    ErrBatcher, ErrBuilder, RowRowAgent, RowRowArrangement, RowRowBatcher,
+    RowRowBuilder, RowRowReduceBuilder, RowRowSpine, KeyBatcher, RowErrBuilder,
     RowErrSpine, RowSpine, RowValSpine,
 };
 
@@ -190,7 +190,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         errors: &mut Vec<VecCollection<'s, T, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> Arranged<'s, FactRowRowAgent<T, Diff>> {
+    ) -> Arranged<'s, RowRowAgent<T, Diff>> {
         // TODO(vmarcos): Arrangement specialization here could eventually be extended to keys,
         // not only values (database-issues#6658).
         let arrangement = match plan {
@@ -255,7 +255,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         collection: VecCollection<'s, T, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        Arranged<'s, TraceAgent<FactRowRowSpine<T, Diff>>>,
+        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
         VecCollection<'s, T, DataflowError, Diff>,
     ) {
         let error_logger = self.error_logger();
@@ -267,12 +267,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
         let arranged = collection
-            .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "Arranged DistinctBy",
             );
         let output = arranged
             .clone()
-            .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                 "DistinctBy",
                 move |key, _input, output| {
                     let temp_storage = RowArena::new();
@@ -336,7 +336,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        FactRowRowArrangement<'s, T>,
+        RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowError, Diff>,
     ) {
         // We are only using this function to render multiple basic aggregates and
@@ -379,7 +379,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
         let output = arranged
             .clone()
-            .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                 "ReduceFuseBasic",
                 {
                     move |key, input, output| {
@@ -450,7 +450,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         mfp_after: Option<SafeMfpPlan>,
         fused_unnest_list: bool,
     ) -> (
-        FactRowRowArrangement<'s, T>,
+        RowRowArrangement<'s, T>,
         Option<VecCollection<'s, T, DataflowError, Diff>>,
     ) {
         let AggregateExpr {
@@ -529,13 +529,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             "FusedReduceUnnestList"
         };
         let arranged = partial
-            .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 &format!("Arranged {name}"),
             );
         let oks = if !fused_unnest_list {
             arranged
                 .clone()
-                .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+                .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                     name,
                     {
                         move |key: DatumSeq<'_>,
@@ -579,7 +579,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         } else {
             arranged
                 .clone()
-                .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+                .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                     name,
                     {
                         move |key: DatumSeq<'_>,
@@ -811,7 +811,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        FactRowRowArrangement<'s, T>,
+        RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowError, Diff>,
     ) {
         let mut err_output: Option<VecCollection<'s, T, _, _>> = None;
@@ -889,7 +889,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
                 // view mz_introspection.mz_expected_group_size_advice.
                 let arranged = partial
-                    .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         "Arrange ReduceMinsMaxes",
                     );
                 // Note that we would prefer to use `mz_timely_util::reduce::ReduceExt::reduce_pair` here,
@@ -957,7 +957,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     }
                 }
                 arranged
-                    .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+                    .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                         "ReduceMinsMaxes",
                         move |key: DatumSeq<'_>,
                               source: &[(DatumSeq<'_>, Diff)],
@@ -1041,7 +1041,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             (input, oks, Some(errs))
         } else {
             let (input, reduced) = self
-                .build_bucketed_negated_output::<FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+                .build_bucketed_negated_output::<RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                     input,
                     aggr_funcs.clone(),
                 );
@@ -1064,7 +1064,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         input: VecCollection<'s, T, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
     ) -> (
-        Arranged<'s, TraceAgent<FactRowRowSpine<T, Diff>>>,
+        Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
         Arranged<'s, TraceAgent<Tr>>,
     )
     where
@@ -1088,7 +1088,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // NOTE(vmarcos): The input operator name below is used in the tuning advice built-in
         // view mz_introspection.mz_expected_group_size_advice.
         let arranged_input = input
-            .mz_arrange::<FactRowRowBatcher<_, _>, FactRowRowBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                 "Arranged MinsMaxesHierarchical input",
             );
 
@@ -1157,7 +1157,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        FactRowRowArrangement<'s, T>,
+        RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowError, Diff>,
     ) {
         let aggregations = aggr_funcs.len();
@@ -1215,7 +1215,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             );
         let output = arranged
             .clone()
-            .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                 "ReduceMonotonic",
                 {
                     move |key, input, output| {
@@ -1288,7 +1288,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
-        FactRowRowArrangement<'s, T>,
+        RowRowArrangement<'s, T>,
         VecCollection<'s, T, DataflowError, Diff>,
     ) {
         let collection_scope = collection.scope();
@@ -1406,7 +1406,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             );
         let arranged_output = arranged
             .clone()
-            .mz_reduce_abelian::<_, FactRowRowReduceBuilder<_, _>, FactRowRowSpine<_, _>>(
+            .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                 "ReduceAccumulable",
                 {
                     move |key, input, output| {

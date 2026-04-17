@@ -29,7 +29,7 @@ use uuid::Uuid;
 use crate::arrangement::manager::{PaddedTrace, TraceBundle};
 use crate::compute_state::peek_result_iterator;
 use crate::compute_state::peek_result_iterator::PeekResultIterator;
-use crate::typedefs::FactRowRowAgent;
+use crate::typedefs::RowRowAgent;
 
 /// An async task that stashes a peek response in persist and yields a handle to
 /// the batch in a [PeekResponse::Stashed].
@@ -41,7 +41,7 @@ pub struct StashingPeek {
     pub peek: Peek,
     /// Iterator for the results. The worker thread has to continually pump
     /// results from this to the `rows_tx` channel.
-    peek_iterator: Option<PeekResultIterator<PaddedTrace<FactRowRowAgent<Timestamp, Diff>>>>,
+    peek_iterator: Option<PeekResultIterator<PaddedTrace<RowRowAgent<Timestamp, Diff>>>>,
     /// We can't give a PeekResultIterator to our async upload task because the
     /// underlying trace reader is not Send/Sync. So we need to use a channel to
     /// send result rows from the worker thread to the async background task.
