@@ -46,7 +46,8 @@ use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, FactRowRowAgent, RowRowAgent,
+    RowRowEnter, RowRowSpine,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -214,6 +215,23 @@ pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
         Arranged<'scope, RowRowAgent<T, Diff>>,
         Arranged<'scope, ErrAgent<T, Diff>>,
     ),
+    /// A dataflow-local factorized (trie-structured) arrangement.
+    ///
+    /// Opt-in alternative to [`ArrangementFlavor::Local`] backed by the
+    /// [`crate::typedefs::FactRowRowSpine`]. Cursors surface `&RowRef` at
+    /// `Key<'a>` / `Val<'a>` instead of `DatumSeq<'a>`, so consumers walking
+    /// keys/values do so via [`mz_repr::fixed_length::ToDatumIter`] (which is
+    /// implemented for both).
+    ///
+    /// Currently unused — no render path produces this variant yet. The match
+    /// arms across the renderer thread through the variant so that a later
+    /// change can wire a specific arrangement target (e.g., a flag-gated
+    /// `arrange_collection`) to emit it.
+    #[allow(dead_code)]
+    FactLocal(
+        Arranged<'scope, FactRowRowAgent<T, Diff>>,
+        Arranged<'scope, ErrAgent<T, Diff>>,
+    ),
     /// An imported trace from outside the dataflow.
     ///
     /// The `GlobalId` identifier exists so that exports of this same trace
@@ -252,6 +270,19 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
                 oks.clone().as_collection(logic),
                 errs.clone().as_collection(|k, &()| k.clone()),
             ),
+            ArrangementFlavor::FactLocal(oks, errs) => {
+                let mut datums = DatumVec::new();
+                let fact_logic = move |k: &mz_repr::RowRef, v: &mz_repr::RowRef| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.to_datum_iter());
+                    datums_borrow.extend(v.to_datum_iter());
+                    SharedRow::pack(&**datums_borrow)
+                };
+                (
+                    oks.clone().as_collection(fact_logic),
+                    errs.clone().as_collection(|k, &()| k.clone()),
+                )
+            }
             ArrangementFlavor::Trace(_, oks, errs) => (
                 oks.clone().as_collection(logic),
                 errs.clone().as_collection(|k, &()| k.clone()),
@@ -290,23 +321,43 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         // arrangement, as well as provides time to accumulate our produced output.
         let refuel = 1000000;
 
-        let mut datums = DatumVec::new();
-        let logic = move |k: DatumSeq, v: DatumSeq, t, d| {
-            let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k.to_datum_iter().take(max_demand));
-            let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            datums_borrow.extend(v.to_datum_iter().take(max_demand));
-            logic(&mut datums_borrow, t, d)
-        };
-
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let mut datums = DatumVec::new();
+                let wrapped = move |k: DatumSeq, v: DatumSeq, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                    let remaining = max_demand.saturating_sub(datums_borrow.len());
+                    datums_borrow.extend(v.to_datum_iter().take(remaining));
+                    logic(&mut datums_borrow, t, d)
+                };
+                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, wrapped, refuel);
+                let errs = errs.clone().as_collection(|k, &()| k.clone());
+                (oks, errs)
+            }
+            ArrangementFlavor::FactLocal(oks, errs) => {
+                let mut datums = DatumVec::new();
+                let wrapped = move |k: &mz_repr::RowRef, v: &mz_repr::RowRef, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                    let remaining = max_demand.saturating_sub(datums_borrow.len());
+                    datums_borrow.extend(v.to_datum_iter().take(remaining));
+                    logic(&mut datums_borrow, t, d)
+                };
+                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, wrapped, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let mut datums = DatumVec::new();
+                let wrapped = move |k: DatumSeq, v: DatumSeq, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                    let remaining = max_demand.saturating_sub(datums_borrow.len());
+                    datums_borrow.extend(v.to_datum_iter().take(remaining));
+                    logic(&mut datums_borrow, t, d)
+                };
+                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, wrapped, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
@@ -318,6 +369,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     pub fn scope(&self) -> Scope<'scope, T> {
         match self {
             ArrangementFlavor::Local(oks, _errs) => oks.stream.scope(),
+            ArrangementFlavor::FactLocal(oks, _errs) => oks.stream.scope(),
             ArrangementFlavor::Trace(_gid, oks, _errs) => oks.stream.scope(),
         }
     }
@@ -326,6 +378,10 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     pub fn enter_region<'a>(&self, region: Scope<'a, T>) -> ArrangementFlavor<'a, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().enter_region(region),
+                errs.clone().enter_region(region),
+            ),
+            ArrangementFlavor::FactLocal(oks, errs) => ArrangementFlavor::FactLocal(
                 oks.clone().enter_region(region),
                 errs.clone().enter_region(region),
             ),
@@ -342,6 +398,10 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
     pub fn leave_region<'outer>(&self, outer: Scope<'outer, T>) -> ArrangementFlavor<'outer, T> {
         match self {
             ArrangementFlavor::Local(oks, errs) => ArrangementFlavor::Local(
+                oks.clone().leave_region(outer),
+                errs.clone().leave_region(outer),
+            ),
+            ArrangementFlavor::FactLocal(oks, errs) => ArrangementFlavor::FactLocal(
                 oks.clone().leave_region(outer),
                 errs.clone().leave_region(outer),
             ),

@@ -94,6 +94,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     }
                                     Ok(oks.enter_region(inner))
                                 }
+                                ArrangementFlavor::FactLocal(..) => {
+                                    unreachable!(
+                                        "delta-join does not yet consume \
+                                         ArrangementFlavor::FactLocal lookups",
+                                    );
+                                }
                                 ArrangementFlavor::Trace(_gid, oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {
                                         inner_errs.push(

@@ -37,7 +37,7 @@ use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{RowRowAgent, RowRowEnter};
+use crate::typedefs::{FactRowRowAgent, RowRowAgent, RowRowEnter};
 
 /// Available linear join implementations.
 ///
@@ -186,6 +186,15 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     Collection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
+    /// A dataflow-local factorized arrangement.
+    ///
+    /// Opt-in counterpart to [`JoinedFlavor::Local`] backed by
+    /// [`crate::typedefs::FactRowRowAgent`]. Currently unused — nothing in the
+    /// linear-join path produces this variant yet. Introduced alongside
+    /// [`ArrangementFlavor::FactLocal`] so the render plumbing compiles with the
+    /// factorized spine threaded through.
+    #[allow(dead_code)]
+    FactLocal(Arranged<'scope, FactRowRowAgent<T, Diff>>),
     /// An imported arrangement.
     Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
 }
@@ -415,6 +424,12 @@ where
                     errors.extend(errs2);
                     oks
                 }
+                ArrangementFlavor::FactLocal(..) => {
+                    unreachable!(
+                        "FactLocal lookup arrangement currently unsupported against \
+                         RowRow-keyed JoinedFlavor::Local — mixed key types (DatumSeq vs &RowRef)",
+                    );
+                }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
                         .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
@@ -424,6 +439,24 @@ where
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
                     oks
+                }
+            },
+            JoinedFlavor::FactLocal(local) => match arrangement {
+                ArrangementFlavor::FactLocal(oks, errs1) => {
+                    let (oks, errs2) = self
+                        .differential_join_inner::<FactRowRowAgent<_, _>, FactRowRowAgent<_, _>>(
+                            local, oks, closure,
+                        );
+
+                    errors.push(errs1.as_collection(|k, _v| k.clone()));
+                    errors.extend(errs2);
+                    oks
+                }
+                ArrangementFlavor::Local(..) | ArrangementFlavor::Trace(..) => {
+                    unreachable!(
+                        "FactLocal streamed input requires FactLocal lookup — mixed key types \
+                         (&RowRef vs DatumSeq) cannot share a differential-join spine",
+                    );
                 }
             },
             JoinedFlavor::Trace(trace) => match arrangement {
@@ -436,6 +469,12 @@ where
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
                     errors.extend(errs2);
                     oks
+                }
+                ArrangementFlavor::FactLocal(..) => {
+                    unreachable!(
+                        "FactLocal lookup arrangement currently unsupported against \
+                         RowRow-keyed JoinedFlavor::Trace — mixed key types (DatumSeq vs &RowRef)",
+                    );
                 }
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self

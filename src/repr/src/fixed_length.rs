@@ -11,11 +11,15 @@
 //! `Row` is the most obvious implementor, but other trace types that may use more advanced
 //! representations only need to commit to implementing these traits.
 
-use crate::row::DatumListIter;
+use crate::row::{DatumListIter, RowRef};
 use crate::{Datum, Row};
 
 /// A helper trait to turn a type into an iterator of datums.
-pub trait ToDatumIter: Sized {
+///
+/// Not bounded by [`Sized`] so that unsized types like [`RowRef`] can
+/// participate directly — the factorized arrangement cursors yield `&RowRef`
+/// at `Key<'a>` / `Val<'a>`, and go through the blanket `&T` impl below.
+pub trait ToDatumIter {
     /// An iterator type for use in `to_datum_iter`.
     type DatumIter<'a>: IntoIterator<Item = Datum<'a>>
     where
@@ -25,7 +29,7 @@ pub trait ToDatumIter: Sized {
     fn to_datum_iter(&self) -> Self::DatumIter<'_>;
 }
 
-impl<'b, T: ToDatumIter> ToDatumIter for &'b T {
+impl<'b, T: ToDatumIter + ?Sized> ToDatumIter for &'b T {
     type DatumIter<'a>
         = T::DatumIter<'a>
     where
@@ -41,6 +45,18 @@ impl ToDatumIter for Row {
     type DatumIter<'a> = DatumListIter<'a>;
 
     /// Borrows `self` and gets an iterator from it.
+    #[inline]
+    fn to_datum_iter(&self) -> Self::DatumIter<'_> {
+        self.iter()
+    }
+}
+
+// Identity implementation for RowRef — enables factorized arrangement cursors
+// (whose Key<'a>/Val<'a> = &'a RowRef) to plug into the same `ToDatumIter`
+// plumbing used by `DatumSeq`-keyed arrangements.
+impl ToDatumIter for RowRef {
+    type DatumIter<'a> = DatumListIter<'a>;
+
     #[inline]
     fn to_datum_iter(&self) -> Self::DatumIter<'_> {
         self.iter()

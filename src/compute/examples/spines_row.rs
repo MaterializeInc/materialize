@@ -77,7 +77,9 @@ fn main() {
                         RowRowSpine<Timestamp, Diff>,
                     >(
                         data_stream,
-                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| update.0.0.hashed().into()),
+                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| {
+                            update.0.0.hashed().into()
+                        }),
                         "ArrangeData",
                     );
                     let keys_arranged = arrange_core::<
@@ -87,7 +89,9 @@ fn main() {
                         RowRowSpine<Timestamp, Diff>,
                     >(
                         keys_stream,
-                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| update.0.0.hashed().into()),
+                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| {
+                            update.0.0.hashed().into()
+                        }),
                         "ArrangeKeys",
                     );
                     keys_arranged
@@ -103,7 +107,9 @@ fn main() {
                         FactRowRowSpine<Timestamp, Diff>,
                     >(
                         data_stream,
-                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| update.0.0.hashed().into()),
+                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| {
+                            update.0.0.hashed().into()
+                        }),
                         "ArrangeData",
                     );
                     let keys_arranged = arrange_core::<
@@ -113,7 +119,9 @@ fn main() {
                         FactRowRowSpine<Timestamp, Diff>,
                     >(
                         keys_stream,
-                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| update.0.0.hashed().into()),
+                        Exchange::new(|update: &((Row, Row), Timestamp, Diff)| {
+                            update.0.0.hashed().into()
+                        }),
                         "ArrangeKeys",
                     );
                     keys_arranged

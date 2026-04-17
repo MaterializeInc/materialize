@@ -756,6 +756,12 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
                 );
             }
+            Some(ArrangementFlavor::FactLocal(..)) => {
+                unreachable!(
+                    "index export does not yet emit TraceBundles from \
+                     ArrangementFlavor::FactLocal — indexes still flow through RowRow",
+                );
+            }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
                 // Duplicate of existing arrangement with id `gid`, so
                 // just create another handle to that arrangement.
@@ -850,6 +856,12 @@ where
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
+                );
+            }
+            Some(ArrangementFlavor::FactLocal(..)) => {
+                unreachable!(
+                    "iterative index export does not yet emit TraceBundles from \
+                     ArrangementFlavor::FactLocal — indexes still flow through RowRow",
                 );
             }
             Some(ArrangementFlavor::Trace(gid, _, _)) => {
@@ -1408,6 +1420,9 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 
                 match arrangement {
                     Local(a, _) => {
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
+                    }
+                    FactLocal(a, _) => {
                         a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
                     Trace(_, a, _) => {

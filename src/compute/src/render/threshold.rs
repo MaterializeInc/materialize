@@ -96,6 +96,12 @@ pub fn build_threshold_basic<'scope, T: RenderTimestamp>(
             );
             CollectionBundle::from_expressions(key, ArrangementFlavor::Local(oks, errs))
         }
+        ArrangementFlavor::FactLocal(..) => {
+            unreachable!(
+                "threshold does not yet consume ArrangementFlavor::FactLocal — reduce path \
+                 still runs on RowRowBuilder",
+            );
+        }
         ArrangementFlavor::Trace(_, oks, errs) => {
             let oks = threshold_arrangement::<_, _, RowRowBuilder<_, _>, _, _>(
                 oks,
