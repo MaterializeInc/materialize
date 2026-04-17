@@ -71,6 +71,8 @@ import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
 } from "~/utils/dateFormat";
+import { toBase64 } from "~/utils/format";
+import { obfuscateSecret } from "~/utils/format";
 
 const AppPasswordsPage = ({ user }: { user: User }) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -143,6 +145,7 @@ const AppPasswordsInner = (props: {
   });
 
   const [newPasswordClosed, setNewPasswordClosed] = useState("");
+  const [newPasswordUser, setNewPasswordUser] = useState<string | null>(null);
 
   const watchType = watch("type");
 
@@ -159,6 +162,7 @@ const AppPasswordsInner = (props: {
           name={newPassword.description}
           password={newPassword.password}
           obfuscatedContent={newPassword.obfuscatedPassword}
+          userEmail={newPasswordUser ?? user.email}
           onClose={() => setNewPasswordClosed(newPassword.clientId)}
         />
       )}
@@ -175,6 +179,7 @@ const AppPasswordsInner = (props: {
         <ModalContent>
           <form
             onSubmit={handleSubmit((data) => {
+              setNewPasswordUser(data.type === "service" ? data.user : null);
               createAppPassword({
                 type: data.type,
                 description: data.name,
@@ -462,6 +467,7 @@ type SecretBoxProps = {
   name: string;
   password: string;
   obfuscatedContent: string;
+  userEmail: string;
   onClose: () => void;
 };
 
@@ -469,9 +475,14 @@ const SecretBox = ({
   name,
   password,
   obfuscatedContent,
+  userEmail,
   onClose,
 }: SecretBoxProps) => {
   const { colors } = useTheme<MaterializeTheme>();
+
+  const base64Token = toBase64(`${userEmail}:${password}`);
+  const obfuscatedBase64Token = obfuscateSecret(base64Token);
+
   return (
     <ChakraAlert
       status="info"
@@ -484,18 +495,36 @@ const SecretBox = ({
     >
       <VStack alignItems="flex-start" width="100%">
         <AlertDescription width="100%" px={2}>
-          <VStack alignItems="start">
-            <Text fontSize="md" fontWeight="500">
-              New password {`"${name}"`}:
-            </Text>
-            <SecretCopyableBox
-              label="clientId"
-              contents={password}
-              obfuscatedContent={obfuscatedContent}
-            />
+          <VStack alignItems="start" spacing="3">
+            <VStack alignItems="start" spacing="1" width="100%">
+              <Text fontSize="md" fontWeight="500">
+                New password {`"${name}"`}:
+              </Text>
+              <SecretCopyableBox
+                label="clientId"
+                contents={password}
+                obfuscatedContent={obfuscatedContent}
+              />
+            </VStack>
+            <VStack alignItems="start" spacing="1" width="100%">
+              <Text fontSize="md" fontWeight="500">
+                MCP Token
+              </Text>
+              <SecretCopyableBox
+                label="mcpToken"
+                contents={base64Token}
+                obfuscatedContent={obfuscatedBase64Token}
+                overflow="hidden"
+                minWidth={0}
+              />
+              <Text fontSize="xs" color={colors.foreground.secondary}>
+                Base64-encoded <code>{userEmail}:&lt;password&gt;</code> for MCP
+                configuration.
+              </Text>
+            </VStack>
           </VStack>
-          <Text pt={1} textStyle="text-base" color={colors.foreground.primary}>
-            Write this down; you will not be able to see your app password again
+          <Text pt={2} textStyle="text-base" color={colors.foreground.primary}>
+            Write this down; you will not be able to see your credentials again
             after you reload!
           </Text>
         </AlertDescription>

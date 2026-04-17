@@ -16,6 +16,16 @@ export function obfuscateSecret(secret: string): string {
   return "*".repeat(secret.length);
 }
 
+/**
+ * Unicode-safe base64 encoding. Unlike `btoa`, this handles
+ * non-ASCII characters by first encoding the string as UTF-8.
+ */
+export const toBase64 = (str: string): string => {
+  const bytes = new TextEncoder().encode(str);
+  const binary = Array.from(bytes, (b) => String.fromCharCode(b)).join("");
+  return btoa(binary);
+};
+
 const kilobyte = 1024n;
 const megabyte = 1024n * 1024n;
 const gigabyte = 1024n * 1024n * 1024n;

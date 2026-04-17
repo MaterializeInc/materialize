@@ -15,10 +15,12 @@ import { useParams } from "react-router-dom";
 import { User } from "~/external-library-wrappers/frontegg";
 import { ClusterDetailParams } from "~/platform/clusters/ClusterRoutes";
 import { currentEnvironmentState } from "~/store/environments";
+import ConnectionIcon from "~/svg/ConnectionIcon";
 import { MonitorIcon } from "~/svg/Monitor";
 import TerminalIcon from "~/svg/Terminal";
 
 import { CopyableBox, TabbedCodeBlock } from "./copyableComponents";
+import McpConnectInstructions from "./McpConnectInstructions";
 
 export interface ConnectInstructionsProps extends BoxProps {
   /** The user string to display. Falls back to user.email if not provided. */
@@ -29,10 +31,16 @@ export interface ConnectInstructionsProps extends BoxProps {
   environmentdAddress?: string;
   /** Override the query params in the psql connection string. */
   psqlQueryParams?: string;
+  /** Pre-computed Base64 token for MCP configuration (cloud only). */
+  mcpBase64Token?: string;
+  /** Called when the active tab changes. */
+  onTabChange?: (title: string) => void;
 }
 
 const ConnectInstructions = ({
   user,
+  onTabChange,
+  mcpBase64Token,
   ...props
 }: ConnectInstructionsProps): JSX.Element => {
   const [currentEnvironment] = useAtom(currentEnvironmentState);
@@ -115,7 +123,18 @@ const ConnectInstructions = ({
           contents: psqlCopyString,
           icon: <TerminalIcon w="4" h="4" />,
         },
+        {
+          title: "MCP Server",
+          children: (
+            <McpConnectInstructions
+              userStr={userStr}
+              mcpBase64Token={mcpBase64Token}
+            />
+          ),
+          icon: <ConnectionIcon w="4" h="4" />,
+        },
       ]}
+      onTabChange={onTabChange}
       minHeight="208px"
       {...props}
     />
