@@ -38,8 +38,10 @@ use timely::dataflow::operators::generic::Session;
 use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 
+use crate::extensions::arrange::MzArrange;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -94,11 +96,28 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     }
                                     Ok(oks.enter_region(inner))
                                 }
-                                ArrangementFlavor::FactLocal(..) => {
-                                    unreachable!(
-                                        "delta-join does not yet consume \
-                                         ArrangementFlavor::FactLocal lookups",
-                                    );
+                                ArrangementFlavor::FactLocal(oks, errs) => {
+                                    if err_dedup.insert((lookup_idx, lookup_key)) {
+                                        inner_errs.push(
+                                            errs.enter_region(inner)
+                                                .as_collection(|k, _v| k.clone()),
+                                        );
+                                    }
+                                    // Bridge FactLocal → Local by flattening + re-arranging
+                                    // in the delta-join region. delta-join consumes
+                                    // RowRowAgent-shaped arrangements; migrating that
+                                    // contract would remove this bridge arrangement.
+                                    let oks = oks
+                                        .as_collection(|k, v| (k.to_row(), v.to_row()))
+                                        .enter_region(inner)
+                                        .mz_arrange::<
+                                            RowRowBatcher<_, _>,
+                                            RowRowBuilder<_, _>,
+                                            RowRowSpine<_, _>,
+                                        >(
+                                            "Bridge FactLocal→Local for delta-join",
+                                        );
+                                    Ok(oks)
                                 }
                                 ArrangementFlavor::Trace(_gid, oks, errs) => {
                                     if err_dedup.insert((lookup_idx, lookup_key)) {

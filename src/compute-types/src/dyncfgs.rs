@@ -268,7 +268,7 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
 /// linear-join workloads.
 pub const ENABLE_COMPUTE_FACTORIZED_ARRANGEMENT: Config<bool> = Config::new(
     "enable_compute_factorized_arrangement",
-    false,
+    true,
     "When enabled, local arrangements built by ArrangeBy use the factorized \
      (trie-structured) spine FactRowRowSpine instead of RowRowSpine.",
 );
