@@ -15,12 +15,12 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
-## v26.20.0
+## v26.20.2
 *Released to Materialize Cloud: 2026-04-16* <br>
 *Released to Materialize Self-Managed: 2026-04-17* <br>
 
-This release introduces the built-in Developer MCP server, MySQL source
-versioning, Console improvements, and bug fixes.
+This release introduces the built-in Developer MCP server, Console
+improvements, and bug fixes.
 
 ### Developer MCP server
 
@@ -36,32 +36,6 @@ For example, you could ask *why is my materialized view stale?* or *how much mem
 
 For more information, refer to:
 - [Integrations: MCP Server for Developers](/integrations/mcp-server/mcp-developer/)
-
-### MySQL: Source versioning
-
-{{< private-preview />}}
-
-For MySQL sources, we've introduced new syntax for [`CREATE
-SOURCE`](/sql/create-source/mysql/) and [`CREATE TABLE`](/sql/create-table/).
-This allows you to better handle schema changes in your source MySQL tables.
-
-{{< note >}}
-- Changing column types is currently unsupported.
-{{< /note >}}
-
-```mzsql
-CREATE SOURCE my_source
-  FROM MYSQL CONNECTION mysql_connection;
-
-CREATE TABLE v1.t1
-  FROM SOURCE my_source (REFERENCE mydb.t1);
-```
-
-For more information, refer to:
-- [Guide: Handling upstream schema changes with zero
-  downtime](/ingest-data/mysql/source-versioning/)
-- [Syntax: `CREATE SOURCE`](/sql/create-source/mysql/)
-- [Syntax: `CREATE TABLE`](/sql/create-table/)
 
 ### Improvements {#v26-20-improvements}
 - **Better Console schema navigation**: The schema dropdown in the SQL Shell now
