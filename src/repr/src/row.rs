@@ -544,9 +544,14 @@ mod columnar {
     }
 
     impl<'a, BC: AsBytes<'a>, VC: AsBytes<'a>> AsBytes<'a> for Rows<BC, VC> {
+        const SLICE_COUNT: usize = BC::SLICE_COUNT + VC::SLICE_COUNT;
         #[inline(always)]
-        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
-            columnar::chain(self.bounds.as_bytes(), self.values.as_bytes())
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            if index < BC::SLICE_COUNT {
+                self.bounds.get_byte_slice(index)
+            } else {
+                self.values.get_byte_slice(index - BC::SLICE_COUNT)
+            }
         }
     }
     impl<'a, BC: FromBytes<'a>, VC: FromBytes<'a>> FromBytes<'a> for Rows<BC, VC> {
@@ -569,6 +574,10 @@ mod columnar {
 
     impl<'a, BC: Len + IndexAs<u64>> Index for Rows<BC, &'a [u8]> {
         type Ref = &'a RowRef;
+        type Cursor<'b>
+            = RowsCursor<'b, Self>
+        where
+            Self: 'b;
         #[inline(always)]
         fn get(&self, index: usize) -> Self::Ref {
             let lower = if index == 0 {
@@ -583,9 +592,17 @@ mod columnar {
             // that correspond to the original rows.
             unsafe { RowRef::from_slice(&self.values[lower..upper]) }
         }
+        #[inline(always)]
+        fn cursor(&self, range: core::ops::Range<usize>) -> Self::Cursor<'_> {
+            RowsCursor { rows: self, range }
+        }
     }
     impl<'a, BC: Len + IndexAs<u64>> Index for &'a Rows<BC, Vec<u8>> {
         type Ref = &'a RowRef;
+        type Cursor<'b>
+            = RowsCursor<'b, Self>
+        where
+            Self: 'b;
         #[inline(always)]
         fn get(&self, index: usize) -> Self::Ref {
             let lower = if index == 0 {
@@ -599,6 +616,27 @@ mod columnar {
             // SAFETY: self.values contains only valid row data, and self.metadata delimits only ranges
             // that correspond to the original rows.
             unsafe { RowRef::from_slice(&self.values[lower..upper]) }
+        }
+        #[inline(always)]
+        fn cursor(&self, range: core::ops::Range<usize>) -> Self::Cursor<'_> {
+            RowsCursor { rows: self, range }
+        }
+    }
+
+    /// Cursor over a range of rows, wraps `Index::get` per element.
+    pub struct RowsCursor<'a, R: Index> {
+        rows: &'a R,
+        range: core::ops::Range<usize>,
+    }
+
+    impl<'a, R: Index> Iterator for RowsCursor<'a, R>
+    where
+        R::Ref: 'a,
+    {
+        type Item = R::Ref;
+        #[inline(always)]
+        fn next(&mut self) -> Option<Self::Item> {
+            self.range.next().map(|i| self.rows.get(i))
         }
     }
 

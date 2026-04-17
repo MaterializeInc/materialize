@@ -97,10 +97,36 @@ mod columnar_timestamp {
     }
     impl<'a> columnar::Index for Timestamps<&'a [Timestamp]> {
         type Ref = Timestamp;
+        type Cursor<'b>
+            = TimestampsCursor<'a>
+        where
+            Self: 'b;
 
         #[inline(always)]
         fn get(&self, index: usize) -> Self::Ref {
             self.0[index]
+        }
+
+        #[inline(always)]
+        fn cursor(&self, range: core::ops::Range<usize>) -> Self::Cursor<'_> {
+            TimestampsCursor {
+                slice: self.0,
+                range,
+            }
+        }
+    }
+
+    /// Cursor over a range of `Timestamps<&[Timestamp]>`, yields `Timestamp` by value.
+    pub struct TimestampsCursor<'a> {
+        slice: &'a [Timestamp],
+        range: core::ops::Range<usize>,
+    }
+
+    impl<'a> Iterator for TimestampsCursor<'a> {
+        type Item = Timestamp;
+        #[inline(always)]
+        fn next(&mut self) -> Option<Self::Item> {
+            self.range.next().map(|i| self.slice[i])
         }
     }
 
@@ -162,12 +188,14 @@ mod columnar_timestamp {
     }
 
     impl<'a> columnar::AsBytes<'a> for Timestamps<&'a [Timestamp]> {
+        const SLICE_COUNT: usize = 1;
         #[inline(always)]
-        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
-            std::iter::once((
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            debug_assert_eq!(index, 0);
+            (
                 u64::cast_from(align_of::<Timestamp>()),
                 bytemuck::cast_slice(self.0),
-            ))
+            )
         }
     }
     impl<'a> columnar::FromBytes<'a> for Timestamps<&'a [Timestamp]> {

@@ -757,8 +757,8 @@ use mz_timely_util::columnar::factorized::batch::{FactBatch, FactBuilder};
 use mz_timely_util::columnar::factorized::column::FactColumn;
 use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::ContainerBytes;
-use timely::progress::frontier::AntichainRef;
 use timely::progress::Antichain;
+use timely::progress::frontier::AntichainRef;
 
 /// Generate sorted `((K,V),T,R)` data for arrangement benchmarks.
 fn generate_kv_updates(

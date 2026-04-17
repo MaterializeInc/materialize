@@ -184,9 +184,10 @@ mod columnar {
     }
 
     impl<'a, T: Copy, TC: AsBytes<'a>> AsBytes<'a> for Overflows<T, TC> {
+        const SLICE_COUNT: usize = TC::SLICE_COUNT;
         #[inline(always)]
-        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
-            self.0.as_bytes()
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            self.0.get_byte_slice(index)
         }
     }
 
@@ -212,14 +213,46 @@ mod columnar {
         }
     }
 
-    impl<T: Copy, TC: IndexAs<T>> Index for Overflows<T, TC>
+    impl<T: Copy, TC> Index for Overflows<T, TC>
     where
+        TC: Index + IndexAs<T>,
+        TC::Ref: columnar::common::index::CopyAs<T>,
         Overflowing<T>: From<T>,
     {
         type Ref = Overflowing<T>;
+        type Cursor<'a>
+            = OverflowsCursor<T, TC::Cursor<'a>>
+        where
+            Self: 'a;
         #[inline(always)]
         fn get(&self, index: usize) -> Self::Ref {
             self.0.index_as(index).into()
+        }
+        #[inline(always)]
+        fn cursor(&self, range: core::ops::Range<usize>) -> Self::Cursor<'_> {
+            OverflowsCursor {
+                inner: self.0.cursor(range),
+                _phantom: std::marker::PhantomData,
+            }
+        }
+    }
+
+    /// Cursor for [`Overflows`]. Wraps inner cursor, converts each `TC::Ref` into `Overflowing<T>`.
+    pub struct OverflowsCursor<T, I> {
+        inner: I,
+        _phantom: std::marker::PhantomData<T>,
+    }
+
+    impl<T: Copy, I: Iterator> Iterator for OverflowsCursor<T, I>
+    where
+        I::Item: columnar::common::index::CopyAs<T>,
+        Overflowing<T>: From<T>,
+    {
+        type Item = Overflowing<T>;
+        #[inline(always)]
+        fn next(&mut self) -> Option<Self::Item> {
+            use columnar::common::index::CopyAs;
+            self.inner.next().map(|r| r.copy_as().into())
         }
     }
 

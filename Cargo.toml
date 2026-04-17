@@ -587,6 +587,10 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+# Pin columnar to our fork's feature branch so differential-dataflow uses
+# the same version as the workspace (avoids "multiple columnar versions" errors).
+columnar = { git = "https://github.com/antiguru/columnar", branch = "feature/cursor-index" }
+
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
