@@ -656,6 +656,10 @@ system. The view can be accessed by Materialize _superusers_.
 | `object_id`             | [`text`]                     | The ID of the materialized view or index. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). For global notices, this column is `NULL`. |
 | `created_at`            | [`timestamp with time zone`] | The time at which the notice was created. Note that some notices are re-created on `environmentd` restart.                                        |
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_entity_types -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_link_types -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_properties -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_ontology_semantic_types -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_optimizer_notices -->
 
 ## `mz_notices_redacted`
