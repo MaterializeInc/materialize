@@ -15,6 +15,39 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.20.2
+*Released to Materialize Cloud: 2026-04-16* <br>
+*Released to Materialize Self-Managed: 2026-04-17* <br>
+
+This release introduces the built-in Developer MCP server, Console
+improvements, and bug fixes.
+
+### Developer MCP server
+
+{{< public-preview />}}
+
+Materialize environments now include a built-in [Model Context Protocol
+(MCP)](https://modelcontextprotocol.io/) Developer endpoint
+(`/api/mcp/developer`). Connecting an MCP-compatible coding
+agent (such as Claude Code, Claude Desktop, or Cursor) to this endpoint lets
+you ask natural language questions about your environment.
+
+For example, you could ask *why is my materialized view stale?* or *how much memory is my cluster using?*. You'll receive a diagnosis, and recommendations on how to fix isssues.
+
+For more information, refer to:
+- [Integrations: MCP Server for Developers](/integrations/mcp-server/mcp-developer/)
+
+### Improvements {#v26-20-improvements}
+- **Better Console schema navigation**: The schema dropdown in the SQL Shell now
+  prioritizes schemas from the current database, making it easier to find
+  relevant schemas.
+
+### Bug Fixes {#v26-20-bug-fixes}
+- Fixed Console RBAC users tab that was displaying incorrectly for cloud users
+  due to null `rolcanlogin` values.
+- Fixed builtin dependency ordering issue that could cause system catalog
+  inconsistencies.
+
 ## v26.19.0
 *Released to Materialize Cloud: 2026-04-09* <br>
 *Released to Materialize Self-Managed: 2026-04-10* <br>
