@@ -131,7 +131,7 @@ use mz_compute_types::plan::render_plan::{
 use mz_expr::{EvalError, Id, LocalId, permutation_for_arrangement};
 use mz_persist_client::operators::shard_source::{ErrorHandler, SnapshotMode};
 use mz_repr::explain::DummyHumanizer;
-use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowRef, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -673,7 +673,7 @@ where
                         self.import_filtered_index_collection(
                             oks,
                             start_signal.clone(),
-                            move |k: DatumSeq, v: DatumSeq| {
+                            move |k: &RowRef, v: &RowRef| {
                                 let mut datums_borrow = datums.borrow();
                                 datums_borrow.extend(k);
                                 datums_borrow.extend(v);
@@ -814,7 +814,7 @@ where
                 //   * Combine as_collection and leave into a single function.
                 //   * Use columnar to extract columns from the batches to implement leave.
                 let mut oks = oks
-                    .as_collection(|k, v| (k.to_row(), v.to_row()))
+                    .as_collection(|k, v| (k.to_owned(), v.to_owned()))
                     .leave(outer)
                     .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
                         "Arrange export iterative",

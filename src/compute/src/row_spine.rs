@@ -33,12 +33,18 @@ mod spines {
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
-    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
-    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
-    pub type RowRowBuilder<T, R> = RcBuilder<
-        OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, ColumnationStack<((Row, Row), T, R)>>,
-    >;
+    // Row×Row spines now alias the factorized trie variants so production
+    // rendering paths pick up the trie-aware batcher/merger pipeline.
+    pub type RowRowSpine<T, R> =
+        mz_timely_util::columnar::factorized::FactValSpine<Row, Row, T, R>;
+    pub type RowRowBatcher<T, R> =
+        mz_timely_util::columnar::factorized::FactValBatcher<Row, Row, T, R>;
+    pub type RowRowBuilder<T, R> =
+        mz_timely_util::columnar::factorized::FactValBuilder<Row, Row, T, R>;
 
+    // `RowVal` stays on the ColumnationStack layout: it's used for error spines
+    // (V = DataflowError, which doesn't implement `Columnar`) and reduce output
+    // sinks (which require `InternalMerge` on the builder input).
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
     pub type RowValBuilder<V, T, R> = RcBuilder<

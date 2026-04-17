@@ -44,6 +44,13 @@ pub type FactRowRowBatcher<T, R> =
 /// Builder for [`FactRowRowSpine`].
 pub type FactRowRowBuilder<T, R> =
     mz_timely_util::columnar::factorized::FactValBuilder<mz_repr::Row, mz_repr::Row, T, R>;
+/// Trace agent for [`FactRowRowSpine`].
+pub type FactRowRowAgent<T, R> = TraceAgent<FactRowRowSpine<T, R>>;
+/// Arranged trace for [`FactRowRowAgent`].
+pub type FactRowRowArrangement<'scope, T> = Arranged<'scope, FactRowRowAgent<T, Diff>>;
+/// Imported `FactRowRow` trace used by [`ArrangementFlavor::Trace`](crate::render::context::ArrangementFlavor).
+pub type FactRowRowEnter<T, R, TEnter> =
+    TraceEnter<TraceFrontier<FactRowRowAgent<T, R>>, TEnter>;
 
 pub(crate) mod spines {
     use std::rc::Rc;

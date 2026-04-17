@@ -36,7 +36,7 @@ use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
     consolidate_and_pack,
 };
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{KeyBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
@@ -190,7 +190,7 @@ pub(super) fn construct(
                 let trace = collection
                     .mz_arrange_core::<
                         _,
-                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBatcher<_, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >(exchange, &format!("Arrange {variant:?}"))

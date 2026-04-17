@@ -31,7 +31,7 @@ use mz_expr::func::CastUint64ToInt64;
 use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, RowRef, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
@@ -408,7 +408,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                 RowValBuilder<_, _, _>,
                 RowValSpine<Result<Row, Row>, _, _>,
             >(&input, order_key, offset, limit, arity);
-            let stage = stage.as_collection(|k, v| (k.to_row(), v.clone()));
+            let stage = stage.as_collection(|k, v| (k.to_owned(), v.clone()));
 
             // Demux oks and errors.
             let error_logger = self.error_logger();
@@ -435,11 +435,11 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                     &input, order_key, offset, limit, arity,
                 );
             // Turn arrangement into collection.
-            let stage = stage.as_collection(|k, v| (k.to_row(), v.to_row()));
+            let stage = stage.as_collection(|k, v| (k.to_owned(), v.to_owned()));
 
             (input, stage, None)
         };
-        let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
+        let input = input.as_collection(|k, v| (k.to_owned(), v.to_owned()));
         (oks.concat(input), errs)
     }
 
@@ -507,7 +507,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                 },
             );
         // TODO(database-issues#2288): Here we discard the arranged output.
-        (result.as_collection(|_k, v| v.to_row()), errs)
+        (result.as_collection(|_k, v| v.to_owned()), errs)
     }
 }
 
@@ -539,7 +539,7 @@ where
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<
-            Key<'a> = DatumSeq<'a>,
+            Key<'a> = &'a RowRef,
             KeyContainer: BatchContainer<Owned = Row>,
             ValOwn: Data + MaybeValidatingRow<Row, Row>,
             Time = T,
@@ -596,7 +596,7 @@ where
                         if diff.is_positive() {
                             continue;
                         }
-                        target.push((err((*datums).to_row()), Diff::ONE));
+                        target.push((err((*datums).to_owned()), Diff::ONE));
                         return;
                     }
                 }

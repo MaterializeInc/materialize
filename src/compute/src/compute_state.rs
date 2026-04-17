@@ -1535,8 +1535,8 @@ impl IndexPeek {
                 Key<'a>: ToDatumIter + Eq,
                 KeyContainer: BatchContainer<Owned = Row>,
                 Val<'a>: ToDatumIter,
-                TimeGat<'a>: PartialOrder<Timestamp>,
-                DiffGat<'a> = &'a Diff,
+                TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+                DiffGat<'a> = Diff,
             >,
     {
         let max_result_size = usize::cast_from(max_result_size);

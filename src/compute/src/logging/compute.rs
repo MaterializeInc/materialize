@@ -40,7 +40,7 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
     SharedLoggingState, Update,
 };
-use crate::row_spine::RowRowBuilder;
+use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::RowRowSpine;
 
 /// Type alias for a logger of compute events.
@@ -435,7 +435,7 @@ pub(super) fn construct<'scope>(
                 let trace = stream
                     .mz_arrange_core::<
                         _,
-                        Col2ValBatcher<_, _, _, _>,
+                        RowRowBatcher<_, _>,
                         RowRowBuilder<_, _>,
                         RowRowSpine<_, _>,
                     >(exchange, &format!("Arrange {variant:?}"))

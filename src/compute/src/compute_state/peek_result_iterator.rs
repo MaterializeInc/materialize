@@ -104,7 +104,7 @@ where
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
+            DiffGat<'a> = Diff,
         >,
 {
     pub fn new(
@@ -142,7 +142,7 @@ impl<Tr> FusedIterator for PeekResultIterator<Tr> where
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
+            DiffGat<'a> = Diff,
         >
 {
 }
@@ -154,7 +154,7 @@ where
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
+            DiffGat<'a> = Diff,
         >,
 {
     type Item = Result<(Row, NonZeroI64), String>;
@@ -199,7 +199,7 @@ where
             KeyContainer: BatchContainer<Owned = Row>,
             Val<'a>: ToDatumIter,
             TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
+            DiffGat<'a> = Diff,
         >,
 {
     /// Extracts and returns the row currently pointed at by our cursor. Returns

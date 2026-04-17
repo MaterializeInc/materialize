@@ -36,7 +36,7 @@ use mz_expr::{
 };
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
-use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
+use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, RowRef, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
@@ -478,10 +478,10 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     >(keyed, None)
                     .as_collection(|k, v| {
                         (
-                            k.to_row(),
+                            k.to_owned(),
                             v.as_ref()
                                 .map(|&()| ())
-                                .map_err(|m| m.as_str().into()),
+                                .map_err(|m| String::from_utf8(m.to_vec()).expect("valid utf8").into()),
                         )
                     })
                     .map_fallible::<
@@ -1000,7 +1000,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     aggr_funcs.clone(),
                 );
             let (oks, errs) = reduced
-                .as_collection(|k, v| (k.to_row(), v.clone()))
+                .as_collection(|k, v| (k.to_owned(), v.to_owned().map_err(|e| e.to_owned())))
                 .map_fallible::<CapacityContainerBuilder<_>, CapacityContainerBuilder<_>, _, _, _>(
                 "Checked Invalid Accumulations",
                 |(hash_key, result)| match result {
@@ -1026,11 +1026,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 );
             // TODO: Here is a good moment where we could apply the next `mod` calculation. Note
             // that we need to apply the mod on both input and oks.
-            let oks = reduced.as_collection(|k, v| (k.to_row(), v.to_row()));
+            let oks = reduced.as_collection(|k, v| (k.to_owned(), v.to_owned()));
             (input, oks, None)
         };
 
-        let input = input.as_collection(|k, v| (k.to_row(), v.to_row()));
+        let input = input.as_collection(|k, v| (k.to_owned(), v.to_owned()));
         let oks = negated_output.concat(input);
         (oks, errs)
     }
@@ -1048,7 +1048,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     )
     where
         Tr: for<'a> Trace<
-                Key<'a> = DatumSeq<'a>,
+                Key<'a> = &'a RowRef,
                 KeyContainer: BatchContainer<Owned = Row>,
                 ValOwn: Data + MaybeValidatingRow<Row, Row>,
                 Time = T,

@@ -24,7 +24,9 @@ use std::collections::VecDeque;
 
 use columnar::Columnar;
 use differential_dataflow::difference::Semigroup;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder, DrainContainer, PushInto};
+
+use crate::columnar::Column;
 
 use super::KVUpdates;
 
@@ -116,6 +118,34 @@ where
 {
     fn push_into(&mut self, input: &mut Vec<((K, V), T, R)>) {
         self.pending.append(input);
+        if self.pending.len() >= 2 * CHUNK_TARGET {
+            self.flush_pending();
+        }
+    }
+}
+
+/// Drain a columnar `Column<((K,V),T,R)>` into the pending buffer as owned tuples.
+///
+/// Mirrors the shape that `Col2ValBatcher` expects on the production render path.
+impl<K, V, T, R> PushInto<&mut Column<((K, V), T, R)>> for FactTrieChunker<K, V, T, R>
+where
+    K: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, K>: Ord + Copy,
+    V: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, V>: Ord + Copy,
+    T: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, T>: Ord + Copy,
+    R: Columnar + Ord + Semigroup + Clone + 'static,
+    for<'a> columnar::Ref<'a, R>: Ord + Copy,
+{
+    fn push_into(&mut self, input: &mut Column<((K, V), T, R)>) {
+        for ((k_ref, v_ref), t_ref, r_ref) in input.drain() {
+            self.pending.push((
+                (K::into_owned(k_ref), V::into_owned(v_ref)),
+                T::into_owned(t_ref),
+                R::into_owned(r_ref),
+            ));
+        }
         if self.pending.len() >= 2 * CHUNK_TARGET {
             self.flush_pending();
         }
