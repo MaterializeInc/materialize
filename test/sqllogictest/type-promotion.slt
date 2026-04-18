@@ -1728,9 +1728,7 @@ EXPLAIN OPTIMIZED PLAN WITH (TYPES) AS VERBOSE TEXT FOR
 Explained Query:
   Union // { types: "(r_string?)" }
     ReadStorage materialize.public.t1 // { types: "(r_string?)" }
-    Project (#1) // { types: "(r_string?)" }
-      Map (text_to_varchar[len=unbounded](#0)) // { types: "(r_string?, r_string?)" }
-        ReadStorage materialize.public.t3 // { types: "(r_string?)" }
+    ReadStorage materialize.public.t3 // { types: "(r_string?)" }
 
 Source materialize.public.t1
 Source materialize.public.t3
