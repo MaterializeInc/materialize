@@ -221,13 +221,13 @@ impl UnauthorizedError {
 
                 // Build the hint message
                 let granter = match object_owner_name {
-                    Some(owner) => format!("The owner ('{}') of {} or a superuser", owner, object_description),
+                    Some(owner) => format!("The owner ({}) of {} or a superuser", Ident::new_unchecked(owner), object_description),
                     None => "A superuser".to_string(),
                 };
 
                 Some(format!(
-                    "{} can grant access: GRANT {} ON {} TO '{}'",
-                    granter, privileges, object_description, grant_target
+                    "{} can grant access: GRANT {} ON {} TO {}",
+                    granter, privileges, object_description, Ident::new_unchecked(grant_target)
                 ))
             }
             UnauthorizedError::Ownership { .. } => Some(
