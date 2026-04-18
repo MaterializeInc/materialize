@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/continual_task.rs
-revision: 1e050fdd07
+revision: a632912d24
 ---
 
 # adapter::continual_task

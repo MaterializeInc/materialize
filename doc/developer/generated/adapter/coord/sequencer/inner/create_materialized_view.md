@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/create_materialized_view.rs
-revision: fcc110b5fe
+revision: a632912d24
 ---
 
 # adapter::coord::sequencer::inner::create_materialized_view
