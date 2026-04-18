@@ -543,7 +543,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     );
 
     info!("All tasks started successfully.");
-    info!("testing if it works and there isn't a thing pre-built");
 
     future::pending().await
 }
