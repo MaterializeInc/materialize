@@ -215,16 +215,30 @@ class ScenarioRunner:
             }
         )
 
-    def run_query(self, query: str, fetch: bool = False, **params) -> list | None:
+    def run_query(
+        self, query: str, fetch: bool = False, retries: int = 5, **params
+    ) -> list | None:
         query = dedent(query).strip()
         if "CREATE SECRET" not in query:
             print(f"> {query} {params or ''}")
-        with self.connection as cur:
-            cur.execute(query.encode(), params)
-            if fetch:
-                return cur.fetchall()
-            else:
-                return None
+        for retry in range(retries + 1):
+            try:
+                with self.connection as cur:
+                    cur.execute(query.encode(), params)
+                    if fetch:
+                        return cur.fetchall()
+                    else:
+                        return None
+            except (
+                InterfaceError,
+                OperationalError,
+                psycopg.errors.SystemError,
+            ) as e:
+                if retry >= retries:
+                    raise
+                print(f"Retryable error (attempt {retry + 1}/{retries}): {e}")
+                time.sleep(5 * (retry + 1))
+        return None
 
     def measure(
         self,
