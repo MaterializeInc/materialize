@@ -2015,7 +2015,7 @@ fn plan_set_expr(
             ) -> Result<(HirRelationExpr, Scope), PlanError> {
                 let rows = vec![plan.row.iter().collect::<Vec<_>>()];
                 let desc = desc.relation_desc.ok_or_else(|| {
-                    sql_err!("internal error: statement description missing relation descriptor")
+                    PlanError::Internal("statement description missing relation descriptor".into())
                 })?;
                 let scope = Scope::from_source(None, desc.iter_names());
                 let expr = HirRelationExpr::constant(rows, desc.into_typ());
@@ -4100,24 +4100,24 @@ fn plan_expr_inner<'a>(
         Expr::MapSubquery(query) => plan_map_subquery(ecx, query),
         Expr::ArraySubquery(query) => plan_array_subquery(ecx, query),
         Expr::Collate { expr, collation } => plan_collate(ecx, expr, collation),
-        Expr::Nested(_) => sql_bail!("internal error: Expr::Nested should have been desugared"),
+        Expr::Nested(_) => bail_internal!("Expr::Nested should have been desugared"),
         Expr::InSubquery { .. } => {
-            sql_bail!("internal error: Expr::InSubquery should have been desugared")
+            bail_internal!("Expr::InSubquery should have been desugared")
         }
         Expr::AnyExpr { .. } => {
-            sql_bail!("internal error: Expr::AnyExpr should have been desugared")
+            bail_internal!("Expr::AnyExpr should have been desugared")
         }
         Expr::AllExpr { .. } => {
-            sql_bail!("internal error: Expr::AllExpr should have been desugared")
+            bail_internal!("Expr::AllExpr should have been desugared")
         }
         Expr::AnySubquery { .. } => {
-            sql_bail!("internal error: Expr::AnySubquery should have been desugared")
+            bail_internal!("Expr::AnySubquery should have been desugared")
         }
         Expr::AllSubquery { .. } => {
-            sql_bail!("internal error: Expr::AllSubquery should have been desugared")
+            bail_internal!("Expr::AllSubquery should have been desugared")
         }
         Expr::Between { .. } => {
-            sql_bail!("internal error: Expr::Between should have been desugared")
+            bail_internal!("Expr::Between should have been desugared")
         }
     }
 }
@@ -5176,7 +5176,7 @@ fn plan_aggregate_common(
 
     let impls = match resolve_func(ecx, name, args)? {
         Func::Aggregate(impls) => impls,
-        _ => sql_bail!("internal error: plan_aggregate_common called on non-aggregate function"),
+        _ => bail_internal!("plan_aggregate_common called on non-aggregate function"),
     };
 
     // We follow PostgreSQL's rule here for mapping `count(*)` into the
@@ -5268,7 +5268,7 @@ fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, 
     let col_name = normalize::column_name(
         names
             .pop()
-            .ok_or_else(|| sql_err!("internal error: empty identifier"))?,
+            .ok_or_else(|| PlanError::Internal("empty identifier".into()))?,
     );
 
     // If the name is qualified, it must refer to a column in a table.
@@ -5549,7 +5549,7 @@ fn plan_function<'a>(
     };
 
     if over.is_some() {
-        sql_bail!("internal error: OVER clause should have been handled");
+        bail_internal!("OVER clause should have been handled by the window function path above");
     }
 
     if *distinct {
@@ -6037,7 +6037,7 @@ pub fn scalar_type_from_sql(
         ResolvedDataType::Named { id, modifiers, .. } => {
             scalar_type_from_catalog(scx.catalog, *id, modifiers)
         }
-        ResolvedDataType::Error => sql_bail!("internal error: unresolved data type"),
+        ResolvedDataType::Error => bail_internal!("should have been caught in name resolution"),
     }
 }
 
@@ -6633,7 +6633,7 @@ impl<'a> QueryContext<'a> {
 
                 Ok((expr, scope))
             }
-            ResolvedItemName::Error => sql_bail!("internal error: unresolved item name"),
+            ResolvedItemName::Error => bail_internal!("should have been caught in name resolution"),
         }
     }
 

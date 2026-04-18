@@ -1202,12 +1202,20 @@ async fn purify_create_source(
                                     table: export
                                         .meta
                                         .load_generator_desc()
-                                        .ok_or_else(|| sql_err!("internal error: expected load generator source reference"))?
+                                        .ok_or_else(|| {
+                                            PlanError::Internal(
+                                                "expected load generator source reference".into(),
+                                            )
+                                        })?
                                         .clone(),
                                     output: export
                                         .meta
                                         .load_generator_output()
-                                        .ok_or_else(|| sql_err!("internal error: expected load generator source reference"))?
+                                        .ok_or_else(|| {
+                                            PlanError::Internal(
+                                                "expected load generator source reference".into(),
+                                            )
+                                        })?
                                         .clone(),
                                 },
                             },
@@ -1249,6 +1257,7 @@ async fn purify_create_source(
         let name = match progress_subsource {
             Some(name) => match name {
                 DeferredItemName::Deferred(name) => name.clone(),
+                // Already checked for this value above.
                 DeferredItemName::Named(_) => {
                     sql_bail!("progress subsource name cannot be a resolved name")
                 }
@@ -1960,14 +1969,14 @@ async fn purify_create_table_from_source(
                         .meta
                         .load_generator_desc()
                         .ok_or_else(|| {
-                            sql_err!("internal error: expected load generator source reference")
+                            PlanError::Internal("expected load generator source reference".into())
                         })?
                         .clone(),
                     output: export
                         .meta
                         .load_generator_output()
                         .ok_or_else(|| {
-                            sql_err!("internal error: expected load generator source reference")
+                            PlanError::Internal("expected load generator source reference".into())
                         })?
                         .clone(),
                 },
@@ -2192,7 +2201,7 @@ async fn purify_create_table_from_source(
         PurifiedExportDetails::LoadGenerator { .. } => {
             let (desc, output) = match purified_export.details {
                 PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
-                _ => sql_bail!("internal error: purified export details must be load generator"),
+                _ => bail_internal!("purified export details must be load generator"),
             };
             // We only determine the table description for multi-output load generator sources here,
             // whereas single-output load generators will have their relation description
@@ -2331,7 +2340,7 @@ pub fn generate_subsource_statements(
     let (_, purified_export) = subsources
         .iter()
         .next()
-        .ok_or_else(|| sql_err!("internal error: expected at least one subsource"))?;
+        .ok_or_else(|| PlanError::Internal("expected at least one subsource".into()))?;
 
     let statements = match &purified_export.details {
         PurifiedExportDetails::Postgres { .. } => {
@@ -2357,11 +2366,13 @@ pub fn generate_subsource_statements(
                 let (desc, output) = match purified_export.details {
                     PurifiedExportDetails::LoadGenerator { table, output } => (table, output),
                     _ => {
-                        sql_bail!("internal error: purified export details must be load generator")
+                        bail_internal!("purified export details must be load generator")
                     }
                 };
                 let desc = desc.ok_or_else(|| {
-                    sql_err!("internal error: subsources cannot be generated for single-output load generators")
+                    PlanError::Internal(
+                        "subsources cannot be generated for single-output load generators".into(),
+                    )
                 })?;
 
                 let (columns, table_constraints) = scx.relation_desc_into_table_defs(&desc)?;

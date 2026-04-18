@@ -876,7 +876,7 @@ pub fn plan_explain_schema(
                 "EXPLAIN SCHEMA is only available for Kafka sinks with Avro schemas"
             ),
         },
-        _ => sql_bail!("internal error: plan_sink did not produce a CreateSink plan"),
+        _ => bail_internal!("plan_sink did not produce a CreateSink plan"),
     }
 }
 

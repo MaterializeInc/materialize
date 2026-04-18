@@ -1117,7 +1117,7 @@ fn plan_mysql_source_connection(
     } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: MySQL source missing details"))?;
+        .ok_or_else(|| PlanError::Internal("MySQL source missing details".into()))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details = ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
     let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
@@ -1144,7 +1144,7 @@ fn plan_sqlserver_source_connection(
     let SqlServerConfigOptionExtracted { details, .. } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: SQL Server source missing details"))?;
+        .ok_or_else(|| PlanError::Internal("SQL Server source missing details".into()))?;
     let extras = hex::decode(details)
         .map_err(|e| sql_err!("{e}"))
         .and_then(|raw| ProtoSqlServerSourceExtras::decode(&*raw).map_err(|e| sql_err!("{e}")))
@@ -1177,7 +1177,7 @@ fn plan_postgres_source_connection(
     } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: Postgres source missing details"))?;
+        .ok_or_else(|| PlanError::Internal("Postgres source missing details".into()))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details =
         ProtoPostgresSourcePublicationDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -1186,6 +1186,7 @@ fn plan_postgres_source_connection(
     Ok(PostgresSourceConnection {
         connection: connection_item.id(),
         connection_id: connection_item.id(),
+        // Validated during purification.
         publication: publication.ok_or_else(|| sql_err!("PUBLICATION option is required"))?,
         publication_details,
     })
@@ -1212,6 +1213,7 @@ fn plan_kafka_source_connection(
         start_offset,
         seen: _,
     }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
+    // Validated during purification.
     let topic = topic.ok_or_else(|| sql_err!("TOPIC option is required"))?;
     let mut start_offsets = BTreeMap::new();
     if let Some(offsets) = start_offset {
@@ -1606,6 +1608,10 @@ pub fn plan_create_subsource(
         seen: _,
     } = with_options.clone().try_into()?;
 
+    // This invariant is enforced during purification; we are responsible for
+    // creating the AST for subsources as a response to CREATE SOURCE
+    // statements, so this would fire in integration testing if we failed to
+    // uphold it.
     if !(progress ^ (external_reference.is_some() && of_source.is_some())) {
         sql_bail!("CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option");
     }
@@ -1634,7 +1640,7 @@ pub fn plan_create_subsource(
         // created during the purification process.
         let details = details
             .as_ref()
-            .ok_or_else(|| sql_err!("internal error: source-export subsource missing details"))?;
+            .ok_or_else(|| PlanError::Internal("source-export subsource missing details".into()))?;
         let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
         let details =
             ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -1773,7 +1779,7 @@ pub fn plan_create_table_from_source(
     // created during the purification process.
     let details = details
         .as_ref()
-        .ok_or_else(|| sql_err!("internal error: source-export missing details"))?;
+        .ok_or_else(|| PlanError::Internal("source-export missing details".into()))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details =
         ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -1916,7 +1922,7 @@ pub fn plan_create_table_from_source(
         if matches!(columns, TableFromSourceColumns::Defined(_)) || !constraints.is_empty() {
             let columns = match columns {
                 TableFromSourceColumns::Defined(columns) => columns,
-                _ => sql_bail!("internal error: expected column definitions to be present"),
+                _ => bail_internal!("expected column definitions to be present"),
             };
             let desc = plan_source_export_desc(scx, name, columns, constraints)?;
             (None, desc)
@@ -1970,6 +1976,7 @@ pub fn plan_create_table_from_source(
 
     let data_source = DataSourceDesc::IngestionExport {
         ingestion_id,
+        // Populated during purification.
         external_reference: external_reference
             .as_ref()
             .ok_or_else(|| sql_err!("EXTERNAL REFERENCE is required"))?
@@ -5340,7 +5347,7 @@ pub fn plan_drop_objects(
     }: DropObjectsStatement,
 ) -> Result<Plan, PlanError> {
     if object_type == mz_sql_parser::ast::ObjectType::Func {
-        sql_bail!("DROP FUNCTION is not supported");
+        bail_unsupported!("DROP FUNCTION");
     }
     let object_type = object_type.into();
 
@@ -6761,7 +6768,7 @@ pub fn plan_alter_object_swap(
             plan_alter_cluster_swap(scx, name_a, name_b, if_exists, gen_temp_suffix)
         }
         (ObjectType::Schema | ObjectType::Cluster, _, _) => {
-            sql_bail!("internal error: name type does not match object type for ALTER SWAP")
+            bail_internal!("name type does not match object type for ALTER SWAP")
         }
         (
             ObjectType::Table
@@ -7209,10 +7216,10 @@ pub fn plan_alter_sink(
             let create_sql = item.create_sql();
             let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
             let [stmt]: [StatementParseResult; 1] = stmts.try_into().map_err(|_| {
-                sql_err!("internal error: create SQL of sink was not exactly one statement")
+                PlanError::Internal("create SQL of sink was not exactly one statement".into())
             })?;
             let Statement::CreateSink(stmt) = stmt.ast else {
-                sql_bail!("internal error: create SQL of sink is not a CREATE SINK statement");
+                bail_internal!("create SQL of sink is not a CREATE SINK statement");
             };
 
             // Then resolve and swap the resolved from relation to the new one
@@ -7221,7 +7228,7 @@ pub fn plan_alter_sink(
 
             // Finally re-plan the modified create sink statement to verify the new configuration is valid
             let Plan::CreateSink(mut plan) = plan_sink(scx, stmt)? else {
-                sql_bail!("internal error: plan_sink did not produce a CreateSink plan");
+                bail_internal!("plan_sink did not produce a CreateSink plan");
             };
 
             plan.sink.version += 1;
@@ -7638,7 +7645,7 @@ pub fn plan_comment(
                 }
                 (CommentObjectId::Type(*id), None)
             }
-            ResolvedDataType::Error => sql_bail!("internal error: unresolved data type"),
+            ResolvedDataType::Error => bail_internal!("unresolved data type"),
         },
         CommentObjectType::Column { name } => {
             let (item, pos) = scx.get_column_by_resolved_name(name)?;

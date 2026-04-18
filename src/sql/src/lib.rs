@@ -109,6 +109,12 @@ macro_rules! bail_never_supported {
     };
 }
 
+macro_rules! bail_internal {
+    ($($e:expr),* $(,)?) => {
+        return Err(crate::plan::error::PlanError::Internal(format!($($e),*)).into())
+    }
+}
+
 // TODO(benesch): delete these macros once we use structured errors everywhere.
 macro_rules! sql_bail {
     ($($e:expr),* $(,)?) => {

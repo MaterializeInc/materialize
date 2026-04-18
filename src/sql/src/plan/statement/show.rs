@@ -328,7 +328,7 @@ pub fn show_schemas<'a>(
             None => sql_bail!("no database specified and no active database"),
         },
         Some(ResolvedDatabaseName::Error) => {
-            sql_bail!("internal error: unresolved database name")
+            bail_internal!("unresolved database name")
         }
     };
     let query = format!(
@@ -988,14 +988,11 @@ impl<'a> ShowSelect<'a> {
         query: String,
     ) -> Result<(ShowSelect<'a>, ResolvedIds), PlanError> {
         let stmts = parse::parse(&query).map_err(|e| {
-            sql_err!(
-                "internal error: failed to parse generated SHOW query: {}",
-                e
-            )
+            PlanError::Internal(format!("failed to parse generated SHOW query: {}", e))
         })?;
         let stmt = match stmts.into_element().ast {
             Statement::Select(select) => select,
-            _ => sql_bail!("internal error: generated SHOW query was not a SELECT statement"),
+            _ => bail_internal!("generated SHOW query was not a SELECT statement"),
         };
         let (mut stmt, new_resolved_ids) = names::resolve(scx.catalog, stmt)?;
         transform_ast::transform(scx, &mut stmt)?;

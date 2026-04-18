@@ -230,9 +230,7 @@ pub(super) fn generate_source_export_statement_values(
         exclude_columns,
     } = purified_export.details
     else {
-        return Err(sql_err!(
-            "internal error: purified export details must be postgres"
-        ));
+        bail_internal!("purified export details must be postgres");
     };
 
     let text_column_set = BTreeSet::from_iter(text_columns.iter().flatten().map(Ident::as_str));

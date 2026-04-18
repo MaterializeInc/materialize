@@ -79,6 +79,7 @@ pub fn plan_alter_owner(
         (ObjectType::NetworkPolicy, UnresolvedObjectName::NetworkPolicy(name)) => {
             plan_alter_network_policy_owner(scx, if_exists, name, new_owner.id)
         }
+        // The parser should have rejected this.
         (ObjectType::Role, UnresolvedObjectName::Role(_)) => {
             sql_bail!("cannot ALTER OWNER of a role")
         }
@@ -99,6 +100,7 @@ pub fn plan_alter_owner(
             | name @ UnresolvedObjectName::NetworkPolicy(_)
             | name @ UnresolvedObjectName::Role(_),
         ) => {
+            // The parser should not have produced this combination.
             sql_bail!("invalid object type '{object_type}' for ALTER OWNER with name {name}")
         }
         (object_type, UnresolvedObjectName::Item(name)) => {
@@ -506,6 +508,7 @@ fn plan_update_privilege(
                     let mut ids = Vec::with_capacity(names.len());
                     for name in names {
                         ids.push(
+                            // Name resolution should have rejected invalid objects.
                             name.try_into()
                                 .map_err(|e| sql_err!("invalid object name: {}", e))?,
                         );
