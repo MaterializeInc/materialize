@@ -13,6 +13,7 @@ can be invoked explicitly with `/<skill-name>`.
 | **mz-commit** | Committing, creating PRs | Pre-commit checklist, PR title conventions, and git workflows |
 | **mz-pr-review** | Reviewing code | Local code review against Materialize standards for tests, style, architecture, and polish |
 | **debug-ci** | CI failures on a PR | Investigates Buildkite failures using `gh` and `bk` CLI tools to identify root causes |
+| **mz-scratch** | Spinning up / driving AWS scratch instances | `bin/scratch` workflow: SSO login, create/list/destroy, remote-env setup (gh, git, Claude creds), and forwarding prompts to a remote Claude Code session (`r-<name>` / `\|-<name>` protocol, stream-json relay, cron-as-wakeup) |
 
 ## Performance
 
