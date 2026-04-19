@@ -241,6 +241,48 @@ FROM t WHERE y = 'null'
 ----
 0
 
+# Regression: float literals must NOT go through the CaseLiteral lookup,
+# because byte-level `Row` equality disagrees with SQL `=` on floats
+# (`-0.0 = 0.0` and `NaN = NaN` are true in SQL but their byte encodings
+# differ). Prior to the fix, `CASE (a*b) WHEN 0.0 ...` missed the arm for
+# `-0.0` and returned the ELSE branch.
+statement ok
+CREATE TABLE tf (a float8, b float8)
+
+statement ok
+INSERT INTO tf VALUES (0.0, -1.0), (1.0, 1.0)
+
+query T rowsort
+SELECT CASE (a * b)
+         WHEN 0.0 THEN 'zero'
+         WHEN 1.0 THEN 'one'
+         WHEN 2.0 THEN 'two'
+         ELSE 'other'
+       END
+FROM tf
+----
+one
+zero
+
+# Same test for float4.
+statement ok
+CREATE TABLE tf4 (a float4, b float4)
+
+statement ok
+INSERT INTO tf4 VALUES (0.0, -1.0), (1.0, 1.0)
+
+query T rowsort
+SELECT CASE (a * b)
+         WHEN 0.0 THEN 'zero'
+         WHEN 1.0 THEN 'one'
+         WHEN 2.0 THEN 'two'
+         ELSE 'other'
+       END
+FROM tf4
+----
+one
+zero
+
 # Verify JSON serialization of a CaseLiteral plan succeeds.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(raw) AS JSON FOR

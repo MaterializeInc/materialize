@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use itertools::Itertools;
 use mz_expr::visit::Visit;
 use mz_expr::{BinaryFunc, MirRelationExpr, MirScalarExpr, VariadicFunc};
-use mz_repr::{ReprColumnType, Row, SqlColumnType};
+use mz_repr::{Datum, ReprColumnType, Row, SqlColumnType};
 
 use crate::analysis::{DerivedBuilder, ReprRelationType};
 use crate::{Transform, TransformCtx, TransformError};
@@ -296,16 +296,44 @@ fn peek_eq_literal(cond: &MirScalarExpr) -> Option<(&MirScalarExpr, &Row)> {
     };
 
     if let Some(row) = expr1.as_literal_non_null_row() {
-        if !expr2.is_literal() {
+        if !expr2.is_literal() && literal_is_case_literal_safe(row) {
             return Some((expr2.as_ref(), row));
         }
     }
     if let Some(row) = expr2.as_literal_non_null_row() {
-        if !expr1.is_literal() {
+        if !expr1.is_literal() && literal_is_case_literal_safe(row) {
             return Some((expr1.as_ref(), row));
         }
     }
     None
+}
+
+/// Returns `true` if byte-level `Row` equality matches SQL `=` semantics for
+/// this literal, i.e. it is safe to key a `CaseLiteral` lookup on its bytes.
+///
+/// Floats are unsafe: `-0.0 = 0.0` and `NaN = NaN` are true under SQL `=`, but
+/// the byte encodings differ (or may differ, across NaN bit patterns). Routing
+/// such values through a byte-keyed lookup would miss the match and fall
+/// through to the `ELSE` arm.
+fn literal_is_case_literal_safe(row: &Row) -> bool {
+    !datum_contains_float(row.iter().next().expect("non-null literal row"))
+}
+
+fn datum_contains_float(datum: Datum<'_>) -> bool {
+    match datum {
+        Datum::Float32(_) | Datum::Float64(_) => true,
+        Datum::List(l) => l.iter().any(datum_contains_float),
+        Datum::Array(a) => a.elements().iter().any(datum_contains_float),
+        Datum::Map(m) => m.iter().any(|(_, v)| datum_contains_float(v)),
+        Datum::Range(r) => match r.inner {
+            None => false,
+            Some(inner) => [inner.lower.bound, inner.upper.bound]
+                .into_iter()
+                .flatten()
+                .any(|b| datum_contains_float(b.datum())),
+        },
+        _ => false,
+    }
 }
 
 /// Walks an If-chain and collects `(literal_row, result_expr)` pairs.
@@ -430,6 +458,71 @@ mod tests {
                     .call_binary(lit_i64(2), Eq)
                     .if_then_else(lit_i64(20), lit_i64(0)),
             )
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn test_float_literal_skipped() {
+        // CASE #0 WHEN 0.0 THEN 10 WHEN 1.0 THEN 20 ELSE 0 END on a float64
+        // column. Row byte-equality distinguishes `-0.0` from `0.0`, while SQL
+        // `=` treats them as equal, so the transform must NOT rewrite this
+        // chain into a CaseLiteral. Instead the original If-chain is kept.
+        fn lit_f64(v: f64) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(
+                Datum::Float64(ordered_float::OrderedFloat(v)),
+                ReprScalarType::Float64,
+            )
+        }
+        fn col0_f64() -> MirScalarExpr {
+            MirScalarExpr::column(0)
+        }
+        let expr = col0_f64()
+            .call_binary(lit_f64(0.0), Eq)
+            .if_then_else(
+                lit_i64(10),
+                col0_f64()
+                    .call_binary(lit_f64(1.0), Eq)
+                    .if_then_else(lit_i64(20), lit_i64(0)),
+            );
+
+        let mut relation = MirRelationExpr::Map {
+            input: Box::new(MirRelationExpr::constant(
+                vec![vec![Datum::Float64(ordered_float::OrderedFloat(-0.0))]],
+                ReprRelationType::new(vec![ReprColumnType {
+                    scalar_type: ReprScalarType::Float64,
+                    nullable: false,
+                }]),
+            )),
+            scalars: vec![expr],
+        };
+        let mut features = mz_repr::optimize::OptimizerFeatures::default();
+        features.enable_case_literal_transform = true;
+        let typecheck_ctx = crate::typecheck::empty_typechecking_context();
+        let mut df_meta = crate::dataflow::DataflowMetainfo::default();
+        let mut transform_ctx =
+            crate::TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
+        crate::Transform::transform(&CaseLiteralTransform, &mut relation, &mut transform_ctx)
+            .unwrap();
+        let result = match relation {
+            MirRelationExpr::Map { scalars, .. } => scalars.into_iter().next().unwrap(),
+            other => panic!("expected Map, got {other:?}"),
+        };
+        // Expect the chain to be left as nested `If`s, not folded into a CaseLiteral.
+        match &result {
+            MirScalarExpr::If { .. } => {}
+            MirScalarExpr::CallVariadic {
+                func: VariadicFunc::CaseLiteral(_),
+                ..
+            } => panic!("float CASE must not be rewritten to CaseLiteral: {result:?}"),
+            other => panic!("expected If-chain, got {other:?}"),
+        }
+
+        // Evaluating on `-0.0` must still hit the `0.0` arm (SQL: -0.0 = 0.0).
+        let arena = mz_repr::RowArena::new();
+        let out = result
+            .eval(&[Datum::Float64(ordered_float::OrderedFloat(-0.0))], &arena)
+            .unwrap();
+        assert_eq!(out, Datum::Int64(10));
     }
 
     #[mz_ore::test]
