@@ -49,6 +49,12 @@ Run the login in the background (e.g. `run_in_background: true`) and read
 the output file to find the code. The command blocks until the user
 completes auth in their browser.
 
+**SSO sessions expire — re-auth ~every 12 hours.** If a `bin/scratch`
+command errors with `The SSO session associated with this profile has
+expired or is otherwise invalid`, re-run the login flow above. This will
+happen silently mid-session during long workflows; surface it to the user
+promptly and show both URLs again.
+
 ## Always `bin/scratch list` after `login`
 
 Before creating anything, list existing instances so the user can reuse one
@@ -297,3 +303,17 @@ instance afterward.
 - Forgetting to cancel stale crons when plans change.
 - Using `claude -p --continue` once multiple named sessions exist on the
   same instance — use `--resume <uuid>` with the captured session id.
+
+## TODO — harden via writing-skills TDD loop
+
+This skill was authored one-shot from a live walkthrough on 2026-04-18,
+not via the `writing-skills` RED-GREEN-REFACTOR pressure-testing process.
+The requirements came from a real release cycle (not hypothesized usage),
+but no subagent pressure scenarios were run to verify agents comply with
+the prescribed protocol under stress.
+
+Future work: dispatch subagents with scenarios covering the session
+protocol (`r-<name>` / `|-<name>`), cron-as-wakeup discipline, stale-cron
+cancellation, and the macOS Keychain Claude-credentials path, and
+refactor this skill against the rationalizations they surface. See
+`superpowers-extended-cc:writing-skills`.
