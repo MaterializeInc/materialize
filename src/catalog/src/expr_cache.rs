@@ -33,7 +33,7 @@ use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::OptimizerNotice;
 use semver::Version;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 #[derive(
@@ -376,6 +376,11 @@ enum CacheOperation {
         invalidate_ids: BTreeSet<GlobalId>,
         trigger: trigger::Trigger,
     },
+    /// See [`ExpressionCacheHandle::get_global_expressions`].
+    GetGlobalExpressions {
+        ids: BTreeSet<GlobalId>,
+        reply: oneshot::Sender<BTreeMap<GlobalId, GlobalExpressions>>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +401,11 @@ impl ExpressionCacheHandle {
     ) {
         let (mut cache, local_expressions, global_expressions) =
             ExpressionCache::open(config).await;
+        // In-memory mirror of the durable global expressions, maintained by
+        // this task. Callers of [`ExpressionCacheHandle::get_global_expressions`]
+        // read from this mirror. Seeded from the initial `open` result and
+        // updated on every `Update` op.
+        let mut global_mirror = global_expressions.clone();
         let (tx, mut rx) = mpsc::unbounded_channel();
         spawn(|| "expression-cache-task", async move {
             loop {
@@ -407,6 +417,12 @@ impl ExpressionCacheHandle {
                             invalidate_ids,
                             trigger: _trigger,
                         } => {
+                            for id in &invalidate_ids {
+                                global_mirror.remove(id);
+                            }
+                            for (id, expr) in &new_global_expressions {
+                                global_mirror.insert(*id, expr.clone());
+                            }
                             cache
                                 .update(
                                     new_local_expressions,
@@ -414,6 +430,16 @@ impl ExpressionCacheHandle {
                                     invalidate_ids,
                                 )
                                 .await
+                        }
+                        CacheOperation::GetGlobalExpressions { ids, reply } => {
+                            let mut result = BTreeMap::new();
+                            for id in ids {
+                                if let Some(expr) = global_mirror.get(&id) {
+                                    result.insert(id, expr.clone());
+                                }
+                            }
+                            // If the reply send fails, the caller is gone; drop.
+                            let _ = reply.send(result);
                         }
                     }
                 }
@@ -439,6 +465,32 @@ impl ExpressionCacheHandle {
         // If the send fails, then we must be shutting down.
         let _ = self.tx.send(op);
         trigger_rx
+    }
+
+    /// Returns the best-effort in-memory snapshot of global expressions for
+    /// the given ids. Ids that are not in the cache are simply absent from
+    /// the returned map (no error).
+    ///
+    /// Used by the catalog-transaction path to hydrate newly-created items'
+    /// plan fields (`optimized_plan`, `physical_plan`, `dataflow_metainfo`)
+    /// in `parse_item`. Relies on the invariant that `cache_expressions` has
+    /// been `.await`ed before the transaction, so the entry for any newly-
+    /// created item is guaranteed to be in the in-memory mirror by the time
+    /// we read it here.
+    pub async fn get_global_expressions(
+        &self,
+        ids: BTreeSet<GlobalId>,
+    ) -> BTreeMap<GlobalId, GlobalExpressions> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        let op = CacheOperation::GetGlobalExpressions {
+            ids,
+            reply: reply_tx,
+        };
+        if self.tx.send(op).is_err() {
+            // Task is gone; we must be shutting down.
+            return BTreeMap::new();
+        }
+        reply_rx.await.unwrap_or_default()
     }
 }
 
