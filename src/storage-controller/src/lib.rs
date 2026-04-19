@@ -3771,7 +3771,10 @@ impl From<&IntrospectionType> for CollectionManagerKind {
             | IntrospectionType::ComputeOperatorHydrationStatus
             | IntrospectionType::ComputeMaterializedViewRefreshes
             | IntrospectionType::ComputeErrorCounts
-            | IntrospectionType::ComputeHydrationTimes => CollectionManagerKind::Differential,
+            | IntrospectionType::ComputeHydrationTimes
+            | IntrospectionType::ComputeObjectArrangementSizes => {
+                CollectionManagerKind::Differential
+            }
 
             IntrospectionType::SourceStatusHistory
             | IntrospectionType::SinkStatusHistory

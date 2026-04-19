@@ -10802,6 +10802,46 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
+pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinSource> = LazyLock::new(|| {
+    BuiltinSource {
+        name: "mz_object_arrangement_sizes",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::SOURCE_MZ_OBJECT_ARRANGEMENT_SIZES_OID,
+        desc: RelationDesc::builder()
+            .with_column("replica_id", SqlScalarType::String.nullable(false))
+            .with_column("object_id", SqlScalarType::String.nullable(false))
+            .with_column("size", SqlScalarType::Int64.nullable(true))
+            .finish(),
+        data_source: IntrospectionType::ComputeObjectArrangementSizes.into(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "replica_id",
+                "The ID of the cluster replica. Corresponds to `mz_cluster_replicas.id`.",
+            ),
+            (
+                "object_id",
+                "The ID of the compute object (index or materialized view). Corresponds to `mz_objects.id`.",
+            ),
+            (
+                "size",
+                "The total arrangement heap and batcher size in bytes for this object on this replica.",
+            ),
+        ]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    }
+});
+
+pub static MZ_OBJECT_ARRANGEMENT_SIZES_IND: LazyLock<BuiltinIndex> =
+    LazyLock::new(|| BuiltinIndex {
+        name: "mz_object_arrangement_sizes_ind",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::INDEX_MZ_OBJECT_ARRANGEMENT_SIZES_IND_OID,
+        sql: "IN CLUSTER mz_catalog_server
+    ON mz_internal.mz_object_arrangement_sizes (replica_id)",
+        is_retained_metrics_object: false,
+    });
+
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
@@ -17085,6 +17125,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_COMPUTE_ERROR_COUNTS),
         Builtin::Source(&MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED),
         Builtin::Source(&MZ_COMPUTE_HYDRATION_TIMES),
+        Builtin::Source(&MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED),
+        Builtin::Index(&MZ_OBJECT_ARRANGEMENT_SIZES_IND),
         Builtin::Log(&MZ_COMPUTE_LIR_MAPPING_PER_WORKER),
         Builtin::View(&MZ_LIR_MAPPING),
         Builtin::Source(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES),
