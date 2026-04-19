@@ -655,3 +655,66 @@ SHOW CREATE VIEW temp_view;
 ----
 mz_temp.temp_view
 CREATE TEMPORARY VIEW mz_temp.temp_view AS SELECT * FROM materialize.public_renamed.non_temp_table;
+
+# Regression test: RENAME on a MATERIALIZED VIEW / INDEX must preserve the
+# plans and dataflow metainfo stored on the catalog item. Before the fix,
+# `EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW ...` would fail after a
+# rename with "cannot find dataflow metainformation for materialized view
+# ... in catalog", because `parse_item_inner` hardcoded `None` for those
+# fields when reconstructing the item from `create_sql`.
+
+statement ok
+CREATE TABLE t_rename_metainfo (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_rename_metainfo AS SELECT a + 1 AS b FROM t_rename_metainfo
+
+statement ok
+ALTER MATERIALIZED VIEW mv_rename_metainfo RENAME TO mv_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_rename_metainfo_renamed
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_rename_metainfo_renamed
+
+# Same, for indexes.
+
+statement ok
+CREATE INDEX idx_rename_metainfo ON t_rename_metainfo (a)
+
+statement ok
+ALTER INDEX idx_rename_metainfo RENAME TO idx_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_rename_metainfo_renamed
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR INDEX idx_rename_metainfo_renamed
+
+# Regression test: ALTER SCHEMA ... RENAME TO ... retracts+re-adds every
+# item in the schema via `tx.update_items`; plans on MV / INDEX items in
+# the schema must survive, so that EXPLAIN can still show them.
+statement ok
+CREATE SCHEMA s_rename_metainfo
+
+statement ok
+CREATE TABLE s_rename_metainfo.t (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW s_rename_metainfo.mv AS SELECT a + 1 AS b FROM s_rename_metainfo.t
+
+statement ok
+CREATE DEFAULT INDEX idx_in_schema ON s_rename_metainfo.mv
+
+statement ok
+ALTER SCHEMA s_rename_metainfo RENAME TO s_rename_metainfo_renamed
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW s_rename_metainfo_renamed.mv
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW s_rename_metainfo_renamed.mv
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX s_rename_metainfo_renamed.idx_in_schema

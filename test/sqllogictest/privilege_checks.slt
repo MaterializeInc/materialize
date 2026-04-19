@@ -3609,8 +3609,52 @@ REVOKE USAGE ON SCHEMA mz_temp FROM PUBLIC
 db error: ERROR: cannot grant or revoke privileges on schema mz_temp because it is a temporary schema
 
 # Disable rbac checks.
-
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_rbac_checks TO false;
 ----
 COMPLETE 0
+
+# Regression tests: ALTER ... OWNER TO ... and GRANT/REVOKE retract + re-add
+# the affected catalog item via `apply_item_update`. Plans on MV / INDEX
+# items must survive, so that EXPLAIN can still show them.
+statement ok
+CREATE ROLE plan_owner_other
+
+statement ok
+CREATE TABLE t_owner_plans (a int)
+
+statement ok
+CREATE MATERIALIZED VIEW mv_owner_plans AS SELECT a + 1 AS b FROM t_owner_plans
+
+statement ok
+CREATE DEFAULT INDEX idx_owner_plans ON mv_owner_plans
+
+statement ok
+ALTER MATERIALIZED VIEW mv_owner_plans OWNER TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+ALTER INDEX idx_owner_plans OWNER TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR INDEX idx_owner_plans
+
+statement ok
+EXPLAIN PHYSICAL PLAN FOR INDEX idx_owner_plans
+
+statement ok
+GRANT SELECT ON mv_owner_plans TO plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans
+
+statement ok
+REVOKE SELECT ON mv_owner_plans FROM plan_owner_other
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv_owner_plans

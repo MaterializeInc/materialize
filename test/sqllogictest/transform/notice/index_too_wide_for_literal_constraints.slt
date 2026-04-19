@@ -297,6 +297,54 @@ Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6
 Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
 
+# Rename a materialized view and verify its notices are preserved.
+# Regression test for a bug where RENAME dropped dataflow_metainfo (and thus
+# the associated mz_optimizer_notices rows) from the catalog item.
+statement ok
+ALTER MATERIALIZED VIEW mv2 RENAME TO mv2_renamed;
+
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
+WHERE
+  mv.name IN ('mv1', 'mv2_renamed');
+----
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y␠on␠t6(x,␠y)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠5`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+Index␠too␠wide␠for␠literal␠constraints  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠7`.  Index␠materialize.notices.t6_idx_x_y_z␠on␠t6(x,␠y,␠z)␠is␠too␠wide␠to␠use␠for␠literal␠equalities␠`y␠=␠█`.  If␠your␠literal␠equalities␠filter␠out␠many␠rows,␠create␠an␠index␠whose␠key␠exactly␠matches␠your␠literal␠equalities:␠(y).  NULL  CREATE␠INDEX␠ON␠t6(y);  NULL  sql_statements
+
+# Also check that EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW works after
+# the rename (this reads the stored optimized_plan + dataflow_metainfo off
+# the catalog item, which is what the bug above broke).
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH(humanized expressions) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv2_renamed;
+----
+materialize.notices.mv2_renamed:
+  Filter (#1{y} = 7)
+    ReadIndex on=t6 t6_idx_x_y=[*** full scan ***]
+
+Used Indexes:
+  - materialize.notices.t6_idx_x_y (*** full scan ***)
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Index materialize.notices.t6_idx_x_y on t6(x, y) is too wide to use for literal equalities `y = 7`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+  - Notice: Index materialize.notices.t6_idx_x_y_z on t6(x, y, z) is too wide to use for literal equalities `y = 7`.
+    Hint: If your literal equalities filter out many rows, create an index whose key exactly matches your literal equalities: (y).
+
+EOF
+
+# Rename back, so that later queries in this file (which filter by mv name)
+# continue to work unchanged.
+statement ok
+ALTER MATERIALIZED VIEW mv2_renamed RENAME TO mv2;
+
 # Drop one of the indexes associated with the notices.
 statement ok
 DROP INDEX t6_idx_x_y_z;
