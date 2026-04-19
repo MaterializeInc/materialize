@@ -4873,7 +4873,7 @@ impl Coordinator {
     ///   `set_dataflow_metainfo`,
     /// - and returns a future that resolves once the builtin-table append
     ///   has been observed, or `None` if nothing was appended.
-    async fn persist_dataflow_metainfo(
+    pub(crate) async fn persist_dataflow_metainfo(
         &mut self,
         df_meta: DataflowMetainfo<Arc<OptimizerNotice>>,
         export_id: GlobalId,

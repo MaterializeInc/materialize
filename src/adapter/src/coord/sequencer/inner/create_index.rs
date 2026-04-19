@@ -32,7 +32,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{AdapterNotice, ExecuteContext, catalog};
@@ -441,7 +440,6 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
         let on_entry = self.catalog().get_entry_by_global_id(&on);
         let owner_id = *on_entry.owner_id();
@@ -485,7 +483,7 @@ impl Coordinator {
         // here, so that if the catalog transaction below fails the user
         // isn't shown confusing notices about an item that wasn't actually
         // created.
-        let (mut df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
         let df_meta = {
             let system_catalog = self.catalog().for_system_session();
             let full_name = self.catalog().resolve_full_name(&name, None);
@@ -512,55 +510,26 @@ impl Coordinator {
         // transaction and await the write. This way any other envd (or a
         // subsequent bootstrap here) will observe the cached plans +
         // rendered notices as soon as the item becomes visible.
+        //
+        // The subsequent `catalog_transact_with_context` call will apply the
+        // `AddIndex` implication, which reads the plans + rendered notices
+        // off the newly-parsed `Index` catalog item (hydrated by
+        // `parse_item` from this very cache entry) and does the remaining
+        // work (persisting notices, acquiring read holds, shipping the
+        // dataflow, installing the read policy).
         self.catalog()
             .cache_expressions(
                 global_id,
                 None,
                 global_mir_plan.df_desc().clone(),
-                df_desc.clone(),
-                df_meta.clone(),
+                df_desc,
+                df_meta,
                 optimizer_features,
             )
             .await;
 
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    let notice_builtin_updates_fut =
-                        coord.persist_dataflow_metainfo(df_meta, global_id).await;
-
-                    // We're putting in place read holds, such that ship_dataflow,
-                    // below, which calls update_read_capabilities, can successfully
-                    // do so. Otherwise, the since of dependencies might move along
-                    // concurrently, pulling the rug from under us!
-                    //
-                    // TODO: Maybe in the future, pass those holds on to compute, to
-                    // hold on to them and downgrade when possible?
-                    let read_holds = coord.acquire_read_holds(&id_bundle);
-                    let since = read_holds.least_valid_read();
-                    df_desc.set_as_of(since);
-
-                    coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                            None,
-                        )
-                        .await;
-                    // No `allow_writes` here because indexes do not modify external state.
-
-                    // Drop read holds after the dataflow has been shipped, at which
-                    // point compute will have put in its own read holds.
-                    drop(read_holds);
-
-                    coord.update_compute_read_policy(
-                        cluster_id,
-                        item_id,
-                        compaction_window.unwrap_or_default().into(),
-                    );
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {

@@ -125,10 +125,6 @@ pub struct GlobalLirPlan {
 }
 
 impl GlobalLirPlan {
-    pub fn df_desc(&self) -> &LirDataflowDescription {
-        &self.df_desc
-    }
-
     pub fn df_meta(&self) -> &DataflowMetainfo {
         &self.df_meta
     }
