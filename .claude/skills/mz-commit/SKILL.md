@@ -37,6 +37,16 @@ Mention which tests were added or modified in the pull request description, but 
 To auto-close issues, include `Fixes database-issues#NNNN`.
 Add release notes for user-visible changes (should complete "This release will...").
 
+## Pre-merge checklist
+
+Before asking for review, verify:
+
+* **Trigger CI**: For non-trivial changes, kick off additional test suites at `https://ci.dev.materialize.com/trigger/<PR-number>`.
+* **Design doc**: The PR description references an up-to-date design doc, or the change is small enough not to require one ([template](doc/developer/design/00000000_template.md), [guidelines](doc/developer/design/README.md)).
+* **User-visible changes**: If the change is user-visible per `doc/developer/guide-changes.md`, include a release note in the description ("This release will…") and ping the relevant PM.
+* **`T-proto` label**: If the diff evolves a `$T ⇔ Proto$T` encoding in a potentially backwards-incompatible way, add the `T-proto` label. Proto encoding breakage can silently corrupt persisted data on upgrade.
+* **Cloud companion PR**: If the change affects cloud orchestration or cloud-side tests, open a companion cloud PR tagged `release-blocker`. Ask in `#team-cloud` on Slack if uncertain.
+
 ## Cargo.lock discipline
 
 Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semver-compatible dep and introduces unrelated breakage (e.g., `os_info` pulling in `objc2` on macOS, `chrono-tz` changing timezone data, `serde_path_to_error` changing error formats).
