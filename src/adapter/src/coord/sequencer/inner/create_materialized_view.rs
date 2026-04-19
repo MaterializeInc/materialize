@@ -746,14 +746,6 @@ impl Coordinator {
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
                     let notice_builtin_updates_fut =
                         coord.persist_dataflow_metainfo(df_meta, global_id).await;
 

@@ -1399,7 +1399,7 @@ impl Catalog {
         let updates = self.storage().await.sync_to_current_updates().await?;
         let (builtin_table_updates, catalog_updates) = self
             .state
-            .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
+            .apply_updates(updates, &mut state::InMemoryExpressionCache::Closed)
             .await;
         Ok((builtin_table_updates, catalog_updates))
     }
@@ -2263,7 +2263,7 @@ mod tests {
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
     use mz_sql::session::vars::{SystemVars, VarInput};
 
-    use crate::catalog::state::LocalExpressionCache;
+    use crate::catalog::state::InMemoryExpressionCache;
     use crate::catalog::{Catalog, Op};
     use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
     use crate::session::Session;
@@ -2597,7 +2597,7 @@ mod tests {
                     gid,
                     &create_sql,
                     &BTreeMap::new(),
-                    &mut LocalExpressionCache::Closed,
+                    &mut InMemoryExpressionCache::Closed,
                     None,
                 )
                 .expect("unable to parse view");

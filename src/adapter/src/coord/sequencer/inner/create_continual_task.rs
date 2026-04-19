@@ -136,9 +136,6 @@ impl Coordinator {
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
                 Box::pin(async move {
                     let catalog = coord.catalog_mut();
-                    catalog.set_optimized_plan(global_id, optimized_plan.clone());
-                    catalog.set_physical_plan(global_id, physical_plan.clone());
-                    catalog.set_dataflow_metainfo(global_id, metainfo.clone());
                     // CT is being removed soon, so keep this call in the
                     // side-effect closure (fire-and-forget). The returned
                     // future is dropped; we don't need to wait for the

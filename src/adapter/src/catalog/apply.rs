@@ -63,7 +63,7 @@ use mz_transform::notice::OptimizerNotice;
 use tracing::{info_span, warn};
 
 use crate::AdapterError;
-use crate::catalog::state::LocalExpressionCache;
+use crate::catalog::state::InMemoryExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
 use crate::coord::catalog_implications::parsed_state_updates::{self, ParsedStateUpdate};
 use crate::util::{index_sql, sort_topological};
@@ -102,7 +102,7 @@ impl CatalogState {
     pub(crate) async fn apply_updates(
         &mut self,
         updates: Vec<StateUpdate>,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) -> (
         Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
         Vec<ParsedStateUpdate>,
@@ -136,7 +136,7 @@ impl CatalogState {
                         ApplyState::new(update),
                         self,
                         &mut retractions,
-                        local_expression_cache,
+                        in_memory_expression_cache,
                     )
                     .await;
                 apply_state = next_apply_state;
@@ -146,7 +146,7 @@ impl CatalogState {
 
             // Apply remaining state.
             let (builtin_table_update, catalog_update) = apply_state
-                .apply(self, &mut retractions, local_expression_cache)
+                .apply(self, &mut retractions, in_memory_expression_cache)
                 .await;
             builtin_table_updates.extend(builtin_table_update);
             catalog_updates.extend(catalog_update);
@@ -205,7 +205,7 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) -> Result<
         (
             Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
@@ -249,7 +249,7 @@ impl CatalogState {
                         state_update.kind,
                         state_update.diff,
                         retractions,
-                        local_expression_cache,
+                        in_memory_expression_cache,
                     )?;
                 }
                 StateDiff::Addition => {
@@ -257,7 +257,7 @@ impl CatalogState {
                         state_update.kind.clone(),
                         state_update.diff,
                         retractions,
-                        local_expression_cache,
+                        in_memory_expression_cache,
                     )?;
                     // We want the builtin table addition to match the state of
                     // the catalog after applying the update. So that we already
@@ -291,7 +291,7 @@ impl CatalogState {
         kind: StateUpdateKind,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) -> Result<(), CatalogError> {
         match kind {
             StateUpdateKind::Role(role) => {
@@ -336,14 +336,19 @@ impl CatalogState {
                     system_object_mapping,
                     diff,
                     retractions,
-                    local_expression_cache,
+                    in_memory_expression_cache,
                 );
             }
             StateUpdateKind::TemporaryItem(item) => {
-                self.apply_temporary_item_update(item, diff, retractions, local_expression_cache);
+                self.apply_temporary_item_update(
+                    item,
+                    diff,
+                    retractions,
+                    in_memory_expression_cache,
+                );
             }
             StateUpdateKind::Item(item) => {
-                self.apply_item_update(item, diff, retractions, local_expression_cache)?;
+                self.apply_item_update(item, diff, retractions, in_memory_expression_cache)?;
             }
             StateUpdateKind::Comment(comment) => {
                 self.apply_comment_update(comment, diff, retractions);
@@ -689,7 +694,7 @@ impl CatalogState {
         system_object_mapping: mz_catalog::durable::SystemObjectMapping,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) {
         let item_id = system_object_mapping.unique_identifier.catalog_id;
         let global_id = system_object_mapping.unique_identifier.global_id;
@@ -805,7 +810,7 @@ impl CatalogState {
                         None,
                         index.is_retained_metrics_object,
                         custom_logical_compaction_window,
-                        local_expression_cache,
+                        in_memory_expression_cache,
                         None,
                     )
                     .unwrap_or_else(|e| {
@@ -952,7 +957,7 @@ impl CatalogState {
                         None,
                         mv.is_retained_metrics_object,
                         custom_logical_compaction_window,
-                        local_expression_cache,
+                        in_memory_expression_cache,
                         None,
                     )
                     .unwrap_or_else(|e| {
@@ -1009,7 +1014,7 @@ impl CatalogState {
                         None,
                         false,
                         None,
-                        local_expression_cache,
+                        in_memory_expression_cache,
                         None,
                     )
                     .unwrap_or_else(|e| {
@@ -1049,7 +1054,7 @@ impl CatalogState {
                         None,
                         false,
                         None,
-                        local_expression_cache,
+                        in_memory_expression_cache,
                         None,
                     )
                     .unwrap_or_else(|e| {
@@ -1093,7 +1098,7 @@ impl CatalogState {
         temporary_item: TemporaryItem,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) {
         match diff {
             StateDiff::Addition => {
@@ -1141,7 +1146,7 @@ impl CatalogState {
                                     global_id,
                                     &create_sql,
                                     &extra_versions,
-                                    local_expression_cache,
+                                    in_memory_expression_cache,
                                     Some(retraction.item),
                                 )
                                 .unwrap_or_else(|e| {
@@ -1170,7 +1175,7 @@ impl CatalogState {
                                 global_id,
                                 &create_sql,
                                 &extra_versions,
-                                local_expression_cache,
+                                in_memory_expression_cache,
                                 None,
                             )
                             .unwrap_or_else(|e| {
@@ -1211,7 +1216,7 @@ impl CatalogState {
         item: mz_catalog::durable::Item,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) -> Result<(), CatalogError> {
         match diff {
             StateDiff::Addition => {
@@ -1244,7 +1249,7 @@ impl CatalogState {
                                 global_id,
                                 &create_sql,
                                 &extra_versions,
-                                local_expression_cache,
+                                in_memory_expression_cache,
                                 Some(retraction.item),
                             )
                             .unwrap_or_else(|e| {
@@ -1268,7 +1273,7 @@ impl CatalogState {
                                 global_id,
                                 &create_sql,
                                 &extra_versions,
-                                local_expression_cache,
+                                in_memory_expression_cache,
                                 None,
                             )
                             .unwrap_or_else(|e| {
@@ -1726,7 +1731,7 @@ impl CatalogState {
         state: &mut CatalogState,
         builtin_views: Vec<(&'static BuiltinView, CatalogItemId, GlobalId)>,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
         let mut builtin_table_updates = Vec::with_capacity(builtin_views.len());
         let (updates, additions): (Vec<_>, Vec<_>) =
@@ -1787,7 +1792,8 @@ impl CatalogState {
                     let span = info_span!(parent: None, "parse builtin view", name = view.name);
                     OpenTelemetryContext::obtain().attach_as_parent_to(&span);
                     let task_state = Arc::clone(&spawn_state);
-                    let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
+                    let cached_expr =
+                        in_memory_expression_cache.remove_cached_expression(&global_id);
                     let handle = mz_ore::task::spawn_blocking(
                         || "parse view",
                         move || {
@@ -1816,13 +1822,13 @@ impl CatalogState {
             let (id, global_id, res) = selected;
             let mut insert_cached_expr = |cached_expr| {
                 if let Some(cached_expr) = cached_expr {
-                    local_expression_cache.insert_cached_expression(global_id, cached_expr);
+                    in_memory_expression_cache.insert_cached_expression(global_id, cached_expr);
                 }
             };
             match res {
                 Ok((item, uncached_expr)) => {
                     if let Some((uncached_expr, optimizer_features)) = uncached_expr {
-                        local_expression_cache.insert_uncached_expression(
+                        in_memory_expression_cache.insert_uncached_expression(
                             global_id,
                             uncached_expr,
                             optimizer_features,
@@ -2633,7 +2639,7 @@ impl ApplyState {
         self,
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) -> (
         Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
         Vec<ParsedStateUpdate>,
@@ -2646,7 +2652,7 @@ impl ApplyState {
                     state,
                     builtin_view_additions,
                     retractions,
-                    local_expression_cache,
+                    in_memory_expression_cache,
                 )
                 .await;
                 state.system_configuration = restore;
@@ -2654,11 +2660,11 @@ impl ApplyState {
             }
             Self::Items(updates) => state.with_enable_for_item_parsing(|state| {
                 state
-                    .apply_updates_inner(updates, retractions, local_expression_cache)
+                    .apply_updates_inner(updates, retractions, in_memory_expression_cache)
                     .expect("corrupt catalog")
             }),
             Self::Updates(updates) => state
-                .apply_updates_inner(updates, retractions, local_expression_cache)
+                .apply_updates_inner(updates, retractions, in_memory_expression_cache)
                 .expect("corrupt catalog"),
         }
     }
@@ -2668,7 +2674,7 @@ impl ApplyState {
         next: Self,
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
     ) -> (
         Self,
         (
@@ -2701,7 +2707,7 @@ impl ApplyState {
             (apply_state, next_apply_state) => {
                 // Apply the current batch and start batching new apply state.
                 let updates = apply_state
-                    .apply(state, retractions, local_expression_cache)
+                    .apply(state, retractions, in_memory_expression_cache)
                     .await;
                 (next_apply_state, updates)
             }
