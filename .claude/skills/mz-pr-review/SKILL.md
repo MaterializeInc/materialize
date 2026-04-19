@@ -70,8 +70,14 @@ The overall developer guide for reviewing changes is defined in `doc/developer/g
 - No unrelated formatting changes in untouched code.
 - New public items should have doc comments.
 
-### Release notes
-- Any user-visible change to stable APIs needs a release note (imperative, "This release will…").
+### PR metadata
+
+These are the author's responsibility but easy to miss — flag them during review if absent:
+
+- **Release notes and PM notification**: User-visible changes need a release note in the description ("This release will…") and PM notification. Check `doc/developer/guide-changes.md` if uncertain what qualifies.
+- **Design doc**: Significant changes should reference a design doc in the PR description.
+- **`T-proto` label**: If the diff changes a `$T ⇔ Proto$T` encoding, verify the `T-proto` label is set. Missing it means broken binary encoding can slip into a release unnoticed.
+- **Cloud companion PR**: If the change touches cloud orchestration or cloud-side tests, look for a companion cloud PR tagged `release-blocker`.
 
 ## One semantic change rule
 
@@ -83,3 +89,4 @@ The PR should do one thing. If it spans multiple CODEOWNERS areas (e.g. sql-pars
 - Use **nit:** for preferences where reasonable people could disagree.
 - If the PR improves overall codebase health and blocking items are addressed, say so.
 - Do NOT make any changes — this is read-only review.
+- Don't flag issues that `cargo clippy`, `bin/lint`, or `bin/fmt` would catch — those are enforced by CI. Focus on what automated tooling cannot catch: design decisions, missing tests, documentation gaps, and the PR metadata items above.
