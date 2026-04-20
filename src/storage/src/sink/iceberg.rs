@@ -10,17 +10,19 @@
 //! Iceberg sink implementation.
 //!
 //! This code renders a [`IcebergSinkConnection`] into a dataflow that writes
-//! data to an Iceberg table. `SinkRender::render_sink` hands the sink an
-//! arranged collection keyed on the sink key; a small `walk_sink_arrangement`
-//! operator at the input walks the arrangement and emits one `DiffPair` per
-//! `(key, timestamp)` update into the pipeline below.
+//! data to an Iceberg table. `SinkRender::render_sink` hands the sink a stream
+//! of arrangement batches keyed on the sink key (the upstream arrangement's
+//! trace reader is already dropped, so the spine is free to compact as
+//! batches flow). A small `walk_sink_arrangement` operator consumes that
+//! stream and emits one `DiffPair` per `(key, timestamp)` update into the
+//! pipeline below.
 //!
 //! ```text
 //!        ┏━━━━━━━━━━━━━━┓
 //!        ┃   persist    ┃
 //!        ┃    source    ┃
 //!        ┗━━━━━━┯━━━━━━━┛
-//!               │ arranged (Option<Row>, Row) keyed by sink key
+//!               │ stream of arrangement batches (trace reader dropped)
 //!               │
 //!        ┏━━━━━━v━━━━━━━┓
 //!        ┃    walk      ┃
@@ -91,7 +93,6 @@ use anyhow::{Context, anyhow};
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use iceberg::ErrorKind;
@@ -153,7 +154,7 @@ use tracing::debug;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
-use crate::render::sinks::{PkViolationWarner, SinkRender, SinkTrace};
+use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
@@ -2251,18 +2252,18 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        arranged: Arranged<'scope, SinkTrace>,
+        batches: SinkBatchStream<'scope>,
         key_is_synthetic: bool,
         _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
     ) -> (
         StreamVec<'scope, Timestamp, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
-        let scope = arranged.stream.scope();
+        let scope = batches.scope();
 
         let (input, walker_button) = walk_sink_arrangement(
             format!("{sink_id}-iceberg-walker"),
-            arranged,
+            batches,
             sink_id,
             sink.from,
             key_is_synthetic,
@@ -2413,15 +2414,15 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
     }
 }
 
-/// Walks `arranged` and emits a stream of individual `(key, DiffPair)` records
-/// that feeds the rest of the Iceberg sink pipeline.
+/// Walks each arrangement batch and emits a stream of individual
+/// `(key, DiffPair)` records that feeds the rest of the Iceberg sink pipeline.
 ///
 /// Tracks per-`(key, timestamp)` group sizes and rate-limits a warning when a
 /// non-synthetic key has more than one `DiffPair`. When `key_is_synthetic` the
 /// arrangement's hash-based key is stripped before emission.
 fn walk_sink_arrangement<'scope>(
     name: String,
-    arranged: Arranged<'scope, SinkTrace>,
+    batches: SinkBatchStream<'scope>,
     sink_id: GlobalId,
     from_id: GlobalId,
     key_is_synthetic: bool,
@@ -2429,9 +2430,9 @@ fn walk_sink_arrangement<'scope>(
     VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
     PressOnDropButton,
 ) {
-    let mut builder = OperatorBuilder::new(name, arranged.stream.scope());
+    let mut builder = OperatorBuilder::new(name, batches.scope());
     let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input = builder.new_input_for(arranged.stream, Pipeline, &output);
+    let mut input = builder.new_input_for(batches, Pipeline, &output);
 
     let button = builder.build(move |_caps| async move {
         let mut pk_warner = (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));

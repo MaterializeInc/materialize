@@ -12,7 +12,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
+use differential_dataflow::operators::arrange::{Arrange, TraceAgent};
+use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::ord_neu::{
     OrdValBatcher, OrdValSpine, RcOrdValBuilder,
 };
@@ -31,9 +32,20 @@ use tracing::warn;
 use crate::healthcheck::HealthStatusMessage;
 use crate::storage_state::StorageState;
 
-/// The concrete trace type used to hand arranged sink input to
-/// [`SinkRender::render_sink`].
+/// The concrete trace type produced internally when arranging a sink's input.
+/// The sink never sees this directly — only the batches flowing through it —
+/// but it's the anchor for the batch type in [`SinkBatchStream`].
 pub(crate) type SinkTrace = TraceAgent<OrdValSpine<Option<Row>, Row, Timestamp, Diff>>;
+
+/// Stream of arrangement batches handed to [`SinkRender::render_sink`].
+///
+/// This is `Arranged::stream` with the trace reader dropped: sinks only need
+/// batch-level access (no random-access reads via a cursor), so we don't keep
+/// a `TraceAgent` alive. Dropping the reader lets the spine's compaction
+/// frontiers advance to the empty antichain, so the arrange operator can
+/// aggressively compact / release batch state as updates flow through.
+pub(crate) type SinkBatchStream<'scope> =
+    StreamVec<'scope, Timestamp, <SinkTrace as TraceReader>::Batch>;
 
 /// _Renders_ complete _differential_ collections
 /// that represent the sink and its errors as requested
@@ -79,7 +91,7 @@ pub(crate) fn render_sink<'scope>(
         );
         tokens.extend(persist_tokens);
 
-        let arranged = arrange_sink_input(&*sink_render, ok_collection.as_collection());
+        let batches = arrange_sink_input(&*sink_render, ok_collection.as_collection());
         let key_is_synthetic = sink_render.get_key_indices().is_none()
             && sink_render.get_relation_key_indices().is_none();
 
@@ -87,7 +99,7 @@ pub(crate) fn render_sink<'scope>(
             storage_state,
             sink,
             sink_id,
-            arranged,
+            batches,
             key_is_synthetic,
             err_collection.as_collection(),
         );
@@ -96,17 +108,22 @@ pub(crate) fn render_sink<'scope>(
     })
 }
 
-/// Extract the sink's key column(s) from each row and arrange the resulting
-/// `(Option<Row>, Row)` collection by key.
+/// Extract the sink's key column(s) from each row, arrange the resulting
+/// `(Option<Row>, Row)` collection by key, and return just the stream of
+/// batches — dropping the trace reader.
 ///
 /// Prefers the user-specified sink key, falling back to any natural key of the
 /// underlying relation. When neither exists, a synthetic per-row hash is used
 /// purely to distribute work across workers — in that case the sink should
 /// treat the key as absent (`key_is_synthetic`).
+///
+/// Partial-moving `arranged.stream` lets the surrounding `Arranged` (and the
+/// `TraceAgent` it holds) drop, releasing the spine's compaction holds so the
+/// arrange operator can compact batch state as it's emitted.
 fn arrange_sink_input<'scope>(
     sink_render: &dyn SinkRender<'scope>,
     collection: VecCollection<'scope, Timestamp, Row, Diff>,
-) -> Arranged<'scope, SinkTrace> {
+) -> SinkBatchStream<'scope> {
     let key_indices = sink_render
         .get_key_indices()
         .or_else(|| sink_render.get_relation_key_indices())
@@ -131,7 +148,8 @@ fn arrange_sink_input<'scope>(
     // Allow access to `arrange_named` because we cannot access Mz's wrapper
     // from here. TODO(database-issues#5046): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
-    keyed.arrange_named::<OrdValBatcher<_, _, _, _>, RcOrdValBuilder<_, _, _, _>, OrdValSpine<_, _, _, _>>("Arrange Sink")
+    let arranged = keyed.arrange_named::<OrdValBatcher<_, _, _, _>, RcOrdValBuilder<_, _, _, _>, OrdValSpine<_, _, _, _>>("Arrange Sink");
+    arranged.stream
 }
 
 /// Rate-limited detector for primary-key uniqueness violations as a sink's
@@ -213,8 +231,8 @@ pub(crate) trait SinkRender<'scope> {
 
     /// Renders the sink's dataflow.
     ///
-    /// The sink receives the input as an arrangement keyed on `Option<Row>`.
-    /// The sink is responsible for walking the arrangement (typically via
+    /// The sink receives a stream of arrangement batches keyed on `Option<Row>`.
+    /// The sink is responsible for walking each batch (typically via
     /// [`mz_interchange::envelopes::for_each_diff_pair`]) and handling any
     /// envelope-specific diff-pair construction. When `key_is_synthetic` is
     /// true the arrangement's key is a per-row hash used only for worker
@@ -225,7 +243,7 @@ pub(crate) trait SinkRender<'scope> {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        arranged: Arranged<'scope, SinkTrace>,
+        batches: SinkBatchStream<'scope>,
         key_is_synthetic: bool,
         err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
     ) -> (

@@ -15,10 +15,10 @@
 //!        ┃   persist    ┃
 //!        ┃    source    ┃
 //!        ┗━━━━━━┯━━━━━━━┛
-//!               │ arranged (Option<Row>, Row) keyed by sink key
+//!               │ stream of arrangement batches (trace reader dropped)
 //!               │
 //!        ┏━━━━━━v━━━━━━┓
-//!        ┃    row      ┃ walks the arrangement and emits one
+//!        ┃    row      ┃ walks each batch's cursor and emits one
 //!        ┃   encoder   ┃ encoded `KafkaMessage` per DiffPair
 //!        ┗━━━━━━┯━━━━━━┛
 //!               │ encoded data
@@ -82,11 +82,10 @@ use std::time::Duration;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::{PkViolationWarner, SinkRender, SinkTrace};
+use crate::render::sinks::{PkViolationWarner, SinkBatchStream, SinkRender};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 use anyhow::{Context, anyhow, bail};
-use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
@@ -161,7 +160,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        arranged: Arranged<'scope, SinkTrace>,
+        batches: SinkBatchStream<'scope>,
         key_is_synthetic: bool,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
@@ -170,7 +169,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
         StreamVec<'scope, Timestamp, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
-        let scope = arranged.stream.scope();
+        let scope = batches.scope();
 
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
@@ -196,7 +195,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
 
         let (encoded, encode_status, encode_token) = encode_collection(
             format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
-            arranged,
+            batches,
             sink.envelope,
             self.clone(),
             storage_state.storage_configuration.clone(),
@@ -1365,15 +1364,14 @@ async fn fetch_partition_count_loop<F>(
     }
 }
 
-/// Walks the sink's arrangement and emits encoded Kafka messages, one per
+/// Walks each arrangement batch and emits encoded Kafka messages, one per
 /// `DiffPair` observed at each `(key, timestamp)`.
 ///
-/// When `key_is_synthetic`, the arrangement's key is a per-row hash used only
-/// for worker distribution; the emitted `KafkaMessage` uses no key in that
-/// case.
+/// When `key_is_synthetic`, the batch keys are per-row hashes used only for
+/// worker distribution; the emitted `KafkaMessage` uses no key in that case.
 fn encode_collection<'scope>(
     name: String,
-    arranged: Arranged<'scope, SinkTrace>,
+    batches: SinkBatchStream<'scope>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1385,10 +1383,10 @@ fn encode_collection<'scope>(
     StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
-    let mut builder = AsyncOperatorBuilder::new(name, arranged.stream.scope());
+    let mut builder = AsyncOperatorBuilder::new(name, batches.scope());
 
     let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input = builder.new_input_for(arranged.stream, Pipeline, &output);
+    let mut input = builder.new_input_for(batches, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
