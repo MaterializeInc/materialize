@@ -103,6 +103,7 @@ def get_minimal_system_parameters(
         "enable_sql_server_source": "true",
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
+        "enable_storage_introspection_logs": "true",
         "enable_compute_temporal_bucketing": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",

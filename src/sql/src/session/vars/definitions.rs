@@ -2074,6 +2074,12 @@ feature_flags!(
         enable_for_item_parsing: false,
     },
     {
+        name: enable_storage_introspection_logs,
+        desc: "forward storage timely logging events into compute's introspection dataflow",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_copy_to_expr,
         desc: "COPY ... TO 's3://...'",
         default: true,

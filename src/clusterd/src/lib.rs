@@ -167,6 +167,11 @@ struct Args {
     /// affinity might degrade dataflow performance rather than improving it.
     #[clap(long)]
     worker_core_affinity: bool,
+
+    /// Forward storage's timely logging events to compute so storage operators appear in
+    /// `mz_introspection.mz_dataflow_*` tables.
+    #[clap(long)]
+    enable_storage_introspection_logs: bool,
 }
 
 pub fn main() {
@@ -379,9 +384,14 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     compute_timely_config.process = args.process;
 
     // Create per-worker bridges for forwarding storage timely logging events to compute.
-    let num_workers = storage_timely_config.workers;
-    let (storage_log_writers, storage_log_readers): (Vec<_>, Vec<_>) =
-        (0..num_workers).map(|_| arc_event_link()).unzip();
+    let (storage_log_writers, storage_log_readers) =
+        if args.enable_storage_introspection_logs {
+            (0..storage_timely_config.workers)
+                .map(|_| arc_event_link())
+                .unzip()
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
     // Start storage server.
     let storage_client_builder = mz_storage::serve(
