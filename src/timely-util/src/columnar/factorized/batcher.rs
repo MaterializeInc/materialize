@@ -49,8 +49,21 @@ fn val_range_in_chunk<K: Columnar, V: Columnar, T: Columnar, R: Columnar>(
     child_range(chunk.rest.lists.bounds.borrow(), key_idx)
 }
 
-/// Target leaf count for an emitted chunk; see [`super::chunker::FactTrieChunker`].
-const CHUNK_TARGET: usize = 1024;
+/// Target leaf count for an emitted chunk — byte-based: 2 MiB / sizeof::<(T, R)>().
+///
+/// Replaces the old fixed `CHUNK_TARGET = 1024`. Byte-based sizing produces
+/// O(batch_size / 2 MiB) chunks regardless of tuple size, so merge passes
+/// through `MergeBatcher` amortize over fewer, larger chunks.
+#[inline]
+fn chunk_target_leaves<T, R>() -> usize {
+    const TARGET_BYTES: usize = 2 * 1024 * 1024;
+    let size = std::mem::size_of::<(T, R)>();
+    if size == 0 {
+        TARGET_BYTES
+    } else {
+        std::cmp::max(1, TARGET_BYTES / size)
+    }
+}
 
 /// A [`Merger`] over factorized trie chunks.
 ///
@@ -93,7 +106,7 @@ where
     ) {
         let mut c1 = ChainCursor::<'_, K, V, T, R>::new(&list1);
         let mut c2 = ChainCursor::<'_, K, V, T, R>::new(&list2);
-        let mut builder = TrieMergeBuilder::<K, V, T, R>::new(CHUNK_TARGET);
+        let mut builder = TrieMergeBuilder::<K, V, T, R>::new(chunk_target_leaves::<T, R>());
 
         while let (Some(cur1), Some(cur2)) = (c1.peek(), c2.peek()) {
             let (src1, key1_ref, key1_idx) = cur1;
@@ -152,8 +165,8 @@ where
         kept: &mut Vec<Self::Chunk>,
         _stash: &mut Vec<Self::Chunk>,
     ) {
-        let mut ready_builder = TrieMergeBuilder::<K, V, T, R>::new(CHUNK_TARGET);
-        let mut keep_builder = TrieMergeBuilder::<K, V, T, R>::new(CHUNK_TARGET);
+        let mut ready_builder = TrieMergeBuilder::<K, V, T, R>::new(chunk_target_leaves::<T, R>());
+        let mut keep_builder = TrieMergeBuilder::<K, V, T, R>::new(chunk_target_leaves::<T, R>());
 
         for chunk in &merged {
             let key_count = Len::len(&chunk.lists.values.borrow());

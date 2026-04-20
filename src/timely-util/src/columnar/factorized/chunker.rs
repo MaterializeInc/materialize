@@ -29,11 +29,24 @@ use timely::container::{ContainerBuilder, PushInto};
 use super::KVUpdates;
 use crate::columnar::Column;
 
-/// Target leaf count for an emitted chunk.
+/// Flush threshold, in flat `((K, V), T, R)` tuples, before the chunker
+/// sorts+consolidates `pending` and emits a trie chunk.
 ///
-/// Picked to match the default power-of-two capacity DD uses for `Vec<(D,T,R)>`,
-/// so allocation behavior resembles the baseline `ColumnationChunker` pipeline.
-const CHUNK_TARGET: usize = 1024;
+/// Byte-based: 2× 2 MiB budget, so each flush produces roughly one
+/// "target-sized" typed chunk post-dedup. Mirrors DD's `ColumnationChunker`
+/// 64-KiB heuristic scaled up; factorized chunks dedup K/V across the leaf
+/// range, so larger chunks reap more dedup savings.
+#[inline]
+fn pending_flush_target<K, V, T, R>() -> usize {
+    const TARGET_BYTES: usize = 2 * 1024 * 1024;
+    let size = std::mem::size_of::<((K, V), T, R)>();
+    let per_chunk = if size == 0 {
+        TARGET_BYTES
+    } else {
+        std::cmp::max(1, TARGET_BYTES / size)
+    };
+    2 * per_chunk
+}
 
 /// A [`ContainerBuilder`] that assembles sorted, consolidated [`KVUpdates`] chunks
 /// from unsorted `Vec<((K, V), T, R)>` inputs.
@@ -117,7 +130,7 @@ where
 {
     fn push_into(&mut self, input: &mut Vec<((K, V), T, R)>) {
         self.pending.append(input);
-        if self.pending.len() >= 2 * CHUNK_TARGET {
+        if self.pending.len() >= pending_flush_target::<K, V, T, R>() {
             self.flush_pending();
         }
     }
@@ -156,7 +169,7 @@ where
             let r = R::into_owned(r_ref);
             self.pending.push(((k, v), t, r));
         }
-        if self.pending.len() >= 2 * CHUNK_TARGET {
+        if self.pending.len() >= pending_flush_target::<K, V, T, R>() {
             self.flush_pending();
         }
     }
@@ -248,7 +261,8 @@ mod tests {
     #[mz_ore::test]
     fn test_chunker_overflow_emits_early() {
         // Push enough to trigger an early flush.
-        let mut input: Vec<((u64, u64), u64, i64)> = (0..(2 * CHUNK_TARGET + 10))
+        let threshold = pending_flush_target::<u64, u64, u64, i64>();
+        let mut input: Vec<((u64, u64), u64, i64)> = (0..(threshold + 10))
             .map(|i| ((i as u64, 0u64), 0u64, 1i64))
             .collect();
         let mut chunker = TestChunker::default();
