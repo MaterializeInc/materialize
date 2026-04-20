@@ -61,12 +61,15 @@ fn make_builtin_materialized_views<'a>(
             let create_sql = stmt.to_ast_string_stable();
             let create_sql = escaped_string_literal(&create_sql);
 
-            let cluster_name = stmt.in_cluster.expect("builtin MV has cluster");
+            let cluster_name = stmt.in_cluster.expect("builtin MV has cluster").to_string();
+            let cluster_name = escaped_string_literal(&cluster_name);
+            let schema = escaped_string_literal(mv.schema);
+            let name = escaped_string_literal(mv.name);
             let privileges = make_privileges_sql(&mv.access, &owner_priv);
 
             format!(
-                "({}::oid, '{}', '{}', '{}', {}, {}, {})",
-                mv.oid, mv.schema, mv.name, cluster_name, definition, privileges, create_sql
+                "({}::oid, {}, {}, {}, {}, {}, {})",
+                mv.oid, schema, name, cluster_name, definition, privileges, create_sql
             )
         })
         .join(",");
