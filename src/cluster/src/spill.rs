@@ -16,8 +16,7 @@
 //! into the in-memory queue.
 //!
 //! lgalloc 0.7 is intentionally separate from the lgalloc 0.6 used by the
-//! [`crate::client::alloc`] slab refill, so the two callers can evolve
-//! independently.
+//! slab refill in `crate::client`, so the two callers can evolve independently.
 
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
