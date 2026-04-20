@@ -936,7 +936,7 @@ async fn read_data_product(
 
     let read_query = match cluster_override {
         Some(cluster) => format!(
-            "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}; COMMIT;",
+            "BEGIN READ ONLY; SET CLUSTER = {}; SELECT * FROM {} LIMIT {}\n; COMMIT;",
             escaped_string_literal(cluster),
             safe_name,
             clamped_limit,
@@ -1000,7 +1000,7 @@ async fn execute_query(
     // Use READ ONLY transaction to prevent modifications
     // Combine with SET CLUSTER (prometheus.rs:29-33 pattern)
     let combined_query = format!(
-        "BEGIN READ ONLY; SET CLUSTER = {}; {}; COMMIT;",
+        "BEGIN READ ONLY; SET CLUSTER = {}; {}\n; COMMIT;",
         escaped_string_literal(cluster),
         sql_query
     );
