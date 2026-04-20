@@ -1023,9 +1023,17 @@ async fn query_system_catalog(
     // Then validate that query only references mz_* tables by parsing the SQL
     validate_system_catalog_query(sql_query)?;
 
-    // Single statement — skip explicit transaction for better performance.
-    // Read-only safety is enforced by validate_readonly_query above.
-    let rows = execute_sql(client, sql_query).await?;
+    // Wrap the query in a READ ONLY transaction with a tight search_path
+    // restricted to system schemas. This prevents unqualified `mz_*` references
+    // from resolving to user-created objects (e.g. a view `public.mz_leak`) via
+    // the session's search_path (mirrors the `BEGIN READ ONLY; SET ...` pattern
+    // used by the agent `query` tool).
+    let combined_query = format!(
+        "BEGIN READ ONLY; SET search_path = mz_catalog, mz_internal, pg_catalog, information_schema; {}; COMMIT;",
+        sql_query
+    );
+
+    let rows = execute_sql(client, &combined_query).await?;
 
     format_rows_response(rows, max_response_size)
 }
@@ -1115,16 +1123,13 @@ fn validate_system_catalog_query(sql: &str) -> Result<(), McpRequestError> {
     let is_allowed_schema =
         |s: &str| SYSTEM_SCHEMAS.contains(&s) && s != namespaces::MZ_UNSAFE_SCHEMA;
 
-    // Helper to check if a table reference is allowed
-    let is_system_table = |(schema, table_name): &(Option<String>, String)| {
-        match schema {
-            // Explicitly qualified with allowed schema
-            Some(s) => is_allowed_schema(s.as_str()),
-            // Unqualified: allow if starts with mz_ (common Materialize system tables).
-            // Note: user tables can also start with mz_, but unqualified references
-            // resolve to the user's search_path first, so this is a best-effort check.
-            None => table_name.starts_with("mz_"),
-        }
+    // Helper to check if a table reference is allowed. Unqualified references
+    // are accepted here because execution uses a tight `search_path` containing
+    // only system schemas (see `query_system_catalog`), so user-created views
+    // like `public.mz_leak` cannot be reached by an unqualified name.
+    let is_system_table = |(schema, table_name): &(Option<String>, String)| match schema {
+        Some(s) => is_allowed_schema(s.as_str()),
+        None => table_name.starts_with("mz_"),
     };
 
     // Check that all table references are system tables
