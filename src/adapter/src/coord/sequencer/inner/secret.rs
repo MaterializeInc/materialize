@@ -220,6 +220,16 @@ impl Coordinator {
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {
+                // Clean up the secret we already persisted, since the catalog
+                // item was not created.
+                if let Err(e) = self.secrets_controller.delete(item_id).await {
+                    warn!(
+                        "Dropping newly created secrets has encountered an error: {}",
+                        e
+                    );
+                } else {
+                    self.caching_secrets_reader.invalidate(item_id);
+                }
                 session.add_notice(AdapterNotice::ObjectAlreadyExists {
                     name: name.item,
                     ty: "secret",
