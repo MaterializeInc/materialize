@@ -5088,6 +5088,151 @@ fn test_mcp_developer_disabled() {
     run_mcp_datadriven("tests/testdata/mcp/developer_disabled", harness);
 }
 
+/// Regression test for database-issues#11320.
+///
+/// The developer endpoint validator allows unqualified `mz_*` table names as
+/// a UX convenience. Before the fix, an attacker with CREATE privileges could
+/// create `public.mz_leak` pointing at sensitive data and the session's
+/// `search_path` would resolve the unqualified name to that view, bypassing
+/// the system-catalog-only restriction. The fix sets a tight `search_path`
+/// containing only system schemas before executing the query, so `mz_leak`
+/// cannot resolve to a user-created object.
+#[mz_ore::test]
+fn test_mcp_developer_search_path_defense() {
+    let server = test_util::TestHarness::default()
+        .with_mcp_routes(false, true)
+        .with_system_parameter_default("enable_mcp_developer".to_string(), "true".to_string())
+        .start_blocking();
+
+    let developer_url = format!("http://{}/api/mcp/developer", server.http_local_addr());
+
+    // Set up a user view named `mz_leak` in the `public` schema and point the
+    // HTTP user's search_path at `public` so an unqualified reference would
+    // normally resolve to it.
+    {
+        let mut super_user = server
+            .pg_config_internal()
+            .user(&SYSTEM_USER.name)
+            .connect(postgres::NoTls)
+            .unwrap();
+
+        super_user
+            .batch_execute(&format!("CREATE ROLE {}", &HTTP_DEFAULT_USER.name))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SYSTEM TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON DATABASE materialize TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT ALL PRIVILEGES ON SCHEMA materialize.public TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Attacker-created view with the `mz_` prefix.
+        super_user
+            .batch_execute("CREATE VIEW public.mz_leak AS SELECT 'leaked_secret'::text AS payload")
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON public.mz_leak TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "ALTER ROLE {} SET search_path TO public",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+    }
+
+    // Attempt to leak: unqualified `mz_leak` must NOT resolve to `public.mz_leak`.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT * FROM mz_leak"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_object(),
+        "unqualified mz_leak should not resolve to the user view, got: {body}"
+    );
+    let result_text = body
+        .get("result")
+        .and_then(|r| r["content"].get(0))
+        .and_then(|c| c["text"].as_str())
+        .unwrap_or("");
+    assert!(
+        !result_text.contains("leaked_secret"),
+        "user view contents must not leak through MCP, got: {body}"
+    );
+
+    // Explicit qualification with a non-system schema is still rejected by the
+    // validator, regardless of search_path.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT * FROM public.mz_leak"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("non-system"),
+        "public.mz_leak should be rejected by the validator, got: {body}"
+    );
+
+    // Legitimate unqualified system queries must still work: the tight
+    // search_path resolves `mz_tables` to `mz_catalog.mz_tables`.
+    let (status, body) = mcp_post(
+        &developer_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "query_system_catalog",
+                "arguments": {"sql_query": "SELECT name FROM mz_databases WHERE name = 'materialize'"}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "legitimate unqualified system query should succeed, got: {body}"
+    );
+    let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        result_text.contains("materialize"),
+        "query should return the default database, got: {result_text}"
+    );
+}
+
 /// Helper to POST a JSON-RPC request to an MCP endpoint and return the parsed response.
 fn mcp_post(url: &str, json: serde_json::Value) -> (reqwest::StatusCode, serde_json::Value) {
     let res = Client::new().post(url).json(&json).send().unwrap();
