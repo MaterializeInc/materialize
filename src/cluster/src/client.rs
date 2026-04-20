@@ -31,6 +31,7 @@ use tracing::{info, info_span};
 use uuid::Uuid;
 
 use crate::communication::initialize_networking;
+use crate::spill::SpillConfig;
 
 type PartitionedClient<C, R> = Partitioned<LocalClient<C, R>, C, R>;
 
@@ -202,12 +203,21 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             }
         };
 
+        let spill = config.enable_spill.then(|| {
+            SpillConfig {
+                threshold_bytes: config.spill_threshold_bytes,
+                head_reserve_bytes: config.spill_head_reserve_bytes,
+            }
+            .into_policy_fn()
+        });
+
         let (builders, other) = initialize_networking(
             config.workers,
             config.process,
             config.addresses.clone(),
             refill,
             config.enable_zero_copy,
+            spill,
         )
         .await?;
 

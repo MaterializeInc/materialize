@@ -84,10 +84,12 @@ use mz_ore::cast::CastFrom;
 use mz_ore::netio::{Listener, Stream};
 use mz_ore::retry::Retry;
 use regex::Regex;
+use timely::communication::Hooks;
 use timely::communication::allocator::ProcessBuilder;
 use timely::communication::allocator::generic::AllocatorBuilder;
 use timely::communication::allocator::zero_copy::bytes_slab::BytesRefill;
 use timely::communication::allocator::zero_copy::initialize::initialize_networking_from_sockets;
+use timely::communication::allocator::zero_copy::spill::SpillPolicyFn;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn};
 
@@ -102,6 +104,7 @@ pub async fn initialize_networking(
     addresses: Vec<String>,
     refill: BytesRefill,
     enable_zero_copy_binary: bool,
+    spill: Option<SpillPolicyFn>,
 ) -> Result<(Vec<AllocatorBuilder>, Box<dyn Any + Send>), anyhow::Error> {
     info!(
         process,
@@ -127,7 +130,14 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers, refill, enable_zero_copy_binary)
+        initialize_networking_inner(
+            sockets,
+            process,
+            workers,
+            refill,
+            enable_zero_copy_binary,
+            spill,
+        )
     } else if sockets
         .iter()
         .filter_map(|s| s.as_ref())
@@ -139,7 +149,14 @@ pub async fn initialize_networking(
             .collect::<Result<Vec<_>, _>>()
             .map_err(anyhow::Error::from)
             .context("failed to get standard sockets from tokio sockets")?;
-        initialize_networking_inner(sockets, process, workers, refill, enable_zero_copy_binary)
+        initialize_networking_inner(
+            sockets,
+            process,
+            workers,
+            refill,
+            enable_zero_copy_binary,
+            spill,
+        )
     } else {
         anyhow::bail!("cannot mix TCP and Unix streams");
     }
@@ -151,6 +168,7 @@ fn initialize_networking_inner<S>(
     workers: usize,
     refill: BytesRefill,
     enable_zero_copy_binary: bool,
+    spill: Option<SpillPolicyFn>,
 ) -> Result<(Vec<AllocatorBuilder>, Box<dyn Any + Send>), anyhow::Error>
 where
     S: timely::communication::allocator::zero_copy::stream::Stream + 'static,
@@ -164,19 +182,18 @@ where
 
     // Choose the intra-process allocator flavor up front.
     let process_allocators = if enable_zero_copy_binary {
-        ProcessBuilder::new_bytes_vector(workers, refill.clone())
+        ProcessBuilder::new_bytes_vector(workers, refill.clone(), spill.clone())
     } else {
-        ProcessBuilder::new_typed_vector(workers, refill.clone())
+        ProcessBuilder::new_typed_vector(workers, refill.clone(), spill.clone())
     };
 
-    match initialize_networking_from_sockets(
-        process_allocators,
-        sockets,
-        process,
-        workers,
+    let hooks = Hooks {
+        log_fn: Arc::new(|_| None),
         refill,
-        Arc::new(|_| None),
-    ) {
+        spill,
+    };
+
+    match initialize_networking_from_sockets(process_allocators, sockets, process, workers, hooks) {
         Ok((tcp_builders, guard)) => {
             info!(process = process, "successfully initialized network");
             let builders = tcp_builders

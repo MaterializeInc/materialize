@@ -26,7 +26,8 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_SPILL, ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC,
+    TIMELY_SPILL_HEAD_RESERVE_BYTES, TIMELY_SPILL_THRESHOLD_BYTES, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -656,6 +657,9 @@ impl Controller {
             enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
             enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
+            enable_spill: ENABLE_TIMELY_SPILL.get(&self.dyncfg),
+            spill_threshold_bytes: TIMELY_SPILL_THRESHOLD_BYTES.get(&self.dyncfg),
+            spill_head_reserve_bytes: TIMELY_SPILL_HEAD_RESERVE_BYTES.get(&self.dyncfg),
             ..Default::default()
         };
 

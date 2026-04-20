@@ -5030,6 +5030,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lgalloc"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e990e580fb8290b171773eedd3f9cb7f2234577baaa4ec93ce36b5824a833b5f"
+dependencies = [
+ "crossbeam-deque",
+ "libc",
+ "page_size",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "libbz2-rs-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6012,7 +6024,8 @@ dependencies = [
  "async-trait",
  "differential-dataflow",
  "futures",
- "lgalloc",
+ "lgalloc 0.6.0",
+ "lgalloc 0.7.0",
  "mz-cluster-client",
  "mz-ore",
  "mz-service",
@@ -6096,7 +6109,7 @@ dependencies = [
  "fail",
  "futures",
  "itertools 0.14.0",
- "lgalloc",
+ "lgalloc 0.6.0",
  "mz-cluster",
  "mz-cluster-client",
  "mz-compute-client",
@@ -6872,7 +6885,7 @@ dependencies = [
 name = "mz-metrics"
 version = "0.0.0"
 dependencies = [
- "lgalloc",
+ "lgalloc 0.6.0",
  "libc",
  "mz-dyncfg",
  "mz-ore",
@@ -7109,7 +7122,7 @@ dependencies = [
  "hyper-tls 0.6.0",
  "hyper-util",
  "itertools 0.14.0",
- "lgalloc",
+ "lgalloc 0.6.0",
  "libc",
  "mz-ore",
  "mz-ore-proc",
@@ -8395,7 +8408,7 @@ dependencies = [
  "differential-dataflow",
  "either",
  "futures-util",
- "lgalloc",
+ "lgalloc 0.6.0",
  "mz-ore",
  "num-traits",
  "serde",
@@ -12000,8 +12013,7 @@ dependencies = [
 [[package]]
 name = "timely"
 version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cdba58f1357fd65576620166d88afb7911b0d4f83b97c0624b03797e85ef4e9"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=b4e5ef9bba472267abf50fc47b456d35b36c4e67#b4e5ef9bba472267abf50fc47b456d35b36c4e67"
 dependencies = [
  "bincode",
  "byteorder",
@@ -12020,14 +12032,12 @@ dependencies = [
 [[package]]
 name = "timely_bytes"
 version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "beb91e9fc11841c4b07af1c95cea20470aaf144d6b412daddf63593cd8e7df50"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=b4e5ef9bba472267abf50fc47b456d35b36c4e67#b4e5ef9bba472267abf50fc47b456d35b36c4e67"
 
 [[package]]
 name = "timely_communication"
 version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9efbf4f3899dc9905b780ec3646920022de3323086cc05ba84f4ffaad9a80c8"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=b4e5ef9bba472267abf50fc47b456d35b36c4e67#b4e5ef9bba472267abf50fc47b456d35b36c4e67"
 dependencies = [
  "byteorder",
  "columnar",
@@ -12041,14 +12051,12 @@ dependencies = [
 [[package]]
 name = "timely_container"
 version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e39eed4292e8e49f341c3d6cdfc8c43431634676a42dc8021cfd67e939c129a9"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=b4e5ef9bba472267abf50fc47b456d35b36c4e67#b4e5ef9bba472267abf50fc47b456d35b36c4e67"
 
 [[package]]
 name = "timely_logging"
 version = "0.29.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11ef86afa8b06f1bfa6e088b87909592a14622189f91ae4b5a49e76ac10ab73c"
+source = "git+https://github.com/TimelyDataflow/timely-dataflow.git?rev=b4e5ef9bba472267abf50fc47b456d35b36c4e67#b4e5ef9bba472267abf50fc47b456d35b36c4e67"
 dependencies = [
  "timely_container",
 ]

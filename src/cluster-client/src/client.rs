@@ -38,6 +38,12 @@ pub struct TimelyConfig {
     pub enable_zero_copy_lgalloc: bool,
     /// Optional limit on the number of empty buffers retained by the zero copy allocator.
     pub zero_copy_limit: Option<usize>,
+    /// Whether to enable file-backed spilling for the timely communication merge queue.
+    pub enable_spill: bool,
+    /// Per-queue byte threshold above which the merge queue spills to disk.
+    pub spill_threshold_bytes: usize,
+    /// Bytes kept in memory at the head of the queue / prefetch budget while spilling.
+    pub spill_head_reserve_bytes: usize,
 }
 
 impl ToString for TimelyConfig {
