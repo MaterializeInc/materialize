@@ -650,6 +650,9 @@ impl Controller {
         // TODO(teskje): use the same values as for compute?
         let storage_proto_timely_config = TimelyConfig {
             arrangement_exert_proportionality: 1337,
+            enable_spill: ENABLE_TIMELY_SPILL.get(&self.dyncfg),
+            spill_threshold_bytes: TIMELY_SPILL_THRESHOLD_BYTES.get(&self.dyncfg),
+            spill_head_reserve_bytes: TIMELY_SPILL_HEAD_RESERVE_BYTES.get(&self.dyncfg),
             ..Default::default()
         };
         let compute_proto_timely_config = TimelyConfig {
