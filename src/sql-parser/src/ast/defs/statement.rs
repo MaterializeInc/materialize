@@ -604,6 +604,68 @@ impl<T: AstInfo> AstDisplay for ConnectionDefaultAwsPrivatelink<T> {
 impl_display_t!(ConnectionDefaultAwsPrivatelink);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// A MATCHING rule inside BROKERS (...) that routes brokers matching a pattern
+/// through an AWS PrivateLink tunnel.
+pub struct KafkaMatchingBrokerRule<T: AstInfo> {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub tunnel: KafkaBrokerAwsPrivatelink<T>,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize
+)]
+/// Parsed from a string, with optional leading and trailing '*' wildcards.
+pub struct ConnectionRulePattern {
+    /// If true, allow any combination of characters before the literal match.
+    pub prefix_wildcard: bool,
+    /// We expect the broker's host:port to match these characters in their entirety.
+    pub literal_match: String,
+    /// If true, allow any combination of characters after the literal match.
+    pub suffix_wildcard: bool,
+}
+
+impl<T: AstInfo> AstDisplay for KafkaMatchingBrokerRule<T> {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("MATCHING ");
+        f.write_node(&self.pattern);
+        f.write_str(" ");
+        f.write_node(&self.tunnel);
+    }
+}
+impl_display_t!(KafkaMatchingBrokerRule);
+
+impl AstDisplay for ConnectionRulePattern {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("'");
+        if self.prefix_wildcard {
+            f.write_str("*");
+        }
+        f.write_node(&display::escape_single_quote_string(&self.literal_match));
+        if self.suffix_wildcard {
+            f.write_str("*");
+        }
+        f.write_str("'");
+    }
+}
+impl_display!(ConnectionRulePattern);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct KafkaBroker<T: AstInfo> {
     pub address: String,
     pub tunnel: KafkaBrokerTunnel<T>,
@@ -4396,6 +4458,7 @@ pub enum WithOptionValue<T: AstInfo> {
     ClusterReplicas(Vec<ReplicaDefinition<T>>),
     ConnectionKafkaBroker(KafkaBroker<T>),
     ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink<T>),
+    KafkaMatchingBrokerRule(KafkaMatchingBrokerRule<T>),
     RetainHistoryFor(Value),
     Refresh(RefreshOptionValue<T>),
     ClusterScheduleOptionValue(ClusterScheduleOptionValue),
@@ -4426,6 +4489,7 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
                 | WithOptionValue::UnresolvedItemName(_)
                 | WithOptionValue::Ident(_)
                 | WithOptionValue::ConnectionAwsPrivatelink(_)
+                | WithOptionValue::KafkaMatchingBrokerRule(_)
                 | WithOptionValue::ClusterReplicas(_)
                 | WithOptionValue::ClusterScheduleOptionValue(_)
                 | WithOptionValue::ClusterAlterStrategy(_)
@@ -4476,6 +4540,9 @@ impl<T: AstInfo> AstDisplay for WithOptionValue<T> {
             }
             WithOptionValue::ConnectionAwsPrivatelink(aws_privatelink) => {
                 f.write_node(aws_privatelink);
+            }
+            WithOptionValue::KafkaMatchingBrokerRule(rule) => {
+                f.write_node(rule);
             }
             WithOptionValue::ConnectionKafkaBroker(broker) => {
                 f.write_node(broker);

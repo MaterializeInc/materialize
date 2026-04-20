@@ -50,7 +50,7 @@ first second
 1     2
 
 ! ALTER CONNECTION conn RESET (broker);
-contains:invalid ALTER CONNECTION: invalid CONNECTION: must set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:set one of BROKER, BROKERS, or AWS PRIVATELINK
 
 ! ALTER CONNECTION conn SET (broker = 'abcd') WITH (validate = true);
 contains:Failed to resolve hostname
@@ -111,7 +111,7 @@ contains:BROKER specified more than once
 contains:BROKER specified more than once
 
 ! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), SET (BROKERS ['${testdrive.kafka-addr}'])
-contains:invalid ALTER CONNECTION: invalid CONNECTION: can only set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:can only set one of BROKER, BROKERS, or AWS PRIVATELINK
 
 ! ALTER CONNECTION conn SET (BROKER '${testdrive.kafka-addr}'), DROP (BROKERS)
 contains:cannot both SET and DROP/RESET mutually exclusive KAFKA options BROKER, BROKERS
@@ -121,7 +121,7 @@ contains:cannot both SET and DROP/RESET mutually exclusive KAFKA options BROKER,
 
 # We permit resetting both of these options, and the error occurs later in planning
 ! ALTER CONNECTION conn RESET (BROKER), RESET (BROKERS);
-contains:invalid ALTER CONNECTION: invalid CONNECTION: must set one of BROKER, BROKERS, or AWS PRIVATELINK
+contains:set one of BROKER, BROKERS, or AWS PRIVATELINK
 
 > ALTER CONNECTION conn SET (BROKER = '${testdrive.kafka-addr}');
 

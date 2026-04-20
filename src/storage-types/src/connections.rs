@@ -31,7 +31,8 @@ use mz_ccsr::tls::{Certificate, Identity};
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceReader, vpc_endpoint_host};
 use mz_dyncfg::ConfigSet;
 use mz_kafka_util::client::{
-    BrokerAddr, BrokerRewrite, MzClientContext, MzKafkaError, TunnelConfig, TunnelingClientContext,
+    BrokerAddr, BrokerRewrite, HostMappingRules, MzClientContext, MzKafkaError, TunnelConfig,
+    TunnelingClientContext,
 };
 use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
@@ -41,6 +42,7 @@ use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
+use mz_sql_parser::ast::ConnectionRulePattern;
 use mz_ssh_util::keys::SshKeyPair;
 use mz_ssh_util::tunnel::SshTunnelConfig;
 use mz_ssh_util::tunnel_manager::{ManagedSshTunnelHandle, SshTunnelManager};
@@ -53,7 +55,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::AlterCompatible;
@@ -957,15 +959,30 @@ impl KafkaConnection {
                     t.port.unwrap_or(9092)
                 )
             }
+            Tunnel::AwsPrivatelinks(_pl) => {
+                let algo = KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM
+                    .get(storage_configuration.config_set());
+                options.insert("ssl.endpoint.identification.algorithm".into(), algo.into());
+
+                if self.brokers.is_empty() {
+                    return Err(ContextCreationError::Other(anyhow::anyhow!(
+                        "at least one static broker is required when using BROKER or BROKERS"
+                    )));
+                }
+                self.brokers.iter().map(|b| &b.address).join(",")
+            }
             _ => self.brokers.iter().map(|b| &b.address).join(","),
         };
-        options.insert("bootstrap.servers".into(), brokers.into());
+        options.insert("bootstrap.servers".into(), brokers.clone().into());
         let security_protocol = match (self.tls.is_some(), self.sasl.is_some()) {
             (false, false) => "PLAINTEXT",
             (true, false) => "SSL",
             (false, true) => "SASL_PLAINTEXT",
             (true, true) => "SASL_SSL",
         };
+        info!(
+            "kafka: create_with_context bootstrap.servers={brokers}, security_protocol={security_protocol}"
+        );
         options.insert("security.protocol".into(), security_protocol.into());
         if let Some(tls) = &self.tls {
             if let Some(root_cert) = &tls.root_cert {
@@ -1067,10 +1084,15 @@ impl KafkaConnection {
                 // By default, don't offer a default override for broker address lookup.
             }
             Tunnel::AwsPrivatelink(pl) => {
-                context.set_default_tunnel(TunnelConfig::StaticHost(vpc_endpoint_host(
-                    pl.connection_id,
-                    None, // Default tunnel does not support availability zones.
-                )));
+                context.set_default_tunnel(TunnelConfig::StaticHost(
+                    // Possible bug: We have been ignoring the configured port.
+                    KafkaConnection::from_default_aws_privatelink(pl).host,
+                ));
+            }
+            Tunnel::AwsPrivatelinks(pl) => {
+                context.set_default_tunnel(TunnelConfig::Rules(
+                    KafkaConnection::from_aws_privatelinks(pl),
+                ));
             }
             Tunnel::Ssh(ssh_tunnel) => {
                 let secret = storage_configuration
@@ -1097,7 +1119,19 @@ impl KafkaConnection {
                 }));
             }
         }
+        info!(
+            "kafka: tunnel config set to {}",
+            match &self.default_tunnel {
+                Tunnel::Direct => "Direct".to_string(),
+                Tunnel::AwsPrivatelink(_) => "AwsPrivatelink (static host)".to_string(),
+                Tunnel::AwsPrivatelinks(pl) =>
+                    format!("AwsPrivatelinks ({} rules)", pl.rules.len()),
+                Tunnel::Ssh(_) => "Ssh".to_string(),
+            }
+        );
 
+        // Here, we preemptively rewrite broker addresses.
+        // In concept, this overlaps with 'TunnelingClientContext::resolve_broker_addr'.
         for broker in &self.brokers {
             let mut addr_parts = broker.address.splitn(2, ':');
             let addr = BrokerAddr {
@@ -1124,19 +1158,14 @@ impl KafkaConnection {
                     // in the `TunnelingClientContext`.
                 }
                 Tunnel::AwsPrivatelink(aws_privatelink) => {
-                    let host = mz_cloud_resources::vpc_endpoint_host(
-                        aws_privatelink.connection_id,
-                        aws_privatelink.availability_zone.as_deref(),
-                    );
-                    let port = aws_privatelink.port;
                     context.add_broker_rewrite(
                         addr,
-                        BrokerRewrite {
-                            host: host.clone(),
-                            port,
-                        },
+                        KafkaConnection::from_aws_privatelink(aws_privatelink),
                     );
                 }
+                Tunnel::AwsPrivatelinks(_) => unreachable!(
+                    "Individually predefined brokers do not use rule-based PrivateLinks routing."
+                ),
                 Tunnel::Ssh(ssh_tunnel) => {
                     // Ensure any SSH bastion address we connect to is resolved to an external address.
                     let ssh_host_resolved = resolve_address(
@@ -1204,11 +1233,16 @@ impl KafkaConnection {
         // The downside of this approach is it produces a generic error message like
         // "metadata fetch error" with no additional details. The real networking
         // error is buried in the librdkafka logs, which are not visible to users.
+        info!("kafka: starting connection validation via fetch_metadata (timeout={timeout:?})");
         let result = mz_ore::task::spawn_blocking(|| "kafka_get_metadata", {
             let consumer = Arc::clone(&consumer);
             move || consumer.fetch_metadata(None, timeout)
         })
         .await;
+        info!(
+            "kafka: connection validation result: {}",
+            if result.is_ok() { "success" } else { "failed" },
+        );
         match result {
             Ok(_) => Ok(()),
             // The error returned by `fetch_metadata` does not provide any details which makes for
@@ -1234,6 +1268,48 @@ impl KafkaConnection {
                     None => Err(err.into()),
                 }
             }
+        }
+    }
+
+    /// The "default" PrivateLink connection is used for bootstrapping Kafka.
+    fn from_default_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(
+                pl.connection_id,
+                None, // Default tunnel does not support availability zones.
+            ),
+            port: pl.port,
+        }
+    }
+
+    /// The "not default" PrivateLink connections are used for routing to specific Kafka brokers.
+    fn from_aws_privatelink(pl: &AwsPrivatelink) -> BrokerRewrite {
+        BrokerRewrite {
+            host: vpc_endpoint_host(pl.connection_id, pl.availability_zone.as_deref()),
+            port: pl.port,
+        }
+    }
+
+    fn from_aws_privatelink_rule(
+        AwsPrivatelinkRule { pattern, to }: &AwsPrivatelinkRule,
+    ) -> (mz_kafka_util::client::ConnectionRulePattern, BrokerRewrite) {
+        (
+            mz_kafka_util::client::ConnectionRulePattern {
+                prefix_wildcard: pattern.prefix_wildcard,
+                literal_match: pattern.literal_match.clone(),
+                suffix_wildcard: pattern.suffix_wildcard,
+            },
+            KafkaConnection::from_aws_privatelink(to),
+        )
+    }
+
+    fn from_aws_privatelinks(pl: &AwsPrivatelinks) -> HostMappingRules {
+        HostMappingRules {
+            rules: pl
+                .rules
+                .iter()
+                .map(KafkaConnection::from_aws_privatelink_rule)
+                .collect_vec(),
         }
     }
 }
@@ -1453,6 +1529,9 @@ impl CsrConnection {
                     .context("resolving PrivateLink host")?
                     .collect();
                 client_config = client_config.resolve_to_addrs(host, &addrs)
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
             }
         }
 
@@ -1712,6 +1791,9 @@ impl PostgresConnection<InlinedConnection> {
                     connection_id: connection.connection_id,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         };
 
         Ok(mz_postgres_util::Config::new(
@@ -1847,6 +1929,7 @@ pub enum Tunnel<C: ConnectionAccess = InlinedConnection> {
     Ssh(SshTunnel<C>),
     /// Via the specified AWS PrivateLink connection.
     AwsPrivatelink(AwsPrivatelink),
+    AwsPrivatelinks(AwsPrivatelinks),
 }
 
 impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<ReferencedConnection> {
@@ -1855,6 +1938,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<Tunnel, R> for Tunnel<Reference
             Tunnel::Direct => Tunnel::Direct,
             Tunnel::Ssh(ssh) => Tunnel::Ssh(ssh.into_inline_connection(r)),
             Tunnel::AwsPrivatelink(awspl) => Tunnel::AwsPrivatelink(awspl),
+            Tunnel::AwsPrivatelinks(x) => Tunnel::AwsPrivatelinks(x),
         }
     }
 }
@@ -2063,6 +2147,9 @@ impl MySqlConnection<InlinedConnection> {
                 mz_mysql_util::TunnelConfig::AwsPrivatelink {
                     connection_id: connection.connection_id,
                 }
+            }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
             }
         };
 
@@ -2390,6 +2477,9 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                     port: self.port,
                 }
             }
+            Tunnel::AwsPrivatelinks(_) => {
+                unreachable!("MATCHING broker rules are only available for Kafka connections.");
+            }
         };
 
         Ok(mz_sql_server_util::Config::new(
@@ -2551,6 +2641,22 @@ impl AlterCompatible for AwsPrivatelink {
 
         Ok(())
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinks {
+    /// Route to brokers through PrivateLink connections according to these rules.
+    /// Exact-match rules (no wildcards) are used as bootstrap brokers.
+    /// Wildcard rules are applied dynamically to discovered brokers.
+    pub rules: Vec<AwsPrivatelinkRule>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct AwsPrivatelinkRule {
+    /// Given a broker's host:port, should we use this route?
+    pub pattern: ConnectionRulePattern,
+    /// Route to the broker through this PrivateLink connection.
+    pub to: AwsPrivatelink,
 }
 
 /// Specifies an SSH tunnel connection.

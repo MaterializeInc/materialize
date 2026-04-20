@@ -1935,6 +1935,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_kafka_broker_matching_rules,
+        desc: "MATCHING broker rules in BROKERS for Kafka PrivateLink connections",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_alter_set_cluster,
         desc: "ALTER ... SET CLUSTER syntax",
         default: false,
