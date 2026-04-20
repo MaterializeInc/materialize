@@ -282,14 +282,14 @@ pub trait StorageCollections: Debug + Sync {
     ///
     /// Identifiers not present in `policies` retain their existing read
     /// policies.
-    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>);
+    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy)>);
 
     /// Acquires and returns the earliest possible read holds for the specified
     /// collections.
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Timestamp>>, CollectionMissing>;
+    ) -> Result<Vec<ReadHold>, CollectionMissing>;
 
     /// Get the time dependence for a storage collection. Returns no value if unknown or if
     /// the object isn't managed by storage.
@@ -1120,7 +1120,7 @@ impl StorageCollectionsImpl {
     fn set_read_policies_inner(
         &self,
         collections: &mut BTreeMap<GlobalId, CollectionState>,
-        policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>,
+        policies: Vec<(GlobalId, ReadPolicy)>,
     ) {
         trace!("set_read_policies: {:?}", policies);
 
@@ -2203,7 +2203,7 @@ impl StorageCollections for StorageCollectionsImpl {
         self.synchronize_finalized_shards(storage_metadata);
     }
 
-    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>) {
+    fn set_read_policies(&self, policies: Vec<(GlobalId, ReadPolicy)>) {
         let mut collections = self.collections.lock().expect("lock poisoned");
 
         if tracing::enabled!(tracing::Level::TRACE) {
@@ -2238,7 +2238,7 @@ impl StorageCollections for StorageCollectionsImpl {
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Timestamp>>, CollectionMissing> {
+    ) -> Result<Vec<ReadHold>, CollectionMissing> {
         if desired_holds.is_empty() {
             return Ok(vec![]);
         }
@@ -2497,7 +2497,7 @@ struct CollectionState {
     pub implied_capability: Antichain<Timestamp>,
 
     /// The policy to use to downgrade `self.implied_capability`.
-    pub read_policy: ReadPolicy<Timestamp>,
+    pub read_policy: ReadPolicy,
 
     /// Storage identifiers on which this collection depends.
     pub storage_dependencies: Vec<GlobalId>,

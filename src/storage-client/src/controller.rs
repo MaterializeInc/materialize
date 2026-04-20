@@ -767,10 +767,10 @@ pub struct ExportState {
     /// The read holds that this export has on its dependencies (its input and itself). When
     /// the upper of the export changes, we downgrade this, which in turn
     /// downgrades holds we have on our dependencies' sinces.
-    pub read_holds: [ReadHold<Timestamp>; 2],
+    pub read_holds: [ReadHold; 2],
 
     /// The policy to use to downgrade `self.read_capability`.
-    pub read_policy: ReadPolicy<Timestamp>,
+    pub read_policy: ReadPolicy,
 
     /// Reported write frontier.
     pub write_frontier: Antichain<Timestamp>,
@@ -779,10 +779,10 @@ pub struct ExportState {
 impl ExportState {
     pub fn new(
         cluster_id: StorageInstanceId,
-        read_hold: ReadHold<Timestamp>,
-        self_hold: ReadHold<Timestamp>,
+        read_hold: ReadHold,
+        self_hold: ReadHold,
         write_frontier: Antichain<Timestamp>,
-        read_policy: ReadPolicy<Timestamp>,
+        read_policy: ReadPolicy,
     ) -> Self {
         let mut dependency_since = Antichain::from_elem(Timestamp::MIN);
         for read_hold in [&read_hold, &self_hold] {
@@ -804,7 +804,7 @@ impl ExportState {
     }
 
     /// Returns the cluster to which the export is bound.
-    pub fn input_hold(&self) -> &ReadHold<Timestamp> {
+    pub fn input_hold(&self) -> &ReadHold {
         &self.read_holds[0]
     }
 

@@ -25,7 +25,7 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_ore::{assert_none, soft_panic_or_log};
-use mz_repr::{Diff, Row};
+use mz_repr::{Diff, Row, Timestamp};
 
 use crate::plan::join::JoinPlan;
 use crate::plan::reduce::{KeyValPlan, ReducePlan};
@@ -47,7 +47,7 @@ use crate::plan::{AvailableCollections, GetPlan, Plan, PlanNode};
 /// [tagless final encoding]: <https://okmij.org/ftp/tagless-final/>
 ///
 /// TODO(database-issues#7446): align this with the `Plan` structure
-pub trait Interpreter<T = mz_repr::Timestamp> {
+pub trait Interpreter {
     /// TODO(database-issues#7533): Add documentation.
     type Domain: Debug + Sized;
 
@@ -55,7 +55,7 @@ pub trait Interpreter<T = mz_repr::Timestamp> {
     fn constant(
         &self,
         ctx: &Context<Self::Domain>,
-        rows: &Result<Vec<(Row, T, Diff)>, EvalError>,
+        rows: &Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
     ) -> Self::Domain;
 
     /// TODO(database-issues#7533): Add documentation.
@@ -212,17 +212,17 @@ const MAX_LET_REC_ITERATIONS: u64 = 100;
 /// A wrapper for a recursive fold invocation over a [Plan] that cannot
 /// mutate its input.
 #[allow(missing_debug_implementations)]
-pub struct Fold<I, T>
+pub struct Fold<I>
 where
-    I: Interpreter<T>,
+    I: Interpreter,
 {
     interpret: I,
     ctx: Context<I::Domain>,
 }
 
-impl<I, T> Fold<I, T>
+impl<I> Fold<I>
 where
-    I: Interpreter<T>,
+    I: Interpreter,
     I::Domain: BoundedLattice + Clone,
 {
     /// TODO(database-issues#7533): Add documentation.
@@ -238,13 +238,13 @@ where
     /// Runs an abstract interpreter over the given `expr` in a bottom-up
     /// manner, keeping the `ctx` field of the enclosing field up to date, and
     /// returns the final result for the entire `expr`.
-    pub fn apply(&mut self, expr: &Plan<T>) -> Result<I::Domain, RecursionLimitError> {
+    pub fn apply(&mut self, expr: &Plan) -> Result<I::Domain, RecursionLimitError> {
         self.apply_rec(expr, &RecursionGuard::with_limit(RECURSION_LIMIT))
     }
 
     fn apply_rec(
         &mut self,
-        expr: &Plan<T>,
+        expr: &Plan,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
         use PlanNode::*;
@@ -460,20 +460,20 @@ where
 /// A wrapper for a recursive fold invocation over a [Plan] that can
 /// mutate its input.
 #[allow(missing_debug_implementations)]
-pub struct FoldMut<I, T, Action>
+pub struct FoldMut<I, Action>
 where
-    I: Interpreter<T>,
+    I: Interpreter,
 {
     interpret: I,
     action: Action,
     ctx: Context<I::Domain>,
 }
 
-impl<I, T, A> FoldMut<I, T, A>
+impl<I, A> FoldMut<I, A>
 where
-    I: Interpreter<T>,
+    I: Interpreter,
     I::Domain: BoundedLattice + Clone,
-    A: FnMut(&mut Plan<T>, &I::Domain, &[I::Domain]),
+    A: FnMut(&mut Plan, &I::Domain, &[I::Domain]),
 {
     /// TODO(database-issues#7533): Add documentation.
     pub fn new(interpreter: I, action: A) -> Self {
@@ -493,13 +493,13 @@ where
     /// At each step, the current `expr` is passed along with the interpretation
     /// result of itself and its children to an `action` callback that can
     /// optionally mutate it.
-    pub fn apply(&mut self, expr: &mut Plan<T>) -> Result<I::Domain, RecursionLimitError> {
+    pub fn apply(&mut self, expr: &mut Plan) -> Result<I::Domain, RecursionLimitError> {
         self.apply_rec(expr, &RecursionGuard::with_limit(RECURSION_LIMIT))
     }
 
     fn apply_rec(
         &mut self,
-        expr: &mut Plan<T>,
+        expr: &mut Plan,
         rg: &RecursionGuard,
     ) -> Result<I::Domain, RecursionLimitError> {
         use PlanNode::*;

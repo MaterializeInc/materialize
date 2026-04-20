@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use derivative::Derivative;
 use itertools::Itertools;
-use mz_repr::TimestampManipulation;
+use mz_repr::Timestamp;
 use serde::Serialize;
+use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
-use timely::progress::{Antichain, Timestamp};
 
 /// Compaction policies for collections maintained by `Controller`.
 ///
@@ -22,13 +22,13 @@ use timely::progress::{Antichain, Timestamp};
 /// because it is fundamental to both storage and compute.
 #[derive(Clone, Derivative, Serialize)]
 #[derivative(Debug)]
-pub enum ReadPolicy<T> {
+pub enum ReadPolicy {
     /// No-one has yet requested a `ReadPolicy` from us, which means that we can
     /// still change the implied_capability/the collection since if we need
     /// to.
-    NoPolicy { initial_since: Antichain<T> },
+    NoPolicy { initial_since: Antichain<Timestamp> },
     /// Maintain the collection as valid from this frontier onward.
-    ValidFrom(Antichain<T>),
+    ValidFrom(Antichain<Timestamp>),
     /// Maintain the collection as valid from a function of the write frontier.
     ///
     /// This function will only be re-evaluated when the write frontier changes.
@@ -39,51 +39,40 @@ pub enum ReadPolicy<T> {
     LagWriteFrontier(
         #[derivative(Debug = "ignore")]
         #[serde(skip)]
-        Arc<dyn Fn(AntichainRef<T>) -> Antichain<T> + Send + Sync>,
+        Arc<dyn Fn(AntichainRef<Timestamp>) -> Antichain<Timestamp> + Send + Sync>,
     ),
     /// Allows one to express multiple read policies, taking the least of
     /// the resulting frontiers.
-    Multiple(Vec<ReadPolicy<T>>),
+    Multiple(Vec<ReadPolicy>),
 }
 
-impl<T> ReadPolicy<T>
-where
-    T: Timestamp + TimestampManipulation,
-{
+impl ReadPolicy {
     /// Creates a read policy that lags the write frontier "by one".
     pub fn step_back() -> Self {
         Self::LagWriteFrontier(Arc::new(move |upper| {
             if upper.is_empty() {
-                Antichain::from_elem(Timestamp::minimum())
+                Antichain::from_elem(Timestamp::MIN)
             } else {
                 let stepped_back = upper
                     .to_owned()
                     .into_iter()
-                    .map(|time| {
-                        if time == T::minimum() {
-                            time
-                        } else {
-                            time.step_back().unwrap()
-                        }
-                    })
+                    .map(|t| t.step_back().unwrap_or(Timestamp::MIN))
                     .collect_vec();
                 stepped_back.into()
             }
         }))
     }
-}
 
-impl ReadPolicy<mz_repr::Timestamp> {
     /// Creates a read policy that lags the write frontier by the indicated amount, rounded down to (at most) the specified value.
     /// The rounding down is done to reduce the number of changes the capability undergoes.
-    pub fn lag_writes_by(lag: mz_repr::Timestamp, max_granularity: mz_repr::Timestamp) -> Self {
+    pub fn lag_writes_by(lag: Timestamp, max_granularity: Timestamp) -> Self {
         Self::LagWriteFrontier(Arc::new(move |upper| {
             if upper.is_empty() {
-                Antichain::from_elem(Timestamp::minimum())
+                Antichain::from_elem(Timestamp::MIN)
             } else {
                 // Subtract the lag from the time, and then round down to a multiple of `granularity` to cut chatter.
                 let mut time = upper[0];
-                if lag != mz_repr::Timestamp::default() {
+                if lag != Timestamp::default() {
                     time = time.saturating_sub(lag);
                     // It makes little sense to refuse to compact if the user genuinely
                     // sets a smaller compaction window than the default, so honor it here.
@@ -94,10 +83,8 @@ impl ReadPolicy<mz_repr::Timestamp> {
             }
         }))
     }
-}
 
-impl<T: Timestamp> ReadPolicy<T> {
-    pub fn frontier(&self, write_frontier: AntichainRef<T>) -> Antichain<T> {
+    pub fn frontier(&self, write_frontier: AntichainRef<Timestamp>) -> Antichain<Timestamp> {
         match self {
             ReadPolicy::NoPolicy { initial_since } => initial_since.clone(),
             ReadPolicy::ValidFrom(frontier) => frontier.clone(),

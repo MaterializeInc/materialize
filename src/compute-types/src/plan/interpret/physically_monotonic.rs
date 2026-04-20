@@ -12,11 +12,10 @@
 
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
-use std::marker::PhantomData;
 
 use differential_dataflow::lattice::Lattice;
 use mz_expr::{EvalError, Id, MapFilterProject, MirScalarExpr, TableFunc};
-use mz_repr::{Diff, GlobalId, Row};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use timely::PartialOrder;
 
 use crate::plan::interpret::{BoundedLattice, Context, Interpreter};
@@ -70,29 +69,25 @@ impl PartialOrder for PhysicallyMonotonic {
 /// of retractions in a stream, enables us to disable forced consolidation
 /// whenever possible.
 #[derive(Debug)]
-pub struct SingleTimeMonotonic<'a, T = mz_repr::Timestamp> {
+pub struct SingleTimeMonotonic<'a> {
     monotonic_ids: &'a BTreeSet<GlobalId>,
-    _phantom: PhantomData<T>,
 }
 
-impl<'a, T> SingleTimeMonotonic<'a, T> {
+impl<'a> SingleTimeMonotonic<'a> {
     /// Instantiates an interpreter for single-time physical monotonicity
     /// analysis.
     pub fn new(monotonic_ids: &'a BTreeSet<GlobalId>) -> Self {
-        SingleTimeMonotonic {
-            monotonic_ids,
-            _phantom: Default::default(),
-        }
+        SingleTimeMonotonic { monotonic_ids }
     }
 }
 
-impl<T> Interpreter<T> for SingleTimeMonotonic<'_, T> {
+impl Interpreter for SingleTimeMonotonic<'_> {
     type Domain = PhysicallyMonotonic;
 
     fn constant(
         &self,
         _ctx: &Context<Self::Domain>,
-        rows: &Result<Vec<(Row, T, Diff)>, EvalError>,
+        rows: &Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
     ) -> Self::Domain {
         // A constant is physically monotonic iff the constant is an `EvalError`
         // or all its rows have `Diff` values greater than zero.

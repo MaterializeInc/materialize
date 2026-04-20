@@ -208,7 +208,7 @@ pub(super) struct Instance {
     ///
     /// Copies of this sender are given to [`ReadHold`]s that are created in
     /// [`CollectionState::new`].
-    read_hold_tx: read_holds::ChangeTx<Timestamp>,
+    read_hold_tx: read_holds::ChangeTx,
     /// A sender for responses from replicas.
     replica_tx: mz_ore::channel::InstrumentedUnboundedSender<ReplicaResponse, IntCounter>,
     /// A receiver for responses from replicas.
@@ -277,9 +277,9 @@ impl Instance {
         id: GlobalId,
         as_of: Antichain<Timestamp>,
         shared: SharedCollectionState,
-        storage_dependencies: BTreeMap<GlobalId, ReadHold<Timestamp>>,
-        compute_dependencies: BTreeMap<GlobalId, ReadHold<Timestamp>>,
-        replica_input_read_holds: Vec<ReadHold<Timestamp>>,
+        storage_dependencies: BTreeMap<GlobalId, ReadHold>,
+        compute_dependencies: BTreeMap<GlobalId, ReadHold>,
+        replica_input_read_holds: Vec<ReadHold>,
         write_only: bool,
         storage_sink: bool,
         initial_as_of: Option<Antichain<Timestamp>>,
@@ -885,7 +885,7 @@ impl Instance {
         dyncfg: Arc<ConfigSet>,
         command_rx: mpsc::UnboundedReceiver<Command>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse>,
-        read_hold_tx: read_holds::ChangeTx<Timestamp>,
+        read_hold_tx: read_holds::ChangeTx,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
         read_only: bool,
     ) -> Self {
@@ -1269,7 +1269,7 @@ impl Instance {
     pub fn create_dataflow(
         &mut self,
         dataflow: DataflowDescription<mz_compute_types::plan::Plan, ()>,
-        import_read_holds: Vec<ReadHold<Timestamp>>,
+        import_read_holds: Vec<ReadHold>,
         mut shared_collection_state: BTreeMap<GlobalId, SharedCollectionState>,
         target_replica: Option<ReplicaId>,
     ) -> Result<(), DataflowCreationError> {
@@ -1628,7 +1628,7 @@ impl Instance {
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        mut read_hold: ReadHold<Timestamp>,
+        mut read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
@@ -1724,7 +1724,7 @@ impl Instance {
     #[mz_ore::instrument(level = "debug")]
     pub fn set_read_policy(
         &mut self,
-        policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>,
+        policies: Vec<(GlobalId, ReadPolicy)>,
     ) -> Result<(), ReadPolicyError> {
         // Do error checking upfront, to avoid introducing inconsistencies between a collection's
         // `implied_capability` and `read_capabilities`.
@@ -2327,10 +2327,7 @@ impl Instance {
     ///
     /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
     /// but executes on the instance task itself.
-    pub(super) fn acquire_read_hold(
-        &self,
-        id: GlobalId,
-    ) -> Result<ReadHold<Timestamp>, CollectionMissing> {
+    pub(super) fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold, CollectionMissing> {
         // Similarly to InstanceState::acquire_read_hold and StorageCollections::acquire_read_holds,
         // we acquire read holds at the earliest possible time rather than returning a copy
         // of the implied read hold. This is so that dependents can acquire read holds on
@@ -2400,7 +2397,7 @@ struct CollectionState {
     /// `read_policy`. It also ensures that read holds on the collection's dependencies are kept at
     /// some time not greater than the collection's `write_frontier`, guaranteeing that the
     /// collection's next outputs can always be computed without skipping times.
-    implied_read_hold: ReadHold<Timestamp>,
+    implied_read_hold: ReadHold,
     /// A read hold held to enable dataflow warmup.
     ///
     /// Dataflow warmup is an optimization that allows dataflows to immediately start hydrating
@@ -2408,20 +2405,20 @@ struct CollectionState {
     /// By installing a read capability derived from the write frontiers of the collection's
     /// inputs, we ensure that the as-of of new dataflows installed for the collection is at a time
     /// that is immediately available, so hydration can begin immediately too.
-    warmup_read_hold: ReadHold<Timestamp>,
+    warmup_read_hold: ReadHold,
     /// The policy to use to downgrade `self.implied_read_hold`.
     ///
     /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
     /// collections, the `implied_read_hold` is only required for maintaining read holds on the
     /// inputs, so we can immediately downgrade it to the `write_frontier`.
-    read_policy: Option<ReadPolicy<Timestamp>>,
+    read_policy: Option<ReadPolicy>,
 
     /// Storage identifiers on which this collection depends, and read holds this collection
     /// requires on them.
-    storage_dependencies: BTreeMap<GlobalId, ReadHold<Timestamp>>,
+    storage_dependencies: BTreeMap<GlobalId, ReadHold>,
     /// Compute identifiers on which this collection depends, and read holds this collection
     /// requires on them.
-    compute_dependencies: BTreeMap<GlobalId, ReadHold<Timestamp>>,
+    compute_dependencies: BTreeMap<GlobalId, ReadHold>,
 
     /// Introspection state associated with this collection.
     introspection: CollectionIntrospection,
@@ -2450,9 +2447,9 @@ impl CollectionState {
         collection_id: GlobalId,
         as_of: Antichain<Timestamp>,
         shared: SharedCollectionState,
-        storage_dependencies: BTreeMap<GlobalId, ReadHold<Timestamp>>,
-        compute_dependencies: BTreeMap<GlobalId, ReadHold<Timestamp>>,
-        read_hold_tx: read_holds::ChangeTx<Timestamp>,
+        storage_dependencies: BTreeMap<GlobalId, ReadHold>,
+        compute_dependencies: BTreeMap<GlobalId, ReadHold>,
+        read_hold_tx: read_holds::ChangeTx,
         introspection: CollectionIntrospection,
     ) -> Self {
         // A collection is not readable before the `as_of`.
@@ -2505,7 +2502,7 @@ impl CollectionState {
     fn new_log_collection(
         id: GlobalId,
         shared: SharedCollectionState,
-        read_hold_tx: read_holds::ChangeTx<Timestamp>,
+        read_hold_tx: read_holds::ChangeTx,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
     ) -> Self {
         let since = Antichain::from_elem(Timestamp::MIN);
@@ -2943,7 +2940,7 @@ struct PendingPeek {
     /// Used to track peek durations.
     requested_at: Instant,
     /// The read hold installed to serve this peek.
-    read_hold: ReadHold<Timestamp>,
+    read_hold: ReadHold,
     /// The channel to send peek results.
     peek_response_tx: oneshot::Sender<PeekResponse>,
     /// An optional limit of the peek's result size.
@@ -3014,7 +3011,7 @@ impl ReplicaState {
         &mut self,
         id: GlobalId,
         as_of: Antichain<Timestamp>,
-        input_read_holds: Vec<ReadHold<Timestamp>>,
+        input_read_holds: Vec<ReadHold>,
     ) {
         let metrics = self.metrics.for_collection(id);
         let introspection = ReplicaCollectionIntrospection::new(
@@ -3114,7 +3111,7 @@ struct ReplicaCollectionState {
     /// These read holds are kept to ensure that the replica is able to read from storage inputs at
     /// all times it hasn't read yet. We only need to install read holds for storage inputs since
     /// compaction of compute inputs is implicitly held back by Timely/DD.
-    input_read_holds: Vec<ReadHold<Timestamp>>,
+    input_read_holds: Vec<ReadHold>,
 
     /// Maximum frontier wallclock lag since the last `WallclockLagHistory` introspection update.
     ///
@@ -3127,7 +3124,7 @@ impl ReplicaCollectionState {
         metrics: Option<ReplicaCollectionMetrics>,
         as_of: Antichain<Timestamp>,
         introspection: ReplicaCollectionIntrospection,
-        input_read_holds: Vec<ReadHold<Timestamp>>,
+        input_read_holds: Vec<ReadHold>,
     ) -> Self {
         Self {
             write_frontier: as_of.clone(),

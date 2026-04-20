@@ -3494,7 +3494,7 @@ impl Coordinator {
     /// This method expects all storage collections and dataflow plans to be available, so it must
     /// run after [`Coordinator::bootstrap_storage_collections`] and
     /// [`Coordinator::bootstrap_dataflow_plans`].
-    async fn bootstrap_dataflow_as_ofs(&mut self) -> BTreeMap<GlobalId, ReadHold<Timestamp>> {
+    async fn bootstrap_dataflow_as_ofs(&mut self) -> BTreeMap<GlobalId, ReadHold> {
         let mut catalog_ids = Vec::new();
         let mut dataflows = Vec::new();
         let mut read_policies = BTreeMap::new();

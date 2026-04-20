@@ -943,7 +943,7 @@ impl ComputeController {
     pub fn set_read_policy(
         &self,
         instance_id: ComputeInstanceId,
-        policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>,
+        policies: Vec<(GlobalId, ReadPolicy)>,
     ) -> Result<(), ReadPolicyError> {
         use ReadPolicyError::*;
 
@@ -968,7 +968,7 @@ impl ComputeController {
         &self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
-    ) -> Result<ReadHold<Timestamp>, CollectionUpdateError> {
+    ) -> Result<ReadHold, CollectionUpdateError> {
         let read_hold = self
             .instance(instance_id)?
             .acquire_read_hold(collection_id)?;
@@ -1114,10 +1114,7 @@ impl InstanceState {
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
-    pub fn acquire_read_hold(
-        &self,
-        id: GlobalId,
-    ) -> Result<ReadHold<Timestamp>, CollectionMissing> {
+    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold, CollectionMissing> {
         // We acquire read holds at the earliest possible time rather than returning a copy
         // of the implied read hold. This is so that in `create_dataflow` we can acquire read holds
         // on compute dependencies at frontiers that are held back by other read holds the caller

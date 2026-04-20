@@ -100,11 +100,11 @@ use tracing::{info, warn};
 /// with the compute controller.
 pub fn run(
     dataflows: &mut [DataflowDescription<Plan, ()>],
-    read_policies: &BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
+    read_policies: &BTreeMap<GlobalId, ReadPolicy>,
     storage_collections: &dyn StorageCollections,
     current_time: Timestamp,
     read_only_mode: bool,
-) -> BTreeMap<GlobalId, ReadHold<Timestamp>> {
+) -> BTreeMap<GlobalId, ReadHold> {
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
     let mut storage_read_holds = BTreeMap::new();
@@ -321,7 +321,7 @@ impl Constraint<'_> {
 struct Collection<'a> {
     storage_inputs: Vec<GlobalId>,
     compute_inputs: Vec<GlobalId>,
-    read_policy: Option<&'a ReadPolicy<Timestamp>>,
+    read_policy: Option<&'a ReadPolicy>,
     /// The currently known as-of bounds.
     ///
     /// Shared between collections exported by the same dataflow.
@@ -342,7 +342,7 @@ impl<'a> Context<'a> {
     fn new(
         dataflows: &[DataflowDescription<Plan, ()>],
         storage_collections: &'a dyn StorageCollections,
-        read_policies: &'a BTreeMap<GlobalId, ReadPolicy<Timestamp>>,
+        read_policies: &'a BTreeMap<GlobalId, ReadPolicy>,
         current_time: Timestamp,
     ) -> Self {
         // Construct initial collection state for each dataflow export. Dataflows might have their
@@ -427,7 +427,7 @@ impl<'a> Context<'a> {
     /// not be able to hydrate successfully.
     fn apply_upstream_storage_constraints(
         &self,
-        storage_read_holds: &BTreeMap<GlobalId, ReadHold<Timestamp>>,
+        storage_read_holds: &BTreeMap<GlobalId, ReadHold>,
     ) {
         // Apply direct constraints from storage inputs.
         for (id, collection) in &self.collections {
@@ -1027,14 +1027,14 @@ mod tests {
             unimplemented!()
         }
 
-        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy<Timestamp>)>) {
+        fn set_read_policies(&self, _policies: Vec<(GlobalId, ReadPolicy)>) {
             unimplemented!()
         }
 
         fn acquire_read_holds(
             &self,
             desired_holds: Vec<GlobalId>,
-        ) -> Result<Vec<ReadHold<Timestamp>>, CollectionMissing> {
+        ) -> Result<Vec<ReadHold>, CollectionMissing> {
             let mut holds = Vec::with_capacity(desired_holds.len());
             for id in desired_holds {
                 let (read, _write) = self.0.get(&id).ok_or(CollectionMissing(id))?;

@@ -101,11 +101,11 @@ pub struct InstanceClient {
     command_tx: mpsc::UnboundedSender<Command>,
     /// A sender for read hold changes for collections installed on the instance.
     #[derivative(Debug = "ignore")]
-    read_hold_tx: read_holds::ChangeTx<Timestamp>,
+    read_hold_tx: read_holds::ChangeTx,
 }
 
 impl InstanceClient {
-    pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx<Timestamp> {
+    pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx {
         Arc::clone(&self.read_hold_tx)
     }
 
@@ -163,7 +163,7 @@ impl InstanceClient {
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
-        let read_hold_tx: read_holds::ChangeTx<_> = {
+        let read_hold_tx: read_holds::ChangeTx = {
             let command_tx = command_tx.clone();
             Arc::new(move |id, change: ChangeBatch<_>| {
                 let cmd: Command = {
@@ -205,8 +205,7 @@ impl InstanceClient {
     pub async fn acquire_read_holds_and_collection_write_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, ReadHold<Timestamp>, Antichain<Timestamp>)>, AcquireReadHoldsError>
-    {
+    ) -> Result<Vec<(GlobalId, ReadHold, Antichain<Timestamp>)>, AcquireReadHoldsError> {
         self.call_sync(move |i| {
             let mut result = Vec::new();
             for id in ids.into_iter() {
@@ -233,7 +232,7 @@ impl InstanceClient {
         result_desc: RelationDesc,
         finishing: RowSetFinishing,
         map_filter_project: mz_expr::SafeMfpPlan,
-        target_read_hold: ReadHold<Timestamp>,
+        target_read_hold: ReadHold,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
     ) -> Result<(), PeekError> {
