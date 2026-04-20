@@ -28,7 +28,6 @@ use timely::progress::frontier::AntichainRef;
 
 use super::KVUpdates;
 use super::batch::{FactBatch, FactBuilder};
-use super::column::FactColumn;
 
 /// Build a FactBatch from sorted data with a given description.
 fn build_fact_batch(
@@ -36,9 +35,8 @@ fn build_fact_batch(
     lower: u64,
     upper: u64,
 ) -> FactBatch<u64, u64, u64, i64> {
-    let mut chunk = FactColumn::Typed(KVUpdates::<u64, u64, u64, i64>::form(
-        data.iter().map(|(k, v, t, d)| (k, v, (t, d))),
-    ));
+    let mut chunk =
+        KVUpdates::<u64, u64, u64, i64>::form(data.iter().map(|(k, v, t, d)| (k, v, (t, d))));
     let mut builder = FactBuilder::with_capacity(0, 0, 0);
     builder.push(&mut chunk);
     builder.done(Description::new(

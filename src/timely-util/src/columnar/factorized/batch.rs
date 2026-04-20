@@ -650,17 +650,14 @@ where
 
 // --- Builder ---
 
-/// A builder for [`FactBatch`] that receives sorted [`FactColumn`] chunks.
+/// A builder for [`FactBatch`] that receives sorted factorized trie chunks.
 ///
-/// Chunks arrive pre-sorted and pre-consolidated from the batcher pipeline,
-/// either as `FactColumn::Typed` (from `reduce_abelian` / threshold output) or
-/// `FactColumn::Align` (serialized by the merge batcher). Internally all chunks
-/// are kept in their borrowed form; [`done`](Builder::done) iterates every
-/// `(k, v, (t, r))` leaf tuple in sort order and feeds them through
-/// [`KVUpdates::form`] to produce a single fully-deduplicated trie.
+/// Chunks arrive pre-sorted and pre-consolidated from the batcher pipeline, with
+/// consecutive chunks holding disjoint key ranges. [`done`](Builder::done) flattens
+/// the chain through [`KVUpdates::form`] to produce a single fully-deduplicated trie.
 pub struct FactBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
-    /// Accumulated chunks; flattened in `done()`.
-    chunks: Vec<FactColumn<K, V, T, R>>,
+    /// Accumulated trie chunks; flattened in `done()`.
+    chunks: Vec<KVUpdates<K, V, T, R>>,
 }
 
 impl<K, V, T, R> Builder for FactBuilder<K, V, T, R>
@@ -674,7 +671,7 @@ where
     R: Columnar + Ord + Clone + Semigroup + 'static,
     for<'a> columnar::Ref<'a, R>: Ord + Copy,
 {
-    type Input = FactColumn<K, V, T, R>;
+    type Input = KVUpdates<K, V, T, R>;
     type Time = T;
     type Output = FactBatch<K, V, T, R>;
 
@@ -687,20 +684,8 @@ where
     }
 
     fn done(self, description: Description<T>) -> FactBatch<K, V, T, R> {
-        let mut updates = 0usize;
-        let mut storage = KVUpdates::<K, V, T, R>::default();
-        for chunk in &self.chunks {
-            let b = chunk.borrow();
-            updates += Len::len(&b.rest.rest.values.0);
-            push_borrowed_level_into::<K, V, T, R>(&mut storage, &b);
-        }
-        // Seal the single outer group containing all keys.
-        if Len::len(&storage.lists.values.borrow()) > 0 {
-            columnar::Push::push(
-                &mut storage.lists.bounds,
-                u64::cast_from(Len::len(&storage.lists.values.borrow())),
-            );
-        }
+        let updates: usize = self.chunks.iter().map(|c| c.len()).sum();
+        let storage = KVUpdates::<K, V, T, R>::form(self.chunks.iter().flat_map(|c| c.iter()));
         FactBatch {
             storage,
             description,
@@ -717,54 +702,69 @@ where
     }
 }
 
-/// Append a borrowed trie chunk's keys / vals / leaves onto `output`.
+// --- Column-input Builder ---
+
+/// A builder for [`FactBatch`] that accepts [`FactColumn`] chunks.
 ///
-/// Assumes that `output` is either empty or that the last key in `output` is
-/// strictly less than `level`'s first key — the invariant that the merger's
-/// seal output maintains across adjacent chunks. Seals leaf and val bounds
-/// inline; leaves outer bounds unsealed (the caller closes them once after
-/// processing all chunks).
-fn push_borrowed_level_into<K, V, T, R>(
-    output: &mut KVUpdates<K, V, T, R>,
-    level: &super::batcher::BorrowedKVUpdates<'_, K, V, T, R>,
-) where
-    K: Columnar,
-    V: Columnar,
-    T: Columnar,
-    R: Columnar,
+/// Parallel to [`FactBuilder`]. `FactBuilder::Input` is `KVUpdates` (fed by
+/// the batcher pipeline); `FactColBuilder::Input` is `FactColumn` (fed by
+/// `reduce_abelian` / `threshold_arrangement`, which need a `Bu::Input` that
+/// implements `Container + Default + ClearContainer + PushInto<((K, V), T, R)>`).
+///
+/// On `push`, the builder unwraps the `Typed` variant and takes ownership of
+/// its inner `KVUpdates`. `Bytes`/`Align` variants are not expected in this
+/// path (they arise from deserialization, not from reduce output) and panic.
+/// `done` flattens the chain through [`KVUpdates::form`] exactly like
+/// [`FactBuilder::done`].
+pub struct FactColBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
+    /// Accumulated trie chunks; flattened in `done()`.
+    chunks: Vec<KVUpdates<K, V, T, R>>,
+}
+
+impl<K, V, T, R> Builder for FactColBuilder<K, V, T, R>
+where
+    K: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, K>: Ord + Copy,
+    V: Columnar + Ord + Clone + 'static,
+    for<'a> columnar::Ref<'a, V>: Ord + Copy,
+    T: Columnar + Ord + Clone + Lattice + timely::progress::Timestamp + 'static,
+    for<'a> columnar::Ref<'a, T>: Ord + Copy,
+    R: Columnar + Ord + Clone + Semigroup + 'static,
+    for<'a> columnar::Ref<'a, R>: Ord + Copy,
 {
-    let outer_count = Len::len(&level.lists);
-    for outer in 0..outer_count {
-        for k_idx in super::child_range(level.lists.bounds, outer) {
-            let k_ref = level.lists.values.get(k_idx);
-            columnar::Push::push(&mut output.lists.values, k_ref);
+    type Input = FactColumn<K, V, T, R>;
+    type Time = T;
+    type Output = FactBatch<K, V, T, R>;
 
-            let v_range = super::child_range(level.rest.lists.bounds, k_idx);
-            for v_idx in v_range {
-                let v_ref = level.rest.lists.values.get(v_idx);
-                columnar::Push::push(&mut output.rest.lists.values, v_ref);
+    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
+        FactColBuilder { chunks: Vec::new() }
+    }
 
-                let l_range = super::child_range(level.rest.rest.bounds, v_idx);
-                for l_idx in l_range {
-                    columnar::Push::push(
-                        &mut output.rest.rest.values.0,
-                        level.rest.rest.values.0.get(l_idx),
-                    );
-                    columnar::Push::push(
-                        &mut output.rest.rest.values.1,
-                        level.rest.rest.values.1.get(l_idx),
-                    );
-                }
-                columnar::Push::push(
-                    &mut output.rest.rest.bounds,
-                    u64::cast_from(Len::len(&output.rest.rest.values.0.borrow())),
-                );
+    fn push(&mut self, chunk: &mut Self::Input) {
+        match std::mem::take(chunk) {
+            FactColumn::Typed(storage) => self.chunks.push(storage),
+            FactColumn::Bytes(_) | FactColumn::Align(_) => {
+                panic!("FactColBuilder::push received a non-Typed FactColumn variant");
             }
-            columnar::Push::push(
-                &mut output.rest.lists.bounds,
-                u64::cast_from(Len::len(&output.rest.lists.values.borrow())),
-            );
         }
+    }
+
+    fn done(self, description: Description<T>) -> FactBatch<K, V, T, R> {
+        let updates: usize = self.chunks.iter().map(|c| c.len()).sum();
+        let storage = KVUpdates::<K, V, T, R>::form(self.chunks.iter().flat_map(|c| c.iter()));
+        FactBatch {
+            storage,
+            description,
+            updates,
+        }
+    }
+
+    fn seal(chain: &mut Vec<Self::Input>, description: Description<T>) -> FactBatch<K, V, T, R> {
+        let mut builder = Self::with_capacity(0, 0, 0);
+        for mut chunk in chain.drain(..) {
+            builder.push(&mut chunk);
+        }
+        builder.done(description)
     }
 }
 
@@ -1009,11 +1009,9 @@ mod tests {
         assert_eq!(result, vec![(1, 10, vec![(500, 2)])]);
     }
 
-    /// Helper: build a sorted typed [`FactColumn`] chunk from tuples.
-    fn make_chunk_u64(data: &[(u64, u64, u64, i64)]) -> FactColumn<u64, u64, u64, i64> {
-        FactColumn::Typed(KVUpdates::<u64, u64, u64, i64>::form(
-            data.iter().map(|(k, v, t, d)| (k, v, (t, d))),
-        ))
+    /// Helper: build a sorted `KVUpdates` chunk from `(K, V, T, R)` tuples.
+    fn make_chunk_u64(data: &[(u64, u64, u64, i64)]) -> KVUpdates<u64, u64, u64, i64> {
+        KVUpdates::<u64, u64, u64, i64>::form(data.iter().map(|(k, v, t, d)| (k, v, (t, d))))
     }
 
     #[mz_ore::test]
@@ -1073,7 +1071,7 @@ mod tests {
     #[mz_ore::test]
     fn test_builder_empty() {
         let mut builder = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
-        builder.push(&mut FactColumn::<u64, u64, u64, i64>::default());
+        builder.push(&mut KVUpdates::<u64, u64, u64, i64>::default());
         let batch = builder.done(Description::new(
             Antichain::from_elem(0u64),
             Antichain::from_elem(1000u64),
@@ -1120,9 +1118,9 @@ mod tests {
             ((b"b".to_vec(), b"z".to_vec()), 100, 2),
         ];
         tuples.sort();
-        let mut chunk = FactColumn::Typed(KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+        let mut chunk = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
             tuples.iter().map(|((k, v), t, r)| (k, v, (t, r))),
-        ));
+        );
 
         let mut builder = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
         builder.push(&mut chunk);
@@ -1153,9 +1151,9 @@ mod tests {
         // Merge two Vec<u8>-keyed batches.
         let tuples2: Vec<((Vec<u8>, Vec<u8>), u64, i64)> =
             vec![((b"a".to_vec(), b"x".to_vec()), 300, 1)];
-        let mut chunk2 = FactColumn::Typed(KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+        let mut chunk2 = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
             tuples2.iter().map(|((k, v), t, r)| (k, v, (t, r))),
-        ));
+        );
         let mut b2 = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
         b2.push(&mut chunk2);
         let batch2 = b2.done(Description::new(

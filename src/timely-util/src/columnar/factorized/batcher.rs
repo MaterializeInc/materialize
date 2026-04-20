@@ -25,11 +25,9 @@
 //! The merger does **not** advance update times; time compaction is a batch-level
 //! concern applied inside [`crate::columnar::factorized::batch::FactMerger`].
 
-use std::io::Cursor;
 use std::marker::PhantomData;
 use std::ops::Range;
 
-use columnar::bytes::indexed;
 use columnar::{Borrow, Columnar, Index, Len};
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::trace::implementations::merge_batcher::Merger;
@@ -37,88 +35,34 @@ use mz_ore::cast::CastFrom;
 use timely::PartialOrder;
 use timely::progress::frontier::{Antichain, AntichainRef};
 
-use super::column::FactColumn;
-use super::{KVUpdates, Level, Lists, child_range};
+use super::{KVUpdates, child_range};
 
-/// Borrowed key-level view of a [`FactColumn`].
-pub(super) type BorrowedK<'a, K> = <Lists<columnar::ContainerOf<K>> as Borrow>::Borrowed<'a>;
-/// Borrowed val-level view of a [`FactColumn`].
-pub(super) type BorrowedV<'a, V> = <Lists<columnar::ContainerOf<V>> as Borrow>::Borrowed<'a>;
-/// Borrowed leaf-level view of a [`FactColumn`] — parallel `(T, R)` columns.
-pub(super) type BorrowedLeaf<'a, T, R> =
-    <Lists<(columnar::ContainerOf<T>, columnar::ContainerOf<R>)> as Borrow>::Borrowed<'a>;
-/// Borrowed view of a 3-level `(K, V, (T, R))` trie.
-pub(super) type BorrowedKVUpdates<'a, K, V, T, R> =
-    Level<BorrowedK<'a, K>, Level<BorrowedV<'a, V>, BorrowedLeaf<'a, T, R>>>;
-
-/// Compute the val index range for `key_idx` within a borrowed trie.
+/// Compute the val index range for `key_idx` within a `KVUpdates` chunk.
+///
+/// Free function rather than a method because [`KVUpdates`] is a type alias
+/// and cannot carry inherent impls.
 #[inline]
-fn val_range_in_level<K: Columnar, V: Columnar, T: Columnar, R: Columnar>(
-    level: &BorrowedKVUpdates<'_, K, V, T, R>,
+fn val_range_in_chunk<K: Columnar, V: Columnar, T: Columnar, R: Columnar>(
+    chunk: &KVUpdates<K, V, T, R>,
     key_idx: usize,
 ) -> Range<usize> {
-    child_range(level.rest.lists.bounds, key_idx)
+    child_range(chunk.rest.lists.bounds.borrow(), key_idx)
 }
 
-/// Target aligned-allocation stride in `u64` words — 2 MiB = `1 << 18` words.
+/// Target leaf count for an emitted chunk — byte-based: 2 MiB / sizeof::<(T, R)>().
 ///
-/// Used by [`should_freeze`] as the alignment unit for pre-allocating the
-/// aligned buffer that backs a [`FactColumn::Align`] chunk, and as the
-/// "fullness" target for emit decisions. Matches the stride used by
-/// [`crate::columnar::ColumnBuilder`].
-pub(super) const TARGET_WORDS: usize = 1 << 18;
-
-/// Returns `true` once `trie`'s serialized size is within 10% of the next
-/// 2 MiB boundary.
-///
-/// Mirrors the policy in [`crate::columnar::ColumnBuilder::push_into`]: probe
-/// [`indexed::length_in_words`] after each key boundary, round up to the next
-/// [`TARGET_WORDS`] stride, and declare the chunk "full" once the slop to that
-/// boundary falls under 10%. The adaptive rounding lets very dense tries grow
-/// past 2 MiB (to 4 MiB, 6 MiB, ...) rather than emitting dozens of tiny
-/// chunks; the 90%-threshold amortizes the one-off `indexed::write` cost.
+/// Replaces the old fixed `CHUNK_TARGET = 1024`. Byte-based sizing produces
+/// O(batch_size / 2 MiB) chunks regardless of tuple size, so merge passes
+/// through `MergeBatcher` amortize over fewer, larger chunks.
 #[inline]
-pub(super) fn should_freeze<K, V, T, R>(trie: &KVUpdates<K, V, T, R>) -> bool
-where
-    K: Columnar,
-    V: Columnar,
-    T: Columnar,
-    R: Columnar,
-{
-    let words = indexed::length_in_words(&trie.borrowed());
-    if words == 0 {
-        return false;
+fn chunk_target_leaves<T, R>() -> usize {
+    const TARGET_BYTES: usize = 2 * 1024 * 1024;
+    let size = std::mem::size_of::<(T, R)>();
+    if size == 0 {
+        TARGET_BYTES
+    } else {
+        std::cmp::max(1, TARGET_BYTES / size)
     }
-    let round = (words + (TARGET_WORDS - 1)) & !(TARGET_WORDS - 1);
-    round - words < round / 10
-}
-
-/// Serialize `trie` to an aligned `FactColumn::Align` buffer, then reset `trie`
-/// for reuse.
-///
-/// The destination buffer is sized to the next [`TARGET_WORDS`] stride above
-/// the current trie's footprint. `trie.clear()` preserves all `Vec`
-/// allocations so subsequent `form`/`push` operations avoid reallocation.
-pub(super) fn freeze_into_aligned<K, V, T, R>(
-    trie: &mut KVUpdates<K, V, T, R>,
-) -> FactColumn<K, V, T, R>
-where
-    K: Columnar,
-    V: Columnar,
-    T: Columnar,
-    R: Columnar,
-{
-    let borrowed = trie.borrowed();
-    let words = indexed::length_in_words(&borrowed);
-    let round = ((words + (TARGET_WORDS - 1)) & !(TARGET_WORDS - 1)).max(TARGET_WORDS);
-    let mut alloc = crate::containers::alloc_aligned_zeroed(round);
-    indexed::write(
-        &mut Cursor::new(bytemuck::cast_slice_mut::<u64, u8>(&mut alloc[..])),
-        &borrowed,
-    )
-    .expect("indexed::write into pre-sized aligned buffer never fails");
-    trie.clear();
-    FactColumn::Align(alloc)
 }
 
 /// A [`Merger`] over factorized trie chunks.
@@ -150,7 +94,7 @@ where
     R: Columnar + Ord + Semigroup + Clone + 'static,
     for<'a> columnar::Ref<'a, R>: Ord + Copy,
 {
-    type Chunk = FactColumn<K, V, T, R>;
+    type Chunk = KVUpdates<K, V, T, R>;
     type Time = T;
 
     fn merge(
@@ -162,7 +106,7 @@ where
     ) {
         let mut c1 = ChainCursor::<'_, K, V, T, R>::new(&list1);
         let mut c2 = ChainCursor::<'_, K, V, T, R>::new(&list2);
-        let mut builder = TrieMergeBuilder::<K, V, T, R>::new();
+        let mut builder = TrieMergeBuilder::<K, V, T, R>::new(chunk_target_leaves::<T, R>());
 
         while let (Some(cur1), Some(cur2)) = (c1.peek(), c2.peek()) {
             let (src1, key1_ref, key1_idx) = cur1;
@@ -171,20 +115,20 @@ where
             use std::cmp::Ordering;
             match K::reborrow(key1_ref).cmp(&K::reborrow(key2_ref)) {
                 Ordering::Less => {
-                    let r1 = val_range_in_level::<K, V, T, R>(src1, key1_idx);
+                    let r1 = val_range_in_chunk::<K, V, T, R>(src1, key1_idx);
                     builder.copy_key_vals(src1, r1);
                     builder.finish_key(key1_ref);
                     c1.step_key();
                 }
                 Ordering::Greater => {
-                    let r2 = val_range_in_level::<K, V, T, R>(src2, key2_idx);
+                    let r2 = val_range_in_chunk::<K, V, T, R>(src2, key2_idx);
                     builder.copy_key_vals(src2, r2);
                     builder.finish_key(key2_ref);
                     c2.step_key();
                 }
                 Ordering::Equal => {
-                    let r1 = val_range_in_level::<K, V, T, R>(src1, key1_idx);
-                    let r2 = val_range_in_level::<K, V, T, R>(src2, key2_idx);
+                    let r1 = val_range_in_chunk::<K, V, T, R>(src1, key1_idx);
+                    let r2 = val_range_in_chunk::<K, V, T, R>(src2, key2_idx);
                     builder.merge_key_vals(src1, r1, src2, r2);
                     builder.finish_key(key1_ref);
                     c1.step_key();
@@ -195,14 +139,14 @@ where
         }
 
         while let Some((src, key_ref, key_idx)) = c1.peek() {
-            let r = val_range_in_level::<K, V, T, R>(src, key_idx);
+            let r = val_range_in_chunk::<K, V, T, R>(src, key_idx);
             builder.copy_key_vals(src, r);
             builder.finish_key(key_ref);
             c1.step_key();
             builder.maybe_emit(output);
         }
         while let Some((src, key_ref, key_idx)) = c2.peek() {
-            let r = val_range_in_level::<K, V, T, R>(src, key_idx);
+            let r = val_range_in_chunk::<K, V, T, R>(src, key_idx);
             builder.copy_key_vals(src, r);
             builder.finish_key(key_ref);
             c2.step_key();
@@ -221,49 +165,45 @@ where
         kept: &mut Vec<Self::Chunk>,
         _stash: &mut Vec<Self::Chunk>,
     ) {
-        let mut ready_builder = TrieMergeBuilder::<K, V, T, R>::new();
-        let mut keep_builder = TrieMergeBuilder::<K, V, T, R>::new();
+        let mut ready_builder = TrieMergeBuilder::<K, V, T, R>::new(chunk_target_leaves::<T, R>());
+        let mut keep_builder = TrieMergeBuilder::<K, V, T, R>::new(chunk_target_leaves::<T, R>());
 
         for chunk in &merged {
-            let level = chunk.borrow();
-            let outer_count = Len::len(&level.lists);
-            for outer in 0..outer_count {
-                for key_idx in child_range(level.lists.bounds, outer) {
-                    let v_range = val_range_in_level::<K, V, T, R>(&level, key_idx);
-                    let key_ref = level.lists.values.get(key_idx);
+            let key_count = Len::len(&chunk.lists.values.borrow());
+            for key_idx in 0..key_count {
+                let v_range = val_range_in_chunk::<K, V, T, R>(chunk, key_idx);
+                let key_ref = chunk.lists.values.borrow().get(key_idx);
 
-                    // Split each val's update range by upper.
-                    for val_idx in v_range {
-                        let val_ref = level.rest.lists.values.get(val_idx);
-                        let upd_range = child_range(level.rest.rest.bounds, val_idx);
-                        let times = level.rest.rest.values.0;
-                        let diffs = level.rest.rest.values.1;
+                // Split each val's update range by upper.
+                for val_idx in v_range {
+                    let val_ref = chunk.rest.lists.values.borrow().get(val_idx);
+                    let upd_range = child_range(chunk.rest.rest.bounds.borrow(), val_idx);
+                    let times = chunk.rest.rest.values.0.borrow();
+                    let diffs = chunk.rest.rest.values.1.borrow();
 
-                        // Partition into ready / keep. No time-wise compaction
-                        // here; seal will produce a consolidated batch via
-                        // FactBuilder.
-                        let start_r = ready_builder.staging.len();
-                        let start_k = keep_builder.staging.len();
-                        for i in upd_range {
-                            let t = T::into_owned(times.get(i));
-                            let r = R::into_owned(diffs.get(i));
-                            if upper.less_equal(&t) {
-                                frontier.insert_with(&t, |t| t.clone());
-                                keep_builder.staging.push((t, r));
-                            } else {
-                                ready_builder.staging.push((t, r));
-                            }
-                        }
-                        if ready_builder.staging.len() > start_r {
-                            ready_builder.seal_val_from_staging(val_ref);
-                        }
-                        if keep_builder.staging.len() > start_k {
-                            keep_builder.seal_val_from_staging(val_ref);
+                    // Partition into ready / keep. No time-wise compaction here;
+                    // seal will produce a consolidated batch via FactBuilder.
+                    let start_r = ready_builder.staging.len();
+                    let start_k = keep_builder.staging.len();
+                    for i in upd_range {
+                        let t = T::into_owned(times.get(i));
+                        let r = R::into_owned(diffs.get(i));
+                        if upper.less_equal(&t) {
+                            frontier.insert_with(&t, |t| t.clone());
+                            keep_builder.staging.push((t, r));
+                        } else {
+                            ready_builder.staging.push((t, r));
                         }
                     }
-                    ready_builder.finish_key(key_ref);
-                    keep_builder.finish_key(key_ref);
+                    if ready_builder.staging.len() > start_r {
+                        ready_builder.seal_val_from_staging(val_ref);
+                    }
+                    if keep_builder.staging.len() > start_k {
+                        keep_builder.seal_val_from_staging(val_ref);
+                    }
                 }
+                ready_builder.finish_key(key_ref);
+                keep_builder.finish_key(key_ref);
             }
             ready_builder.maybe_emit(readied);
             keep_builder.maybe_emit(kept);
@@ -274,8 +214,7 @@ where
     }
 
     fn account(chunk: &Self::Chunk) -> (usize, usize, usize, usize) {
-        let leaves = Len::len(&chunk.borrow().rest.rest.values.0);
-        (leaves, 0, 0, 0)
+        (chunk.len(), 0, 0, 0)
     }
 }
 
@@ -283,15 +222,12 @@ where
 // ChainCursor
 // -----------------------------------------------------------------------------
 
-/// A cursor over a chain of [`FactColumn`] chunks at key granularity.
+/// A cursor over a chain of `KVUpdates` chunks at key granularity.
 ///
-/// Pre-decodes each chunk to its [`BorrowedKVUpdates`] view in `new` so that
-/// `peek` is a cheap field lookup — repeat decodes of [`FactColumn::Bytes`] /
-/// [`FactColumn::Align`] would otherwise re-run [`indexed::decode`] on every
-/// peek. Yields `(borrowed_level, key_ref, key_idx)` triples in key order
-/// across all chunks, advancing chunk boundaries transparently.
+/// Yields `(source_chunk, key_ref, key_idx_in_chunk)` triples in sorted key
+/// order across all chunks in the chain. Advances chunk boundaries transparently.
 struct ChainCursor<'a, K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
-    chunks: Vec<BorrowedKVUpdates<'a, K, V, T, R>>,
+    chunks: &'a [KVUpdates<K, V, T, R>],
     chunk_idx: usize,
     key_idx: usize,
 }
@@ -304,8 +240,7 @@ where
     T: Columnar,
     R: Columnar,
 {
-    fn new(columns: &'a [FactColumn<K, V, T, R>]) -> Self {
-        let chunks: Vec<_> = columns.iter().map(|c| c.borrow()).collect();
+    fn new(chunks: &'a [KVUpdates<K, V, T, R>]) -> Self {
         let mut cursor = Self {
             chunks,
             chunk_idx: 0,
@@ -316,13 +251,9 @@ where
     }
 
     /// Skip past any empty leading chunks.
-    ///
-    /// `Len::len(&chunk.lists.values)` is the total key count (flat across
-    /// outer groups). Chunks emitted by this pipeline always have exactly one
-    /// outer group, so flat iteration over keys suffices.
     fn skip_empty(&mut self) {
         while self.chunk_idx < self.chunks.len()
-            && self.key_idx >= Len::len(&self.chunks[self.chunk_idx].lists.values)
+            && self.key_idx >= Len::len(&self.chunks[self.chunk_idx].lists.values.borrow())
         {
             self.chunk_idx += 1;
             self.key_idx = 0;
@@ -330,21 +261,15 @@ where
     }
 
     /// Peek at the current `(chunk, key_ref, key_idx)`; `None` if drained.
-    fn peek(
-        &self,
-    ) -> Option<(
-        &BorrowedKVUpdates<'a, K, V, T, R>,
-        columnar::Ref<'a, K>,
-        usize,
-    )> {
+    fn peek(&self) -> Option<(&'a KVUpdates<K, V, T, R>, columnar::Ref<'a, K>, usize)> {
         if self.chunk_idx >= self.chunks.len() {
             return None;
         }
         let chunk = &self.chunks[self.chunk_idx];
-        if self.key_idx >= Len::len(&chunk.lists.values) {
+        if self.key_idx >= Len::len(&chunk.lists.values.borrow()) {
             return None;
         }
-        let key_ref = chunk.lists.values.get(self.key_idx);
+        let key_ref = chunk.lists.values.borrow().get(self.key_idx);
         Some((chunk, key_ref, self.key_idx))
     }
 
@@ -361,16 +286,11 @@ where
 /// Accumulates a sequence of `(k, v, updates)` items into trie chunks.
 ///
 /// The caller drives the builder by repeatedly calling `copy_key_vals` or
-/// `merge_key_vals` for each key, then `finish_key`. Between keys,
-/// [`Self::maybe_emit`] probes the in-progress trie against the
-/// [`should_freeze`] predicate and, when full, serializes it to a
-/// [`FactColumn::Align`] chunk. [`Self::finish`] emits any remainder.
-///
-/// The `result` trie is reused across emits via [`KVUpdates::clear`]: all
-/// backing `Vec` allocations persist, so subsequent pushes avoid
-/// reallocation.
+/// `merge_key_vals` for each key, then `finish_key`, and finally
+/// `maybe_emit` / `finish`. Chunks are emitted at key boundaries when the
+/// leaf count exceeds the configured target.
 struct TrieMergeBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
-    /// The in-progress chunk (reused across emits).
+    /// The in-progress chunk.
     result: KVUpdates<K, V, T, R>,
     /// Staging buffer for consolidation (per-val).
     staging: Vec<(T, R)>,
@@ -378,6 +298,10 @@ struct TrieMergeBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
     vals_this_key: usize,
     /// Number of keys sealed into the in-progress chunk.
     keys_in_chunk: usize,
+    /// Number of leaves sealed into the in-progress chunk.
+    leaves_in_chunk: usize,
+    /// Target leaf count before emitting a chunk.
+    target: usize,
 }
 
 impl<K, V, T, R> TrieMergeBuilder<K, V, T, R>
@@ -391,21 +315,23 @@ where
     R: Columnar + Ord + Semigroup + Clone + 'static,
     for<'a> columnar::Ref<'a, R>: Ord + Copy,
 {
-    fn new() -> Self {
+    fn new(target: usize) -> Self {
         Self {
             result: Default::default(),
             staging: Vec::new(),
             vals_this_key: 0,
             keys_in_chunk: 0,
+            leaves_in_chunk: 0,
+            target,
         }
     }
 
     /// Stash one val's `(t, r)` entries into `self.staging`.
     #[inline]
-    fn stash_one(&mut self, source: &BorrowedKVUpdates<'_, K, V, T, R>, val_idx: usize) {
-        let range = child_range(source.rest.rest.bounds, val_idx);
-        let times = source.rest.rest.values.0;
-        let diffs = source.rest.rest.values.1;
+    fn stash_one(&mut self, source: &KVUpdates<K, V, T, R>, val_idx: usize) {
+        let range = child_range(source.rest.rest.bounds.borrow(), val_idx);
+        let times = source.rest.rest.values.0.borrow();
+        let diffs = source.rest.rest.values.1.borrow();
         self.staging.reserve(range.len());
         self.staging
             .extend(range.map(|i| (T::into_owned(times.get(i)), R::into_owned(diffs.get(i)))));
@@ -419,6 +345,7 @@ where
         if self.staging.is_empty() {
             return false;
         }
+        self.leaves_in_chunk += self.staging.len();
         self.vals_this_key += 1;
         for (t, r) in self.staging.drain(..) {
             columnar::Push::push(&mut self.result.rest.rest.values.0, &t);
@@ -433,10 +360,10 @@ where
     }
 
     /// Copy one key's vals from `source`'s val range into the builder.
-    fn copy_key_vals(&mut self, source: &BorrowedKVUpdates<'_, K, V, T, R>, v_range: Range<usize>) {
+    fn copy_key_vals(&mut self, source: &KVUpdates<K, V, T, R>, v_range: Range<usize>) {
         for val_idx in v_range {
             self.stash_one(source, val_idx);
-            let v_ref = source.rest.lists.values.get(val_idx);
+            let v_ref = source.rest.lists.values.borrow().get(val_idx);
             self.seal_val_from_staging(v_ref);
         }
     }
@@ -445,17 +372,17 @@ where
     /// together before seal; unequal emits each independently.
     fn merge_key_vals(
         &mut self,
-        src1: &BorrowedKVUpdates<'_, K, V, T, R>,
+        src1: &KVUpdates<K, V, T, R>,
         r1: Range<usize>,
-        src2: &BorrowedKVUpdates<'_, K, V, T, R>,
+        src2: &KVUpdates<K, V, T, R>,
         r2: Range<usize>,
     ) {
         let mut i1 = r1.start;
         let mut i2 = r2.start;
         let e1 = r1.end;
         let e2 = r2.end;
-        let vals1 = src1.rest.lists.values;
-        let vals2 = src2.rest.lists.values;
+        let vals1 = src1.rest.lists.values.borrow();
+        let vals2 = src2.rest.lists.values.borrow();
 
         while i1 < e1 && i2 < e2 {
             let v1 = vals1.get(i1);
@@ -508,17 +435,15 @@ where
         self.vals_this_key = 0;
     }
 
-    /// If the in-progress trie is near-full (90% of the next 2 MiB boundary),
-    /// serialize it to a [`FactColumn::Align`] chunk and push to `output`.
-    fn maybe_emit(&mut self, output: &mut Vec<FactColumn<K, V, T, R>>) {
-        if self.keys_in_chunk > 0 && should_freeze::<K, V, T, R>(&self.result) {
+    /// If enough leaves have accumulated, seal the chunk and push to `output`.
+    fn maybe_emit(&mut self, output: &mut Vec<KVUpdates<K, V, T, R>>) {
+        if self.leaves_in_chunk >= self.target {
             self.emit(output);
         }
     }
 
-    /// Unconditionally seal the in-progress chunk: finalize outer bounds,
-    /// serialize to `FactColumn::Align`, push to `output`, and reset state.
-    fn emit(&mut self, output: &mut Vec<FactColumn<K, V, T, R>>) {
+    /// Finalize current chunk (sealing outer bounds) and move it to `output`.
+    fn emit(&mut self, output: &mut Vec<KVUpdates<K, V, T, R>>) {
         if self.keys_in_chunk == 0 {
             return;
         }
@@ -526,12 +451,14 @@ where
             &mut self.result.lists.bounds,
             u64::cast_from(Len::len(&self.result.lists.values.borrow())),
         );
-        output.push(freeze_into_aligned(&mut self.result));
+        let chunk = std::mem::take(&mut self.result);
+        output.push(chunk);
         self.keys_in_chunk = 0;
+        self.leaves_in_chunk = 0;
     }
 
     /// Flush any remaining accumulated state into `output`.
-    fn finish(mut self, output: &mut Vec<FactColumn<K, V, T, R>>) {
+    fn finish(mut self, output: &mut Vec<KVUpdates<K, V, T, R>>) {
         // Any in-progress key should already have been finished via finish_key.
         debug_assert_eq!(
             self.vals_this_key, 0,
@@ -551,34 +478,19 @@ mod tests {
     use timely::progress::Antichain;
 
     type TestMerger = FactTrieInternalMerger<u64, u64, u64, i64>;
-    type FC = FactColumn<u64, u64, u64, i64>;
+    type KV = KVUpdates<u64, u64, u64, i64>;
 
-    fn mk_chunk(data: &[(u64, u64, u64, i64)]) -> FC {
-        FactColumn::Typed(KVUpdates::<u64, u64, u64, i64>::form(
-            data.iter().map(|(k, v, t, d)| (k, v, (t, d))),
-        ))
+    fn mk_chunk(data: &[(u64, u64, u64, i64)]) -> KV {
+        KV::form(data.iter().map(|(k, v, t, d)| (k, v, (t, d))))
     }
 
-    fn collect(chunk: &FC) -> Vec<(u64, u64, u64, i64)> {
+    fn collect(chunk: &KV) -> Vec<(u64, u64, u64, i64)> {
         let mut out = Vec::new();
-        let borrowed = chunk.borrow();
-        for outer in 0..Len::len(&borrowed.lists) {
-            for key_idx in child_range(borrowed.lists.bounds, outer) {
-                let k = *Index::get(&borrowed.lists.values, key_idx);
-                for val_idx in child_range(borrowed.rest.lists.bounds, key_idx) {
-                    let v = *Index::get(&borrowed.rest.lists.values, val_idx);
-                    for l_idx in child_range(borrowed.rest.rest.bounds, val_idx) {
-                        let t = *Index::get(&borrowed.rest.rest.values.0, l_idx);
-                        let d = *Index::get(&borrowed.rest.rest.values.1, l_idx);
-                        out.push((k, v, t, d));
-                    }
-                }
-            }
-        }
+        chunk.for_each_cursor(|k, v, (t, d)| out.push((*k, *v, *t, *d)));
         out
     }
 
-    fn collect_chain(chain: &[FC]) -> Vec<(u64, u64, u64, i64)> {
+    fn collect_chain(chain: &[KV]) -> Vec<(u64, u64, u64, i64)> {
         chain.iter().flat_map(collect).collect()
     }
 
@@ -676,9 +588,7 @@ mod tests {
 
         // Reference via FactMerger.
         let batch_a = FactBatch {
-            storage: KVUpdates::<u64, u64, u64, i64>::form(
-                a.iter().map(|(k, v, t, d)| (k, v, (t, d))),
-            ),
+            storage: mk_chunk(&a),
             description: Description::new(
                 Antichain::from_elem(0u64),
                 Antichain::from_elem(500u64),
@@ -687,9 +597,7 @@ mod tests {
             updates: a.len(),
         };
         let batch_b = FactBatch {
-            storage: KVUpdates::<u64, u64, u64, i64>::form(
-                b.iter().map(|(k, v, t, d)| (k, v, (t, d))),
-            ),
+            storage: mk_chunk(&b),
             description: Description::new(
                 Antichain::from_elem(500u64),
                 Antichain::from_elem(1000u64),
