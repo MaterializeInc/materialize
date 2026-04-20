@@ -39,6 +39,7 @@ ALTER SYSTEM SET enable_copy_from_remote = true;
 # Row 1: id=2, keys unsorted: {"b": "val_b", "a": "val_a"}
 # Row 2: id=3, single key (trivially sorted): {"x": "val_x"}
 # Row 3: id=4, empty map: {}
+# Row 4: id=5, duplicated keys: {"y": "val_y", "y": "val_y2", "y": "val_y3"}
 $ s3-upload-parquet-unsorted-map bucket=copyfroms3 key=parquet/unsorted_map.parquet
 
 > CREATE TABLE from_parquet (id int, map_col map[text => text]);
@@ -54,7 +55,8 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/unsorted_map.parquet var-na
   (1, '{a=>val_a,m=>val_m,z=>val_z}'),
   (2, '{a=>val_a,b=>val_b}'),
   (3, '{x=>val_x}'),
-  (4, '{}');
+  (4, '{}'),
+  (5, '{y=>val_y3}');
 
 # Verify that COPY FROM'd maps have keys in sorted order.
 # If the bug is present, keys will be in their original unsorted order
@@ -64,6 +66,7 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/unsorted_map.parquet var-na
 2 {a=>val_a,b=>val_b}
 3 {x=>val_x}
 4 {}
+5 {y=>val_y3}
 
 # Verify equality: maps from COPY FROM should equal maps inserted via SQL.
 # If unsorted, these will NOT match, demonstrating silent data corruption.
@@ -75,6 +78,7 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/unsorted_map.parquet var-na
 2 true
 3 true
 4 true
+5 true
 
 # Verify that a join on map_col works correctly.
 # If keys are unsorted, hash/equality is broken and this join will miss rows.
@@ -86,3 +90,4 @@ $ s3-set-presigned-url bucket=copyfroms3 key=parquet/unsorted_map.parquet var-na
 2
 3
 4
+5

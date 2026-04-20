@@ -835,12 +835,24 @@ impl ColReader {
                 // Arrow's MapArray doesn't guarantee that keys are in sorted order, but Materialize's
                 // Datum::Map does, so we need to sort the keys here before packing them, or else
                 // many assumptions will break.
-                let kv_sorted = (start..end)
+                let mut kv_sorted = (start..end)
                     .map(|i| (keys.value(i), i))
-                    .sorted_by_key(|(k, _)| *k);
+                    .sorted_by_key(|(k, _)| *k)
+                    .peekable();
+
                 packer
                     .push_dict_with(|packer| {
-                        for (key, i) in kv_sorted {
+                        while let Some((key, i)) = kv_sorted.next() {
+                            // Parquet docs state that if there are duplicate keys, the last value
+                            // should be used, so skip duplicates here.
+                            //
+                            // sorted_by_key is a stable sort, so entries with duplicate keys will
+                            // maintain their original order, and we can pick the last one here.
+                            if let Some((next_key, _)) = kv_sorted.peek() {
+                                if key == *next_key {
+                                    continue;
+                                }
+                            }
                             packer.push(Datum::String(key));
                             values.read(i, packer)?;
                         }

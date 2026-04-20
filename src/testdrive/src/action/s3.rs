@@ -685,6 +685,15 @@ fn build_parquet_unsorted_map_batch() -> Result<RecordBatch, anyhow::Error> {
     // Row 3: empty map
     map_builder.append(true).context("appending map row 3")?;
 
+    // Row 4: duplicate keys - should be deduped and the last one chosen by the reader
+    map_builder.keys().append_value("y");
+    map_builder.values().append_value("val_y");
+    map_builder.keys().append_value("y");
+    map_builder.values().append_value("val_y2");
+    map_builder.keys().append_value("y");
+    map_builder.values().append_value("val_y3");
+    map_builder.append(true).context("appending map row 4")?;
+
     let map_array = Arc::new(map_builder.finish());
 
     let schema = Arc::new(Schema::new(vec![
@@ -711,7 +720,7 @@ fn build_parquet_unsorted_map_batch() -> Result<RecordBatch, anyhow::Error> {
 
     let batch = RecordBatch::try_new(
         schema,
-        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])), map_array],
+        vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])), map_array],
     )
     .context("building record batch")?;
 
