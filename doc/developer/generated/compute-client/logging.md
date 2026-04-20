@@ -1,6 +1,6 @@
 ---
 source: src/compute-client/src/logging.rs
-revision: f94584ddef
+revision: c7616144a8
 ---
 
 # mz-compute-client::logging

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/indexes.rs
-revision: dfd0a155bf
+revision: a632912d24
 ---
 
 # adapter::coord::indexes
