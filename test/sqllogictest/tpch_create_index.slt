@@ -2010,7 +2010,7 @@ materialize.public.q22:
   With
     cte l0 =
       Project (#0{c_custkey}, #4{c_phone}, #5{c_acctbal}, #8) // { arity: 4 }
-        Map (substr(char_to_text(#4{c_phone}), 1, 2)) // { arity: 9 }
+        Map (substr(#4{c_phone}, 1, 2)) // { arity: 9 }
           ReadIndex on=customer pk_customer_custkey=[*** full scan ***] // { arity: 8 }
     cte l1 =
       Project (#0{c_custkey}..=#2{c_acctbal}) // { arity: 3 }
@@ -2032,7 +2032,7 @@ materialize.public.q22:
         Project (#0{c_custkey}) // { arity: 1 }
           Get l1 // { arity: 3 }
   Return // { arity: 3 }
-    Reduce group_by=[substr(char_to_text(#0{c_phone}), 1, 2)] aggregates=[count(*), sum(#1{c_acctbal})] // { arity: 3 }
+    Reduce group_by=[substr(#0{c_phone}, 1, 2)] aggregates=[count(*), sum(#1{c_acctbal})] // { arity: 3 }
       Project (#1{c_phone}, #2{c_acctbal}) // { arity: 2 }
         Join on=(#0{c_custkey} = #3{c_custkey}) type=differential // { arity: 4 }
           implementation

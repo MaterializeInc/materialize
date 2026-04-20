@@ -990,27 +990,21 @@ impl HirScalarExpr {
                 }
                 CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
                 CallUnary {
-                    func: func::UnaryFunc::CastVarCharToString(_),
+                    func,
                     expr,
                     name: _,
-                } if context.config.enable_cast_elimination => {
-                    expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?
+                } => {
+                    let inner =
+                        expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?;
+                    if context.config.enable_cast_elimination && func.is_eliminable_cast() {
+                        inner
+                    } else {
+                        SS::CallUnary {
+                            func,
+                            expr: Box::new(inner),
+                        }
+                    }
                 }
-                CallUnary {
-                    func,
-                    expr,
-                    name: _,
-                } => SS::CallUnary {
-                    func,
-                    expr: Box::new(expr.applied_to(
-                        id_gen,
-                        col_map,
-                        cte_map,
-                        inner,
-                        subquery_map,
-                        context,
-                    )?),
-                },
                 CallBinary {
                     func,
                     expr1,

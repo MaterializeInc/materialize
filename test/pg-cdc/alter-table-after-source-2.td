@@ -219,6 +219,10 @@ contains:table was truncated
 #
 # Drop table
 
+# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9571 is fixed
+$ skip-if
+SELECT true
+
 > SELECT * from drop_table;
 1 1
 
@@ -228,3 +232,5 @@ DROP TABLE drop_table;
 # Table is dropped
 ! SELECT * FROM drop_table;
 regex:(table was dropped|incompatible schema change)
+
+$ skip-end

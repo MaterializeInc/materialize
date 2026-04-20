@@ -28,7 +28,7 @@ from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.sqlsmith import known_errors
 
-TOTAL_MEMORY = 8
+TOTAL_MEMORY = 16
 NUM_SERVERS = 2
 MZ_SERVERS = [f"mz_{i + 1}" for i in range(NUM_SERVERS)]
 
