@@ -26,14 +26,15 @@ use timely::dataflow::operators::capture::{Event, EventPusher};
 /// (as opposed to the `Rc`/`RefCell`-based `EventLink` in `timely::capture`).
 ///
 /// Both writer and reader are `Arc<ArcEventLink<T, C>>`: the writer implements
-/// [`EventPusher`] and the reader implements [`EventIterator`].
+/// [`EventPusher`] and the reader implements
+/// [`EventIterator`](timely::dataflow::operators::capture::event::EventIterator).
 pub type ArcEventLink<T, C> = EventLink<T, C>;
 
 /// Creates a linked `(writer, reader)` pair for cross-thread event streaming.
 ///
 /// Both handles begin pointing at the same empty sentinel node. The writer
 /// appends events via [`EventPusher`]; the reader chases the list and yields
-/// them via [`EventIterator`].
+/// them via [`EventIterator`](timely::dataflow::operators::capture::event::EventIterator).
 pub fn arc_event_link<T, C>() -> (Arc<ArcEventLink<T, C>>, Arc<ArcEventLink<T, C>>) {
     let shared = Arc::new(ArcEventLink::new());
     (Arc::clone(&shared), shared)
