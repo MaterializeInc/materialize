@@ -785,7 +785,7 @@ mod tests {
             let mut buf_s = Vec::new();
             reader_s.read_to_end(&mut buf_s).unwrap();
 
-            assert_eq!(buf_s, buf_s);
+            assert_eq!(buf_c, buf_s);
         }
 
         proptest!(|(segments in any::<Vec<Vec<u8>>>())| {
