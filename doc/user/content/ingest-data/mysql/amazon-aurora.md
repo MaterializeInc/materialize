@@ -385,11 +385,7 @@ your networking configuration.
 
 ### 3. Start ingesting data
 
-{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source" %}}
-
-{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source-options" %}}
-
-{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="schema-changes" %}}
+{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="ingest-data-step" %}}
 
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when
