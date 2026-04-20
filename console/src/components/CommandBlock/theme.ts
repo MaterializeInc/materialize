@@ -52,6 +52,9 @@ export const createCmTheme = (theme: MaterializeTheme) =>
         padding: "2px 0",
         caretColor: baseThemeSettings[theme.colorMode].caretColor,
       },
+      ".cm-cursor": {
+        borderLeftColor: baseThemeSettings[theme.colorMode].caretColor,
+      },
       ".cm-scroller": {
         lineHeight,
       },

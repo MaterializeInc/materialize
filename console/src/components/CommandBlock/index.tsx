@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { history } from "@codemirror/commands";
+import { drawSelection } from "@codemirror/view";
 import {
   extensionManager,
   updateListener,
@@ -26,6 +27,7 @@ export const CodeMirrorProvider = ({ children }: PropsWithChildren) => {
         extensions: [
           updateListener(),
           history(),
+          drawSelection(),
           languageExt,
           extensionManager(),
         ],
