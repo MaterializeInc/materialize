@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+#
+# git-hook-pre-push — fast checks for the CI failures that waste the most time.
+#
+# Install:
+#   ln -sf ../../bin/git-hook-pre-push .git/hooks/pre-push
+#
+# Currently checks:
+#   - Cargo.lock is in sync with Cargo.toml files (catches the common case
+#     where a workspace dep was added but Cargo.lock wasn't committed).
+#
+# Bypass (emergencies only): git push --no-verify
+
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+
+cargo_changed=false
+while read -r _ local_sha _ remote_sha; do
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+        remote_sha="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD~1)"
+    fi
+    if git diff --name-only "$remote_sha" "$local_sha" 2>/dev/null \
+        | grep -qE '(^|/)Cargo\.(toml|lock)$'; then
+        cargo_changed=true
+        break
+    fi
+done
+
+if [ "$cargo_changed" = false ]; then
+    exit 0
+fi
+
+if ! command -v cargo &>/dev/null; then
+    exit 0
+fi
+
+if ! cargo metadata --locked --offline --format-version 1 >/dev/null 2>&1; then
+    echo >&2 ""
+    echo >&2 "pre-push: Cargo.lock is out of sync with Cargo.toml."
+    echo >&2 ""
+    echo >&2 "  Run:  cargo check"
+    echo >&2 "  Then: git add Cargo.lock && git commit"
+    echo >&2 ""
+    echo >&2 "Bypass (if you know what you're doing): git push --no-verify"
+    echo >&2 ""
+    exit 1
+fi
