@@ -10,14 +10,23 @@
 //! Iceberg sink implementation.
 //!
 //! This code renders a [`IcebergSinkConnection`] into a dataflow that writes
-//! data to an Iceberg table. The dataflow consists of three operators:
+//! data to an Iceberg table. `SinkRender::render_sink` hands the sink an
+//! arranged collection keyed on the sink key; a small `walk_sink_arrangement`
+//! operator at the input walks the arrangement and emits one `DiffPair` per
+//! `(key, timestamp)` update into the pipeline below.
 //!
 //! ```text
 //!        ┏━━━━━━━━━━━━━━┓
 //!        ┃   persist    ┃
 //!        ┃    source    ┃
 //!        ┗━━━━━━┯━━━━━━━┛
-//!               │ row data, the input to this module
+//!               │ arranged (Option<Row>, Row) keyed by sink key
+//!               │
+//!        ┏━━━━━━v━━━━━━━┓
+//!        ┃    walk      ┃
+//!        ┃ arrangement  ┃ yields individual DiffPairs per (key, timestamp)
+//!        ┗━━━━━━┯━━━━━━━┛
+//!               │ (Option<Row>, DiffPair<Row>) rows
 //!               │
 //!        ┏━━━━━━v━━━━━━━┓
 //!        ┃     mint     ┃ (single worker)
@@ -82,6 +91,7 @@ use anyhow::{Context, anyhow};
 use arrow::array::{ArrayRef, Int32Array, Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use differential_dataflow::lattice::Lattice;
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use iceberg::ErrorKind;
@@ -111,6 +121,7 @@ use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 use itertools::Itertools;
 use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
 use mz_interchange::avro::DiffPair;
+use mz_interchange::envelopes::for_each_diff_pair;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -142,7 +153,7 @@ use tracing::debug;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{PkViolationWarner, SinkRender, SinkTrace};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 
@@ -2240,13 +2251,22 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+        arranged: Arranged<'scope, SinkTrace>,
+        key_is_synthetic: bool,
         _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
     ) -> (
         StreamVec<'scope, Timestamp, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
-        let scope = input.scope();
+        let scope = arranged.stream.scope();
+
+        let (input, walker_button) = walk_sink_arrangement(
+            format!("{sink_id}-iceberg-walker"),
+            arranged,
+            sink_id,
+            sink.from,
+            key_is_synthetic,
+        );
 
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
@@ -2386,6 +2406,58 @@ impl<'scope> SinkRender<'scope> for IcebergSinkConnection {
         let statuses =
             scope.concatenate([running_status, mint_status, write_status, commit_status]);
 
-        (statuses, vec![mint_button, write_button, commit_button])
+        (
+            statuses,
+            vec![walker_button, mint_button, write_button, commit_button],
+        )
     }
+}
+
+/// Walks `arranged` and emits a stream of individual `(key, DiffPair)` records
+/// that feeds the rest of the Iceberg sink pipeline.
+///
+/// Tracks per-`(key, timestamp)` group sizes and rate-limits a warning when a
+/// non-synthetic key has more than one `DiffPair`. When `key_is_synthetic` the
+/// arrangement's hash-based key is stripped before emission.
+fn walk_sink_arrangement<'scope>(
+    name: String,
+    arranged: Arranged<'scope, SinkTrace>,
+    sink_id: GlobalId,
+    from_id: GlobalId,
+    key_is_synthetic: bool,
+) -> (
+    VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+    PressOnDropButton,
+) {
+    let mut builder = OperatorBuilder::new(name, arranged.stream.scope());
+    let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
+    let mut input = builder.new_input_for(arranged.stream, Pipeline, &output);
+
+    let button = builder.build(move |_caps| async move {
+        let mut pk_warner = (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
+
+        while let Some(event) = input.next().await {
+            if let Event::Data(cap, mut batches) = event {
+                for batch in batches.drain(..) {
+                    for_each_diff_pair(&batch, |key, time, diff_pair| {
+                        if let Some(warner) = pk_warner.as_mut() {
+                            warner.observe(key, time);
+                        }
+                        // The arrangement key is only used downstream for grouping and PK checks;
+                        // `write_data_files` discards it on both the stash and drain paths. Emit
+                        // None unconditionally to avoid per-`DiffPair` `Row` clones on this hot path.
+                        output.give(&cap, ((None, diff_pair), time, Diff::ONE));
+                    });
+                    // Flush after each batch so the final `(key, time)` group of the walk is
+                    // resolved immediately — a PK violation in the last group is otherwise held
+                    // until more data arrives or the operator shuts down.
+                    if let Some(warner) = pk_warner.as_mut() {
+                        warner.flush();
+                    }
+                }
+            }
+        }
+    });
+
+    (stream.as_collection(), button.press_on_drop())
 }

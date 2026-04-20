@@ -15,11 +15,11 @@
 //!        ┃   persist    ┃
 //!        ┃    source    ┃
 //!        ┗━━━━━━┯━━━━━━━┛
-//!               │ row data, the input to this module
+//!               │ arranged (Option<Row>, Row) keyed by sink key
 //!               │
 //!        ┏━━━━━━v━━━━━━┓
-//!        ┃    row      ┃
-//!        ┃   encoder   ┃
+//!        ┃    row      ┃ walks the arrangement and emits one
+//!        ┃   encoder   ┃ encoded `KafkaMessage` per DiffPair
 //!        ┗━━━━━━┯━━━━━━┛
 //!               │ encoded data
 //!               │
@@ -36,10 +36,11 @@
 //!
 //! # Encoding
 //!
-//! One part of the dataflow deals with encoding the rows that we read from persist. There isn't
-//! anything surprizing here, it is *almost* just a `Collection::map` with the exception of an
-//! initialization step that makes sure the schemas are published to the Schema Registry. After
-//! that step the operator just encodes each batch it receives record by record.
+//! One part of the dataflow deals with encoding the rows that we read from persist. The encoder
+//! walks the input arrangement's batches via
+//! [`mz_interchange::envelopes::for_each_diff_pair`], producing one encoded `KafkaMessage` per
+//! `DiffPair` observed at each `(key, timestamp)`. An initialization step first ensures that the
+//! schemas are published to the Schema Registry.
 //!
 //! # Sinking
 //!
@@ -81,17 +82,18 @@ use std::time::Duration;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::kafka::KafkaSinkMetrics;
-use crate::render::sinks::SinkRender;
+use crate::render::sinks::{PkViolationWarner, SinkRender, SinkTrace};
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 use anyhow::{Context, anyhow, bail};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_expr::MirScalarExpr;
-use mz_interchange::avro::{AvroEncoder, DiffPair};
+use mz_interchange::avro::AvroEncoder;
 use mz_interchange::encode::Encode;
-use mz_interchange::envelopes::dbz_format;
+use mz_interchange::envelopes::{dbz_format, for_each_diff_pair};
 use mz_interchange::json::JsonEncoder;
 use mz_interchange::text_binary::{BinaryEncoder, TextEncoder};
 use mz_kafka_util::admin::EnsureTopicConfig;
@@ -159,7 +161,8 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: VecCollection<'scope, Timestamp, (Option<Row>, DiffPair<Row>), Diff>,
+        arranged: Arranged<'scope, SinkTrace>,
+        key_is_synthetic: bool,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
         _err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
@@ -167,7 +170,7 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
         StreamVec<'scope, Timestamp, HealthStatusMessage>,
         Vec<PressOnDropButton>,
     ) {
-        let scope = input.scope();
+        let scope = arranged.stream.scope();
 
         let write_handle = {
             let persist = Arc::clone(&storage_state.persist_clients);
@@ -193,10 +196,13 @@ impl<'scope> SinkRender<'scope> for KafkaSinkConnection {
 
         let (encoded, encode_status, encode_token) = encode_collection(
             format!("kafka-{sink_id}-{}-encode", self.format.get_format_name()),
-            input,
+            arranged,
             sink.envelope,
             self.clone(),
             storage_state.storage_configuration.clone(),
+            sink_id,
+            sink.from,
+            key_is_synthetic,
         );
 
         let metrics = storage_state.metrics.get_kafka_sink_metrics(sink_id);
@@ -1359,24 +1365,30 @@ async fn fetch_partition_count_loop<F>(
     }
 }
 
-/// Encodes a stream of `(Option<Row>, Option<Row>)` updates using the specified encoder.
+/// Walks the sink's arrangement and emits encoded Kafka messages, one per
+/// `DiffPair` observed at each `(key, timestamp)`.
 ///
-/// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
-fn encode_collection<'scope, T: timely::progress::Timestamp>(
+/// When `key_is_synthetic`, the arrangement's key is a per-row hash used only
+/// for worker distribution; the emitted `KafkaMessage` uses no key in that
+/// case.
+fn encode_collection<'scope>(
     name: String,
-    input: VecCollection<'scope, T, (Option<Row>, DiffPair<Row>), Diff>,
+    arranged: Arranged<'scope, SinkTrace>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
+    sink_id: GlobalId,
+    from_id: GlobalId,
+    key_is_synthetic: bool,
 ) -> (
-    VecCollection<'scope, T, KafkaMessage, Diff>,
-    StreamVec<'scope, T, HealthStatusMessage>,
+    VecCollection<'scope, Timestamp, KafkaMessage, Diff>,
+    StreamVec<'scope, Timestamp, HealthStatusMessage>,
     PressOnDropButton,
 ) {
-    let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
+    let mut builder = AsyncOperatorBuilder::new(name, arranged.stream.scope());
 
     let (output, stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
-    let mut input = builder.new_input_for(input.inner, Pipeline, &output);
+    let mut input = builder.new_input_for(arranged.stream, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {
         Box::pin(async move {
@@ -1476,70 +1488,94 @@ fn encode_collection<'scope, T: timely::progress::Timestamp>(
 
             let mut row_buf = Row::default();
             let mut datums = DatumVec::new();
+            let mut pk_warner =
+                (!key_is_synthetic).then(|| PkViolationWarner::new(sink_id, from_id));
 
             while let Some(event) = input.next().await {
-                if let Event::Data(cap, rows) = event {
-                    for ((key, value), time, diff) in rows {
-                        let mut hash = None;
-                        let mut headers = vec![];
-                        if connection.headers_index.is_some() || connection.partition_by.is_some() {
-                            // Header values and partition by values are derived from the row that
-                            // produces an event. But it is ambiguous whether to use the `before` or
-                            // `after` from the event. The rule applied here is simple: use `after`
-                            // if it exists (insertions and updates), otherwise fall back to `before`
-                            // (deletions).
-                            //
-                            // It is up to the SQL planner to ensure this produces sensible results.
-                            // (When using the upsert envelope and both `before` and `after` are
-                            // present, it's always unambiguous to use `after` because that's all
-                            // that will be present in the Kafka message; when using the Debezium
-                            // envelope, it's okay to refer to columns in the key because those
-                            // are guaranteed to be the same in both `before` and `after`.)
-                            let row = value
-                                .after
-                                .as_ref()
-                                .or(value.before.as_ref())
-                                .expect("one of before or after must be set");
-                            let row = datums.borrow_with(row);
-
-                            if let Some(i) = connection.headers_index {
-                                headers = encode_headers(row[i]);
+                if let Event::Data(cap, mut batches) = event {
+                    for batch in batches.drain(..) {
+                        for_each_diff_pair(&batch, |key, time, value| {
+                            if let Some(warner) = pk_warner.as_mut() {
+                                warner.observe(key, time);
                             }
+                            // Only emit the arrangement key when the user configured one; relation-key
+                            // and synthetic-hash arrangements exist purely for grouping / worker
+                            // distribution and have no corresponding key encoder.
+                            let key_for_message = if key_encoder.is_some() { key } else { &None };
 
-                            if let Some(partition_by) = &connection.partition_by {
-                                hash = Some(evaluate_partition_by(partition_by, &row));
+                            let mut hash = None;
+                            let mut headers = vec![];
+                            if connection.headers_index.is_some()
+                                || connection.partition_by.is_some()
+                            {
+                                // Header values and partition by values are derived from the row
+                                // that produces an event. But it is ambiguous whether to use the
+                                // `before` or `after` from the event. The rule applied here is
+                                // simple: use `after` if it exists (insertions and updates),
+                                // otherwise fall back to `before` (deletions).
+                                //
+                                // It is up to the SQL planner to ensure this produces sensible
+                                // results. (When using the upsert envelope and both `before` and
+                                // `after` are present, it's always unambiguous to use `after`
+                                // because that's all that will be present in the Kafka message;
+                                // when using the Debezium envelope, it's okay to refer to columns
+                                // in the key because those are guaranteed to be the same in both
+                                // `before` and `after`.)
+                                let row = value
+                                    .after
+                                    .as_ref()
+                                    .or(value.before.as_ref())
+                                    .expect("one of before or after must be set");
+                                let row = datums.borrow_with(row);
+
+                                if let Some(i) = connection.headers_index {
+                                    headers = encode_headers(row[i]);
+                                }
+
+                                if let Some(partition_by) = &connection.partition_by {
+                                    hash = Some(evaluate_partition_by(partition_by, &row));
+                                }
                             }
+                            let (encoded_key, hash) = match key_for_message {
+                                Some(key) => {
+                                    let key_encoder =
+                                        key_encoder.as_ref().expect("key present");
+                                    let encoded = key_encoder.encode_unchecked(key.clone());
+                                    let hash =
+                                        hash.unwrap_or_else(|| key_encoder.hash(&encoded));
+                                    (Some(encoded), hash)
+                                }
+                                None => (None, hash.unwrap_or(0)),
+                            };
+                            let value = match envelope {
+                                SinkEnvelope::Upsert => value.after,
+                                SinkEnvelope::Debezium => {
+                                    dbz_format(&mut row_buf.packer(), value);
+                                    Some(row_buf.clone())
+                                }
+                                SinkEnvelope::Append => {
+                                    unreachable!("Append envelope is not valid for Kafka sinks")
+                                }
+                            };
+                            let value = value.map(|value| value_encoder.encode_unchecked(value));
+                            let message = KafkaMessage {
+                                hash,
+                                key: encoded_key,
+                                value,
+                                headers,
+                            };
+                            output.give(&cap, (message, time, Diff::ONE));
+                        });
+                        // Flush after each batch so the final `(key, time)` group of the walk is
+                        // resolved immediately — a PK violation in the last group is otherwise
+                        // held until more data arrives or the operator shuts down.
+                        if let Some(warner) = pk_warner.as_mut() {
+                            warner.flush();
                         }
-                        let (key, hash) = match key {
-                            Some(key) => {
-                                let key_encoder = key_encoder.as_ref().expect("key present");
-                                let key = key_encoder.encode_unchecked(key);
-                                let hash = hash.unwrap_or_else(|| key_encoder.hash(&key));
-                                (Some(key), hash)
-                            }
-                            None => (None, hash.unwrap_or(0))
-                        };
-                        let value = match envelope {
-                            SinkEnvelope::Upsert => value.after,
-                            SinkEnvelope::Debezium => {
-                                dbz_format(&mut row_buf.packer(), value);
-                                Some(row_buf.clone())
-                            }
-                            SinkEnvelope::Append => {
-                                unreachable!("Append envelope is not valid for Kafka sinks")
-                            }
-                        };
-                        let value = value.map(|value| value_encoder.encode_unchecked(value));
-                        let message = KafkaMessage {
-                            hash,
-                            key,
-                            value,
-                            headers,
-                        };
-                        output.give(&cap, (message, time, diff));
                     }
                 }
             }
+
             Ok::<(), anyhow::Error>(())
         })
     });

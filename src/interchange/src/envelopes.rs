@@ -11,18 +11,14 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::LazyLock;
 
-use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, VecCollection};
-use itertools::{Either, EitherOrBoth, Itertools};
+use differential_dataflow::trace::{BatchReader, Cursor};
+use itertools::{Either, EitherOrBoth};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{
     CatalogItemId, ColumnName, Datum, Diff, Row, RowPacker, SqlColumnType, SqlScalarType,
 };
-use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::Operator;
 
 use crate::avro::DiffPair;
 
@@ -32,11 +28,9 @@ use crate::avro::DiffPair;
 /// Within a key, diffs are partitioned by sign into retractions (befores) and
 /// insertions (afters), sorted by timestamp, and zipped into `DiffPair`s via a
 /// merge-join. Pairs are emitted in ascending timestamp order for a given key;
-/// no ordering is guaranteed across keys.
-///
-/// This is the batch-level cursor walk underlying [`combine_at_timestamp`].
-/// Sinks that consume an arrangement directly can call this inside their own
-/// operator to stream pairs without materializing a `Vec<DiffPair>` per group.
+/// no ordering is guaranteed across keys. Callers are responsible for tracking
+/// `(key, timestamp)` boundaries themselves if they need to detect groups
+/// with more than one pair (e.g., for primary-key violation checks).
 pub fn for_each_diff_pair<B, F>(batch: &B, mut on_diff_pair: F)
 where
     B: BatchReader<Diff = Diff>,
@@ -104,111 +98,6 @@ where
 
         cursor.step_key(batch);
     }
-}
-
-/// Given a stream of batches, produce a stream of groups of DiffPairs, grouped
-/// by key, at each timestamp.
-///
-// This is useful for some sink envelopes (e.g., Debezium and Upsert), which
-// need to do specific logic based on the _entire_ set of before/after diffs for
-// a given key at each timestamp.
-pub fn combine_at_timestamp<'scope, Tr>(
-    arranged: Arranged<'scope, Tr>,
-) -> VecCollection<
-    'scope,
-    Tr::Time,
-    (
-        <Tr::KeyContainer as BatchContainer>::Owned,
-        Vec<DiffPair<Tr::ValOwn>>,
-    ),
-    Diff,
->
-where
-    Tr: Clone + TraceReader<Diff = Diff, ValOwn: 'static, Time: Copy>,
-    <Tr::KeyContainer as BatchContainer>::Owned: Clone + 'static,
-{
-    arranged
-        .stream
-        .unary(Pipeline, "combine_at_timestamp", move |_, _| {
-            move |input, output| {
-                input.for_each_time(|time, batches| {
-                    let mut session = output.session(&time);
-                    for batch in batches.flat_map(IntoIterator::into_iter) {
-                        let mut befores = vec![];
-                        let mut afters = vec![];
-
-                        let mut cursor = batch.cursor();
-                        while cursor.key_valid(batch) {
-                            let k = cursor.key(batch);
-
-                            // Partition updates into retractions (befores)
-                            // and insertions (afters).
-                            while cursor.val_valid(batch) {
-                                let v = cursor.val(batch);
-                                cursor.map_times(batch, |t, diff| {
-                                    let diff = Tr::owned_diff(diff);
-                                    let update = (
-                                        Tr::owned_time(t),
-                                        Tr::owned_val(v),
-                                        usize::cast_from(diff.unsigned_abs()),
-                                    );
-                                    if diff < Diff::ZERO {
-                                        befores.push(update);
-                                    } else {
-                                        afters.push(update);
-                                    }
-                                });
-                                cursor.step_val(batch);
-                            }
-
-                            // Sort by timestamp.
-                            befores.sort_by_key(|(t, _v, _diff)| *t);
-                            afters.sort_by_key(|(t, _v, _diff)| *t);
-
-                            // Convert diff into unary representation.
-                            let befores = befores
-                                .drain(..)
-                                .flat_map(|(t, v, cnt)| iter::repeat((t, v)).take(cnt));
-                            let afters = afters
-                                .drain(..)
-                                .flat_map(|(t, v, cnt)| iter::repeat((t, v)).take(cnt));
-
-                            // At each timestamp, zip together the insertions
-                            // and retractions into diff pairs.
-                            let groups = itertools::merge_join_by(
-                                befores,
-                                afters,
-                                |(t1, _v1), (t2, _v2)| t1.cmp(t2),
-                            )
-                            .map(|pair| match pair {
-                                EitherOrBoth::Both((t, before), (_t, after)) => {
-                                    (t, Some(before.clone()), Some(after.clone()))
-                                }
-                                EitherOrBoth::Left((t, before)) => (t, Some(before.clone()), None),
-                                EitherOrBoth::Right((t, after)) => (t, None, Some(after.clone())),
-                            })
-                            .chunk_by(|(t, _before, _after)| *t);
-
-                            // For each timestamp, emit the group of
-                            // `DiffPair`s.
-                            for (t, group) in &groups {
-                                let group = group
-                                    .map(|(_t, before, after)| DiffPair { before, after })
-                                    .collect();
-                                session.give((
-                                    (<Tr::KeyContainer as BatchContainer>::into_owned(k), group),
-                                    t,
-                                    Diff::ONE,
-                                ));
-                            }
-
-                            cursor.step_key(batch);
-                        }
-                    }
-                });
-            }
-        })
-        .as_collection()
 }
 
 // NOTE(benesch): statically allocating transient IDs for the
