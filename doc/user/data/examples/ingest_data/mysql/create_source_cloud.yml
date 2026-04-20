@@ -44,7 +44,7 @@
       FROM MYSQL CONNECTION mysql_connection;
 
     -- Step 2: Create tables from the source
-    CREATE TABLE orders FROM SOURCE mz_source (REFERENCE mydb.orders);
+    CREATE TABLE t FROM SOURCE mz_source (REFERENCE public.t);
 
   results: |
     - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
