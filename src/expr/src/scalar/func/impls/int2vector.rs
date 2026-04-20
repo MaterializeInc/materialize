@@ -18,7 +18,6 @@ use crate::scalar::func::stringify_datum;
     sqlname = "int2vectortoarray",
     is_monotone = true,
     introduces_nulls = false,
-    is_eliminable_cast = true,
     output_type_expr = SqlScalarType::Array(Box::from(SqlScalarType::Int16))
         .nullable(input_type.nullable)
 )]

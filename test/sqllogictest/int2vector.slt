@@ -186,7 +186,7 @@ SELECT CASE WHEN c2 = 5 THEN c0 ELSE c1 END FROM t1;
 ----
 Explained Query:
   Project (#3)
-    Map (case when (#2{c2} = 5) then #0{c0} else arraytoarray(#1{c1}) end)
+    Map (case when (#2{c2} = 5) then #0{c0} else arraytoarray(int2vectortoarray(#1{c1})) end)
       ReadStorage materialize.public.t1
 
 Source materialize.public.t1
