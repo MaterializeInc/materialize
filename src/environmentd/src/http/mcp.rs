@@ -1630,6 +1630,48 @@ mod tests {
         }
     }
 
+    // ── Response size cap tests ────────────────────────────────────────
+
+    #[mz_ore::test]
+    fn test_format_rows_response_within_limit() {
+        let rows = vec![vec![json!("a"), json!(1)], vec![json!("b"), json!(2)]];
+        let result = format_rows_response(rows, 1_000_000).unwrap();
+        let McpResult::ToolContent(content) = result else {
+            panic!("Expected ToolContent");
+        };
+        assert_eq!(content.content.len(), 1);
+        assert!(content.content[0].text.contains("\"a\""));
+        assert!(content.content[0].text.contains("\"b\""));
+    }
+
+    #[mz_ore::test]
+    fn test_format_rows_response_errors_when_over_limit() {
+        let rows: Vec<Vec<serde_json::Value>> = (0..100)
+            .map(|i| vec![json!(format!("row_{}", i)), json!(i)])
+            .collect();
+        let err = format_rows_response(rows, 500).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("exceeds the 500 byte limit"),
+            "Error should mention the size limit, got: {msg}"
+        );
+        assert!(
+            msg.contains("Use LIMIT or WHERE"),
+            "Error should suggest narrowing the query, got: {msg}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_format_rows_response_empty_rows() {
+        let rows: Vec<Vec<serde_json::Value>> = vec![];
+        let result = format_rows_response(rows, 1000).unwrap();
+        let McpResult::ToolContent(content) = result else {
+            panic!("Expected ToolContent");
+        };
+        assert_eq!(content.content.len(), 1);
+        assert_eq!(content.content[0].text, "[]");
+    }
+
     // ── Data product name validation tests ─────────────────────────────
 
     #[mz_ore::test]
