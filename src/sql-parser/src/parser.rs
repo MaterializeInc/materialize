@@ -1895,6 +1895,22 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Optional '=', then comma-separated list in parens/brackets.
+    fn parse_list_value<T, F>(&mut self, f: F) -> Result<Vec<T>, ParserError>
+    where
+        F: FnMut(&mut Self) -> Result<T, ParserError>,
+    {
+        let _ = self.consume_token(&Token::Eq);
+        let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
+        let values = self.parse_comma_separated(f)?;
+        self.expect_token(&match delimiter {
+            Token::LParen => Token::RParen,
+            Token::LBracket => Token::RBracket,
+            _ => unreachable!(),
+        })?;
+        Ok(values)
+    }
+
     /// Parse a comma-separated list of 1+ items accepted by `F`
     fn parse_comma_separated<T, F>(&mut self, mut f: F) -> Result<Vec<T>, ParserError>
     where
@@ -2531,6 +2547,14 @@ impl<'a> Parser<'a> {
 
     fn parse_default_aws_privatelink(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
         let _ = self.consume_token(&Token::Eq);
+        Ok(WithOptionValue::ConnectionAwsPrivatelink(
+            self.parse_default_aws_privatelink_()?,
+        ))
+    }
+
+    fn parse_default_aws_privatelink_(
+        &mut self,
+    ) -> Result<ConnectionDefaultAwsPrivatelink<Raw>, ParserError> {
         let connection = self.parse_raw_name()?;
         let port = if self.consume_token(&Token::LParen) {
             self.expect_keyword(PORT)?;
@@ -2543,9 +2567,69 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
-        Ok(WithOptionValue::ConnectionAwsPrivatelink(
-            ConnectionDefaultAwsPrivatelink { connection, port },
-        ))
+        Ok(ConnectionDefaultAwsPrivatelink { connection, port })
+    }
+
+    /// This is just like 'parse_default_aws_privatelink_' except it supports more PrivateLink options.
+    fn parse_aws_privatelink(&mut self) -> Result<KafkaBrokerAwsPrivatelink<Raw>, ParserError> {
+        let connection = self.parse_raw_name()?;
+        let options = if self.consume_token(&Token::LParen) {
+            let options =
+                self.parse_comma_separated(Parser::parse_kafka_broker_aws_privatelink_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
+        Ok(KafkaBrokerAwsPrivatelink {
+            connection,
+            options,
+        })
+    }
+
+    fn parse_connection_rule_pattern(&mut self) -> Result<ConnectionRulePattern, ParserError> {
+        let s = self.parse_literal_string()?;
+        let pos = self.peek_prev_pos();
+        let mut prefix_wildcard = false;
+        let mut suffix_wildcard = false;
+        let mut remainder = &s[..];
+
+        if let Some(stripped) = remainder.strip_prefix('*') {
+            prefix_wildcard = true;
+            remainder = stripped;
+        }
+        if let Some(stripped) = remainder.strip_suffix('*') {
+            suffix_wildcard = true;
+            remainder = stripped;
+        }
+
+        if remainder.contains('*') {
+            return parser_err!(
+                self,
+                pos,
+                "pattern may only contain `*` as a leading and/or trailing wildcard"
+            );
+        }
+
+        Ok(ConnectionRulePattern {
+            prefix_wildcard,
+            literal_match: remainder.to_owned(),
+            suffix_wildcard,
+        })
+    }
+
+    fn parse_kafka_broker_or_matching_rule(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
+        if self.parse_keyword(MATCHING) {
+            let pattern = self.parse_connection_rule_pattern()?;
+            self.expect_keyword(USING)?;
+            self.expect_keywords(&[AWS, PRIVATELINK])?;
+            let tunnel = self.parse_aws_privatelink()?;
+            Ok(WithOptionValue::KafkaMatchingBrokerRule(
+                KafkaMatchingBrokerRule { pattern, tunnel },
+            ))
+        } else {
+            self.parse_kafka_broker()
+        }
     }
 
     fn parse_kafka_broker(&mut self) -> Result<WithOptionValue<Raw>, ParserError> {
@@ -2555,20 +2639,7 @@ impl<'a> Parser<'a> {
             match self.expect_one_of_keywords(&[AWS, SSH])? {
                 AWS => {
                     self.expect_keywords(&[PRIVATELINK])?;
-                    let connection = self.parse_raw_name()?;
-                    let options = if self.consume_token(&Token::LParen) {
-                        let options = self.parse_comma_separated(
-                            Parser::parse_kafka_broker_aws_privatelink_option,
-                        )?;
-                        self.expect_token(&Token::RParen)?;
-                        options
-                    } else {
-                        vec![]
-                    };
-                    KafkaBrokerTunnel::AwsPrivatelink(KafkaBrokerAwsPrivatelink {
-                        connection,
-                        options,
-                    })
+                    KafkaBrokerTunnel::AwsPrivatelink(self.parse_aws_privatelink()?)
                 }
                 SSH => {
                     self.expect_keywords(&[TUNNEL])?;
@@ -2847,51 +2918,18 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_connection_option_unified(&mut self) -> Result<ConnectionOption<Raw>, ParserError> {
-        let name = match self.parse_connection_option_name()? {
-            ConnectionOptionName::AwsConnection => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::AwsConnection,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            ConnectionOptionName::AwsPrivatelink => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::AwsPrivatelink,
-                    value: Some(self.parse_default_aws_privatelink()?),
-                });
-            }
-            ConnectionOptionName::Broker => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::Broker,
-                    value: Some(self.parse_kafka_broker()?),
-                });
-            }
-            ConnectionOptionName::Brokers => {
-                let _ = self.consume_token(&Token::Eq);
-                let delimiter = self.expect_one_of_tokens(&[Token::LParen, Token::LBracket])?;
-                let brokers = self.parse_comma_separated(Parser::parse_kafka_broker)?;
-                self.expect_token(&match delimiter {
-                    Token::LParen => Token::RParen,
-                    Token::LBracket => Token::RBracket,
-                    _ => unreachable!(),
-                })?;
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::Brokers,
-                    value: Some(WithOptionValue::Sequence(brokers)),
-                });
-            }
-            ConnectionOptionName::SshTunnel => {
-                return Ok(ConnectionOption {
-                    name: ConnectionOptionName::SshTunnel,
-                    value: Some(self.parse_object_option_value()?),
-                });
-            }
-            name => name,
+        let name = self.parse_connection_option_name()?;
+        let value = match name {
+            ConnectionOptionName::AwsConnection => Some(self.parse_object_option_value()?),
+            ConnectionOptionName::AwsPrivatelink => Some(self.parse_default_aws_privatelink()?),
+            ConnectionOptionName::Broker => Some(self.parse_kafka_broker()?),
+            ConnectionOptionName::Brokers => Some(WithOptionValue::Sequence(
+                self.parse_list_value(Parser::parse_kafka_broker_or_matching_rule)?,
+            )),
+            ConnectionOptionName::SshTunnel => Some(self.parse_object_option_value()?),
+            _ => self.parse_optional_option_value()?,
         };
-        Ok(ConnectionOption {
-            name,
-            value: self.parse_optional_option_value()?,
-        })
+        Ok(ConnectionOption { name, value })
     }
 
     fn parse_create_subsource(&mut self) -> Result<Statement<Raw>, ParserError> {

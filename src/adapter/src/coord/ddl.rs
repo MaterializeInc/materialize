@@ -822,10 +822,14 @@ impl Coordinator {
     }
 
     pub(crate) fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
-        let cloud_resource_controller = Arc::clone(self.cloud_resource_controller
-            .as_ref()
-            .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))
-            .expect("vpc endpoints should only be dropped in CLOUD, where `cloud_resource_controller` is `Some`"));
+        // Match the create path (catalog_implications.rs) which gracefully
+        // logs an error when cloud_resource_controller is None, rather than
+        // panicking.
+        let Some(cloud_resource_controller) = self.cloud_resource_controller.as_ref() else {
+            warn!("dropping VPC endpoints without cloud_resource_controller; skipping cleanup");
+            return;
+        };
+        let cloud_resource_controller = Arc::clone(cloud_resource_controller);
         // We don't want to block the coordinator on an external delete api
         // calls, so move the drop vpc_endpoint to a separate task. This does
         // mean that a failed drop won't bubble up to the user as an error

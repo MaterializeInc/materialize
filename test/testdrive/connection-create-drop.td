@@ -479,6 +479,63 @@ contains: HOST option is required
 ! CREATE CONNECTION conn1 TO KAFKA (BROKER '${testdrive.kafka-addr}' USING AWS PRIVATELINK foo (PORT 9093), SECURITY PROTOCOL PLAINTEXT);
 contains: unknown catalog item 'foo'
 
+! CREATE CONNECTION conn1 TO KAFKA (
+    BROKERS (
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK foo (AVAILABILITY ZONE = 'use1-az1'),
+        MATCHING '*.use1-az4.*' USING AWS PRIVATELINK foo (PORT 9093, AVAILABILITY ZONE = 'use1-az4')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  );
+contains: unknown catalog item 'foo'
+
+## MATCHING broker rules for PrivateLink
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET max_aws_privatelink_connections = 5;
+
+> CREATE CONNECTION pl_for_matching TO AWS PRIVATELINK (
+    SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc',
+    AVAILABILITY ZONES ('use1-az1', 'use1-az4')
+  )
+
+# MATCHING requires the feature flag
+! CREATE CONNECTION kafka_matching_no_flag TO KAFKA (
+    BROKERS (
+        'broker:9092',
+        MATCHING '*' USING AWS PRIVATELINK pl_for_matching
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false);
+contains: MATCHING broker rules in BROKERS for Kafka PrivateLink connections is not available
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET enable_kafka_broker_matching_rules = true;
+
+# MATCHING-only BROKERS without a static broker is rejected
+! CREATE CONNECTION kafka_matching_no_static TO KAFKA (
+    BROKERS (
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az1')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false);
+contains: BROKERS must contain at least one static broker address
+
+# Static broker + MATCHING works (validate = false, we just test planning)
+> CREATE CONNECTION kafka_matching_ok TO KAFKA (
+    BROKERS (
+        'broker:9092' USING AWS PRIVATELINK pl_for_matching,
+        MATCHING '*.use1-az1.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az1'),
+        MATCHING '*.use1-az4.*' USING AWS PRIVATELINK pl_for_matching (AVAILABILITY ZONE = 'use1-az4')
+    ),
+    SECURITY PROTOCOL PLAINTEXT
+  ) WITH (VALIDATE = false)
+
+> DROP CONNECTION kafka_matching_ok
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM RESET enable_kafka_broker_matching_rules;
+ALTER SYSTEM RESET max_aws_privatelink_connections;
+
 ! CREATE CONNECTION conn1 TO CONFLUENT SCHEMA REGISTRY (AWS PRIVATELINK foo, PORT 8080)
 contains: unknown catalog item 'foo'
 

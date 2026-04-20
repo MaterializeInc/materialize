@@ -631,6 +631,76 @@ CREATE CONNECTION mysqlconn TO MYSQL (AWS PRIVATELINK = db.schema.item, PORT = 1
 =>
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("mysqlconn")]), connection_type: MySql, if_not_exists: false, values: [ConnectionOption { name: AwsPrivatelink, value: Some(ConnectionAwsPrivatelink(ConnectionDefaultAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("db"), Ident("schema"), Ident("item")])), port: None })) }, ConnectionOption { name: Port, value: Some(Value(Number("1234"))) }, ConnectionOption { name: Host, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("foo")]))) }, ConnectionOption { name: SslCertificate, value: Some(Value(String("cert"))) }, ConnectionOption { name: SslCertificateAuthority, value: Some(Value(String("auth"))) }, ConnectionOption { name: SslKey, value: Some(Value(String("key"))) }], with_options: [] })
 
+# Static broker with PrivateLink + MATCHING rules in BROKERS
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS ('lkc-825730.endpoint.cloud:9092' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1'), MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+----
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS = ('lkc-825730.endpoint.cloud:9092' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az1'), MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az1')))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "lkc-825730.endpoint.cloud:9092", tunnel: AwsPrivatelink(KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] }) }), KafkaMatchingBrokerRule(KafkaMatchingBrokerRule { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, tunnel: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] } })])) }], with_options: [] })
+
+# BROKERS with MATCHING entries
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1'), MATCHING '*.use1-az4.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az4')))
+----
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS = (MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az1'), MATCHING '*.use1-az4.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az4')))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Brokers, value: Some(Sequence([KafkaMatchingBrokerRule(KafkaMatchingBrokerRule { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, tunnel: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] } }), KafkaMatchingBrokerRule(KafkaMatchingBrokerRule { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az4.", suffix_wildcard: true }, tunnel: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az4"))) }] } })])) }], with_options: [] })
+
+# MATCHING with availability zone and port
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1', PORT 9092)))
+----
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS = (MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az1', PORT = 9092)))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Brokers, value: Some(Sequence([KafkaMatchingBrokerRule(KafkaMatchingBrokerRule { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, tunnel: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }, KafkaBrokerAwsPrivatelinkOption { name: Port, value: Some(Value(Number("9092"))) }] } })])) }], with_options: [] })
+
+# Mixed static and MATCHING in BROKERS
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS ('static:9092', MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+----
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS = ('static:9092', MATCHING '*.use1-az1.*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE = 'use1-az1')))
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("kafka_connection")]), connection_type: Kafka, if_not_exists: false, values: [ConnectionOption { name: Brokers, value: Some(Sequence([ConnectionKafkaBroker(KafkaBroker { address: "static:9092", tunnel: Direct }), KafkaMatchingBrokerRule(KafkaMatchingBrokerRule { pattern: ConnectionRulePattern { prefix_wildcard: true, literal_match: ".use1-az1.", suffix_wildcard: true }, tunnel: KafkaBrokerAwsPrivatelink { connection: Name(UnresolvedItemName([Ident("privatelink_svc")])), options: [KafkaBrokerAwsPrivatelinkOption { name: AvailabilityZone, value: Some(Value(String("use1-az1"))) }] } })])) }], with_options: [] })
+
+# MATCHING requires USING AWS PRIVATELINK
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '*.az.*'))
+----
+error: Expected USING, found right parenthesis
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '*.az.*'))
+                                                                       ^
+
+# MATCHING patterns must reject internal `*` wildcards. Only a single leading
+# and/or trailing `*` is supported.
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '*foo*bar*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+----
+error: pattern may only contain `*` as a leading and/or trailing wildcard
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '*foo*bar*' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+                                                               ^
+
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING 'foo*bar' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+----
+error: pattern may only contain `*` as a leading and/or trailing wildcard
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING 'foo*bar' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+                                                               ^
+
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '**az1**' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+----
+error: pattern may only contain `*` as a leading and/or trailing wildcard
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING '**az1**' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+                                                               ^
+
+parse-statement
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING 'broker-*-az1-*.host.com' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+----
+error: pattern may only contain `*` as a leading and/or trailing wildcard
+CREATE CONNECTION kafka_connection TO KAFKA (BROKERS (MATCHING 'broker-*-az1-*.host.com' USING AWS PRIVATELINK privatelink_svc (AVAILABILITY ZONE 'use1-az1')))
+                                                               ^
+
 parse-statement
 CREATE SOURCE mz_source FROM MYSQL CONNECTION mysqlconn FOR TABLES (foo, bar as qux, baz into zop);
 ----
