@@ -181,7 +181,6 @@ impl ClusterReplicaSizeMap {
                         name,
                         ReplicaAllocation {
                             memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
-                            memory_request: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
                             cpu_limit: None,
                             cpu_request: None,
                             disk_limit: None,
@@ -205,7 +204,6 @@ impl ClusterReplicaSizeMap {
                 format!("scale={scale},workers=1"),
                 ReplicaAllocation {
                     memory_limit: None,
-                    memory_request: None,
                     cpu_limit: None,
                     cpu_request: None,
                     disk_limit: None,
@@ -224,7 +222,6 @@ impl ClusterReplicaSizeMap {
                 format!("scale={scale},workers={scale}"),
                 ReplicaAllocation {
                     memory_limit: None,
-                    memory_request: None,
                     cpu_limit: None,
                     cpu_request: None,
                     disk_limit: None,
@@ -243,7 +240,6 @@ impl ClusterReplicaSizeMap {
                 format!("scale=1,workers=8,mem={scale}GiB"),
                 ReplicaAllocation {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
-                    memory_request: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
                     cpu_limit: None,
                     cpu_request: None,
                     disk_limit: None,
@@ -263,7 +259,6 @@ impl ClusterReplicaSizeMap {
             "scale=2,workers=4".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
-                memory_request: None,
                 cpu_limit: None,
                 cpu_request: None,
                 disk_limit: None,
@@ -282,7 +277,6 @@ impl ClusterReplicaSizeMap {
             "free".to_string(),
             ReplicaAllocation {
                 memory_limit: None,
-                memory_request: None,
                 cpu_limit: None,
                 cpu_request: None,
                 disk_limit: None,

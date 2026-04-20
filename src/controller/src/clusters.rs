@@ -75,8 +75,6 @@ pub struct ReplicaConfig {
 pub struct ReplicaAllocation {
     /// The memory limit for each process in the replica.
     pub memory_limit: Option<MemoryLimit>,
-    /// The memory request for each process in the replica.
-    pub memory_request: Option<MemoryLimit>,
     /// The CPU limit for each process in the replica.
     pub cpu_limit: Option<CpuLimit>,
     /// The CPU limit for each process in the replica.
@@ -144,7 +142,6 @@ fn test_replica_allocation_deserialization() {
             disk_limit: Some(DiskLimit(ByteSize::mib(100))),
             disabled: false,
             memory_limit: Some(MemoryLimit(ByteSize::gib(10))),
-            memory_request: None,
             cpu_limit: Some(CpuLimit::from_millicpus(1000)),
             cpu_request: None,
             cpu_exclusive: false,
@@ -181,7 +178,6 @@ fn test_replica_allocation_deserialization() {
             disk_limit: Some(DiskLimit(ByteSize::mib(0))),
             disabled: true,
             memory_limit: Some(MemoryLimit(ByteSize::gib(0))),
-            memory_request: None,
             cpu_limit: Some(CpuLimit::from_millicpus(0)),
             cpu_request: None,
             cpu_exclusive: true,
