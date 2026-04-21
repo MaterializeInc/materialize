@@ -19,7 +19,8 @@
     "prettier": "^2.0.4"
   },
   "resolutions": {
-    "js-yaml": "^3.14.2"
+    "js-yaml": "^3.14.2",
+    "lodash": ">=4.18.0"
   },
   "prettier": {
     "tabWidth": 2,
