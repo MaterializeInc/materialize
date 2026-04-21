@@ -191,7 +191,7 @@ dependencies = [
  "miniz_oxide",
  "num-bigint",
  "quad-rand",
- "rand 0.9.3",
+ "rand 0.9.4",
  "regex-lite",
  "serde",
  "serde_bytes",
@@ -3492,7 +3492,7 @@ dependencies = [
  "foundationdb-sys",
  "foundationdb-tuple",
  "futures",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -3799,7 +3799,7 @@ dependencies = [
  "parking_lot",
  "portable-atomic",
  "quanta",
- "rand 0.9.3",
+ "rand 0.9.4",
  "smallvec",
  "spinning_top",
  "web-time",
@@ -4757,7 +4757,7 @@ dependencies = [
  "futures",
  "kube",
  "kube-runtime",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -4912,7 +4912,7 @@ dependencies = [
  "lru",
  "moka",
  "parking_lot",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5412,7 +5412,7 @@ dependencies = [
  "native-tls",
  "pem",
  "percent-encoding",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "socket2 0.5.10",
@@ -5568,7 +5568,7 @@ dependencies = [
  "prometheus",
  "prost",
  "qcell",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rand_chacha 0.9.0",
  "semver",
  "serde",
@@ -5701,7 +5701,7 @@ dependencies = [
  "flate2",
  "itertools 0.14.0",
  "mz-ore",
- "rand 0.9.3",
+ "rand 0.9.4",
  "regex",
  "serde",
  "serde_json",
@@ -5874,7 +5874,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost",
- "rand 0.9.3",
+ "rand 0.9.4",
  "semver",
  "serde",
  "serde_json",
@@ -5996,7 +5996,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-server-core",
- "rand 0.9.3",
+ "rand 0.9.4",
  "schemars",
  "semver",
  "serde",
@@ -6017,7 +6017,7 @@ dependencies = [
  "mz-cluster-client",
  "mz-ore",
  "mz-service",
- "rand 0.9.3",
+ "rand 0.9.4",
  "regex",
  "timely",
  "tokio",
@@ -6427,7 +6427,7 @@ dependencies = [
  "predicates 3.1.4",
  "prometheus",
  "proptest",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rdkafka",
  "rdkafka-sys",
  "regex",
@@ -6513,7 +6513,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.3",
+ "rand 0.9.4",
  "regex",
  "regex-syntax",
  "seahash",
@@ -6769,7 +6769,7 @@ dependencies = [
  "num_cpus",
  "prost",
  "prost-build",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rdkafka",
  "serde",
  "serde_json",
@@ -7070,7 +7070,7 @@ dependencies = [
  "mz-prof-http",
  "mz-server-core",
  "prometheus",
- "rand 0.9.3",
+ "rand 0.9.4",
  "reqwest",
  "semver",
  "serde",
@@ -7127,7 +7127,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "proptest-derive",
- "rand 0.9.3",
+ "rand 0.9.4",
  "scopeguard",
  "sentry",
  "sentry-panic",
@@ -7209,7 +7209,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.3",
+ "rand 0.9.4",
  "reqwest",
  "serde",
  "serde_json",
@@ -7260,7 +7260,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.3",
+ "rand 0.9.4",
  "semver",
  "serde",
  "serde_json",
@@ -7592,7 +7592,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.3",
+ "rand 0.9.4",
  "regex",
  "ryu",
  "serde",
@@ -7742,7 +7742,7 @@ dependencies = [
  "os_info",
  "pin-project",
  "prometheus",
- "rand 0.9.3",
+ "rand 0.9.4",
  "semver",
  "sentry-tracing",
  "serde",
@@ -7986,7 +7986,7 @@ dependencies = [
  "mz-ore",
  "openssh",
  "openssh-mux-client",
- "rand 0.9.3",
+ "rand 0.9.4",
  "scopeguard",
  "serde",
  "serde_json",
@@ -8270,7 +8270,7 @@ dependencies = [
  "proptest-derive",
  "prost",
  "prost-build",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rdkafka",
  "regex",
  "reqwest",
@@ -8294,7 +8294,7 @@ dependencies = [
  "chrono",
  "mz-kafka-util",
  "mz-ore",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rdkafka",
  "tokio",
  "tokio-postgres",
@@ -8356,7 +8356,7 @@ dependencies = [
  "prost-build",
  "prost-reflect",
  "prost-types",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rdkafka",
  "regex",
  "reqwest",
@@ -8423,7 +8423,7 @@ dependencies = [
  "mz-postgres-client",
  "mz-repr",
  "postgres-protocol",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "tokio",
  "tracing",
@@ -8501,7 +8501,7 @@ dependencies = [
  "prometheus",
  "prost",
  "prost-build",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "timely",
  "tokio",
@@ -9034,7 +9034,7 @@ dependencies = [
  "futures-util",
  "opentelemetry",
  "percent-encoding",
- "rand 0.9.3",
+ "rand 0.9.4",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -9619,7 +9619,7 @@ dependencies = [
  "hmac",
  "md-5",
  "memchr",
- "rand 0.9.3",
+ "rand 0.9.4",
  "sha2",
  "stringprep",
 ]
@@ -9885,7 +9885,7 @@ checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
 dependencies = [
  "bitflags 2.11.0",
  "num-traits",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rand_chacha 0.9.0",
  "rand_xorshift",
  "regex-syntax",
@@ -10179,9 +10179,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ec095654a25171c2124e9e3393a930bddbffdc939556c914957a4c3e0a87166"
+checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
@@ -10252,7 +10252,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
- "rand 0.9.3",
+ "rand 0.9.4",
 ]
 
 [[package]]
@@ -10572,7 +10572,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "46a4bd6027df676bcb752d3724db0ea3c0c5fc1dd0376fec51ac7dcaf9cc69be"
 dependencies = [
- "rand 0.9.3",
+ "rand 0.9.4",
 ]
 
 [[package]]
@@ -10785,9 +10785,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.23"
+version = "0.23.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47796c98c480fce5406ef69d1c76378375492c3b0a0de587be0c1d9feb12f395"
+checksum = "69f9466fb2c14ea04357e91413efb882e2a6d4a406e625449bc0a5d360d53a21"
 dependencies = [
  "once_cell",
  "rustls-pki-types",
@@ -10807,9 +10807,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.102.8"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ca1bc8749bd4cf37b5ce386cc146580777b4e8572c7b97baf22c83f444bee9"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -11040,7 +11040,7 @@ version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26ab054c34b87f96c3e4701bea1888317cde30cc7e4a6136d2c48454ab96661c"
 dependencies = [
- "rand 0.9.3",
+ "rand 0.9.4",
  "sentry-types",
  "serde",
  "serde_json",
@@ -11088,7 +11088,7 @@ checksum = "eecbd63e9d15a26a40675ed180d376fcb434635d2e33de1c24003f61e3e2230d"
 dependencies = [
  "debugid",
  "hex",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -12187,7 +12187,7 @@ dependencies = [
  "pin-project-lite",
  "postgres-protocol",
  "postgres-types",
- "rand 0.9.3",
+ "rand 0.9.4",
  "serde",
  "socket2 0.6.3",
  "tokio",
@@ -12691,7 +12691,7 @@ dependencies = [
  "http 1.4.0",
  "httparse",
  "log",
- "rand 0.9.3",
+ "rand 0.9.4",
  "sha1",
  "thiserror 2.0.18",
  "utf-8",
@@ -12705,7 +12705,7 @@ checksum = "f5384da930ba6d7e467030c421a7332726755d548ba38058aed30c2c30d991d2"
 dependencies = [
  "bytes",
  "indexmap 2.11.4",
- "rand 0.9.3",
+ "rand 0.9.4",
  "rand_distr",
  "scoped-tls",
  "tokio",
