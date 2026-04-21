@@ -4733,7 +4733,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 })
             }) => ReturnType::set_of(RecordAny), oid::FUNC_REGEXP_EXTRACT_OID;
         },
-        "repeat_row" => Table {
+        mz_expr::REPEAT_ROW_NAME => Table {
             params!(Int64) => Operation::unary(move |ecx, n| {
                 ecx.require_feature_flag(&vars::ENABLE_REPEAT_ROW)?;
                 Ok(TableFuncPlan {
