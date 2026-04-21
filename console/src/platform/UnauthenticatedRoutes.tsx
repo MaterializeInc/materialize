@@ -22,6 +22,7 @@ import { AuthenticatedRoutes } from "~/platform/AuthenticatedRoutes";
 import { SentryRoutes } from "~/sentry";
 
 import { Login } from "./auth/Login";
+import { OidcCallback } from "./auth/OidcCallback";
 
 const OidcAuthGuard = ({ children }: React.PropsWithChildren) => {
   const auth = useAuth();
@@ -47,7 +48,7 @@ const SelfManagedRoutes = ({
       {(appConfig.authMode === "Password" ||
         appConfig.authMode === "Sasl" ||
         isOidc) && <Route path={LOGIN_PATH} element={<Login />} />}
-      {isOidc && <Route path="/auth/callback" element={<LoadingScreen />} />}
+      {isOidc && <Route path="/auth/callback" element={<OidcCallback />} />}
       <Route
         path="*"
         element={

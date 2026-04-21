@@ -883,26 +883,33 @@ pub(crate) enum AuthError {
     FailedToUpdateSession,
     #[error("invalid credentials")]
     InvalidCredentials,
+    /// Payload is `OidcError`'s sanitized `Display` (no expected-values leaks).
+    #[error("{0}")]
+    OidcFailed(String),
 }
 
 impl IntoResponse for AuthError {
     fn into_response(self) -> Response {
         warn!("HTTP request failed authentication: {}", self);
         let mut headers = HeaderMap::new();
-        match self {
+        // We omit most detail from the error message we send to the client, to
+        // avoid giving attackers unnecessary information. `OidcFailed` is the
+        // exception — its payload is a sanitized `OidcError::Display` that the
+        // console embeds in the login-page error.
+        let body = match &self {
             AuthError::MissingHttpAuthentication {
                 include_www_authenticate_header,
-            } if include_www_authenticate_header => {
+            } if *include_www_authenticate_header => {
                 headers.insert(
                     http::header::WWW_AUTHENTICATE,
                     HeaderValue::from_static("Basic realm=Materialize"),
                 );
+                "unauthorized".to_string()
             }
-            _ => {}
+            AuthError::OidcFailed(message) => message.clone(),
+            _ => "unauthorized".to_string(),
         };
-        // We omit most detail from the error message we send to the client, to
-        // avoid giving attackers unnecessary information.
-        (StatusCode::UNAUTHORIZED, headers, "unauthorized").into_response()
+        (StatusCode::UNAUTHORIZED, headers, body).into_response()
     }
 }
 
@@ -1297,11 +1304,10 @@ async fn auth(
         }
         Authenticator::Oidc(oidc) => match creds {
             Some(Credentials::Token { token }) => {
-                // Validate JWT token
                 let (mut claims, authenticated) = oidc
                     .authenticate(&token, None)
                     .await
-                    .map_err(|_| AuthError::InvalidCredentials)?;
+                    .map_err(|e| AuthError::OidcFailed(e.to_string()))?;
                 let name = std::mem::take(&mut claims.user);
                 let groups = claims.groups.take();
                 (name, None, authenticated, groups)

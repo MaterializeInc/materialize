@@ -8,6 +8,10 @@
 // by the Apache License, Version 2.0.
 
 import { NOT_SUPPORTED_MESSAGE } from "~/config/AppConfig";
+import {
+  LOGIN_REDIRECT_MESSAGE_KEY,
+  type LoginRedirectMessage,
+} from "~/platform/auth/constants";
 
 import { apiClient, type SelfManagedApiClient } from "../apiClient";
 
@@ -83,8 +87,20 @@ export async function logout(logoutParams: {
 
 export async function logoutAndRedirect(logoutParams: {
   apiClient: SelfManagedApiClient;
+  message?: LoginRedirectMessage;
 }) {
   logout(logoutParams);
+  if (logoutParams.message) {
+    try {
+      sessionStorage.setItem(
+        LOGIN_REDIRECT_MESSAGE_KEY,
+        JSON.stringify(logoutParams.message),
+      );
+    } catch {
+      // Storage unavailable (private browsing, quota). Fall through to a
+      // silent redirect.
+    }
+  }
   window.location.href = LOGIN_PATH;
 }
 

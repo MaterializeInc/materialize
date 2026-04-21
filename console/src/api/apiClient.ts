@@ -20,6 +20,7 @@ import {
 } from "~/config/AppConfig";
 import { ContextHolder } from "~/external-library-wrappers/frontegg";
 import { MzOidcUserManager } from "~/external-library-wrappers/oidc";
+import { formatLoginErrorForOIDC, readAuthErrorDetail } from "~/utils/oidcAuth";
 
 import { logoutAndRedirect } from "./materialize/auth";
 import {
@@ -177,9 +178,17 @@ export class SelfManagedApiClient
 
   #mzApiWithAuthRedirect = async (...req: Parameters<Fetch>) => {
     const response = await globalFetch(...req);
-    // If the user is not authenticated, we redirect to the login page.
     if (response.status === 401) {
-      await logoutAndRedirect({ apiClient: this });
+      const reason =
+        this.authMode === "Oidc"
+          ? formatLoginErrorForOIDC(req[0])
+          : "session_expired";
+      const detail =
+        reason === "auth_rejected"
+          ? await readAuthErrorDetail(response)
+          : undefined;
+      const message = reason ? { reason, detail } : undefined;
+      await logoutAndRedirect({ apiClient: this, message });
     }
     return response;
   };

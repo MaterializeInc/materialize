@@ -36,6 +36,42 @@ import EyeClosedIcon from "~/svg/EyeClosedIcon";
 import EyeOpenIcon from "~/svg/EyeOpenIcon";
 import { MaterializeTheme } from "~/theme";
 
+import {
+  buildAuthRejectedMessage,
+  LOGIN_REASON_MESSAGES,
+  LOGIN_REDIRECT_MESSAGE_KEY,
+  type LoginRedirectMessage,
+} from "./constants";
+
+const isLoginRedirectMessage = (
+  value: unknown,
+): value is LoginRedirectMessage => {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as { reason?: unknown; detail?: unknown };
+  const validReason =
+    v.reason === "auth_rejected" || v.reason === "session_expired";
+  const validDetail = v.detail === undefined || typeof v.detail === "string";
+  return validReason && validDetail;
+};
+
+/** Reads and clears the one-shot message set by {@link logoutAndRedirect}. */
+const consumeLoginRedirectMessage = (): LoginRedirectMessage | null => {
+  let raw: string | null = null;
+  try {
+    raw = sessionStorage.getItem(LOGIN_REDIRECT_MESSAGE_KEY);
+    sessionStorage.removeItem(LOGIN_REDIRECT_MESSAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isLoginRedirectMessage(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+};
+
 type LoginFormState = {
   username: string;
 
@@ -186,6 +222,15 @@ export const Login = () => {
   const isOidc =
     appConfig.mode === "self-managed" && appConfig.authMode === "Oidc";
 
+  // Consume once on mount so a manual refresh of the login page clears it.
+  const [redirectMessage] = useState(consumeLoginRedirectMessage);
+  const reasonMessage =
+    redirectMessage?.reason === "auth_rejected"
+      ? buildAuthRejectedMessage(redirectMessage.detail ?? null)
+      : redirectMessage
+        ? LOGIN_REASON_MESSAGES[redirectMessage.reason]
+        : null;
+
   return (
     <AuthLayout>
       <AuthContentContainer>
@@ -193,6 +238,16 @@ export const Login = () => {
           <HStack my={{ base: "8", lg: "0" }} paddingBottom="8">
             <MaterializeLogo height="12" />
           </HStack>
+          {reasonMessage && (
+            <Alert
+              variant={
+                redirectMessage?.reason === "auth_rejected" ? "error" : "info"
+              }
+              minWidth="100%"
+              message={reasonMessage}
+              mb="4"
+            />
+          )}
           <PasswordLoginForm />
           {isOidc && <SsoLoginLink />}
         </VStack>
