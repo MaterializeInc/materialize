@@ -417,21 +417,21 @@ pub(crate) fn render<'scope>(
                         let row: MySqlRow = row;
                         snapshot_staged += 1;
                         for (output, row_val) in outputs.iter().repeat_clone(row) {
-                            let event = match pack_mysql_row(&mut final_row, row_val, &output.desc)
-                            {
-                                Ok(row) => Ok(SourceMessage {
-                                    key: Row::default(),
-                                    value: row,
-                                    metadata: Row::default(),
-                                }),
-                                // Produce a DefiniteError in the stream for any rows that fail to decode
-                                Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                                    Err(DataflowError::from(DefiniteError::ValueDecodeError(
-                                        err.to_string(),
-                                    )))
-                                }
-                                Err(err) => Err(err)?,
-                            };
+                            let event =
+                                match pack_mysql_row(&mut final_row, row_val, &output.desc, None) {
+                                    Ok(row) => Ok(SourceMessage {
+                                        key: Row::default(),
+                                        value: row,
+                                        metadata: Row::default(),
+                                    }),
+                                    // Produce a DefiniteError in the stream for any rows that fail to decode
+                                    Err(err @ MySqlError::ValueDecodeError { .. }) => {
+                                        Err(DataflowError::from(DefiniteError::ValueDecodeError(
+                                            err.to_string(),
+                                        )))
+                                    }
+                                    Err(err) => Err(err)?,
+                                };
                             let update = (
                                 (output.output_index, event),
                                 GtidPartition::minimum(),
