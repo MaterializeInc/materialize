@@ -3828,7 +3828,7 @@ dependencies = [
  "futures-sink",
  "futures-util",
  "http 0.2.12",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -3847,7 +3847,7 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "http 1.4.0",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "slab",
  "tokio",
  "tokio-util",
@@ -3909,6 +3909,12 @@ dependencies = [
  "equivalent",
  "foldhash 0.2.0",
 ]
+
+[[package]]
+name = "hashbrown"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f467dd6dccf739c208452f8014c75c18bb8301b050ad1cfb27153803edb0f51"
 
 [[package]]
 name = "hashlink"
@@ -4465,12 +4471,12 @@ dependencies = [
 
 [[package]]
 name = "indexmap"
-version = "2.11.4"
+version = "2.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
+checksum = "d466e9454f08e4a911e14806c24e16fba1b4c121d1ea474396f396069cf949d9"
 dependencies = [
  "equivalent",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.0",
  "serde",
  "serde_core",
 ]
@@ -5990,7 +5996,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "k8s-openapi",
  "kube",
  "mz-ore",
@@ -6896,7 +6902,7 @@ dependencies = [
  "aws-types",
  "chrono",
  "fancy-regex",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "itertools 0.14.0",
  "maplit",
  "mysql_async",
@@ -8025,7 +8031,7 @@ dependencies = [
  "futures",
  "humantime",
  "iceberg",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "itertools 0.14.0",
  "maplit",
  "mysql_async",
@@ -9358,7 +9364,7 @@ checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
 dependencies = [
  "fixedbitset",
  "hashbrown 0.15.3",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
 ]
 
 [[package]]
@@ -11181,7 +11187,7 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "itoa",
  "memchr",
  "serde",
@@ -11260,7 +11266,7 @@ dependencies = [
  "chrono",
  "hex",
  "indexmap 1.9.3",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "serde",
  "serde_derive",
  "serde_json",
@@ -11286,7 +11292,7 @@ version = "0.9.34+deprecated"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
 dependencies = [
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "itoa",
  "ryu",
  "serde",
@@ -12282,7 +12288,7 @@ version = "0.19.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8123f27e969974a3dfba720fdb560be359f57b44302d280ba72e76a74480e8a"
 dependencies = [
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "toml_datetime",
  "winnow 0.5.4",
 ]
@@ -12293,7 +12299,7 @@ version = "0.22.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "310068873db2c5b3e7659d2cc35d21855dbafa50d1ce336397c666e3cb08137e"
 dependencies = [
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "serde",
  "serde_spanned",
  "toml_datetime",
@@ -12398,7 +12404,7 @@ checksum = "ebe5ef63511595f1344e2d5cfa636d973292adc0eec1f0ad45fae9f0851ab1d4"
 dependencies = [
  "futures-core",
  "futures-util",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "pin-project-lite",
  "slab",
  "sync_wrapper",
@@ -12704,7 +12710,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5384da930ba6d7e467030c421a7332726755d548ba38058aed30c2c30d991d2"
 dependencies = [
  "bytes",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "rand 0.9.4",
  "rand_distr",
  "scoped-tls",
@@ -12959,7 +12965,7 @@ version = "5.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fcc29c80c21c31608227e0912b2d7fddba57ad76b606890627ba8ee7964e993"
 dependencies = [
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "serde",
  "serde_json",
  "utoipa-gen",
@@ -13613,7 +13619,7 @@ dependencies = [
  "arbitrary",
  "crc32fast",
  "flate2",
- "indexmap 2.11.4",
+ "indexmap 2.14.0",
  "memchr",
  "zopfli",
 ]
