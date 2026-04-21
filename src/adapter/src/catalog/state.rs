@@ -1121,7 +1121,24 @@ impl CatalogState {
 
         let mut uncached_expr = None;
 
-        let item = match plan {
+        // Carry over the plans (`optimized_plan`, `physical_plan`,
+        // `dataflow_metainfo`) from the previous incarnation of this item when
+        // re-parsing an existing item (e.g. after a RENAME). These fields live
+        // on the `CatalogItem` since #35834, but are not reconstructable from
+        // `create_sql` alone — they are populated by the sequencer `_finish`
+        // paths at create time, and by the expression-cache / bootstrap
+        // rendering path on boot. If we don't preserve them here, a RENAME
+        // silently drops the plans and dataflow metainfo for the affected
+        // MV/Index/CT.
+        let previous_plans = previous_item.as_ref().map(|item| {
+            (
+                item.optimized_plan().cloned(),
+                item.physical_plan().cloned(),
+                item.dataflow_metainfo().cloned(),
+            )
+        });
+
+        let mut item = match plan {
             Plan::CreateTable(CreateTablePlan { table, .. }) => {
                 let collections = extra_versions
                     .iter()
@@ -1507,6 +1524,18 @@ impl CatalogState {
                 ));
             }
         };
+
+        // Carry over the plans (`optimized_plan`, `physical_plan`,
+        // `dataflow_metainfo`) from the previous incarnation of this item, if
+        // any. See the comment on `previous_plans` above.
+        if let Some((prev_optimized, prev_physical, prev_metainfo)) = previous_plans {
+            if let Some((optimized_plan, physical_plan, dataflow_metainfo)) = item.plan_fields_mut()
+            {
+                *optimized_plan = prev_optimized;
+                *physical_plan = prev_physical;
+                *dataflow_metainfo = prev_metainfo;
+            }
+        }
 
         Ok((item, uncached_expr))
     }

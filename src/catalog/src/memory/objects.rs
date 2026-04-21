@@ -1848,6 +1848,37 @@ impl CatalogItem {
         }
     }
 
+    /// Returns mutable references to the plan fields (`optimized_plan`,
+    /// `physical_plan`, `dataflow_metainfo`) on plan-bearing items
+    /// (`Index`, `MaterializedView`, `ContinualTask`), or `None` for
+    /// other item kinds.
+    pub fn plan_fields_mut(
+        &mut self,
+    ) -> Option<(
+        &mut Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
+        &mut Option<Arc<DataflowDescription<ComputePlan>>>,
+        &mut Option<DataflowMetainfo<Arc<OptimizerNotice>>>,
+    )> {
+        match self {
+            CatalogItem::Index(idx) => Some((
+                &mut idx.optimized_plan,
+                &mut idx.physical_plan,
+                &mut idx.dataflow_metainfo,
+            )),
+            CatalogItem::MaterializedView(mv) => Some((
+                &mut mv.optimized_plan,
+                &mut mv.physical_plan,
+                &mut mv.dataflow_metainfo,
+            )),
+            CatalogItem::ContinualTask(ct) => Some((
+                &mut ct.optimized_plan,
+                &mut ct.physical_plan,
+                &mut ct.dataflow_metainfo,
+            )),
+            _ => None,
+        }
+    }
+
     /// Whether this item represents a storage collection.
     pub fn is_storage_collection(&self) -> bool {
         match self {
