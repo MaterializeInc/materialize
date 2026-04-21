@@ -1881,6 +1881,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_repeat_row_non_negative,
+        desc: "the repeat_row_non_negative function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_replica_targeted_materialized_views,
         desc: "replica-targeted materialized views",
         default: false,

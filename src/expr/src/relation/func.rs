@@ -3289,6 +3289,22 @@ pub fn repeat_row(a: Datum) -> Option<(Row, Diff)> {
     }
 }
 
+pub fn repeat_row_non_negative<'a>(
+    a: Datum,
+) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
+    let n = a.unwrap_int64();
+    if n < 0 {
+        Err(EvalError::InvalidParameterValue(
+            format!("repeat_row_non_negative got {}", n).into(),
+        ))
+    } else if n == 0 {
+        Ok(Box::new(iter::empty()))
+    } else {
+        // iterator with 1 element; n goes into the diff
+        Ok(Box::new(iter::once((Row::default(), n.into()))))
+    }
+}
+
 fn wrap<'a>(datums: &'a [Datum<'a>], width: usize) -> impl Iterator<Item = (Row, Diff)> + 'a {
     datums
         .chunks(width)
@@ -3396,7 +3412,16 @@ pub enum TableFunc {
     GuardSubquerySize {
         column_type: SqlScalarType,
     },
+    /// Repeats the input row the given number of times. Can even repeat a negative number of times,
+    /// which has some important consequences:
+    /// - can lead to negative accumulations downstream;
+    /// - can't be used in `WITH ORDINALITY` and other constructs that are implemented by
+    ///   `TableFunc::WithOrdinality`, e.g., `ROWS FROM`;
+    /// - output is non-monotonic.
     RepeatRow,
+    /// Same as `RepeatRow`, but errors on a negative count, and thereby avoids the above
+    /// peculiarities.
+    RepeatRowNonNegative,
     UnnestArray {
         el_typ: SqlScalarType,
     },
@@ -3471,7 +3496,8 @@ impl TableFunc {
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GuardSubquerySize { .. }
-            | TableFunc::RepeatRow
+            | TableFunc::RepeatRow // TODO: will move this to the not allowed category in the next commit
+            | TableFunc::RepeatRowNonNegative
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
@@ -3567,6 +3593,7 @@ impl TableFunc {
                 }
             }
             TableFunc::RepeatRow => Ok(Box::new(repeat_row(datums[0]).into_iter())),
+            TableFunc::RepeatRowNonNegative => repeat_row_non_negative(datums[0]),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
             TableFunc::UnnestMap { .. } => Ok(Box::new(unnest_map(datums[0]))),
@@ -3682,7 +3709,7 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::RepeatRow => {
+            TableFunc::RepeatRow | TableFunc::RepeatRowNonNegative => {
                 let column_types = vec![];
                 let keys = vec![];
                 (column_types, keys)
@@ -3764,6 +3791,7 @@ impl TableFunc {
             TableFunc::GenerateSubscriptsArray => 1,
             TableFunc::GuardSubquerySize { .. } => 1,
             TableFunc::RepeatRow => 0,
+            TableFunc::RepeatRowNonNegative => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
             TableFunc::UnnestMap { .. } => 2,
@@ -3791,6 +3819,7 @@ impl TableFunc {
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::RepeatRow
+            | TableFunc::RepeatRowNonNegative
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
@@ -3822,6 +3851,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::GenerateSubscriptsArray => true,
             TableFunc::RepeatRow => false,
+            TableFunc::RepeatRowNonNegative => true,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::UnnestMap { .. } => true,
@@ -3853,6 +3883,7 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
             TableFunc::GuardSubquerySize { .. } => f.write_str("guard_subquery_size"),
             TableFunc::RepeatRow => f.write_str("repeat_row"),
+            TableFunc::RepeatRowNonNegative => f.write_str("repeat_row_non_negative"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),

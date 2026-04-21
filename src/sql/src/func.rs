@@ -4745,6 +4745,18 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 })
             }) => ReturnType::none(true), oid::FUNC_REPEAT_ROW_OID;
         },
+        "repeat_row_non_negative" => Table {
+            params!(Int64) => Operation::unary(move |ecx, n| {
+                ecx.require_feature_flag(&vars::ENABLE_REPEAT_ROW_NON_NEGATIVE)?;
+                Ok(TableFuncPlan {
+                    imp: TableFuncImpl::CallTable {
+                        func: TableFunc::RepeatRowNonNegative,
+                        exprs: vec![n],
+                    },
+                    column_names: vec![]
+                })
+            }) => ReturnType::none(true), oid::FUNC_REPEAT_ROW_NON_NEGATIVE_OID;
+        },
         "seahash" => Scalar {
             params!(String) => UnaryFunc::SeahashString(func::SeahashString)
                 => UInt32, oid::FUNC_SEAHASH_STRING_OID;
