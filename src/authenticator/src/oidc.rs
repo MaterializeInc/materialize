@@ -193,8 +193,47 @@ impl Zeroize for OidcClaims {
             s.zeroize();
         }
         self.aud.clear();
-        // serde_json::Value doesn't implement Zeroize; clearing is best-effort.
-        self.unknown_claims.clear();
+        // serde_json::Value doesn't implement Zeroize; drain entries and
+        // zeroize keys/values before the backing allocations are freed.
+        while let Some((mut k, mut v)) = self.unknown_claims.pop_first() {
+            k.zeroize();
+            zeroize_json_value(&mut v);
+        }
+    }
+}
+
+impl Drop for OidcClaims {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+/// `OidcClaims` implements both `Zeroize` and `Drop` (which calls `zeroize()`),
+/// satisfying the `ZeroizeOnDrop` contract.
+impl ZeroizeOnDrop for OidcClaims {}
+
+fn zeroize_json_value(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::String(s) => s.zeroize(),
+        Value::Array(a) => {
+            for item in a.iter_mut() {
+                zeroize_json_value(item);
+            }
+            a.clear();
+        }
+        Value::Object(map) => {
+            let taken = std::mem::take(map);
+            for (mut k, mut nested) in taken {
+                k.zeroize();
+                zeroize_json_value(&mut nested);
+            }
+        }
+        Value::Number(_) => {
+            *v = Value::Number(serde_json::Number::from(0u8));
+        }
+        Value::Bool(b) => *b = false,
+        Value::Null => {}
     }
 }
 
@@ -594,6 +633,13 @@ mod tests {
         };
         claims.zeroize();
         assert!(claims.user.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn oidc_claims_implements_zeroize_on_drop() {
+        fn assert_zod<T: ZeroizeOnDrop>() {}
+        assert_zod::<OidcClaims>();
+        assert_zod::<ValidatedClaims>();
     }
 
     #[mz_ore::test]
