@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/read_policy.rs
-revision: fcc110b5fe
+revision: b55d3dee25
 ---
 
 # adapter::coord::read_policy

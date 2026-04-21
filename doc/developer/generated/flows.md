@@ -97,7 +97,7 @@ graph LR
    * **`mz_timestamp_oracle::batching_oracle`** — batches concurrent oracle calls for throughput
 2. **`mz_adapter::coord::timestamp_selection`** — `determine_timestamp` picks a read timestamp for a query
 3. **`mz_adapter::coord::read_policy`** — manages `ReadPolicy` per collection, controlling `since` advancement
-4. **`mz_storage_types::read_holds`** — `ReadHold<T>` RAII tokens preventing `since` from advancing past held timestamps
+4. **`mz_storage_types::read_holds`** — `ReadHold` RAII tokens preventing `since` from advancing past held timestamps
 
 ## Persist read/write path
 

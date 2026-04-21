@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/sinks.rs
-revision: 2982634c0d
+revision: b55d3dee25
 ---
 
 # compute-types::sinks
