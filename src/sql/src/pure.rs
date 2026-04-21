@@ -68,6 +68,7 @@ use protobuf_native::compiler::{SourceTreeDescriptorDatabase, VirtualSourceTree}
 use rdkafka::admin::AdminClient;
 use references::{RetrievedSourceReferences, SourceReferenceClient};
 use uuid::Uuid;
+use version_compare;
 
 use crate::ast::{
     AlterSourceAddSubsourceOption, AvroSchema, CreateSourceConnection, CreateSourceStatement,

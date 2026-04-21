@@ -8075,6 +8075,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "version-compare",
 ]
 
 [[package]]
