@@ -7,11 +7,10 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-#
-# Test relaxation of the must_consolidate flag in LIR refinements
-# for single-time dataflows (aka monotonic one-shot `SELECT`s).
-# PR https://github.com/MaterializeInc/materialize/pull/19680
-#
+# Tests LIR optimizations in single-time dataflows (one-shot SELECTs):
+# - refine_single_time_consolidation -> RelaxMustConsolidate -> SingleTimeMonotonic -> PhysicallyMonotonic tweaking the
+#   `must_consolidate` flag on LIR operators.
+# - refine_single_time_operator_selection tweaking the `monotonic` flag on LIR operators.
 
 statement ok
 CREATE TABLE t (a int, b int);
