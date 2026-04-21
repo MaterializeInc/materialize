@@ -7,12 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::fmt::Write;
-
 use maplit::btreemap;
-use mysql_common::Value;
 use mysql_common::binlog::events::{QueryEvent, RowsEventData};
-use mz_mysql_util::{MySqlError, MySqlTableDesc, pack_mysql_row};
+use mz_mysql_util::{MySqlError, pack_mysql_row};
 use mz_ore::iter::IteratorExt;
 use mz_repr::{Diff, Row};
 use mz_storage_types::errors::DataflowError;
@@ -301,30 +298,23 @@ pub(super) async fn handle_rows_event(
             before_row.map(|r| (r, Diff::MINUS_ONE)),
             after_row.map(|r| (r, Diff::ONE)),
         ];
+        let gtid_str = format!("{new_gtid:?}");
         for (binlog_row, diff) in updates.into_iter().flatten() {
             let row = mysql_async::Row::try_from(binlog_row)?;
             for (output, row_val) in outputs.iter().repeat_clone(row) {
-                let row_shape = describe_row_shape(&row_val, &output.desc);
-                let event = match pack_mysql_row(&mut final_row, row_val, &output.desc) {
-                    Ok(row) => Ok(SourceMessage {
-                        key: Row::default(),
-                        value: row,
-                        metadata: Row::default(),
-                    }),
-                    // Produce a DefiniteError in the stream for any rows that fail to decode
-                    Err(err @ MySqlError::ValueDecodeError { .. }) => {
-                        tracing::warn!(
-                            %id,
-                            "timely-{worker_id} decode error for {table:?} \
-                             output={} gtid={new_gtid:?}: {err}; row shape: {row_shape}",
-                            output.output_index,
-                        );
-                        Err(DataflowError::from(DefiniteError::ValueDecodeError(
-                            err.to_string(),
-                        )))
-                    }
-                    Err(err) => Err(err)?,
-                };
+                let event =
+                    match pack_mysql_row(&mut final_row, row_val, &output.desc, Some(&gtid_str)) {
+                        Ok(row) => Ok(SourceMessage {
+                            key: Row::default(),
+                            value: row,
+                            metadata: Row::default(),
+                        }),
+                        // Produce a DefiniteError in the stream for any rows that fail to decode
+                        Err(err @ MySqlError::ValueDecodeError { .. }) => Err(DataflowError::from(
+                            DefiniteError::ValueDecodeError(err.to_string()),
+                        )),
+                        Err(err) => Err(err)?,
+                    };
 
                 let data = (output.output_index, event);
 
@@ -373,58 +363,4 @@ pub(super) async fn handle_rows_event(
     );
 
     Ok(())
-}
-
-/// Describes the structural shape of a row without revealing any data values.
-/// Emits per-column ordinal, the binlog wire type, the expected Materialize
-/// scalar type from the table descriptor, the character-set id (or `binary`),
-/// and a value disposition (`null` or `bytes(len=N)` / primitive kind).
-/// Intended for diagnostic logging on decode errors: MySQL serializes CHAR,
-/// VARCHAR, TEXT, JSON, BLOB, etc. all as `Value::Bytes`, so the wire type
-/// tag and the expected scalar type are what distinguish them.
-fn describe_row_shape(row: &mysql_async::Row, desc: &MySqlTableDesc) -> String {
-    let mut out = String::new();
-    out.push('[');
-    for i in 0..row.len() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        let (wire_type, charset) = match row.columns_ref().get(i) {
-            Some(c) => {
-                let cs = c.character_set();
-                // 63 = binary collation (binary/blob columns).
-                let cs_str = if cs == 63 {
-                    "binary".to_string()
-                } else {
-                    format!("charset={cs}")
-                };
-                (format!("{:?}", c.column_type()), cs_str)
-            }
-            None => ("?".to_string(), "charset=?".to_string()),
-        };
-        let expected = match desc.columns.get(i) {
-            Some(col) => match &col.column_type {
-                Some(ct) => format!("{:?}", ct.scalar_type),
-                None => "ignored".to_string(),
-            },
-            None => "?".to_string(),
-        };
-        let val_desc = match row.as_ref(i) {
-            None => "absent".to_string(),
-            Some(Value::NULL) => "null".to_string(),
-            Some(Value::Bytes(b)) => format!("bytes(len={})", b.len()),
-            Some(Value::Int(_)) => "int".to_string(),
-            Some(Value::UInt(_)) => "uint".to_string(),
-            Some(Value::Float(_)) => "float".to_string(),
-            Some(Value::Double(_)) => "double".to_string(),
-            Some(Value::Date(..)) => "date".to_string(),
-            Some(Value::Time(..)) => "time".to_string(),
-        };
-        let _ = write!(
-            out,
-            "{{ord={i}, wire={wire_type}, {charset}, expected={expected}, val={val_desc}}}"
-        );
-    }
-    out.push(']');
-    out
 }
