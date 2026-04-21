@@ -38,7 +38,7 @@ pub struct FronteggCliArgs {
     )]
     frontegg_tenant: Option<Uuid>,
     /// JWK used to validate JWTs during Frontegg authentication as a PEM public
-    /// key. Can optionally be base64 encoded with the URL-safe alphabet.
+    /// key.
     #[clap(long, env = "FRONTEGG_JWK", requires = "frontegg_tenant")]
     frontegg_jwk: Option<String>,
     /// Path to JWK used to validate JWTs during Frontegg authentication as a PEM public
