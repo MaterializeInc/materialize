@@ -82,6 +82,9 @@ from materialize.parallel_workload.database import (
 )
 from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.expression import ExprKind, expression
+from materialize.parallel_workload.negative_accumulation_errors import (
+    NEGATIVE_ACCUMULATION_ERRORS,
+)
 from materialize.parallel_workload.settings import (
     ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
     Complexity,
@@ -227,6 +230,13 @@ class Action:
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
+        if exe.db.scenario == Scenario.RepeatRow:
+            # Views that use `repeat_row` with a negative count can surface
+            # negative-accumulation errors both at DDL time (constant folding)
+            # and at read time (various operators checking multiplicities).
+            # The central list lives in `negative_accumulation_errors.py` so
+            # we can update it in one place when the error messages change.
+            result.extend(NEGATIVE_ACCUMULATION_ERRORS)
         if materialize.parallel_workload.column.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result

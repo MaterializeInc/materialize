@@ -30,6 +30,7 @@ class Scenario(Enum):
     Rename = "rename"
     BackupRestore = "backup-restore"
     ZeroDowntimeDeploy = "0dt-deploy"
+    RepeatRow = "repeat-row"
 
     @classmethod
     def _missing_(cls, value):
