@@ -79,6 +79,7 @@ MySQL service, see the integration guides:
 [Azure DB](/ingest-data/mysql/azure-db/),
 [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 [Self-hosted](/ingest-data/mysql/self-hosted/).
+
 {{< /note >}}
 
 The source uses MySQL's binlog replication protocol to **continually ingest
@@ -112,9 +113,11 @@ binlog replication for your MySQL service, see the integration guides.
 #### Binlog retention
 
 {{< warning >}}
+
 If Materialize tries to resume replication and finds GTID gaps due to missing
 binlog files, the source enters an errored state and you have to drop and
 recreate it.
+
 {{< /warning >}}
 
 By default, MySQL retains binlog files for **30 days** (i.e., 2592000 seconds)
@@ -174,6 +177,7 @@ related issues, see [Troubleshooting](/ops/troubleshooting/).
 ## Example
 
 {{< important >}}
+
 Before creating a MySQL source, you must enable GTID-based binlog replication in
 the upstream database. For step-by-step instructions, see the integration guide
 for your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
@@ -181,6 +185,7 @@ for your MySQL service: [Amazon RDS](/ingest-data/mysql/amazon-rds/),
 [Azure DB](/ingest-data/mysql/azure-db/),
 [Google Cloud SQL](/ingest-data/mysql/google-cloud-sql/),
 [Self-hosted](/ingest-data/mysql/self-hosted/).
+
 {{< /important >}}
 
 ### Creating a source {#create-source-example}
@@ -279,6 +284,10 @@ _Creates a table in Materialize from the upstream table `mydb.orders`_
 ```mzsql
 CREATE TABLE orders FROM SOURCE mz_source (REFERENCE mydb.orders);
 ```
+
+### Modifying an existing source
+
+{{< include-md file="headless/alter-source-snapshot-blocking-behavior.md" >}}
 
 ## Related pages
 
