@@ -46,6 +46,8 @@ struct Config {
 
     /// Metrics for storage
     pub metrics: StorageMetrics,
+    /// The process-global metrics registry.
+    pub metrics_registry: MetricsRegistry,
     /// Shared rocksdb write buffer manager
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
 }
@@ -69,6 +71,7 @@ pub async fn serve(
         connection_context,
         instance_context,
         metrics: StorageMetrics::register_with(metrics_registry),
+        metrics_registry: metrics_registry.clone(),
         // The shared RocksDB `WriteBufferManager` is shared between the workers.
         // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
         // first worker attempts to initialize it.
@@ -93,6 +96,10 @@ impl ClusterSpec for Config {
     type Response = StorageResponse;
 
     const NAME: &str = "storage";
+
+    fn metrics_registry(&self) -> &MetricsRegistry {
+        &self.metrics_registry
+    }
 
     fn run_worker(
         &self,

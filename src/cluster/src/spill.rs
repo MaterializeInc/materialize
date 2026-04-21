@@ -22,10 +22,45 @@ use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 
+use mz_ore::metric;
+use mz_ore::metrics::{IntCounter, MetricsRegistry};
 use timely::bytes::arc::{Bytes, BytesMut};
 use timely::communication::allocator::zero_copy::spill::{
     BytesFetch, BytesSpill, PrefetchPolicy, SpillPolicy, SpillPolicyFn, Threshold,
 };
+
+/// Prometheus metrics for merge queue spilling.
+#[derive(Clone, Debug)]
+pub struct SpillMetrics {
+    spill_chunks_total: IntCounter,
+    spill_bytes_total: IntCounter,
+    fetch_chunks_total: IntCounter,
+    fetch_bytes_total: IntCounter,
+}
+
+impl SpillMetrics {
+    /// Register the spill metrics with the provided registry.
+    pub fn register_with(registry: &MetricsRegistry) -> Self {
+        Self {
+            spill_chunks_total: registry.register(metric!(
+                name: "mz_timely_spill_chunks_total",
+                help: "Total number of chunks spilled out of the timely merge queue.",
+            )),
+            spill_bytes_total: registry.register(metric!(
+                name: "mz_timely_spill_bytes_total",
+                help: "Total bytes spilled out of the timely merge queue.",
+            )),
+            fetch_chunks_total: registry.register(metric!(
+                name: "mz_timely_spill_fetch_chunks_total",
+                help: "Total number of spilled chunks fetched back into the timely merge queue.",
+            )),
+            fetch_bytes_total: registry.register(metric!(
+                name: "mz_timely_spill_fetch_bytes_total",
+                help: "Total bytes fetched back into the timely merge queue from spill storage.",
+            )),
+        }
+    }
+}
 
 /// Configuration for lgalloc-backed merge queue spilling.
 #[derive(Clone, Debug)]
@@ -34,6 +69,8 @@ pub struct SpillConfig {
     pub threshold_bytes: usize,
     /// Bytes kept in memory at the head / prefetch budget on the reader side.
     pub head_reserve_bytes: usize,
+    /// Prometheus metrics handle.
+    pub metrics: SpillMetrics,
 }
 
 impl SpillConfig {
@@ -41,8 +78,11 @@ impl SpillConfig {
     pub fn into_policy_fn(self) -> SpillPolicyFn {
         let threshold_bytes = self.threshold_bytes;
         let head_reserve_bytes = self.head_reserve_bytes;
+        let metrics = Arc::new(self.metrics);
         Arc::new(move || {
-            let strategy: Box<dyn BytesSpill> = Box::new(LgallocSpillStrategy);
+            let strategy: Box<dyn BytesSpill> = Box::new(LgallocSpillStrategy {
+                metrics: Arc::clone(&metrics),
+            });
             let mut tp = Threshold::new(strategy);
             tp.threshold_bytes = threshold_bytes;
             tp.head_reserve_bytes = head_reserve_bytes;
@@ -58,7 +98,9 @@ impl SpillConfig {
 /// Each spilled chunk is copied into its own lgalloc allocation (with a heap
 /// fallback if lgalloc cannot service the size), releasing the originating
 /// slab. The fetch handle hands the chunk back as a fresh [`Bytes`].
-struct LgallocSpillStrategy;
+struct LgallocSpillStrategy {
+    metrics: Arc<SpillMetrics>,
+}
 
 impl BytesSpill for LgallocSpillStrategy {
     fn spill(&mut self, chunks: &mut Vec<Bytes>, handles: &mut Vec<Box<dyn BytesFetch>>) {
@@ -73,8 +115,11 @@ impl BytesSpill for LgallocSpillStrategy {
             // Wrap the (possibly larger) lgalloc buffer and split off exactly the chunk bytes.
             let mut bm = BytesMut::from(buf);
             let bytes = bm.extract_to(chunk_len);
+            self.metrics.spill_chunks_total.inc();
+            self.metrics.spill_bytes_total.inc_by(chunk_len as u64);
             handles.push(Box::new(LgallocHandleEntry {
                 bytes: Mutex::new(Some(bytes)),
+                metrics: Arc::clone(&self.metrics),
             }));
         }
     }
@@ -82,6 +127,7 @@ impl BytesSpill for LgallocSpillStrategy {
 
 struct LgallocHandleEntry {
     bytes: Mutex<Option<Bytes>>,
+    metrics: Arc<SpillMetrics>,
 }
 
 impl BytesFetch for LgallocHandleEntry {
@@ -92,6 +138,8 @@ impl BytesFetch for LgallocHandleEntry {
             .expect("spill handle poisoned")
             .take()
             .expect("spill handle fetched twice");
+        self.metrics.fetch_chunks_total.inc();
+        self.metrics.fetch_bytes_total.inc_by(bytes.len() as u64);
         Ok(vec![bytes])
     }
 }

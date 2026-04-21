@@ -30,8 +30,10 @@ use tokio::sync::mpsc;
 use tracing::{info, info_span};
 use uuid::Uuid;
 
+use mz_ore::metrics::MetricsRegistry;
+
 use crate::communication::initialize_networking;
-use crate::spill::SpillConfig;
+use crate::spill::{SpillConfig, SpillMetrics};
 
 type PartitionedClient<C, R> = Partitioned<LocalClient<C, R>, C, R>;
 
@@ -168,6 +170,9 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
     /// The name of this cluster ("compute" or "storage").
     const NAME: &str;
 
+    /// Return the metrics registry used to register cluster-level metrics.
+    fn metrics_registry(&self) -> &MetricsRegistry;
+
     /// Run the given Timely worker.
     fn run_worker(
         &self,
@@ -207,6 +212,7 @@ pub trait ClusterSpec: Clone + Send + Sync + 'static {
             SpillConfig {
                 threshold_bytes: config.spill_threshold_bytes,
                 head_reserve_bytes: config.spill_head_reserve_bytes,
+                metrics: SpillMetrics::register_with(self.metrics_registry()),
             }
             .into_policy_fn()
         });
