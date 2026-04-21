@@ -490,36 +490,9 @@ impl Plan {
             Self::refine_union_negate_consolidation(&mut dataflow);
         }
 
-        if dataflow.is_single_time() {
-            Self::refine_single_time_operator_selection(&mut dataflow);
+        Self::refine_single_time_operator_selection(&mut dataflow);
 
-            // The relaxation of the `must_consolidate` flag performs an LIR-based
-            // analysis and transform under checked recursion. By a similar argument
-            // made in `from_mir`, we do not expect the recursion limit to be hit.
-            // However, if that happens, we propagate an error to the caller.
-            // To apply the transform, we first obtain monotonic source and index
-            // global IDs and add them to a `TransformConfig` instance.
-            let monotonic_ids = dataflow
-                .source_imports
-                .iter()
-                .filter_map(|(id, source_import)| source_import.monotonic.then_some(*id))
-                .chain(
-                    dataflow
-                        .index_imports
-                        .iter()
-                        .filter_map(|(_id, index_import)| {
-                            if index_import.monotonic {
-                                Some(index_import.desc.on_id)
-                            } else {
-                                None
-                            }
-                        }),
-                )
-                .collect::<BTreeSet<_>>();
-
-            let config = TransformConfig { monotonic_ids };
-            Self::refine_single_time_consolidation(&mut dataflow, &config)?;
-        }
+        Self::refine_single_time_consolidation(&mut dataflow)?;
 
         soft_assert_eq_no_log!(dataflow.check_invariants(), Ok(()));
 
@@ -639,18 +612,36 @@ impl Plan {
         mz_repr::explain::trace_plan(dataflow);
     }
 
-    /// Refines the plans of objects to be built as part of `dataflow` to take advantage
-    /// of monotonic operators if the dataflow refers to a single-time, i.e., is for a
-    /// one-shot SELECT query.
+    /// If the dataflow refers to a single-time, i.e., is for a one-shot SELECT query, this function
+    /// refines the `dataflow` to use monotonic operators.
+    ///
+    /// Note that we set the `must_consolidate` flag on the monotonic operators, i.e., we don't
+    /// assume physical monotonicity here. Reasoning about physical monotonicity and refining the
+    /// `must_consolidate` flag is the responsibility of `refine_single_time_consolidation`.
+    ///
+    /// Note that, strictly speaking, choosing monotonic operators is valid only by assuming that
+    /// - all inputs of single-time dataflows are logically (i.e., after consolidation) monotonic;
+    /// - it's not possible to introduce logically non-monotonic collections inside a single-time
+    ///   dataflow when the inputs are logically monotonic.
+    ///
+    /// This assumption is not true when there are negative accumulations, which can be introduced
+    /// by bugs (in Materialize or external systems), or by user error when using `repeat_row`.
+    /// In such cases, the introduced monotonic operators won't produce correct results. This is
+    /// considered ok, because:
+    /// - In most cases, monotonic operators will detect non-monotonic input, and cleanly error out.
+    /// - In some cases, a monotonic operator might produce garbage output when given non-monotonic
+    ///   input. Even this is considered ok, because we generally don't expect the system to always
+    ///   detect negative accumulations (because this seems to be ~impossible to achieve without
+    ///   adding further resource usage to various operators, not just monotonic operators).
     #[mz_ore::instrument(
         target = "optimizer",
         level = "debug",
         fields(path.segment = "refine_single_time_operator_selection")
     )]
     fn refine_single_time_operator_selection(dataflow: &mut DataflowDescription<Self>) {
-        // We should only reach here if we have a one-shot SELECT query, i.e.,
-        // a single-time dataflow.
-        assert!(dataflow.is_single_time());
+        if !dataflow.is_single_time() {
+            return;
+        }
 
         // Upgrade single-time plans to monotonic.
         for build_desc in dataflow.objects_to_build.iter_mut() {
@@ -698,16 +689,41 @@ impl Plan {
     )]
     fn refine_single_time_consolidation(
         dataflow: &mut DataflowDescription<Self>,
-        config: &TransformConfig,
     ) -> Result<(), String> {
-        // We should only reach here if we have a one-shot SELECT query, i.e.,
-        // a single-time dataflow.
-        assert!(dataflow.is_single_time());
+        if !dataflow.is_single_time() {
+            return Ok(());
+        }
+
+        // The relaxation of the `must_consolidate` flag performs an LIR-based
+        // analysis and transform under checked recursion. By a similar argument
+        // made in `from_mir`, we do not expect the recursion limit to be hit.
+        // However, if that happens, we propagate an error to the caller.
+        // To apply the transform, we first obtain monotonic source and index
+        // global IDs and add them to a `TransformConfig` instance.
+        let monotonic_ids = dataflow
+            .source_imports
+            .iter()
+            .filter_map(|(id, source_import)| source_import.monotonic.then_some(*id))
+            .chain(
+                dataflow
+                    .index_imports
+                    .iter()
+                    .filter_map(|(_id, index_import)| {
+                        if index_import.monotonic {
+                            Some(index_import.desc.on_id)
+                        } else {
+                            None
+                        }
+                    }),
+            )
+            .collect::<BTreeSet<_>>();
+
+        let config = TransformConfig { monotonic_ids };
 
         let transform = transform::RelaxMustConsolidate;
         for build_desc in dataflow.objects_to_build.iter_mut() {
             transform
-                .transform(config, &mut build_desc.plan)
+                .transform(&config, &mut build_desc.plan)
                 .map_err(|_| "Maximum recursion limit error in consolidation relaxation.")?;
         }
         mz_repr::explain::trace_plan(dataflow);
