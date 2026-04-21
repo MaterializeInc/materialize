@@ -444,7 +444,13 @@ fn create_public_service_object(
     mz: &Materialize,
     generation: u64,
 ) -> Service {
-    create_base_service_object(config, mz, generation, &mz.environmentd_service_name())
+    create_base_service_object(
+        config,
+        mz,
+        generation,
+        &mz.environmentd_service_name(),
+        true,
+    )
 }
 
 fn create_generation_service_object(
@@ -457,6 +463,7 @@ fn create_generation_service_object(
         mz,
         generation,
         &mz.environmentd_generation_service_name(generation),
+        false,
     )
 }
 
@@ -465,6 +472,7 @@ fn create_base_service_object(
     mz: &Materialize,
     generation: u64,
     service_name: &str,
+    headless: bool,
 ) -> Service {
     let ports = vec![
         ServicePort {
@@ -497,7 +505,11 @@ fn create_base_service_object(
 
     let spec = ServiceSpec {
         type_: Some("ClusterIP".to_string()),
-        cluster_ip: Some("None".to_string()),
+        cluster_ip: if headless {
+            Some("None".to_string())
+        } else {
+            None
+        },
         selector: Some(selector),
         ports: Some(ports),
         ..Default::default()
