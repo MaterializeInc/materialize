@@ -56,7 +56,7 @@ Per scrape, do you query and trigger? Or pre-write everything beforehand? Query 
 ### Persist (Durable Storage)
 
 General notes:
-- All of these seem to align with existing metrics. TODO (SangJunBak): audit it closely.
+- All of these seem to align with existing metrics.
 
 
 Metrics for the Persist layer that manages durable storage in S3/blob storage.
@@ -262,7 +262,7 @@ General notes:
 | `mz_cluster_replicas_configured` | Gauge | `cluster` | Number of replicas configured (replication factor) | ? | Redundant with any of the utilization metrics
 | `mz_cluster_replicas_ready` | Gauge | `cluster` | Number of replicas in ready state | ? | Not sure what ready means here. I think as soon as we see some utilization active per replica, we know it's "ready" too.
 | `mz_cluster_replicas_not_ready` | Gauge | `cluster` | Number of replicas not ready | ? | Same as `mz_cluster_replicas_ready`.
-| `mz_cluster_replica_status` | Gauge | `cluster`, `replica`, `status` | Replica status (1 if in this status, 0 otherwise; status: ready, not_ready, rehydrating) | ? | A cluster doesn't have a hydration status. Can perhaps derive it from the hydration status of all dataflows inside of it. We do have `mz_compute_collection_count` with label `status`
+| `mz_cluster_replica_status` | Gauge | `cluster`, `replica`, `status` | Replica status (1 if in this status, 0 otherwise; status: ready, not_ready, rehydrating) | ? | A cluster doesn't have a hydration status. Can perhaps derive it from the hydration status of all dataflows inside of it. We do have `mz_compute_collection_count` with labels `("worker_id", "type", "hydrated")` where type is something like "system" | "user" | "transient", originally meant for tracking 0dt deployments.
 | `mz_cluster_replica_uptime_seconds` | Gauge | `cluster`, `replica` | Replica uptime in seconds | ? | Derivable from pod's `container_start_time_seconds`
 | `mz_cluster_replica_restarts_total` | Counter | `cluster`, `replica` | Total replica restarts | ? | Redundant with container_start_time_seconds in k8s. We could potentially expose this from scraping cadvisor, but realistically it might be
 
@@ -337,27 +337,32 @@ No overlap at all:
 
 Metrics for data ingestion from external systems.
 
-### General Source Metrics (TODO)
+General notes:
+- None of these have clusters as the labels. It's usually (source_id, parent_source_id (for source tables), shard, or worker_id). The storage controller has knowledge of cluster replicas so we can attach it possbly, though it'll be null sometimes.
+- I wonder whether we need the LSN of each source as gauges in prometheus. As long as we have the source metrics, we can observe how far along/behind/backed up the source is. Then for deeper debugging, each of the LSNs are already stored in the progress collection.
+- We may want to include `mz_source_progress`.
+
+### General Source Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_source_status` | Gauge | `source`, `cluster`, `status` | Source status (1 if in status; status: hydrated, running, stalled, failed, dropped) | ? (data in `mz_internal.mz_source_statuses` SQL table) |
+| `mz_source_status` | Gauge | `source`, `cluster`, `status` | Source status (1 if in status; status: hydrated, running, stalled, failed, dropped) | ? (data in `mz_internal.mz_source_statuses` SQL table) | We could get the data from orchestrator-kubernetes and avoid sending it through environmentd to the storage controller.
 | `mz_source_messages_received_total` | Counter | `source`, `cluster` | Total messages received from upstream | `mz_source_messages_received` (storage/src/statistics.rs) — counter with source_id, worker_id, parent_source_id labels |
 | `mz_source_bytes_received_total` | Counter | `source`, `cluster` | Total bytes received from upstream | `mz_source_bytes_received` (storage/src/statistics.rs) — counter with source_id, worker_id, parent_source_id labels |
 | `mz_source_updates_staged_total` | Counter | `source`, `cluster` | Updates staged (pending commit) | `mz_source_updates_staged` (storage/src/statistics.rs) — counter with source_id, worker_id, shard_id labels |
 | `mz_source_updates_committed_total` | Counter | `source`, `cluster` | Updates durably committed | `mz_source_updates_committed` (storage/src/statistics.rs) — counter with source_id, worker_id, shard_id labels |
-| `mz_source_records_indexed_total` | Counter | `source`, `cluster` | Records added to indexes | `mz_source_records_indexed` (storage/src/statistics.rs) — gauge with source_id, worker_id, shard_id labels |
-| `mz_source_errors_total` | Counter | `source`, `cluster`, `error_type` | Source errors (error_type: connection, parse, schema, timeout) | `mz_source_error_inserts` / `mz_source_error_retractions` (storage/src/metrics/source.rs) |
+| `mz_source_records_indexed_total` | Counter | `source`, `cluster` | Records added to indexes | `mz_source_records_indexed` (storage/src/statistics.rs) — gauge with source_id, worker_id, shard_id labels | Useful for debugging upsert sources.
+| `mz_source_errors_total` | Counter | `source`, `cluster`, `error_type` | Source errors (error_type: connection, parse, schema, timeout) | `mz_source_error_inserts` / `mz_source_error_retractions` (storage/src/metrics/source.rs) | Doesn't have the error type.
 
-### Snapshot Progress (TODO)
+### Snapshot Progress
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_source_snapshot_committed` | Gauge | `source`, `cluster` | Whether initial snapshot is committed (0 or 1) | `mz_source_snapshot_committed` (storage/src/statistics.rs) — gauge with source_id, worker_id, shard_id labels |
 | `mz_source_snapshot_records_known_size` | Gauge | `source`, `cluster` | Total records known in snapshot | `mz_source_snapshot_records_known` (storage/src/statistics.rs) — gauge with source_id, worker_id, shard_id labels |
-| `mz_source_snapshot_progress_ratio` | Gauge | `source`, `cluster` | Snapshot progress as ratio (0.0-1.0) | ? (derivable from `mz_source_snapshot_records_known` and `mz_source_snapshot_records_staged` in storage/src/statistics.rs) |
+| `mz_source_snapshot_progress_ratio` | Gauge | `source`, `cluster` | Snapshot progress as ratio (0.0-1.0) | derivable from `mz_source_snapshot_records_known` and `mz_source_snapshot_records_staged` in storage/src/statistics.rs |
 
-### Replication Progress & Lag (TODO)
+### Replication Progress & Lag
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -366,34 +371,34 @@ Metrics for data ingestion from external systems.
 | `mz_source_offset_lag` | Gauge | `source`, `cluster` | Offset lag (known - committed) | ? (derivable from `mz_source_offset_known` - `mz_source_offset_committed`) |
 | `mz_source_replication_lag_seconds` | Gauge | `source`, `cluster` | Estimated replication lag in seconds | `mz_source_rehydration_latency_ms` (storage/src/statistics.rs) — gauge in milliseconds |
 
-### Kafka Source Metrics (TODO)
+### Kafka Source Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_source_kafka_partitions_assigned` | Gauge | `source`, `cluster` | Number of Kafka partitions assigned | ? |
 | `mz_source_kafka_consumer_lag` | Gauge | `source`, `cluster`, `partition` | Consumer lag per partition | `mz_kafka_partition_offset_max` (storage/src/metrics/source/kafka.rs) — max offset per partition; lag derivable |
-| `mz_source_kafka_bytes_per_second` | Gauge | `source`, `cluster` | Current ingestion rate (bytes/sec) | ? (derivable from `mz_bytes_read_total` rate) |
-| `mz_source_kafka_messages_per_second` | Gauge | `source`, `cluster` | Current ingestion rate (messages/sec) | ? (derivable from `mz_source_row_inserts` rate) |
+| `mz_source_kafka_bytes_per_second` | Gauge | `source`, `cluster` | Current ingestion rate (bytes/sec) | `mz_bytes_read_total` |
+| `mz_source_kafka_messages_per_second` | Gauge | `source`, `cluster` | Current ingestion rate (messages/sec) | `mz_source_messages_received` |
 
-### PostgreSQL/MySQL Source Metrics (TODO)
+### PostgreSQL/MySQL Source Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_source_postgres_replication_slot_lag_bytes` | Gauge | `source`, `cluster` | Replication slot lag in bytes | ? |
-| `mz_source_postgres_wal_lsn_received` | Gauge | `source`, `cluster` | Last WAL LSN received | `mz_postgres_per_source_wal_lsn` (storage/src/metrics/source/postgres.rs) |
-| `mz_source_postgres_wal_lsn_committed` | Gauge | `source`, `cluster` | Last WAL LSN committed | ? |
+| `mz_source_postgres_replication_slot_lag_bytes` | Gauge | `source`, `cluster` | Replication slot lag in bytes | ? | Not sure what this means.
+| `mz_source_postgres_wal_lsn_received` | Gauge | `source`, `cluster` | Last WAL LSN received | ? |
+| `mz_source_postgres_wal_lsn_committed` | Gauge | `source`, `cluster` | Last WAL LSN committed |  `mz_postgres_per_source_wal_lsn` (storage/src/metrics/source/postgres.rs) |
 | `mz_source_postgres_tables_replicated` | Gauge | `source`, `cluster` | Number of tables being replicated | `mz_postgres_per_source_tables_count` (storage/src/metrics/source/postgres.rs) |
 | `mz_source_mysql_gtid_position` | Gauge | `source`, `cluster` | Current GTID position | `mz_mysql_sum_gtid_txns` (storage/src/metrics/source/mysql.rs) |
 | `mz_source_mysql_binlog_lag_seconds` | Gauge | `source`, `cluster` | Binlog replication lag | ? |
 
-### Webhook Source Metrics (TODO)
+### Webhook Source Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_source_webhook_requests_total` | Counter | `source`, `cluster`, `status` | Webhook requests (status: accepted, rejected, error) | `mz_webhook_get_appender_count` (adapter/src/metrics.rs) — counter of appender requests |
-| `mz_source_webhook_bytes_received_total` | Counter | `source`, `cluster` | Bytes received via webhook | ? |
-| `mz_source_webhook_validation_failures_total` | Counter | `source`, `cluster` | Webhook validation failures (CHECK clause) | `mz_webhook_validation_reduce_failures` (adapter/src/metrics.rs) |
-| `mz_source_webhook_request_duration_seconds` | Histogram | `source`, `cluster` | Webhook request processing time | ? |
+| `mz_source_webhook_bytes_received_total` | Counter | `source`, `cluster` | Bytes received via webhook | `mz_source_bytes_received` (storage/src/statistics.rs)  |
+| `mz_source_webhook_validation_failures_total` | Counter | `source`, `cluster` | Webhook validation failures (CHECK clause) | ? | There exists `mz_webhook_validation_reduce_failures` (adapter/src/metrics.rs) which occur when we fail to reduce webhook statements to MIR. Not sure how valueable this is, also the reason label isn't enumerated.
+| `mz_source_webhook_request_duration_seconds` | Histogram | `source`, `cluster` | Webhook request processing time | ? | We can add this in `http/webhook.rs`.
 
 ---
 
@@ -401,7 +406,7 @@ Metrics for data ingestion from external systems.
 
 Metrics for data output to external systems.
 
-### General Sink Metrics (TODO)
+### General Sink Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -410,20 +415,20 @@ Metrics for data output to external systems.
 | `mz_sink_messages_committed_total` | Counter | `sink`, `cluster` | Messages committed to external system | `mz_sink_messages_committed` (storage/src/statistics.rs) — counter with sink_id, worker_id labels |
 | `mz_sink_bytes_staged_total` | Counter | `sink`, `cluster` | Bytes staged for delivery | `mz_sink_bytes_staged` (storage/src/statistics.rs) — counter with sink_id, worker_id labels |
 | `mz_sink_bytes_committed_total` | Counter | `sink`, `cluster` | Bytes committed to external system | `mz_sink_bytes_committed` (storage/src/statistics.rs) — counter with sink_id, worker_id labels |
-| `mz_sink_errors_total` | Counter | `sink`, `cluster`, `error_type` | Sink errors (error_type: connection, write, schema, timeout) | ? |
+| `mz_sink_errors_total` | Counter | `sink`, `cluster`, `error_type` | Sink errors (error_type: connection, write, schema, timeout) | ? | Potentially derivable from the data in `MZ_SINK_STATUS_HISTORY`. However the error types aren't enumerated.
 
-### Kafka Sink Metrics (TODO)
+### Kafka Sink Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_sink_kafka_rows_delivered_total` | Counter | `sink`, `cluster` | Rows delivered to Kafka | `mz_sink_rdkafka_txmsgs` (storage/src/metrics/sink/kafka.rs) — transmitted messages |
 | `mz_sink_kafka_bytes_delivered_total` | Counter | `sink`, `cluster` | Bytes delivered to Kafka | `mz_sink_rdkafka_txmsg_bytes` (storage/src/metrics/sink/kafka.rs) — transmitted bytes |
-| `mz_sink_kafka_transactions_total` | Counter | `sink`, `cluster`, `status` | Kafka transactions (status: committed, aborted) | `mz_sink_rdkafka_tx` / `mz_sink_rdkafka_tx_bytes` (storage/src/metrics/sink/kafka.rs) |
+| `mz_sink_kafka_transactions_total` | Counter | `sink`, `cluster`, `status` | Kafka transactions (status: committed, aborted) | `mz_sink_rdkafka_tx` / `mz_sink_rdkafka_tx_bytes` (storage/src/metrics/sink/kafka.rs) | Status isn't known but we can get the number of errors, retries, and disconnects
 | `mz_sink_kafka_delivery_lag_seconds` | Gauge | `sink`, `cluster` | Time since last successful delivery | ? |
 | `mz_sink_kafka_produce_latency_seconds` | Histogram | `sink`, `cluster` | Kafka produce latency | ? |
 | `mz_sink_kafka_retries_total` | Counter | `sink`, `cluster` | Transaction retry count | `mz_sink_rdkafka_txretries` (storage/src/metrics/sink/kafka.rs) |
 
-### Iceberg Sink Metrics (TODO)
+### Iceberg Sink Metrics
 
 Note: Materialize now has native Iceberg sink support.
 
@@ -434,7 +439,7 @@ Note: Materialize now has native Iceberg sink support.
 | `mz_sink_iceberg_files_written_total` | Counter | `sink`, `cluster` | Parquet/data files written | `mz_sink_iceberg_data_files_written` / `mz_sink_iceberg_delete_files_written` (storage/src/metrics/sink/iceberg.rs) |
 | `mz_sink_iceberg_file_size_bytes` | Histogram | `sink`, `cluster` | Distribution of file sizes | ? |
 | `mz_sink_iceberg_commits_total` | Counter | `sink`, `cluster`, `status` | Iceberg commits (status: success, failure) | `mz_sink_iceberg_snapshots_committed` / `mz_sink_iceberg_commit_failures` (storage/src/metrics/sink/iceberg.rs) |
-| `mz_sink_iceberg_commit_lag_seconds` | Gauge | `sink`, `cluster` | Time since last successful commit | ? |
+| `mz_sink_iceberg_commit_lag_seconds` | Gauge | `sink`, `cluster` | Time since last successful commit | `mz_sink_iceberg_commit_duration_seconds` with labels (sink_id, worker_id) | Not the same metric as described, but reveals very similar information
 | `mz_sink_iceberg_snapshots_total` | Counter | `sink`, `cluster` | Iceberg snapshots created | `mz_sink_iceberg_snapshots_committed` (storage/src/metrics/sink/iceberg.rs) |
 
 ---
@@ -443,27 +448,33 @@ Note: Materialize now has native Iceberg sink support.
 
 Metrics for incrementally maintained materialized views and indexes.
 
-### Materialized View Metrics (TODO)
+General notes:
+
+- Regarding hydration statuses, it was an intentional decision to not report per-dataflow hydration status. Context: https://materializeinc.slack.com/archives/C08ACQNGSQK/p1738774881494979
+
+### Materialized View Metrics
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
-| `mz_materialized_view_status` | Gauge | `view`, `cluster`, `status` | View status (1 if in status; status: hydrated, running, stalled, failed, dropped) | ? (data in `mz_internal.mz_materialized_view_statuses` SQL table) |
-| `mz_materialized_view_rows` | Gauge | `view`, `cluster` | Approximate row count | `mz_arrangement_record_count` (environmentd/src/http/prometheus.rs) — SQL-based, per-collection |
-| `mz_materialized_view_bytes` | Gauge | `view`, `cluster` | Storage bytes used | `mz_arrangement_size_bytes` (environmentd/src/http/prometheus.rs) — SQL-based, per-collection |
+| `mz_materialized_view_status` | Gauge | `view`, `cluster`, `status` | View status (1 if in status; status: hydrated, running, stalled, failed, dropped) | ? |  We have `mz_compute_collection_count`
+| `mz_materialized_view_rows` | Gauge | `view`, `cluster` | Approximate row count | ? | Can be derived from `mz_arrangement_record_count` (environmentd/src/http/prometheus.rs) — SQL-based, per-collection
+| `mz_materialized_view_bytes` | Gauge | `view`, `cluster` | Storage bytes used | ? | Can be derived from `mz_arrangement_size_bytes` (environmentd/src/http/prometheus.rs) — SQL-based, per-collection
 | `mz_materialized_view_updates_total` | Counter | `view`, `cluster` | Total updates processed | ? |
 | `mz_materialized_view_retractions_total` | Counter | `view`, `cluster` | Total retractions processed | ? |
 
-### Freshness (TODO)
+### Freshness
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
 | `mz_materialized_view_freshness_seconds` | Gauge | `view`, `cluster` | Wallclock lag (how far behind real-time) | `mz_dataflow_wallclock_lag_seconds` (cluster-client/src/metrics.rs) — gauge with instance_id, replica_id, collection_id, quantile labels |
 | `mz_materialized_view_local_seconds` | Gauge | `view`, `cluster`, `replica` | Per-replica local lag | `mz_dataflow_wallclock_lag_seconds` (cluster-client/src/metrics.rs) — per-replica via replica_id label |
 | `mz_materialized_view_global_seconds` | Gauge | `view`, `cluster` | Global lag across all inputs | `mz_dataflow_wallclock_lag_seconds` (cluster-client/src/metrics.rs) — aggregatable across replicas |
-| `mz_materialized_view_input_frontier` | Gauge | `view`, `cluster` | Input frontier timestamp (milliseconds) | `mz_write_frontier` / `mz_read_frontier` (environmentd/src/http/prometheus.rs) — SQL-based per-collection |
-| `mz_materialized_view_output_frontier` | Gauge | `view`, `cluster` | Output frontier timestamp (milliseconds) | `mz_write_frontier` (environmentd/src/http/prometheus.rs) — SQL-based per-collection |
+| `mz_materialized_view_input_frontier` | Gauge | `view`, `cluster` | Input frontier timestamp (milliseconds) | ? | Could derive from `mz_write_frontier` / `mz_read_frontier` (environmentd/src/http/prometheus.rs) — SQL-based per-collection . This might cause the cardinality to become too high
+| `mz_materialized_view_output_frontier` | Gauge | `view`, `cluster` | Output frontier timestamp (milliseconds) | ? | Could derive from `mz_write_frontier` (environmentd/src/http/prometheus.rs) — SQL-based per-collection
 
-### Index Metrics (TODO)
+### Index Metrics
+
+General notes: These metrics should share the same metrics as materialized views.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -474,7 +485,9 @@ Metrics for incrementally maintained materialized views and indexes.
 | `mz_index_query_duration_seconds` | Histogram | `index`, `cluster` | Query latency for indexed queries | `mz_index_peek_total_seconds` (compute/src/metrics.rs) — histogram of peek latency |
 | `mz_index_freshness_seconds` | Gauge | `index`, `cluster` | Index freshness lag | `mz_dataflow_wallclock_lag_seconds` (cluster-client/src/metrics.rs) — per-collection via collection_id label |
 
-### View Metrics (Non-Materialized) (TODO)
+### View Metrics (Non-Materialized)
+
+General notes: These metrics don't exist and it seems like the compute-client (the crate that usually holds compute peek durations) don't have knowledge of the view targeted.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
@@ -483,9 +496,12 @@ Metrics for incrementally maintained materialized views and indexes.
 --
 ---
 
-## Table Metrics (TODO)
+## Table Metrics
 
 Metrics for Materialize tables (user-created mutable tables).
+
+General notes:
+- We can implement most of these metrics, but are customers really going to be inserting data into tables? Wonder if we should just expose COPY FROM metrics instead.
 
 | Metric | Type | Labels | Description | Existing Metric | Notes |
 |--------|------|--------|-------------|-----------------| ------|
