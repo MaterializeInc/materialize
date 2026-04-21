@@ -165,7 +165,9 @@ impl SourceRender for MySqlSourceConnection {
             metrics.snapshot_metrics.clone(),
         );
 
-        let (repl_updates, repl_err, repl_token) = replication::render(
+        // The replication probe stream is unused here — the statistics operator
+        // produces the probe stream used by the source pipeline (see below).
+        let (repl_updates, _repl_probe, repl_err, repl_token) = replication::render(
             scope.clone(),
             config.clone(),
             self.clone(),

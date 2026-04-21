@@ -557,6 +557,49 @@ true
 > DROP SOURCE large_cluster_source CASCADE;
 
 #
+# Verify parallel PK-range snapshot correctness with multiple workers.
+# With a single-column integer PK and enough rows, each worker reads a
+# disjoint PK range. We verify no rows are lost or duplicated.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_range_test;
+CREATE TABLE pk_range_test (id BIGINT PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_range_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_range_cluster SIZE 'scale=1,workers=4'
+
+> BEGIN
+> CREATE SOURCE pk_range_source
+  IN CLUSTER pk_range_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_range_table FROM SOURCE pk_range_source (REFERENCE public.pk_range_test);
+> COMMIT
+
+# Exact row count
+> SELECT COUNT(*) FROM pk_range_table;
+1000
+
+# No duplicates: distinct count must equal total count
+> SELECT COUNT(DISTINCT id) = COUNT(*) FROM pk_range_table;
+true
+
+# Verify PK boundaries — all rows from 1..1000 are present
+> SELECT MIN(id), MAX(id) FROM pk_range_table;
+1 1000
+
+# Checksum: val = id * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
+> SELECT SUM(val) FROM pk_range_table;
+3503500
+
+> DROP SOURCE pk_range_source CASCADE;
+> DROP CLUSTER pk_range_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_range_test;
+
+#
 # Remove all data on the Postgres side
 #
 
