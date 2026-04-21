@@ -638,7 +638,22 @@ text
 query T
 SELECT format_type(18, NULL)
 ----
-char
+"char"
+
+query B
+SELECT format_type(18, NULL) != format_type(1042, NULL)
+----
+true
+
+query T
+SELECT format_type(1002, NULL)
+----
+"char"[]
+
+query T
+SELECT mz_internal.mz_type_name(18::oid)
+----
+"char"
 
 query T
 SELECT format_type(1043, NULL)
