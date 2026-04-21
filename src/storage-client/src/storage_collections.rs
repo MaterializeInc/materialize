@@ -1644,11 +1644,18 @@ impl StorageCollections for StorageCollectionsImpl {
         // Delete the metadata for any dropped collections.
         let dropped_mappings = txn.delete_collection_metadata(ids_to_drop);
 
-        let dropped_shards = dropped_mappings
-            .into_iter()
-            .map(|(_id, shard)| shard)
-            .collect();
-
+        // Only finalize the shards of dropped collections that don't have a primary.
+        // Otherwise the shard might still be in use by the primary.
+        let mut dropped_shards = BTreeSet::new();
+        {
+            let collections = self.collections.lock().expect("poisoned");
+            for (id, shard) in dropped_mappings {
+                let coll = collections.get(&id).expect("must exist");
+                if coll.primary.is_none() {
+                    dropped_shards.insert(shard);
+                }
+            }
+        }
         txn.insert_unfinalized_shards(dropped_shards)?;
 
         // Reconcile any shards we've successfully finalized with the shard
