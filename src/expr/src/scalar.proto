@@ -164,5 +164,6 @@ message ProtoEvalError {
     google.protobuf.Empty key_cannot_be_null = 80;
     string invalid_catalog_json = 81;
     string redact_error = 82;
+    google.protobuf.Empty negative_rows_from_subquery = 83;
   }
 }

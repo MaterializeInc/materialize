@@ -2683,6 +2683,7 @@ pub enum EvalError {
     OutOfDomain(DomainLimit, DomainLimit, Box<str>),
     ComplexOutOfRange(Box<str>),
     MultipleRowsFromSubquery,
+    NegativeRowsFromSubquery,
     Undefined(Box<str>),
     LikePatternTooLong,
     LikeEscapeTooLong,
@@ -2867,6 +2868,9 @@ impl fmt::Display for EvalError {
             }
             EvalError::MultipleRowsFromSubquery => {
                 write!(f, "more than one record produced in subquery")
+            }
+            EvalError::NegativeRowsFromSubquery => {
+                write!(f, "negative number of rows produced in subquery")
             }
             EvalError::Undefined(s) => {
                 write!(f, "{} is undefined", s)
@@ -3148,6 +3152,7 @@ impl RustType<ProtoEvalError> for EvalError {
             }),
             EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.into_proto()),
             EvalError::MultipleRowsFromSubquery => MultipleRowsFromSubquery(()),
+            EvalError::NegativeRowsFromSubquery => NegativeRowsFromSubquery(()),
             EvalError::Undefined(v) => Undefined(v.into_proto()),
             EvalError::LikePatternTooLong => LikePatternTooLong(()),
             EvalError::LikeEscapeTooLong => LikeEscapeTooLong(()),
@@ -3282,6 +3287,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 )),
                 ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v.into())),
                 MultipleRowsFromSubquery(()) => Ok(EvalError::MultipleRowsFromSubquery),
+                NegativeRowsFromSubquery(()) => Ok(EvalError::NegativeRowsFromSubquery),
                 Undefined(v) => Ok(EvalError::Undefined(v.into())),
                 LikePatternTooLong(()) => Ok(EvalError::LikePatternTooLong),
                 LikeEscapeTooLong(()) => Ok(EvalError::LikeEscapeTooLong),

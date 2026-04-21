@@ -652,6 +652,7 @@ mod columnation {
                         | e @ EvalError::KeyCannotBeNull
                         | e @ EvalError::UnterminatedLikeEscapeSequence
                         | e @ EvalError::MultipleRowsFromSubquery
+                        | e @ EvalError::NegativeRowsFromSubquery
                         | e @ EvalError::LikePatternTooLong
                         | e @ EvalError::LikeEscapeTooLong
                         | e @ EvalError::MultidimensionalArrayRemovalNotSupported
