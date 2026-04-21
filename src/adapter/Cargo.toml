@@ -30,8 +30,8 @@ imbl.workspace = true
 http.workspace = true
 ipnet.workspace = true
 itertools.workspace = true
-launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"] }
-launchdarkly-sdk-transport = "0.1"
+launchdarkly-server-sdk.workspace = true
+launchdarkly-sdk-transport.workspace = true
 maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }

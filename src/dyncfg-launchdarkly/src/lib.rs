@@ -49,7 +49,23 @@ where
         let _ = dyn_into_flag(entry.val())?;
     }
     let ld_client = if let Some(key) = launchdarkly_sdk_key {
-        let config = ld::ConfigBuilder::new(key).build().expect("valid config");
+        let transport = launchdarkly_sdk_transport::HyperTransport::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .read_timeout(Duration::from_secs(300))
+            .build_https()
+            .expect("failed to create HTTPS transport");
+
+        let mut data_source = ld::PollingDataSourceBuilder::new();
+        data_source.transport(transport.clone());
+
+        let mut event_processor = ld::EventProcessorBuilder::new();
+        event_processor.transport(transport);
+
+        let config = ld::ConfigBuilder::new(key)
+            .data_source(&data_source)
+            .event_processor(&event_processor)
+            .build()
+            .expect("valid config");
         let client = ld::Client::build(config)?;
         client.start_with_default_executor();
         let init = async {

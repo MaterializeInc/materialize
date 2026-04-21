@@ -14,7 +14,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use derivative::Derivative;
-use launchdarkly_sdk_transport::{HttpTransport, ResponseFuture};
+use futures::TryStreamExt;
+use launchdarkly_sdk_transport::{ByteStream, HttpTransport, ResponseFuture};
 use launchdarkly_server_sdk as ld;
 use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
@@ -170,14 +171,23 @@ impl<T: HttpTransport> HttpTransport for MetricsTransport<T> {
             let resp = inner_fut.await?;
             if resp.status().is_success() {
                 gauge.set(now_fn() / 1000);
+                let (parts, body) = resp.into_parts();
+                let wrapped: ByteStream = Box::pin(body.inspect_ok(move |_| {
+                    gauge.set(now_fn() / 1000);
+                }));
+                Ok(http::Response::from_parts(parts, wrapped))
+            } else {
+                Ok(resp)
             }
-            Ok(resp)
         })
     }
 }
 
 fn ld_config(api_key: &str, metrics: &Metrics, now_fn: &NowFn) -> ld::Config {
-    let transport = launchdarkly_sdk_transport::HyperTransport::new_https()
+    let transport = launchdarkly_sdk_transport::HyperTransport::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(300))
+        .build_https()
         .expect("failed to create HTTPS transport");
 
     let cse_transport = MetricsTransport {
@@ -185,7 +195,7 @@ fn ld_config(api_key: &str, metrics: &Metrics, now_fn: &NowFn) -> ld::Config {
         last_success_gauge: metrics.last_cse_time_seconds.clone(),
         now_fn: now_fn.clone(),
     };
-    let sse_transport = MetricsTransport {
+    let data_source_transport = MetricsTransport {
         inner: transport,
         last_success_gauge: metrics.last_sse_time_seconds.clone(),
         now_fn: now_fn.clone(),
@@ -194,8 +204,8 @@ fn ld_config(api_key: &str, metrics: &Metrics, now_fn: &NowFn) -> ld::Config {
     let mut event_processor = ld::EventProcessorBuilder::new();
     event_processor.transport(cse_transport);
 
-    let mut data_source = ld::StreamingDataSourceBuilder::new();
-    data_source.transport(sse_transport);
+    let mut data_source = ld::PollingDataSourceBuilder::new();
+    data_source.transport(data_source_transport);
 
     ld::ConfigBuilder::new(api_key)
         .event_processor(&event_processor)
@@ -297,4 +307,154 @@ fn ld_ctx(
     );
 
     ctx_builder.build().map_err(|e| anyhow::anyhow!(e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StreamExt;
+    use launchdarkly_sdk_transport::{ByteStream, TransportError};
+    use mz_ore::metrics::MetricsRegistry;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// A fake transport that simulates a long-lived SSE streaming connection:
+    /// returns 200 OK immediately, then delivers multiple SSE events as body
+    /// chunks (exactly how LaunchDarkly's streaming data source works).
+    #[derive(Clone)]
+    struct FakeSseTransport;
+
+    impl HttpTransport for FakeSseTransport {
+        fn request(&self, _request: http::Request<Option<Bytes>>) -> ResponseFuture {
+            let body: ByteStream = Box::pin(futures::stream::iter(vec![
+                Ok(Bytes::from("event: put\ndata: {\"flags\":{}}\n\n")),
+                Ok(Bytes::from("event: patch\ndata: {\"key\":\"flag1\"}\n\n")),
+                Ok(Bytes::from("event: patch\ndata: {\"key\":\"flag2\"}\n\n")),
+            ]));
+            Box::pin(async move {
+                http::Response::builder()
+                    .status(200)
+                    .body(body)
+                    .map_err(|e| TransportError::new(std::io::Error::other(e)))
+            })
+        }
+    }
+
+    /// A fake transport that returns an error, simulating a failed connection.
+    #[derive(Clone)]
+    struct FailingTransport;
+
+    impl HttpTransport for FailingTransport {
+        fn request(&self, _request: http::Request<Option<Bytes>>) -> ResponseFuture {
+            Box::pin(async move {
+                Err(TransportError::new(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "connection refused",
+                )))
+            })
+        }
+    }
+
+    fn test_gauge(registry: &MetricsRegistry, name: &str) -> UIntGauge {
+        registry.register(mz_ore::metric!(
+            name: name,
+            help: "test gauge",
+        ))
+    }
+
+    /// Verifies that MetricsTransport updates the gauge on each body chunk,
+    /// not just on the initial HTTP 200 response head. This matters for
+    /// long-lived streaming connections where SSE events arrive as body chunks.
+    #[mz_ore::test(tokio::test)]
+    async fn test_metric_updated_on_body_chunks() -> Result<(), anyhow::Error> {
+        let time = Arc::new(AtomicU64::new(1_000_000));
+        let time_clone = Arc::clone(&time);
+        let now_fn = NowFn::from(move || time_clone.load(Ordering::SeqCst));
+
+        let registry = MetricsRegistry::new();
+        let gauge = test_gauge(&registry, "test_sse_gauge");
+
+        let transport = MetricsTransport {
+            inner: FakeSseTransport,
+            last_success_gauge: gauge.clone(),
+            now_fn,
+        };
+
+        assert_eq!(gauge.get(), 0);
+
+        let request = http::Request::builder()
+            .uri("https://stream.launchdarkly.com/all")
+            .body(None)?;
+        let response = transport.request(request).await?;
+
+        assert_eq!(gauge.get(), 1000);
+
+        time.store(2_800_000, Ordering::SeqCst);
+
+        let mut body = response.into_body();
+        let mut event_count = 0;
+        while let Some(Ok(_chunk)) = body.next().await {
+            event_count += 1;
+        }
+        assert_eq!(event_count, 3);
+
+        assert_eq!(gauge.get(), 2800);
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_cse_metric_updates_correctly_per_request() -> Result<(), anyhow::Error> {
+        let time = Arc::new(AtomicU64::new(1_000_000));
+        let time_clone = Arc::clone(&time);
+        let now_fn = NowFn::from(move || time_clone.load(Ordering::SeqCst));
+
+        let registry = MetricsRegistry::new();
+        let gauge = test_gauge(&registry, "test_cse_gauge");
+
+        let transport = MetricsTransport {
+            inner: FakeSseTransport,
+            last_success_gauge: gauge.clone(),
+            now_fn,
+        };
+
+        let req = || -> Result<http::Request<Option<Bytes>>, http::Error> {
+            http::Request::builder()
+                .uri("https://events.launchdarkly.com/bulk")
+                .body(None)
+        };
+
+        let _ = transport.request(req()?).await?;
+        assert_eq!(gauge.get(), 1000);
+
+        time.store(2_000_000, Ordering::SeqCst);
+        let _ = transport.request(req()?).await?;
+        assert_eq!(gauge.get(), 2000);
+
+        time.store(3_000_000, Ordering::SeqCst);
+        let _ = transport.request(req()?).await?;
+        assert_eq!(gauge.get(), 3000);
+        Ok(())
+    }
+
+    #[mz_ore::test(tokio::test)]
+    async fn test_metric_not_updated_on_failed_request() -> Result<(), anyhow::Error> {
+        let now_fn = NowFn::from(|| 5_000_000u64);
+
+        let registry = MetricsRegistry::new();
+        let gauge = test_gauge(&registry, "test_fail_gauge");
+
+        let transport = MetricsTransport {
+            inner: FailingTransport,
+            last_success_gauge: gauge.clone(),
+            now_fn,
+        };
+
+        let request = http::Request::builder()
+            .uri("https://stream.launchdarkly.com/all")
+            .body(None)?;
+        let result = transport.request(request).await;
+        assert!(result.is_err());
+        assert_eq!(gauge.get(), 0, "gauge must not update on transport error");
+        Ok(())
+    }
 }
