@@ -50,11 +50,18 @@ struct Config {
     pub metrics: StorageMetrics,
     /// Shared rocksdb write buffer manager
     pub shared_rocksdb_write_buffer_manager: SharedWriteBufferManager,
-    /// Per-worker writers for forwarding timely logging events to compute.
-    // TODO: Consider using the timely config's `process` and `workers` fields to
-    // deterministically assign writers to workers by local index, rather than pop().
+    /// Number of timely workers in this process, for local-index computation.
+    pub workers_per_process: usize,
+    /// Per-worker writers for forwarding timely logging events to compute,
+    /// indexed by local worker index.
     pub timely_log_writers: Arc<
-        Mutex<Vec<Arc<ArcEventLink<mz_repr::Timestamp, Vec<(std::time::Duration, TimelyEvent)>>>>>,
+        Mutex<
+            Vec<
+                Option<
+                    Arc<ArcEventLink<mz_repr::Timestamp, Vec<(std::time::Duration, TimelyEvent)>>>,
+                >,
+            >,
+        >,
     >,
 }
 
@@ -72,6 +79,16 @@ pub async fn serve(
         Arc<ArcEventLink<mz_repr::Timestamp, Vec<(std::time::Duration, TimelyEvent)>>>,
     >,
 ) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
+    let workers_per_process = timely_config.workers;
+    // Normalize the log-writer vec to exactly one slot per worker in this process.
+    // Empty input means logging is disabled; pad with `None` so index-based access is
+    // always in bounds.
+    let timely_log_writers = if timely_log_writers.is_empty() {
+        (0..workers_per_process).map(|_| None).collect()
+    } else {
+        assert_eq!(timely_log_writers.len(), workers_per_process);
+        timely_log_writers.into_iter().map(Some).collect()
+    };
     let config = Config {
         persist_clients,
         txns_ctx,
@@ -84,6 +101,7 @@ pub async fn serve(
         // It protects (behind a shared mutex) a `Weak` that will be upgraded and shared when the
         // first worker attempts to initialize it.
         shared_rocksdb_write_buffer_manager: Default::default(),
+        workers_per_process,
         timely_log_writers: Arc::new(Mutex::new(timely_log_writers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
@@ -116,7 +134,9 @@ impl ClusterSpec for Config {
         )>,
     ) {
         // Register a timely logger that forwards events to the compute logging dataflow.
-        let writer = self.timely_log_writers.lock().unwrap().pop();
+        // Assign by local worker index so storage worker x matches compute worker x.
+        let local_index = timely_worker.index() % self.workers_per_process;
+        let writer = self.timely_log_writers.lock().unwrap()[local_index].take();
         if let Some(writer) = writer {
             use timely::dataflow::operators::capture::{Event, EventPusher};
             use timely::logging::TimelyEventBuilder;

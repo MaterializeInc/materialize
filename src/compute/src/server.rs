@@ -77,10 +77,8 @@ struct Config {
     pub metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     pub workers_per_process: usize,
-    /// Per-worker readers for storage timely logging events.
-    // TODO: Consider using the timely config's `process` and `workers` fields to
-    // deterministically assign readers to workers by local index, rather than pop().
-    pub storage_log_readers: Arc<Mutex<Vec<StorageTimelyLogReader>>>,
+    /// A reader for each storage worker in this process.
+    pub storage_log_readers: Arc<Mutex<Vec<Option<StorageTimelyLogReader>>>>,
 }
 
 /// Initiates a timely dataflow computation, processing compute commands.
@@ -93,6 +91,16 @@ pub async fn serve(
     context: ComputeInstanceContext,
     storage_log_readers: Vec<StorageTimelyLogReader>,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
+    let workers_per_process = timely_config.workers;
+    // Normalize the log-reader vec to exactly one slot per local worker. Empty
+    // input means logging is disabled; pad with `None` so index-based access is
+    // always in bounds.
+    let storage_log_readers = if storage_log_readers.is_empty() {
+        (0..workers_per_process).map(|_| None).collect()
+    } else {
+        assert_eq!(storage_log_readers.len(), workers_per_process);
+        storage_log_readers.into_iter().map(Some).collect()
+    };
     let config = Config {
         persist_clients,
         txns_ctx,
@@ -100,7 +108,7 @@ pub async fn serve(
         metrics: ComputeMetrics::register_with(metrics_registry),
         context,
         metrics_registry: metrics_registry.clone(),
-        workers_per_process: timely_config.workers,
+        workers_per_process,
         storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
@@ -261,8 +269,10 @@ impl ClusterSpec for Config {
         let worker_id = timely_worker.index();
         let metrics = self.metrics.for_worker(worker_id);
 
-        // Take this worker's storage log reader.
-        let storage_log_reader = self.storage_log_readers.lock().unwrap().pop();
+        // Take this worker's storage log reader, indexed by local worker index
+        // so compute worker x matches storage worker x.
+        let local_index = worker_id % self.workers_per_process;
+        let storage_log_reader = self.storage_log_readers.lock().unwrap()[local_index].take();
 
         // Create the command channel that broadcasts commands from worker 0 to other workers. We
         // reuse this channel between client connections, to avoid bugs where different workers end

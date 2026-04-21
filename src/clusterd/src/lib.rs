@@ -383,15 +383,20 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
+    // We assume each storage worker has a corresponding compute worker that can process its logs.
+    assert_eq!(
+        storage_timely_config.workers, compute_timely_config.workers,
+        "storage and compute must have equal workers-per-process",
+    );
+
     // Create per-worker bridges for forwarding storage timely logging events to compute.
-    let (storage_log_writers, storage_log_readers) =
-        if args.enable_storage_introspection_logs {
-            (0..storage_timely_config.workers)
-                .map(|_| arc_event_link())
-                .unzip()
-        } else {
-            (Vec::new(), Vec::new())
-        };
+    let (storage_log_writers, storage_log_readers) = if args.enable_storage_introspection_logs {
+        (0..storage_timely_config.workers)
+            .map(|_| arc_event_link())
+            .unzip()
+    } else {
+        (Vec::new(), Vec::new())
+    };
 
     // Start storage server.
     let storage_client_builder = mz_storage::serve(

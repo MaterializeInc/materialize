@@ -173,14 +173,10 @@ pub(super) fn construct(
                     };
 
                     for (time, event) in data.drain(..) {
-                        // Note: we skip the worker_id assertion for storage events,
-                        // whose channel IDs have been offset by STORAGE_ID_OFFSET.
                         if let TimelyEvent::Messages(msg) = &event {
-                            if msg.channel < STORAGE_ID_OFFSET {
-                                match msg.is_send {
-                                    true => assert_eq!(msg.source, worker_id),
-                                    false => assert_eq!(msg.target, worker_id),
-                                }
+                            match msg.is_send {
+                                true => assert_eq!(msg.source, worker_id),
+                                false => assert_eq!(msg.target, worker_id),
                             }
                         }
 
