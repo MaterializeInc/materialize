@@ -12,6 +12,7 @@ import { useAtom } from "jotai";
 import * as React from "react";
 
 import { useMaybeCurrentOrganizationId } from "~/api/auth";
+import useCurrentUser from "~/api/materialize/useCurrentUser";
 import { CopyButton } from "~/components/copyableComponents";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
 import { currentEnvironmentState } from "~/store/environments";
@@ -139,6 +140,28 @@ export const HelmChartVersionTag = () => {
   return (
     <AppConfigSwitch
       selfManagedConfigElement={() => <HelmChartVersionTagContent />}
+    />
+  );
+};
+
+const CurrentUserTagContent = () => {
+  const { results: currentUser } = useCurrentUser();
+
+  if (!currentUser) return <LoadingVersionTag />;
+
+  return (
+    <VersionTag
+      label={`User ${currentUser}`}
+      contents={currentUser}
+      title="Copy username"
+    />
+  );
+};
+
+export const CurrentUserTag = () => {
+  return (
+    <AppConfigSwitch
+      selfManagedConfigElement={() => <CurrentUserTagContent />}
     />
   );
 };
