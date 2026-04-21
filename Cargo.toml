@@ -379,7 +379,7 @@ k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
 kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"] }
 launchdarkly-sdk-transport = "0.1"
-lgalloc = "0.6.0"
+lgalloc = "0.7.0"
 libc = "0.2.184"
 lru = "0.16.3"
 maplit = "1.0.2"
