@@ -43,6 +43,7 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.parallel_workload.settings import Scenario
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
@@ -236,11 +237,20 @@ class View(DBObject):
         base_object: DBObject,
         base_object2: DBObject | None,
         schema: Schema,
+        scenario: Scenario = Scenario.Regression,
         temp: bool = False,
     ):
         super().__init__()
         self.rename = 0
         self.view_id = view_id
+        # Wrap the SELECT body with a `repeat_row(-1)` cross join, which
+        # constant-folds into a `Constant` MIR node with negative diffs.
+        # Only enabled in the `RepeatRow` scenario; the matching ignore list
+        # for negative-accumulation errors is wired through
+        # `Action.errors_to_ignore`.
+        self.repeat_row_const = (
+            scenario == Scenario.RepeatRow and rng.random() < 0.05
+        )
         self.base_object = base_object
         self.base_object2 = base_object2
         self.schema = schema
@@ -302,6 +312,11 @@ class View(DBObject):
             select = f"SELECT {exprs} FROM {self.base_object}"
             if self.base_object2:
                 select += f" JOIN {self.base_object2} ON {self.on_expr}"
+            if self.repeat_row_const:
+                # `repeat_row(-1)` retracts each input row exactly once,
+                # producing a collection with a net-negative accumulation.
+                # Hardcoded to `-1` to avoid blowing up the data size.
+                select = f"SELECT * FROM ({select}) AS rr_inner, repeat_row(-1)"
             return select
 
         expressions_str = ", ".join(
@@ -1013,7 +1028,14 @@ class Database:
             base_object2: Table | None = rng.choice(self.tables)
             if rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(rng, i, base_object, base_object2, rng.choice(self.schemas))
+            view = View(
+                rng,
+                i,
+                base_object,
+                base_object2,
+                rng.choice(self.schemas),
+                scenario=scenario,
+            )
             self.views.append(view)
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]

@@ -1897,6 +1897,7 @@ class CreateViewAction(Action):
                 base_object,
                 base_object2,
                 schema,
+                scenario=exe.db.scenario,
                 temp=True,
             )
             view.create(exe)
@@ -1918,6 +1919,7 @@ class CreateViewAction(Action):
                     base_object,
                     base_object2,
                     schema,
+                    scenario=exe.db.scenario,
                 )
                 # Randomly make materialized views replica-targeted
                 if (
