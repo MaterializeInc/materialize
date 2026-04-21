@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/bytes.rs
-revision: 4267863081
+revision: ee8f3e1a8d
 ---
 
 # mz-ore::bytes

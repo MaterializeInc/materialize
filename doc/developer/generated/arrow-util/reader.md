@@ -1,6 +1,6 @@
 ---
 source: src/arrow-util/src/reader.rs
-revision: 3fbe777cf7
+revision: 1781cb822f
 ---
 
 # reader

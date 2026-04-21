@@ -1,6 +1,6 @@
 ---
 source: src/adapter-types/src/compaction.rs
-revision: e757b4d11b
+revision: b55d3dee25
 ---
 
 # mz-adapter-types::compaction

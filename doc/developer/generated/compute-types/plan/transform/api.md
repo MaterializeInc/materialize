@@ -1,10 +1,10 @@
 ---
 source: src/compute-types/src/plan/transform/api.rs
-revision: e757b4d11b
+revision: b55d3dee25
 ---
 
 # compute-types::plan::transform::api
 
-Defines the `Transform<T>` trait for mutating `Plan` trees and `TransformConfig` (currently carrying a set of globally monotonic `GlobalId`s).
-`Transform::transform` wraps `do_transform` with optional tracing; implementors override `do_transform`.
-`BottomUpTransform` is a blanket wrapper that drives a bottom-up traversal using `FoldMut` and an `Interpreter`, then applies a user-supplied mutation based on the inferred domain value.
+Defines the `Transform` trait for mutating `Plan` trees and `TransformConfig` (carrying a set of globally monotonic `GlobalId`s).
+`Transform::transform` wraps `do_transform` with a tracing span for the optimizer; implementors override `do_transform`.
+`BottomUpTransform` is a higher-level trait that drives a bottom-up traversal using `FoldMut` with an associated `Interpreter` and `action` callback; any `BottomUpTransform` automatically implements `Transform` via a blanket impl.

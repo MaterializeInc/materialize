@@ -1,9 +1,9 @@
 ---
 source: src/compute-types/src/plan/transform/relax_must_consolidate.rs
-revision: aa395ac946
+revision: b55d3dee25
 ---
 
 # compute-types::plan::transform::relax_must_consolidate
 
-Implements `RelaxMustConsolidate<T>`, a `BottomUpTransform` that uses the `SingleTimeMonotonic` interpreter to identify plan nodes that are physically monotonic and removes unnecessary `must_consolidate` flags from monotonic `TopKPlan` and `ReducePlan` variants.
-This transform runs as part of `Plan::finalize_dataflow` after all other lowering steps.
+Implements `RelaxMustConsolidate`, a `BottomUpTransform` that uses the `SingleTimeMonotonic` interpreter to identify plan nodes whose input is physically monotonic and clears the `must_consolidate` flag from monotonic `ReducePlan::Hierarchical(MonotonicPlan)`, `TopKPlan::MonotonicTop1`, and `TopKPlan::MonotonicTopK` variants.
+This transform runs as part of `Plan::finalize_dataflow` after all other lowering steps, via `Plan::refine_single_time_consolidation`.

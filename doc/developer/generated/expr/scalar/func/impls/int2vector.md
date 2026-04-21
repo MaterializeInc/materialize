@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/int2vector.rs
-revision: 61475c0097
+revision: cd1934f510
 ---
 
 # mz-expr::scalar::func::impls::int2vector

@@ -1,6 +1,6 @@
 ---
 source: src/compute-types/src/plan/interpret/physically_monotonic.rs
-revision: 833454ccc9
+revision: b55d3dee25
 ---
 
 # compute-types::plan::interpret::physically_monotonic
