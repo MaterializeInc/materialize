@@ -6431,6 +6431,53 @@ def workflow_github_10086(c: Composition) -> None:
     assert not upper_empty
 
 
+def workflow_github_11322(c: Composition) -> None:
+    """
+    Regression test for database-issues#11322, in which dropping a
+    replacement MV leaks a `collection_metadata` entry.
+    """
+
+    def storage_collection_metadata() -> dict[str, str]:
+        port = c.port("materialized", 6878)
+        resp = requests.get(f"http://localhost:{port}/api/catalog/dump")
+        resp.raise_for_status()
+        return resp.json()["storage_metadata"]["collection_metadata"]
+
+    c.up("materialized")
+
+    # Create a materialized view and a replacement.
+    c.sql("""
+        CREATE TABLE t (a int);
+        CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+        CREATE REPLACEMENT MATERIALIZED VIEW rp FOR mv AS SELECT * FROM t;
+        SELECT * FROM mv;
+        """)
+
+    [(mv_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'mv'")
+    [(rp_id,)] = c.sql_query("SELECT id FROM mz_materialized_views WHERE name = 'rp'")
+
+    collection_metadata = storage_collection_metadata()
+    mv_shard = collection_metadata[mv_id]
+    rp_shard = collection_metadata[rp_id]
+    assert mv_shard == rp_shard
+
+    # Drop the replacement without applying it.
+    c.sql("DROP MATERIALIZED VIEW rp")
+
+    # Verify replacement's collection metadata has been removed.
+    collection_metadata = storage_collection_metadata()
+    assert collection_metadata[mv_id] == mv_shard
+    assert rp_id not in collection_metadata
+
+    c.kill("materialized")
+    c.up("materialized")
+
+    # Verify replacement's collection metadata has been removed durably.
+    collection_metadata = storage_collection_metadata()
+    assert collection_metadata[mv_id] == mv_shard
+    assert rp_id not in collection_metadata
+
+
 def workflow_test_github_10102(c: Composition) -> None:
     """
     Regression test for database-issues#10102:
