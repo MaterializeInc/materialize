@@ -3280,7 +3280,7 @@ pub fn csv_extract(a: Datum<'_>, n_cols: usize) -> impl Iterator<Item = (Row, Di
     })
 }
 
-pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
+pub fn repeat_row(a: Datum) -> Option<(Row, Diff)> {
     let n = a.unwrap_int64();
     if n != 0 {
         Some((Row::default(), n.into()))
@@ -3396,7 +3396,7 @@ pub enum TableFunc {
     GuardSubquerySize {
         column_type: SqlScalarType,
     },
-    Repeat,
+    RepeatRow,
     UnnestArray {
         el_typ: SqlScalarType,
     },
@@ -3471,7 +3471,7 @@ impl TableFunc {
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GuardSubquerySize { .. }
-            | TableFunc::Repeat
+            | TableFunc::RepeatRow
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
@@ -3566,7 +3566,7 @@ impl TableFunc {
                     Ok(Box::new([].into_iter()))
                 }
             }
-            TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
+            TableFunc::RepeatRow => Ok(Box::new(repeat_row(datums[0]).into_iter())),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
             TableFunc::UnnestMap { .. } => Ok(Box::new(unnest_map(datums[0]))),
@@ -3682,7 +3682,7 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::Repeat => {
+            TableFunc::RepeatRow => {
                 let column_types = vec![];
                 let keys = vec![];
                 (column_types, keys)
@@ -3763,7 +3763,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::GenerateSubscriptsArray => 1,
             TableFunc::GuardSubquerySize { .. } => 1,
-            TableFunc::Repeat => 0,
+            TableFunc::RepeatRow => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
             TableFunc::UnnestMap { .. } => 2,
@@ -3790,7 +3790,7 @@ impl TableFunc {
             | TableFunc::GenerateSubscriptsArray
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
-            | TableFunc::Repeat
+            | TableFunc::RepeatRow
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
@@ -3821,7 +3821,7 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestamp => true,
             TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::GenerateSubscriptsArray => true,
-            TableFunc::Repeat => false,
+            TableFunc::RepeatRow => false,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::UnnestMap { .. } => true,
@@ -3852,7 +3852,7 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
             TableFunc::GuardSubquerySize { .. } => f.write_str("guard_subquery_size"),
-            TableFunc::Repeat => f.write_str("repeat_row"),
+            TableFunc::RepeatRow => f.write_str("repeat_row"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
