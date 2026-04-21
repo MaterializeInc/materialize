@@ -37,37 +37,37 @@ pub fn pack_mysql_row(
     // This is a fallback for MySQL servers that do not have `binlog_row_metadata` set to
     // `FULL`. If the first column name does not begin with '@', then we can assume that
     // full metadata is available and we can match columns by name.
-    let row_values: Vec<Value> = if row
+    let zip_values: Vec<EitherOrBoth<&MySqlColumnDesc, Value>> = if row
         .columns_ref()
         .first()
         .is_some_and(|col| col.name_ref().starts_with(b"@"))
     {
-        row.unwrap()
-    } else {
-        row.columns_ref()
+        table_desc
+            .columns
             .iter()
-            .enumerate()
-            .filter(|(_, col)| {
-                table_desc
-                    .columns
+            .zip_longest(row.unwrap())
+            .collect()
+    } else {
+        table_desc
+            .columns
+            .iter()
+            .filter(|col| col.column_type.is_some())
+            .map(|col| {
+                let pos = row
+                    .columns_ref()
                     .iter()
-                    .filter(|col| col.column_type.is_some())
-                    .any(|c| c.name.as_str() == col.name_str())
-            })
-            .map(|(i, _)| {
-                row.as_ref(i)
-                    .expect("Can't unwrap row if some of columns was taken")
-                    .clone()
+                    .position(|row_col| row_col.name_str() == col.name.as_str())
+                    .expect("column in table desc not found in row metadata");
+                EitherOrBoth::Both(
+                    col,
+                    row.get(pos)
+                        .expect("Can't unwrap row if some of columns was taken"),
+                )
             })
             .collect()
     };
 
-    for values in table_desc
-        .columns
-        .iter()
-        .filter(|col| col.column_type.is_some())
-        .zip_longest(row_values)
-    {
+    for values in zip_values {
         let (col_desc, value) = match values {
             EitherOrBoth::Both(col_desc, value) => (col_desc, value),
             EitherOrBoth::Left(col_desc) => {
