@@ -638,7 +638,7 @@ text
 query T
 SELECT format_type(18, NULL)
 ----
-character
+char
 
 query T
 SELECT format_type(1043, NULL)
