@@ -22,7 +22,7 @@ use mz_lowertest::MzReflect;
 use mz_ore::cast::CastFrom;
 
 use mz_ore::str::separated;
-use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log};
+use mz_ore::{soft_assert_eq_no_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
@@ -3560,10 +3560,19 @@ impl TableFunc {
                 // We error if the count is not one,
                 // and produce no rows if equal to one.
                 let count = datums[0].unwrap_int64();
-                if count != 1 {
-                    Err(EvalError::MultipleRowsFromSubquery)
-                } else {
+                if count == 1 {
                     Ok(Box::new([].into_iter()))
+                } else if count > 1 {
+                    Err(EvalError::MultipleRowsFromSubquery)
+                } else if count < 0 {
+                    Err(EvalError::NegativeRowsFromSubquery)
+                } else {
+                    // This shouldn't happen because this is not an SQL `count` but an MIR `count`,
+                    // which produces no output on 0 input rows.
+                    soft_panic_or_log!("subquery counting unexpectedly produced 0");
+                    Err(EvalError::Internal(
+                        "subquery counting unexpectedly produced 0".into(),
+                    ))
                 }
             }
             TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
