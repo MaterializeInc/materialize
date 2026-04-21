@@ -17,14 +17,14 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_CONNECTIONS, MZ_CONTINUAL_TASKS,
+    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_CONTINUAL_TASKS,
     MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
     MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
     MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
     MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SECRETS,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS,
+    MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES,
     MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
     MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
@@ -647,12 +647,10 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            CatalogItem::Secret(_) => {
-                self.pack_secret_update(id, oid, schema_id, name, owner_id, privileges, diff)
+            CatalogItem::Secret(_) => vec![],
+            CatalogItem::Connection(connection) => {
+                self.pack_connection_update(id, connection, diff)
             }
-            CatalogItem::Connection(connection) => self.pack_connection_update(
-                id, oid, schema_id, name, owner_id, privileges, connection, diff,
-            ),
             CatalogItem::ContinualTask(ct) => self.pack_continual_task_update(
                 id, oid, schema_id, name, owner_id, privileges, ct, diff,
             ),
@@ -1007,43 +1005,10 @@ impl CatalogState {
     fn pack_connection_update(
         &self,
         id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
         connection: &Connection,
         diff: Diff,
     ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&connection.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", connection.create_sql))
-            .into_element()
-            .ast;
-        let mut updates = vec![BuiltinTableUpdate::row(
-            &*MZ_CONNECTIONS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(match connection.details {
-                    ConnectionDetails::Kafka { .. } => "kafka",
-                    ConnectionDetails::Csr { .. } => "confluent-schema-registry",
-                    ConnectionDetails::Postgres { .. } => "postgres",
-                    ConnectionDetails::Aws(..) => "aws",
-                    ConnectionDetails::AwsPrivatelink(..) => "aws-privatelink",
-                    ConnectionDetails::Ssh { .. } => "ssh-tunnel",
-                    ConnectionDetails::MySql { .. } => "mysql",
-                    ConnectionDetails::SqlServer(_) => "sql-server",
-                    ConnectionDetails::IcebergCatalog(_) => "iceberg-catalog",
-                }),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&connection.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        )];
+        let mut updates = vec![];
         match connection.details {
             ConnectionDetails::Kafka(ref kafka) => {
                 updates.extend(self.pack_kafka_connection_update(id, kafka, diff));
@@ -1793,30 +1758,6 @@ impl CatalogState {
             ]),
             diff,
         )
-    }
-
-    fn pack_secret_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        vec![BuiltinTableUpdate::row(
-            &*MZ_SECRETS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-            ]),
-            diff,
-        )]
     }
 
     pub fn pack_audit_log_update(

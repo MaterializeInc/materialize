@@ -954,6 +954,22 @@ pub enum CreateConnectionType {
     IcebergCatalog,
 }
 
+impl CreateConnectionType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Kafka => "kafka",
+            Self::Csr => "confluent-schema-registry",
+            Self::Postgres => "postgres",
+            Self::Aws => "aws",
+            Self::AwsPrivatelink => "aws-privatelink",
+            Self::Ssh => "ssh-tunnel",
+            Self::MySql => "mysql",
+            Self::SqlServer => "sql-server",
+            Self::IcebergCatalog => "iceberg-catalog",
+        }
+    }
+}
+
 impl AstDisplay for CreateConnectionType {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         match self {
