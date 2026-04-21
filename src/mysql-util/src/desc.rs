@@ -101,10 +101,11 @@ impl MySqlTableDesc {
         // If we do have full metadata, then we can match columns by name and just check that all
         // columns in `self.columns` are present and compatible with columns in `other.columns`.
         let mut other_columns = other.columns.iter();
-        for self_column in &self.columns {
+        for self_column in self.columns.iter().filter(|col| col.column_type.is_some()) {
             let other_column = if full_metadata {
-                other_columns
-                    .by_ref()
+                other
+                    .columns
+                    .iter()
                     .find(|c| c.name == self_column.name)
                     .ok_or_else(|| {
                         anyhow::anyhow!(

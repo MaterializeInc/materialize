@@ -103,7 +103,10 @@ f fig
 # dropping an excluded column should have no effect
 $ mysql-execute name=mysql
 ALTER TABLE foo DROP COLUMN meta_col;
+INSERT INTO foo VALUES ('g', 'grape');
 
+# The INSERT after the DROP COLUMN forces the binlog to advance past the ALTER
+# TABLE event, so the SELECT must succeed after the schema change is processed.
 > SELECT * FROM foo3;
 a apple
 b banana
@@ -111,6 +114,7 @@ c cherry
 d date
 e elderberry
 f fig
+g grape
 
 > DROP TABLE foo3;
 
@@ -123,9 +127,10 @@ c cherry
 d date
 e elderberry
 f fig
+g grape
 
 $ mysql-execute name=mysql
-INSERT INTO foo VALUES ('g', 'grape');
+INSERT INTO foo VALUES ('h', 'honeydew');
 
 > SELECT * FROM foo4;
 a apple
@@ -158,16 +163,23 @@ b banana 7
 
 $ mysql-execute name=mysql
 ALTER TABLE bar DROP COLUMN meta_col;
+INSERT INTO bar VALUES ('c', 'cherry', 9, 'grove');
 
+# The INSERT after the DROP COLUMN forces the binlog to advance past the ALTER
+# TABLE event, so the SELECT must succeed after the schema change is processed.
 > SELECT * FROM bar1;
 a apple 5
 b banana 7
+c cherry 9
 
 $ mysql-execute name=mysql
 ALTER TABLE bar ADD COLUMN lastname VARCHAR(16) AFTER `name`;
+INSERT INTO bar VALUES ('d', 'date_lastname', 'date', 10, 'oasis');
 
 > SELECT * FROM bar1;
 a apple 5
 b banana 7
+c cherry 9
+d date 10
 
 > DROP SOURCE mysql_src CASCADE;
