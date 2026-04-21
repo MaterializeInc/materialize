@@ -28,10 +28,10 @@ governor.workspace = true
 hex.workspace = true
 imbl.workspace = true
 http.workspace = true
-hyper-tls = "0.5.0"
 ipnet.workspace = true
 itertools.workspace = true
 launchdarkly-server-sdk.workspace = true
+launchdarkly-sdk-transport.workspace = true
 maplit.workspace = true
 mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
