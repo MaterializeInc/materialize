@@ -10,7 +10,6 @@
 use std::fmt::Write;
 use std::str::FromStr;
 
-use itertools::{EitherOrBoth, Itertools};
 use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
@@ -43,50 +42,39 @@ pub fn pack_mysql_row(
         .columns_ref()
         .first()
         .is_some_and(|col| col.name_ref().starts_with(b"@"));
-    // Wire indices of `row` to decode, in iteration order. Keeping indices
-    // (rather than moving values out via `row.unwrap()`) lets us describe the
-    // row's shape on a decode error without paying the allocation cost on the
-    // happy path.
-    let active_indices: Vec<usize> = if fallback_names {
-        (0..row.len()).collect()
-    } else {
-        row.columns_ref()
-            .iter()
-            .enumerate()
-            .filter(|(_, col)| {
-                table_desc
-                    .columns
-                    .iter()
-                    .any(|c| c.name.as_str() == col.name_str())
-            })
-            .map(|(i, _)| i)
-            .collect()
-    };
 
-    for pair in table_desc.columns.iter().zip_longest(&active_indices) {
-        let (col_desc, wire_idx) = match pair {
-            EitherOrBoth::Both(col_desc, &idx) => (col_desc, idx),
-            EitherOrBoth::Left(col_desc) => {
+    // For each column in `table_desc` (in descriptor order), resolve its wire
+    // index. Non-fallback rows are matched by name so a reordered upstream
+    // still decodes correctly; fallback rows have no names and are matched
+    // positionally. A `None` here means the upstream row is missing this
+    // column and is only tolerated for ignored columns.
+    for (i, col_desc) in table_desc.columns.iter().enumerate() {
+        let wire_idx = if fallback_names {
+            (i < row.len()).then_some(i)
+        } else {
+            row.columns_ref()
+                .iter()
+                .position(|wc| wc.name_str() == col_desc.name.as_str())
+        };
+        if col_desc.column_type.is_none() {
+            // This column is ignored, so don't decode it.
+            continue;
+        }
+        let wire_idx = match wire_idx {
+            Some(idx) => idx,
+            None => {
                 return Err(decode_error(
-                    "extra column description",
+                    "upstream row is missing column",
                     col_desc,
                     table_desc,
                     gtid_set,
                     &row,
                 ));
             }
-            EitherOrBoth::Right(_) => {
-                // If there are extra columns on the upstream table we can safely ignore them
-                break;
-            }
         };
-        if col_desc.column_type.is_none() {
-            // This column is ignored, so don't decode it.
-            continue;
-        }
         let value = row
             .as_ref(wire_idx)
-            .expect("active_indices is within row bounds")
+            .expect("wire_idx resolved from row")
             .clone();
         if let Err(err) = pack_val_as_datum(value, col_desc, &mut packer) {
             return Err(decode_error(
