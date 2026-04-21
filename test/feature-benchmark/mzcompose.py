@@ -119,11 +119,12 @@ FEATURE_BENCHMARK_FRAMEWORK_VERSION = "1.5.0"
 
 
 def make_filter(args: argparse.Namespace) -> Filter:
-    # Discard the first run unless a small --max-runs limit is explicitly set
+    # Discard the first few runs to allow for JVM/cache warmup (Kafka, Schema Registry)
+    # unless a small --max-runs limit is explicitly set
     if args.max_measurements <= 5:
         return NoFilter()
     else:
-        return FilterFirst()
+        return FilterFirst(count=3)
 
 
 def make_termination_conditions(args: argparse.Namespace) -> list[TerminationCondition]:

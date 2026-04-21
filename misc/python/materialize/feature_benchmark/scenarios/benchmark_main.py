@@ -1326,8 +1326,15 @@ class ExactlyOnce(Sink):
 
     FIXED_SCALE = True  # TODO: Remove when database-issues#8705 is fixed
 
+    def __init__(
+        self, scale: float, mz_version: MzVersion, default_size: int, seed: int
+    ) -> None:
+        super().__init__(scale, mz_version, default_size, seed)
+        self._instance_id = uuid.uuid4().hex[:8]
+        self._benchmark_iter = 0
+
     def version(self) -> ScenarioVersion:
-        return ScenarioVersion.create(1, 1, 0)
+        return ScenarioVersion.create(1, 2, 0)
 
     def shared(self) -> Action:
         return TdAction(self.keyschema() + self.schema() + f"""
@@ -1361,19 +1368,30 @@ $ kafka-ingest format=avro topic=sink-input key-format=avro key-schema=${{keysch
 {self.n()}
 """)
 
-    def benchmark(self) -> MeasurementSource:
-        return Td(f"""
+    def before(self) -> Action:
+        self._benchmark_iter += 1
+        self._topic = f"sink-output-{self._instance_id}-{self._benchmark_iter}"
+        return TdAction(f"""
 > DROP SINK IF EXISTS sink1;
 > DROP SOURCE IF EXISTS sink1_check CASCADE;
-  /* A */
+> DROP CLUSTER IF EXISTS sink_cluster CASCADE;
 
-> DROP CLUSTER IF EXISTS sink_cluster CASCADE
 > CREATE CLUSTER sink_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
+
+$ kafka-create-topic topic={self._topic}
+""")
+
+    def benchmark(self) -> MeasurementSource:
+        topic = self._topic
+        return Td(f"""
+> SELECT 1
+  /* A */
+1
 
 > CREATE SINK sink1
   IN CLUSTER sink_cluster
   FROM source1_tbl
-  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}')
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{topic}-${{testdrive.seed}}')
   KEY (f1)
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
@@ -1384,9 +1402,9 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
 
 > CREATE SOURCE sink1_check
   IN CLUSTER source_cluster
-  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-sink-output-${{testdrive.seed}}');
+  FROM KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-{topic}-${{testdrive.seed}}');
 
-> CREATE TABLE sink1_check_tbl FROM SOURCE sink1_check (REFERENCE "testdrive-sink-output-${{testdrive.seed}}")
+> CREATE TABLE sink1_check_tbl FROM SOURCE sink1_check (REFERENCE "testdrive-{topic}-${{testdrive.seed}}")
   KEY FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   VALUE FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE UPSERT;
