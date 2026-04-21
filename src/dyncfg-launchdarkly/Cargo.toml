@@ -13,8 +13,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 humantime.workspace = true
-hyper-tls = "0.5.0"
-launchdarkly-server-sdk.workspace = true
+launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"] }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
