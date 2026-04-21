@@ -23,12 +23,14 @@
 //!
 //! Data products are discovered via `mz_internal.mz_mcp_data_products` system view.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::anyhow;
+use axum::Extension;
 use axum::Json;
 use axum::response::IntoResponse;
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, HeaderValue, StatusCode};
 use mz_adapter_types::dyncfgs::{
     ENABLE_MCP_AGENT, ENABLE_MCP_AGENT_QUERY_TOOL, ENABLE_MCP_DEVELOPER, MCP_MAX_RESPONSE_SIZE,
 };
@@ -378,10 +380,11 @@ pub async fn handle_mcp_method_not_allowed() -> impl IntoResponse {
 /// Agent endpoint: exposes user data products.
 pub async fn handle_mcp_agent(
     headers: HeaderMap,
+    Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
 ) -> axum::response::Response {
-    if let Some(resp) = validate_origin(&headers) {
+    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
     handle_mcp_request(client, body, McpEndpointType::Agent)
@@ -392,10 +395,11 @@ pub async fn handle_mcp_agent(
 /// Developer endpoint: exposes system catalog (mz_*) only.
 pub async fn handle_mcp_developer(
     headers: HeaderMap,
+    Extension(allowed_origins): Extension<Arc<Vec<HeaderValue>>>,
     client: AuthedClient,
     Json(body): Json<McpRequest>,
 ) -> axum::response::Response {
-    if let Some(resp) = validate_origin(&headers) {
+    if let Some(resp) = validate_origin(&headers, &allowed_origins) {
         return resp;
     }
     handle_mcp_request(client, body, McpEndpointType::Developer)
@@ -403,38 +407,27 @@ pub async fn handle_mcp_developer(
         .into_response()
 }
 
-/// Validates the Origin header to prevent DNS rebinding attacks (MCP 2025-11-25).
-/// Returns Some(403) if the Origin is present but doesn't match the Host.
-/// Returns None if the Origin is absent (non-browser client) or valid.
-fn validate_origin(headers: &HeaderMap) -> Option<axum::response::Response> {
-    let origin = match headers.get(http::header::ORIGIN) {
-        Some(o) => o,
-        None => return None, // No Origin header = non-browser client, allow
-    };
-
-    let host = headers
-        .get(http::header::HOST)
-        .and_then(|h| h.to_str().ok());
-
-    let origin_str = origin.to_str().ok().unwrap_or("");
-
-    // Extract host portion from Origin (strip scheme)
-    let origin_host = origin_str
-        .strip_prefix("https://")
-        .or_else(|| origin_str.strip_prefix("http://"))
-        .unwrap_or(origin_str);
-
-    match host {
-        Some(h) if h == origin_host => None, // Origin matches Host
-        _ => {
-            warn!(
-                origin = origin_str,
-                host = ?host,
-                "MCP request rejected: Origin does not match Host",
-            );
-            Some(StatusCode::FORBIDDEN.into_response())
-        }
+/// Validates the Origin header against the CORS allowlist to prevent DNS
+/// rebinding attacks (MCP spec 2025-11-25). Returns Some(403) if Origin is
+/// present but not on the allowlist. Returns None if absent (non-browser
+/// client) or allowed.
+///
+/// Note: this server-side check is required in addition to the CorsLayer.
+/// CorsLayer only controls response headers and can be bypassed when the
+/// attacker arranges same-origin DNS rebinding (no preflight fires).
+fn validate_origin(
+    headers: &HeaderMap,
+    allowed: &[HeaderValue],
+) -> Option<axum::response::Response> {
+    let origin = headers.get(http::header::ORIGIN)?;
+    if mz_http_util::origin_is_allowed(origin, allowed) {
+        return None;
     }
+    warn!(
+        origin = ?origin,
+        "MCP request rejected: origin not in allowlist",
+    );
+    Some(StatusCode::FORBIDDEN.into_response())
 }
 
 async fn handle_mcp_request(
@@ -1711,46 +1704,6 @@ mod tests {
         assert!(safe_data_product_name("my_view, secrets").is_err());
         // SQL keywords after name are rejected by the parser
         assert!(safe_data_product_name("my_view WHERE 1=1 --").is_err());
-    }
-
-    // ── Origin validation tests ────────────────────────────────────────
-
-    #[mz_ore::test]
-    fn test_validate_origin_no_header() {
-        let headers = HeaderMap::new();
-        assert!(validate_origin(&headers).is_none(), "No Origin = allow");
-    }
-
-    #[mz_ore::test]
-    fn test_validate_origin_matching() {
-        let mut headers = HeaderMap::new();
-        headers.insert(http::header::ORIGIN, "https://example.com".parse().unwrap());
-        headers.insert(http::header::HOST, "example.com".parse().unwrap());
-        assert!(
-            validate_origin(&headers).is_none(),
-            "Matching Origin = allow"
-        );
-    }
-
-    #[mz_ore::test]
-    fn test_validate_origin_mismatch() {
-        let mut headers = HeaderMap::new();
-        headers.insert(http::header::ORIGIN, "https://evil.com".parse().unwrap());
-        headers.insert(http::header::HOST, "example.com".parse().unwrap());
-        assert!(
-            validate_origin(&headers).is_some(),
-            "Mismatched Origin = reject"
-        );
-    }
-
-    #[mz_ore::test]
-    fn test_validate_origin_no_host() {
-        let mut headers = HeaderMap::new();
-        headers.insert(http::header::ORIGIN, "https://example.com".parse().unwrap());
-        assert!(
-            validate_origin(&headers).is_some(),
-            "Origin with no Host = reject"
-        );
     }
 
     #[mz_ore::test]

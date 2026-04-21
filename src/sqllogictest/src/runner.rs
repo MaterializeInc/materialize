@@ -1198,6 +1198,7 @@ impl<'a> RunnerInner<'a> {
             tls: None,
             frontegg: None,
             cors_allowed_origin: AllowOrigin::list([]),
+            cors_allowed_origin_list: Vec::new(),
             unsafe_mode: true,
             all_features: false,
             metrics_registry,
