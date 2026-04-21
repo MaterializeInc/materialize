@@ -108,3 +108,41 @@ contains:on-positive accumulation
 
 #! SELECT max(unsigned_data) OVER () FROM data;
 #contains:Non-positive accumulation in ReduceInaccumulable
+
+# Kafka sink over a collection with a net-negative accumulation.
+#
+# Current behavior: `combine_at_timestamp` (in `src/interchange/src/envelopes.rs`)
+# unrolls a `-N` multiplicity into `N` `before`-only `DiffPair`s, each emitted
+# with diff `1`. So the `assert_eq!(diff, Diff::ONE, "invalid sink update")` in
+# `src/storage/src/sink/kafka.rs` does not fire, but the Debezium envelope ends
+# up publishing `N` bogus delete records for a row that was never inserted.
+#
+# Ideally the sink would go into an error state on net-negative accumulations,
+# but that is out of scope for now: we don't even put the sink into an error
+# state on primary key violations (see
+# https://github.com/MaterializeInc/database-issues/issues/5099), which are
+# far more common than users hitting negative `repeat_row` through a Kafka sink,
+# so a proper error state here is not urgent. This test just pins the current
+# behavior.
+
+> CREATE MATERIALIZED VIEW neg_mult_sink_data AS
+  SELECT 7::bigint AS x FROM repeat_row(-3)
+
+> CREATE CONNECTION kafka_conn
+  TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+
+> CREATE CONNECTION IF NOT EXISTS csr_conn TO CONFLUENT SCHEMA REGISTRY (
+    URL '${testdrive.schema-registry-url}'
+  );
+
+> CREATE SINK neg_mult_sink
+  FROM neg_mult_sink_data
+  INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-neg-mult-sink-${testdrive.seed}')
+  FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
+  ENVELOPE DEBEZIUM
+
+# Expect three spurious `before`-only records for a row that was never inserted.
+$ kafka-verify-data format=avro sink=materialize.public.neg_mult_sink sort-messages=true
+{"before": {"row": {"x": 7}}, "after": null}
+{"before": {"row": {"x": 7}}, "after": null}
+{"before": {"row": {"x": 7}}, "after": null}
