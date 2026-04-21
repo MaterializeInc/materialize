@@ -71,6 +71,7 @@ For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 ### Change data capture
 
 {{< note >}}
+
 For step-by-step instructions on enabling GTID-based binlog replication for your
 MySQL service, see the integration guides:
 [Amazon RDS](/ingest-data/mysql/amazon-rds/),
