@@ -123,11 +123,11 @@
 /src/sql-parser                     @MaterializeInc/adapter
 /src/sqllogictest                   @MaterializeInc/testing @ggevay
 /src/ssh-util                       @MaterializeInc/cluster
-/src/storage                        @MaterializeInc/cluster
-/src/storage-client                 @MaterializeInc/cluster
-/src/storage-controller             @MaterializeInc/cluster
-/src/storage-operators              @MaterializeInc/cluster
-/src/storage-types                  @MaterializeInc/cluster
+/src/storage                        @MaterializeInc/sources-sinks
+/src/storage-client                 @MaterializeInc/sources-sinks
+/src/storage-controller             @MaterializeInc/sources-sinks
+/src/storage-operators              @MaterializeInc/sources-sinks
+/src/storage-types                  @MaterializeInc/sources-sinks
 /src/test-macro                     @MaterializeInc/testing
 /src/testdrive                      @MaterializeInc/testing
 /src/timely-util                    @MaterializeInc/cluster
