@@ -47,7 +47,6 @@ def create_mysql_replica(mysql_version: str) -> MySql:
             "--enforce_gtid_consistency=ON",
             "--skip-replica-start",
             "--server-id=2",
-            "--binlog_row_metadata=FULL",
         ],
     )
 
