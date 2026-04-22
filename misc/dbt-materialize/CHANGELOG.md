@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* Support overriding the `options` PostgreSQL connection parameter
+
 ## 1.9.7 - 2026-03-16
 
 * Reduce catalog server load during
