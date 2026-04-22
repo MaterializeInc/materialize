@@ -28,6 +28,7 @@ use timely::progress::frontier::AntichainRef;
 
 use super::KVUpdates;
 use super::batch::{FactBatch, FactBuilder};
+use super::column::FactColumn;
 
 /// Build a FactBatch from sorted data with a given description.
 fn build_fact_batch(
@@ -35,8 +36,9 @@ fn build_fact_batch(
     lower: u64,
     upper: u64,
 ) -> FactBatch<u64, u64, u64, i64> {
-    let mut chunk =
-        KVUpdates::<u64, u64, u64, i64>::form(data.iter().map(|(k, v, t, d)| (k, v, (t, d))));
+    let mut chunk = FactColumn::Typed(KVUpdates::<u64, u64, u64, i64>::form(
+        data.iter().map(|(k, v, t, d)| (k, v, (t, d))),
+    ));
     let mut builder = FactBuilder::with_capacity(0, 0, 0);
     builder.push(&mut chunk);
     builder.done(Description::new(
@@ -291,6 +293,71 @@ proptest! {
             updates: data.len(),
         };
         let form_result = collect_cursor(&form_batch);
+
+        prop_assert_eq!(builder_result, form_result);
+    }
+
+    /// Builder must dedup keys and vals across chunk boundaries.
+    ///
+    /// Splits sorted input at every possible point, pushes each half as a
+    /// separate `FactColumn::Typed` chunk through the same `FactBuilder`, and
+    /// verifies the resulting batch matches a one-shot `form()` build. This
+    /// is the property the reverted attempt broke — a byte-bounded chunker
+    /// can place the same key's vals in two adjacent chunks, so raw
+    /// concatenation duplicates the key (yielding inflated counts, e.g.
+    /// aoc_1204.slt returning 20696 vs expected 978).
+    #[test]
+    fn builder_dedups_across_chunks(
+        mut data in prop::collection::vec(
+            (0..10u64, 0..8u64, 0..5u64, 1..3i64),
+            2..50
+        ),
+        split_points in prop::collection::vec(any::<usize>(), 0..5),
+    ) {
+        sort_input(&mut data);
+        if data.is_empty() { return Ok(()); }
+
+        // Reference: one-shot form().
+        let refs: Vec<_> = data.iter().map(|(k, v, t, d)| (k, v, (t, d))).collect();
+        let storage = super::KVUpdates::<u64, u64, u64, i64>::form(refs.into_iter());
+        let form_batch = FactBatch {
+            storage,
+            description: Description::new(
+                Antichain::from_elem(0u64),
+                Antichain::from_elem(1000u64),
+                Antichain::from_elem(0u64),
+            ),
+            updates: data.len(),
+        };
+        let form_result = collect_cursor(&form_batch);
+
+        // Build via Builder with multiple chunks split at arbitrary points.
+        let mut splits: Vec<usize> = split_points
+            .into_iter()
+            .map(|p| p % (data.len() + 1))
+            .collect();
+        splits.push(0);
+        splits.push(data.len());
+        splits.sort();
+        splits.dedup();
+
+        let mut builder = FactBuilder::with_capacity(0, 0, 0);
+        for window in splits.windows(2) {
+            let slice = &data[window[0]..window[1]];
+            if slice.is_empty() { continue; }
+            let mut chunk = FactColumn::Typed(
+                super::KVUpdates::<u64, u64, u64, i64>::form(
+                    slice.iter().map(|(k, v, t, d)| (k, v, (t, d))),
+                ),
+            );
+            builder.push(&mut chunk);
+        }
+        let builder_batch = builder.done(Description::new(
+            Antichain::from_elem(0u64),
+            Antichain::from_elem(1000u64),
+            Antichain::from_elem(0u64),
+        ));
+        let builder_result = collect_cursor(&builder_batch);
 
         prop_assert_eq!(builder_result, form_result);
     }

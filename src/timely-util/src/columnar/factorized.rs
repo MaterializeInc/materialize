@@ -49,7 +49,7 @@ use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
 use mz_ore::cast::CastFrom;
 
-use batch::{FactBatch, FactBuilder, FactColBuilder};
+use batch::{FactBatch, FactBuilder};
 use batcher::FactTrieInternalMerger;
 use chunker::FactTrieChunker;
 
@@ -84,13 +84,10 @@ pub type FactValBuilder<K, V, T, R> = RcBuilder<FactBuilder<K, V, T, R>>;
 
 /// Column-input builder producing `Rc<FactBatch>`.
 ///
-/// Like [`FactValBuilder`] but consumes [`FactColumn`] chunks. Intended for
-/// `reduce_abelian` / `threshold_arrangement` callsites, where `Bu::Input`
-/// must be a timely `Container` with `Default`, `ClearContainer`, and
-/// `PushInto<((K, V), T, R)>` — all of which [`FactColumn`] provides.
-///
-/// [`FactColumn`]: column::FactColumn
-pub type FactColValBuilder<K, V, T, R> = RcBuilder<FactColBuilder<K, V, T, R>>;
+/// Alias for [`FactValBuilder`]; retained for callsite naming clarity in
+/// `reduce_abelian` / `threshold_arrangement` paths. [`FactBuilder`] accepts
+/// [`column::FactColumn`] on both the batcher and reduce paths.
+pub type FactColValBuilder<K, V, T, R> = RcBuilder<FactBuilder<K, V, T, R>>;
 
 /// A [`Vecs`] using [`Strides`] for offset bounds.
 ///
@@ -823,9 +820,9 @@ mod tests {
         // Build two abutting batches.
         let tuples1: Vec<(u64, u64, u64, i64)> =
             vec![(1, 10, 100, 1), (1, 20, 100, 1), (2, 30, 100, 1)];
-        let mut chunk1 = KVUpdates::<u64, u64, u64, i64>::form(
+        let mut chunk1 = column::FactColumn::Typed(KVUpdates::<u64, u64, u64, i64>::form(
             tuples1.iter().map(|(k, v, t, d)| (k, v, (t, d))),
-        );
+        ));
         let mut builder1 = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
         builder1.push(&mut chunk1);
         let batch1 = builder1.done(Description::new(
@@ -836,9 +833,9 @@ mod tests {
 
         let tuples2: Vec<(u64, u64, u64, i64)> =
             vec![(1, 10, 300, 2), (2, 30, 300, -1), (3, 40, 300, 1)];
-        let mut chunk2 = KVUpdates::<u64, u64, u64, i64>::form(
+        let mut chunk2 = column::FactColumn::Typed(KVUpdates::<u64, u64, u64, i64>::form(
             tuples2.iter().map(|(k, v, t, d)| (k, v, (t, d))),
-        );
+        ));
         let mut builder2 = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
         builder2.push(&mut chunk2);
         let batch2 = builder2.done(Description::new(

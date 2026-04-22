@@ -653,78 +653,48 @@ where
 
 // --- Builder ---
 
-/// A builder for [`FactBatch`] that receives sorted factorized trie chunks.
+/// A builder for [`FactBatch`] that receives sorted [`FactColumn`] chunks.
 ///
-/// Chunks arrive pre-sorted and pre-consolidated from the batcher pipeline, with
-/// consecutive chunks holding disjoint key ranges. [`done`](Builder::done) flattens
-/// the chain through [`KVUpdates::form`] to produce a single fully-deduplicated trie.
+/// Chunks arrive pre-sorted and pre-consolidated from the batcher pipeline
+/// (either `FactColumn::Typed` from `reduce_abelian` / threshold output, or
+/// `FactColumn::Align` from the serialized merge pipeline). Consecutive chunks
+/// are globally sorted by key but may share a boundary key — a byte-bounded
+/// chunker can split one key's val range across two chunks — so the builder
+/// must dedup across chunk boundaries.
+///
+/// Each `push` streams the chunk's `(k, v, (t, r))` tuples into a persistent
+/// `storage` trie, maintaining `prev_a` / `prev_b` state across `push` calls
+/// to dedup seamlessly at chunk boundaries (the `KVUpdates::form` semantics,
+/// applied incrementally). `done` seals the outer bound and hands over
+/// `storage`, so the builder allocates zero new `Vec`s after the first chunk
+/// grows them to capacity.
 pub struct FactBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
-    /// Accumulated trie chunks; flattened in `done()`.
-    chunks: Vec<KVUpdates<K, V, T, R>>,
+    /// In-progress trie — reused across `push` calls, capacity retained.
+    storage: KVUpdates<K, V, T, R>,
+    /// Total leaf count — accumulated per `push`, reported in `done`.
+    updates: usize,
+    /// `prev_a` (last K ref pushed) — `None` before any tuple.
+    ///
+    /// Stored as `Option<K>` owned because borrow lifetimes don't outlive a
+    /// single `push` call — we need the dedup state to survive into the next
+    /// `push`.
+    prev_k: Option<K>,
+    /// `prev_b` (last V ref pushed) — paired with the same K as `prev_k`.
+    prev_v: Option<V>,
+}
+
+impl<K: Columnar, V: Columnar, T: Columnar, R: Columnar> Default for FactBuilder<K, V, T, R> {
+    fn default() -> Self {
+        Self {
+            storage: Default::default(),
+            updates: 0,
+            prev_k: None,
+            prev_v: None,
+        }
+    }
 }
 
 impl<K, V, T, R> Builder for FactBuilder<K, V, T, R>
-where
-    K: Columnar + Ord + Clone + 'static,
-    for<'a> columnar::Ref<'a, K>: Ord + Copy,
-    V: Columnar + Ord + Clone + 'static,
-    for<'a> columnar::Ref<'a, V>: Ord + Copy,
-    T: Columnar + Ord + Clone + Lattice + timely::progress::Timestamp + 'static,
-    for<'a> columnar::Ref<'a, T>: Ord + Copy,
-    R: Columnar + Ord + Clone + Semigroup + 'static,
-    for<'a> columnar::Ref<'a, R>: Ord + Copy,
-{
-    type Input = KVUpdates<K, V, T, R>;
-    type Time = T;
-    type Output = FactBatch<K, V, T, R>;
-
-    fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        FactBuilder { chunks: Vec::new() }
-    }
-
-    fn push(&mut self, chunk: &mut Self::Input) {
-        self.chunks.push(std::mem::take(chunk));
-    }
-
-    fn done(self, description: Description<T>) -> FactBatch<K, V, T, R> {
-        let updates: usize = self.chunks.iter().map(|c| c.len()).sum();
-        let storage = KVUpdates::<K, V, T, R>::form(self.chunks.iter().flat_map(|c| c.iter()));
-        FactBatch {
-            storage,
-            description,
-            updates,
-        }
-    }
-
-    fn seal(chain: &mut Vec<Self::Input>, description: Description<T>) -> FactBatch<K, V, T, R> {
-        let mut builder = Self::with_capacity(0, 0, 0);
-        for mut chunk in chain.drain(..) {
-            builder.push(&mut chunk);
-        }
-        builder.done(description)
-    }
-}
-
-// --- Column-input Builder ---
-
-/// A builder for [`FactBatch`] that accepts [`FactColumn`] chunks.
-///
-/// Parallel to [`FactBuilder`]. `FactBuilder::Input` is `KVUpdates` (fed by
-/// the batcher pipeline); `FactColBuilder::Input` is `FactColumn` (fed by
-/// `reduce_abelian` / `threshold_arrangement`, which need a `Bu::Input` that
-/// implements `Container + Default + ClearContainer + PushInto<((K, V), T, R)>`).
-///
-/// On `push`, the builder unwraps the `Typed` variant and takes ownership of
-/// its inner `KVUpdates`. `Bytes`/`Align` variants are not expected in this
-/// path (they arise from deserialization, not from reduce output) and panic.
-/// `done` flattens the chain through [`KVUpdates::form`] exactly like
-/// [`FactBuilder::done`].
-pub struct FactColBuilder<K: Columnar, V: Columnar, T: Columnar, R: Columnar> {
-    /// Accumulated trie chunks; flattened in `done()`.
-    chunks: Vec<KVUpdates<K, V, T, R>>,
-}
-
-impl<K, V, T, R> Builder for FactColBuilder<K, V, T, R>
 where
     K: Columnar + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, K>: Ord + Copy,
@@ -740,25 +710,42 @@ where
     type Output = FactBatch<K, V, T, R>;
 
     fn with_capacity(_keys: usize, _vals: usize, _upds: usize) -> Self {
-        FactColBuilder { chunks: Vec::new() }
+        Self::default()
     }
 
     fn push(&mut self, chunk: &mut Self::Input) {
-        match std::mem::take(chunk) {
-            FactColumn::Typed(storage) => self.chunks.push(storage),
-            FactColumn::Bytes(_) | FactColumn::Align(_) => {
-                panic!("FactColBuilder::push received a non-Typed FactColumn variant");
-            }
-        }
+        let taken = std::mem::take(chunk);
+        let borrowed = taken.borrow();
+        push_borrowed_level_into::<K, V, T, R>(
+            &mut self.storage,
+            &mut self.updates,
+            &mut self.prev_k,
+            &mut self.prev_v,
+            &borrowed,
+        );
     }
 
-    fn done(self, description: Description<T>) -> FactBatch<K, V, T, R> {
-        let updates: usize = self.chunks.iter().map(|c| c.len()).sum();
-        let storage = KVUpdates::<K, V, T, R>::form(self.chunks.iter().flat_map(|c| c.iter()));
+    fn done(mut self, description: Description<T>) -> FactBatch<K, V, T, R> {
+        // Seal the final val's leaf bounds, the final key's val bounds, and
+        // the single outer group, mirroring `KVUpdates::form`'s tail.
+        if self.prev_k.is_some() {
+            columnar::Push::push(
+                &mut self.storage.rest.rest.bounds,
+                u64::cast_from(Len::len(&self.storage.rest.rest.values.0.borrow())),
+            );
+            columnar::Push::push(
+                &mut self.storage.rest.lists.bounds,
+                u64::cast_from(Len::len(&self.storage.rest.lists.values.borrow())),
+            );
+            columnar::Push::push(
+                &mut self.storage.lists.bounds,
+                u64::cast_from(Len::len(&self.storage.lists.values.borrow())),
+            );
+        }
         FactBatch {
-            storage,
+            storage: self.storage,
             description,
-            updates,
+            updates: self.updates,
         }
     }
 
@@ -769,6 +756,123 @@ where
         }
         builder.done(description)
     }
+}
+
+/// Stream a borrowed trie chunk's `(k, v, (t, r))` tuples into `storage`,
+/// deduplicating keys and vals across the chunk boundary.
+///
+/// Because chunks within a chain are globally sorted by key, at most one key
+/// can straddle a chunk boundary — and when it does, its val range can only
+/// be extended (never overlap) by the new chunk's first vals. So the only
+/// cross-chunk check needed is on the very first `(k, v)` of this chunk vs.
+/// the `(prev_k, prev_v)` owned by the builder. Within the chunk, the source
+/// trie is already deduplicated (one entry per distinct K, V), so we can
+/// copy keys and vals verbatim once we've disambiguated the boundary.
+///
+/// Mirrors the dedup semantics of [`KVUpdates::form`] but writes into an
+/// existing (cleared or partially-filled) trie. Outer bounds remain unsealed
+/// — the caller closes them exactly once after the final `push`.
+#[inline]
+fn push_borrowed_level_into<K, V, T, R>(
+    storage: &mut KVUpdates<K, V, T, R>,
+    updates: &mut usize,
+    prev_k: &mut Option<K>,
+    prev_v: &mut Option<V>,
+    level: &super::batcher::BorrowedKVUpdates<'_, K, V, T, R>,
+) where
+    K: Columnar + Ord,
+    V: Columnar + Ord,
+    T: Columnar,
+    R: Columnar,
+{
+    use columnar::Push;
+
+    let outer_count = Len::len(&level.lists);
+    let mut first_tuple = true;
+    for outer in 0..outer_count {
+        for k_idx in super::child_range(level.lists.bounds, outer) {
+            let k_ref = level.lists.values.get(k_idx);
+
+            // Cross-chunk boundary check (first K of chunk vs prev).
+            // Within a chunk each K is unique, so after the first tuple we
+            // always seal and open a new key.
+            let k_new = if first_tuple {
+                match prev_k.as_ref() {
+                    Some(pk) => &K::into_owned(k_ref) != pk,
+                    None => true,
+                }
+            } else {
+                true
+            };
+
+            if k_new {
+                if prev_k.is_some() {
+                    // Seal open leaf bounds and val bounds for the previous key.
+                    Push::push(
+                        &mut storage.rest.rest.bounds,
+                        u64::cast_from(Len::len(&storage.rest.rest.values.0.borrow())),
+                    );
+                    Push::push(
+                        &mut storage.rest.lists.bounds,
+                        u64::cast_from(Len::len(&storage.rest.lists.values.borrow())),
+                    );
+                }
+                Push::push(&mut storage.lists.values, k_ref);
+                *prev_k = Some(K::into_owned(k_ref));
+                *prev_v = None;
+            }
+
+            let v_range = super::child_range(level.rest.lists.bounds, k_idx);
+            let mut first_v_in_key = true;
+            for v_idx in v_range {
+                let v_ref = level.rest.lists.values.get(v_idx);
+
+                // Cross-chunk val check applies only on the very first (K, V)
+                // tuple where the K matched. Otherwise (new key, or later val
+                // within the same key), we always treat as a new val.
+                let v_new = if first_tuple && first_v_in_key && !k_new {
+                    match prev_v.as_ref() {
+                        Some(pv) => &V::into_owned(v_ref) != pv,
+                        None => true,
+                    }
+                } else {
+                    true
+                };
+
+                if v_new {
+                    if prev_v.is_some() {
+                        // Seal leaf bounds for the previous val.
+                        Push::push(
+                            &mut storage.rest.rest.bounds,
+                            u64::cast_from(Len::len(&storage.rest.rest.values.0.borrow())),
+                        );
+                    }
+                    Push::push(&mut storage.rest.lists.values, v_ref);
+                    *prev_v = Some(V::into_owned(v_ref));
+                }
+
+                // Copy all (t, r) leaves for this val into `storage`.
+                let l_range = super::child_range(level.rest.rest.bounds, v_idx);
+                let n = l_range.len();
+                *updates += n;
+                for l_idx in l_range {
+                    Push::push(
+                        &mut storage.rest.rest.values.0,
+                        level.rest.rest.values.0.get(l_idx),
+                    );
+                    Push::push(
+                        &mut storage.rest.rest.values.1,
+                        level.rest.rest.values.1.get(l_idx),
+                    );
+                }
+                first_v_in_key = false;
+                first_tuple = false;
+            }
+        }
+    }
+    // No sealing here: the final val's leaf bounds and the final key's val
+    // bounds remain open so a subsequent `push` can continue the same key or
+    // val. `FactBuilder::done` closes them exactly once.
 }
 
 #[cfg(test)]
@@ -1012,9 +1116,11 @@ mod tests {
         assert_eq!(result, vec![(1, 10, vec![(500, 2)])]);
     }
 
-    /// Helper: build a sorted `KVUpdates` chunk from `(K, V, T, R)` tuples.
-    fn make_chunk_u64(data: &[(u64, u64, u64, i64)]) -> KVUpdates<u64, u64, u64, i64> {
-        KVUpdates::<u64, u64, u64, i64>::form(data.iter().map(|(k, v, t, d)| (k, v, (t, d))))
+    /// Helper: build a sorted typed [`FactColumn`] chunk from tuples.
+    fn make_chunk_u64(data: &[(u64, u64, u64, i64)]) -> FactColumn<u64, u64, u64, i64> {
+        FactColumn::Typed(KVUpdates::<u64, u64, u64, i64>::form(
+            data.iter().map(|(k, v, t, d)| (k, v, (t, d))),
+        ))
     }
 
     #[mz_ore::test]
@@ -1074,7 +1180,7 @@ mod tests {
     #[mz_ore::test]
     fn test_builder_empty() {
         let mut builder = FactBuilder::<u64, u64, u64, i64>::with_capacity(0, 0, 0);
-        builder.push(&mut KVUpdates::<u64, u64, u64, i64>::default());
+        builder.push(&mut FactColumn::<u64, u64, u64, i64>::default());
         let batch = builder.done(Description::new(
             Antichain::from_elem(0u64),
             Antichain::from_elem(1000u64),
@@ -1121,9 +1227,9 @@ mod tests {
             ((b"b".to_vec(), b"z".to_vec()), 100, 2),
         ];
         tuples.sort();
-        let mut chunk = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+        let mut chunk = FactColumn::Typed(KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
             tuples.iter().map(|((k, v), t, r)| (k, v, (t, r))),
-        );
+        ));
 
         let mut builder = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
         builder.push(&mut chunk);
@@ -1154,9 +1260,9 @@ mod tests {
         // Merge two Vec<u8>-keyed batches.
         let tuples2: Vec<((Vec<u8>, Vec<u8>), u64, i64)> =
             vec![((b"a".to_vec(), b"x".to_vec()), 300, 1)];
-        let mut chunk2 = KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
+        let mut chunk2 = FactColumn::Typed(KVUpdates::<Vec<u8>, Vec<u8>, u64, i64>::form(
             tuples2.iter().map(|((k, v), t, r)| (k, v, (t, r))),
-        );
+        ));
         let mut b2 = FactBuilder::<Vec<u8>, Vec<u8>, u64, i64>::with_capacity(0, 0, 0);
         b2.push(&mut chunk2);
         let batch2 = b2.done(Description::new(
