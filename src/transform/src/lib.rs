@@ -843,10 +843,11 @@ impl Optimizer {
             Box::new(Fixpoint {
                 name: "fixpoint_physical_01",
                 limit: 100,
-                transforms: vec![
+                transforms: transforms![
                     Box::new(EquivalencePropagation::default()),
                     Box::new(fold_constants_fixpoint(true)),
-                    Box::new(coalesce_case::CoalesceCase::default()),
+                    Box::new(coalesce_case::CoalesceCase::default());
+                        if ctx.features.enable_coalesce_case_transform,
                     Box::new(Demand::default()),
                     // Demand might have introduced dummies, so let's also do a ProjectionPushdown.
                     Box::new(ProjectionPushdown::default()),

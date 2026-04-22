@@ -2271,7 +2271,7 @@ feature_flags!(
     {
         name: enable_coalesce_case_transform,
         desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
-        default: false,
+        default: true,
         enable_for_item_parsing: false,
     },
 );
