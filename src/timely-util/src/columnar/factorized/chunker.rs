@@ -426,6 +426,23 @@ where
         self.empty = ready;
         Some(&mut self.empty)
     }
+
+    /// Drop retained buffer capacity to release memory back to the allocator.
+    ///
+    /// Called by the merge batcher when it believes resources can be relinquished.
+    /// The caller must drain all extracted containers via [`Self::finish`] first,
+    /// so `pending` and `ready` are already empty; what remains is retained
+    /// capacity in `pending: Vec<_>` and `work: KVUpdates` (five underlying
+    /// `Vec`s). For workloads with many concurrent arrangements, retaining these
+    /// per-batcher buffers between seals compounds into meaningful clusterd RSS.
+    #[inline]
+    fn relax(&mut self) {
+        assert!(
+            self.pending.is_empty() && self.ready.is_empty(),
+            "relax called with unfinished data",
+        );
+        *self = Self::default();
+    }
 }
 
 #[cfg(test)]
