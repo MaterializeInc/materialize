@@ -29,7 +29,7 @@ Column       | Description
 -------------|------------
 **cluster**  | The name of the cluster.
 **replica**  | The name of the replica.
-**size**     | The [size](/sql/create-cluster#size) of the replica.
+**size**     | The [size](/sql/create-cluster#available-sizes) of the replica.
 **ready**    | Whether all objects on the cluster have hydrated. `true` indicates that all indexes, materialized views, and other objects on this replica are caught up with the upstream data and ready to serve queries.
 **comment**  | The [comment](/sql/comment-on) associated with the cluster replica, if any.
 
