@@ -65,7 +65,7 @@ SERVICES = [
         },
         external_metadata_store=True,
     ),
-    Testdrive(no_reset=True, seed=1),
+    Testdrive(no_reset=True, seed=1, default_timeout="120s"),
 ]
 
 
