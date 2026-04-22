@@ -112,6 +112,7 @@
 //! ```
 //! # use std::sync::Arc;
 //! # use mz_ore::metrics::MetricsRegistry;
+//! # use mz_persist_client::critical::Opaque;
 //! # use mz_persist_client::{Diagnostics, PersistClient, ShardId};
 //! # use mz_txn_wal::metrics::Metrics;
 //! # use mz_txn_wal::operator::DataSubscribe;
@@ -127,7 +128,7 @@
 //! // Open a txn shard, initializing it if necessary.
 //! let txns_id = ShardId::new();
 //! let mut txns = TxnsHandle::<String, (), u64, i64>::open(
-//!     0u64, client.clone(), dyncfgs, metrics, txns_id
+//!     0u64, client.clone(), dyncfgs, metrics, txns_id, Opaque::encode(&0u64)
 //! ).await;
 //!
 //! // Register data shards to the txn set.

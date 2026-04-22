@@ -17,7 +17,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-if ! grep -q "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs" "$1"; then
+if ! grep -qE "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs|Found unstable fingerprints for" "$1"; then
   exit
 fi
 
