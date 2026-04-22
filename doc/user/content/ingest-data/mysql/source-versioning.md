@@ -53,7 +53,7 @@ Create a connection to your MySQL database using the [`CREATE CONNECTION` syntax
 ## Create a source
 
 In Materialize, create a source using the [`CREATE SOURCE`
-syntax](/sql/create-source/mysql/).
+syntax](/sql/create-source/mysql-v2/).
 
 ```mzsql
 CREATE SOURCE my_source
