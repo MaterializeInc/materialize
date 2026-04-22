@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Turn `COALESCE` of `NULL`-returning `CASE` into just a `CASE`
+//! Pushes `COALESCE` into `CASE WHEN`
 
 use mz_expr::func::variadic::Coalesce;
 use mz_expr::visit::Visit;
@@ -115,8 +115,6 @@ impl CoalesceCase {
         // COALESCE(CASE WHEN e_cond THEN e_then ELSE e_else END, ...)
         // ->
         // CASE WHEN e_cond THEN COALESCE(e_then, ...) ELSE COALESCE(e_else, ...) END
-        //
-        // ... and flipped
         expr.flatten_associative();
 
         if let MirScalarExpr::CallVariadic { func, exprs } = expr
