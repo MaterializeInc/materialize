@@ -18,8 +18,8 @@ use maplit::btreemap;
 use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::ControllerResponse;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
-use mz_ore::instrument;
 use mz_ore::cast::CastFrom;
+use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -429,11 +429,9 @@ impl Coordinator {
             .arrangement_sizes_collection_time_seconds
             .start_timer();
 
-        let live_item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(
-                &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED,
-            );
+        let live_item_id = self.catalog().resolve_builtin_storage_collection(
+            &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED,
+        );
         let live_global_id = self.catalog.get_entry(&live_item_id).latest_global_id();
         let history_item_id = self
             .catalog()
@@ -1117,10 +1115,7 @@ mod arrangement_sizes_hydration_tests {
 
     #[mz_ore::test]
     fn all_non_null_is_hydrated() {
-        let rows = vec![
-            (hydration_row(Some(100)), 1),
-            (hydration_row(Some(200)), 1),
-        ];
+        let rows = vec![(hydration_row(Some(100)), 1), (hydration_row(Some(200)), 1)];
         assert!(arrangement_sizes_all_hydrated(&rows));
     }
 
@@ -1138,10 +1133,7 @@ mod arrangement_sizes_hydration_tests {
     fn retractions_are_ignored() {
         // A -1 row represents stale state that consolidation would remove.
         // We skip it so a retracted null doesn't veto hydration.
-        let rows = vec![
-            (hydration_row(None), -1),
-            (hydration_row(Some(100)), 1),
-        ];
+        let rows = vec![(hydration_row(None), -1), (hydration_row(Some(100)), 1)];
         assert!(arrangement_sizes_all_hydrated(&rows));
     }
 

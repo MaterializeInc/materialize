@@ -4196,11 +4196,8 @@ impl Coordinator {
             differential_dataflow::consolidation::consolidate(&mut current_contents);
 
             let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
-            let expired = arrangement_sizes_expired_retractions(
-                current_contents,
-                cutoff_ts,
-                item_id,
-            );
+            let expired =
+                arrangement_sizes_expired_retractions(current_contents, cutoff_ts, item_id);
 
             // TODO(arrangement-sizes): when the writeable-catalog-server
             // plumbing in https://github.com/MaterializeInc/materialize/pull/35436
