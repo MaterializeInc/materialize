@@ -443,12 +443,19 @@ rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-v
 rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = "1.12.3"
 regex-syntax = "0.8.10"
-# Starting in reqwest 0.13, `default-tls` activates rustls instead of
-# native-tls. We pin `native-tls` explicitly to hold the previous backend;
-# switching to rustls is tracked separately in the crypto migration plan.
-# `query` became opt-in in 0.13 and is used by the cloud-api and
-# frontegg-client crates.
-reqwest = { version = "0.13.2", features = ["blocking", "charset", "cookies", "http2", "json", "native-tls", "native-tls-vendored", "query", "stream"] }
+# Starting in reqwest 0.13, default features changed: `default-tls` now
+# activates rustls (which pulls in banned rustls/hyper-rustls), and
+# `system-proxy` became an opt-in feature that was implicit before. We
+# disable default features and list everything explicitly so the TLS
+# backend stays on native-tls. Switching to rustls is tracked separately
+# in the crypto migration plan. `query` became opt-in in 0.13 and is
+# used by the cloud-api and frontegg-client crates.
+reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "charset", "cookies", "http2", "json", "native-tls", "native-tls-vendored", "query", "stream", "system-proxy"] }
+# Used by mz-storage-types to satisfy the `reqsign::AwsCredentialLoad`
+# trait signature (reqsign 0.16, via our iceberg fork, is pinned to
+# reqwest 0.12). Remove once iceberg bumps to a reqsign that supports
+# reqwest 0.13.
+reqwest_0_12 = { package = "reqwest", version = "0.12", default-features = false }
 reqwest-middleware = { version = "0.5.1", features = ["json"] }
 reqwest-retry = "0.9.1"
 rlimit = "0.11.0"
