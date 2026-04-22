@@ -56,6 +56,13 @@ impl PartialEq<Timestamp> for &Timestamp {
     }
 }
 
+impl mz_timely_util::columnar::factorized::SortPrefix for Timestamp {
+    #[inline(always)]
+    fn sort_prefix(&self) -> u128 {
+        u128::from(self.internal)
+    }
+}
+
 impl RustType<ProtoTimestamp> for Timestamp {
     fn into_proto(&self) -> ProtoTimestamp {
         ProtoTimestamp {

@@ -20,6 +20,7 @@
 //! built via [`KVUpdates::form`]. The factorization (key/value deduplication)
 //! happens at chunk production time, not downstream in the builder.
 
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 
 use columnar::{Borrow, Columnar};
@@ -30,6 +31,138 @@ use super::KVUpdates;
 use super::batcher::freeze_into_aligned;
 use super::column::FactColumn;
 use crate::columnar::Column;
+
+/// A fixed-width 128-bit sort prefix whose lexicographic order is monotone with
+/// `Self::cmp`. When two values share a prefix, the full `cmp` is used to break
+/// the tie.
+///
+/// Implementations must satisfy the monotonicity contract:
+/// * `a.cmp(b) == Ordering::Less  ==> a.sort_prefix() <= b.sort_prefix()`.
+/// * `a.cmp(b) == Ordering::Greater ==> a.sort_prefix() >= b.sort_prefix()`.
+///
+/// Put differently: if `a.sort_prefix() < b.sort_prefix()` then `a < b`, and
+/// equal prefixes require breaking the tie via `cmp`.
+pub trait SortPrefix {
+    /// Return the 128-bit sort prefix for `self`.
+    fn sort_prefix(&self) -> u128;
+}
+
+impl SortPrefix for u64 {
+    #[inline(always)]
+    fn sort_prefix(&self) -> u128 {
+        u128::from(*self)
+    }
+}
+
+impl SortPrefix for u32 {
+    #[inline(always)]
+    fn sort_prefix(&self) -> u128 {
+        u128::from(*self)
+    }
+}
+
+impl SortPrefix for i64 {
+    #[inline(always)]
+    fn sort_prefix(&self) -> u128 {
+        // Flip the sign bit so two's-complement order matches unsigned order.
+        u128::from((*self as u64) ^ (1u64 << 63))
+    }
+}
+
+impl SortPrefix for i32 {
+    #[inline(always)]
+    fn sort_prefix(&self) -> u128 {
+        u128::from((*self as u32) ^ (1u32 << 31))
+    }
+}
+
+impl SortPrefix for () {
+    #[inline(always)]
+    fn sort_prefix(&self) -> u128 {
+        0
+    }
+}
+
+/// Sort and consolidate `pending` with the K sort prefix augmented inline.
+///
+/// The tuples are temporarily moved into `Vec<(u128, ((K, V), T, R))>` so the
+/// sort sees the prefix as a direct-access field. The comparator uses the
+/// 128-bit prefix as fast path and falls back to `((K, V), T)` on ties. After
+/// sorting, the prefix is dropped and tuples move back into `pending` in order,
+/// followed by the usual run consolidation.
+///
+/// The resulting order is identical to
+/// `differential_dataflow::consolidation::consolidate_updates`.
+fn prefix_sort_and_consolidate<K, V, T, R>(pending: &mut Vec<((K, V), T, R)>)
+where
+    K: SortPrefix + Ord,
+    V: Ord,
+    T: Ord,
+    R: Semigroup + Clone,
+{
+    let n = pending.len();
+    if n <= 1 {
+        pending.retain(|(_, _, r)| !r.is_zero());
+        return;
+    }
+
+    // Move tuples into an augmented vector (prefix, tuple) for sorting.
+    // `std::mem::take` is a no-op move that reuses the allocation for the empty
+    // state and avoids reallocating when we refill `pending` below.
+    let input: Vec<((K, V), T, R)> = std::mem::take(pending);
+    let mut augmented: Vec<(u128, ((K, V), T, R))> = Vec::with_capacity(n);
+    for tuple in input {
+        let prefix = tuple.0.0.sort_prefix();
+        augmented.push((prefix, tuple));
+    }
+
+    augmented.sort_unstable_by(|a, b| match a.0.cmp(&b.0) {
+        Ordering::Equal => {
+            let ((ak, av), at, _) = &a.1;
+            let ((bk, bv), bt, _) = &b.1;
+            match ak.cmp(bk) {
+                Ordering::Equal => match av.cmp(bv) {
+                    Ordering::Equal => at.cmp(bt),
+                    other => other,
+                },
+                other => other,
+            }
+        }
+        other => other,
+    });
+
+    // Move tuples back into pending, dropping the prefix.
+    pending.reserve(n);
+    for (_, tuple) in augmented {
+        pending.push(tuple);
+    }
+
+    // Accumulate runs sharing (K, V, T); drop zero-sum runs.
+    let mut offset = 0usize;
+    let mut accum = pending[0].2.clone();
+    for index in 1..n {
+        let (left, right) = pending.split_at_mut(index);
+        let prev = &left[index - 1];
+        let curr = &right[0];
+        if prev.0 == curr.0 && prev.1 == curr.1 {
+            accum.plus_equals(&curr.2);
+        } else {
+            if !accum.is_zero() {
+                pending.swap(offset, index - 1);
+                pending[offset].2.clone_from(&accum);
+                offset += 1;
+            }
+            accum.clone_from(&pending[index].2);
+        }
+    }
+    if !accum.is_zero() {
+        pending.swap(offset, n - 1);
+        pending[offset].2 = accum;
+        offset += 1;
+    }
+
+    pending.truncate(offset);
+}
 
 /// Flush threshold, in flat `((K, V), T, R)` tuples, before the chunker
 /// sorts+consolidates `pending` and emits a trie chunk.
@@ -61,8 +194,8 @@ fn pending_flush_target<K, V, T, R>() -> usize {
 /// allocations for the next flush.
 pub struct FactTrieChunker<K, V, T, R>
 where
-    K: Columnar + Ord + Clone,
-    V: Columnar + Ord + Clone,
+    K: Columnar + SortPrefix + Ord + Clone,
+    V: Columnar + SortPrefix + Ord + Clone,
     T: Columnar + Ord + Clone,
     R: Columnar + Semigroup + Clone,
 {
@@ -79,8 +212,8 @@ where
 
 impl<K, V, T, R> Default for FactTrieChunker<K, V, T, R>
 where
-    K: Columnar + Ord + Clone,
-    V: Columnar + Ord + Clone,
+    K: Columnar + SortPrefix + Ord + Clone,
+    V: Columnar + SortPrefix + Ord + Clone,
     T: Columnar + Ord + Clone,
     R: Columnar + Semigroup + Clone,
 {
@@ -96,9 +229,9 @@ where
 
 impl<K, V, T, R> FactTrieChunker<K, V, T, R>
 where
-    K: Columnar + Ord + Clone + 'static,
+    K: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, K>: Ord + Copy,
-    V: Columnar + Ord + Clone + 'static,
+    V: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, V>: Ord + Copy,
     T: Columnar + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, T>: Ord + Copy,
@@ -114,7 +247,14 @@ where
         if self.pending.is_empty() {
             return;
         }
-        differential_dataflow::consolidation::consolidate_updates(&mut self.pending);
+        // Sort+consolidate the pending staging buffer with a K-prefix
+        // accelerated comparator. For types that can expose a monotone 128-bit
+        // sort prefix (e.g. `Row`, `Timestamp`, numeric primitives), most
+        // tuple comparisons short-circuit via a branch-predictable integer
+        // compare, avoiding the full `Row::cmp` memcmp path that dominates
+        // arrangement profiles. See `prefix_sort_and_consolidate` for details
+        // and `SortPrefix` for the correctness contract.
+        prefix_sort_and_consolidate(&mut self.pending);
         if self.pending.is_empty() {
             return;
         }
@@ -205,9 +345,9 @@ fn form_into<K, V, T, R, AR, BR, TR, DR>(
 
 impl<K, V, T, R> PushInto<&mut Vec<((K, V), T, R)>> for FactTrieChunker<K, V, T, R>
 where
-    K: Columnar + Ord + Clone + 'static,
+    K: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, K>: Ord + Copy,
-    V: Columnar + Ord + Clone + 'static,
+    V: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, V>: Ord + Copy,
     T: Columnar + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, T>: Ord + Copy,
@@ -233,9 +373,9 @@ where
 /// materialize a `Vec<((K, V), T, R)>` before exchange.
 impl<K, V, T, R> PushInto<&mut Column<((K, V), T, R)>> for FactTrieChunker<K, V, T, R>
 where
-    K: Columnar + Ord + Clone + 'static,
+    K: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, K>: Ord + Copy,
-    V: Columnar + Ord + Clone + 'static,
+    V: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, V>: Ord + Copy,
     T: Columnar + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, T>: Ord + Copy,
@@ -263,9 +403,9 @@ where
 
 impl<K, V, T, R> ContainerBuilder for FactTrieChunker<K, V, T, R>
 where
-    K: Columnar + Ord + Clone + 'static,
+    K: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, K>: Ord + Copy,
-    V: Columnar + Ord + Clone + 'static,
+    V: Columnar + SortPrefix + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, V>: Ord + Copy,
     T: Columnar + Ord + Clone + 'static,
     for<'a> columnar::Ref<'a, T>: Ord + Copy,
@@ -372,5 +512,70 @@ mod tests {
         assert!(first.is_some(), "expected an early-flushed chunk");
         // finish() yields nothing else (flush emits a single chunk for all pending).
         assert!(chunker.finish().is_none());
+    }
+
+    /// Compare `prefix_sort_and_consolidate` against differential's
+    /// `consolidate_updates` for a handful of deliberately adversarial inputs.
+    #[mz_ore::test]
+    fn test_prefix_sort_matches_consolidate_updates() {
+        let cases: Vec<Vec<((u64, u64), u64, i64)>> = vec![
+            // Empty.
+            vec![],
+            // Single element.
+            vec![((1u64, 2u64), 3u64, 5i64)],
+            // Already sorted, distinct.
+            (0u64..64).map(|i| ((i, i + 1), i + 2, 1i64)).collect(),
+            // Reversed.
+            (0u64..64)
+                .rev()
+                .map(|i| ((i, i + 1), i + 2, 1i64))
+                .collect(),
+            // Heavy dedup — all identical.
+            (0u64..64).map(|_| ((7u64, 11u64), 13u64, 1i64)).collect(),
+            // Dup with cancelling diffs.
+            vec![
+                ((1, 2), 3, 1),
+                ((1, 2), 3, -1),
+                ((4, 5), 6, 2),
+                ((4, 5), 6, -2),
+            ],
+            // Mixed — same K prefix, different V.
+            (0u64..100)
+                .map(|i| ((i % 4, i), i % 3, (i as i64) - 50))
+                .collect(),
+        ];
+
+        for (idx, case) in cases.into_iter().enumerate() {
+            let mut expected = case.clone();
+            differential_dataflow::consolidation::consolidate_updates(&mut expected);
+            let mut actual = case.clone();
+            prefix_sort_and_consolidate(&mut actual);
+            assert_eq!(
+                expected, actual,
+                "prefix_sort_and_consolidate diverged from consolidate_updates on case {idx}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(5000))]
+
+        /// For arbitrary inputs, `prefix_sort_and_consolidate` must produce the
+        /// exact same output as differential's `consolidate_updates`. This is the
+        /// contract upheld by [`FactTrieChunker::flush_pending`].
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn prefix_sort_matches_consolidate_prop(
+            input in proptest::collection::vec(
+                ((0u64..8, 0u64..8), 0u64..4, -3i64..=3i64),
+                0..512,
+            )
+        ) {
+            let mut expected = input.clone();
+            differential_dataflow::consolidation::consolidate_updates(&mut expected);
+            let mut actual = input;
+            prefix_sort_and_consolidate(&mut actual);
+            proptest::prop_assert_eq!(expected, actual);
+        }
     }
 }

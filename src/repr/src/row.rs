@@ -341,6 +341,34 @@ impl Ord for Row {
     }
 }
 
+/// A 128-bit prefix derived from a `Row`'s data bytes whose lexicographic order
+/// is monotone with `Row::cmp` (length-then-bytes).
+///
+/// Layout (big-endian `u128`):
+/// * bytes 0..2: `data.len()` as u16 (capped at `u16::MAX`; rows larger than
+///   64 KiB are rare but would alias at the cap — ties are then resolved by the
+///   full `Row::cmp` fallback).
+/// * bytes 2..16: first 14 bytes of `data()`, zero-padded if shorter.
+///
+/// Because `Row::cmp` compares by length first and then lexicographically by
+/// bytes, a u128 built in this order sorts monotonically with `Row::cmp`. Rows
+/// whose 14-byte data prefix is identical share a u128 and must fall back to
+/// the full comparator.
+impl mz_timely_util::columnar::factorized::SortPrefix for Row {
+    #[inline]
+    fn sort_prefix(&self) -> u128 {
+        let data = self.data();
+        let mut buf = [0u8; 16];
+        // Clamp length at u16::MAX; any larger row ties at the cap and will be
+        // disambiguated by the full Row::cmp fallback.
+        let len_u16 = u16::try_from(data.len()).unwrap_or(u16::MAX);
+        buf[0..2].copy_from_slice(&len_u16.to_be_bytes());
+        let take = data.len().min(14);
+        buf[2..2 + take].copy_from_slice(&data[..take]);
+        u128::from_be_bytes(buf)
+    }
+}
+
 #[allow(missing_debug_implementations)]
 mod columnation {
     use columnation::{Columnation, Region};

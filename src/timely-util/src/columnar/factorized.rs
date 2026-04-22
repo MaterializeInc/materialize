@@ -52,6 +52,7 @@ use mz_ore::cast::CastFrom;
 use batch::{FactBatch, FactBuilder};
 use batcher::FactTrieInternalMerger;
 use chunker::FactTrieChunker;
+pub use chunker::SortPrefix;
 
 /// A spine of factorized columnar batches.
 pub type FactValSpine<K, V, T, R> = Spine<Rc<FactBatch<K, V, T, R>>>;
