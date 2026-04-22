@@ -38,6 +38,8 @@
     atomic swap transaction when it is aborted by a concurrent-DDL conflict
     (Materialize SQLSTATE 40001). Other errors (permissions, syntax, missing
     objects) are surfaced immediately and are not retried. Default: 3.
+    Values below zero produce zero attempts and raise the retry-exhausted
+    error immediately.
   - `retry_backoff` (number, optional): Seconds to sleep before each retry
     of the atomic swap. Gives concurrent DDL a chance to complete before
     retrying. Default: 1.0.
@@ -110,10 +112,10 @@
     {% set ns = namespace(success=False) %}
     {% for attempt in range(max_retries + 1) %}
         {% if attempt > 0 %}
+            {{ log("Retrying atomic swap (attempt " ~ (attempt + 1) ~ " of " ~ (max_retries + 1) ~ ") due to concurrent-DDL conflict", info=True) }}
             {% if retry_backoff > 0 %}
                 {% do adapter.sleep(retry_backoff) %}
             {% endif %}
-            {{ log("Retrying atomic swap (attempt " ~ (attempt + 1) ~ " of " ~ (max_retries + 1) ~ ") due to concurrent-DDL conflict", info=True) }}
         {% endif %}
 
         {% if adapter.try_atomic_swap(swap_sql) %}

@@ -1158,35 +1158,47 @@ class TestDeployPromoteRetry:
     def test_try_atomic_swap_raises_syntax_errors_immediately(self, project):
         """A syntax error is not a DDL conflict and must surface to the user
         right away rather than being silently retried."""
-        with pytest.raises(Exception) as excinfo:
-            run_dbt(
-                [
-                    "run-operation",
-                    "_test_try_atomic_swap",
-                    "--args",
-                    "{swap_sql: 'NOT VALID SQL'}",
-                ],
-            )
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "_test_try_atomic_swap",
+                "--args",
+                "{swap_sql: 'NOT VALID SQL'}",
+            ],
+            expect_pass=False,
+        )
+        msg = log_output.lower()
         # Must not be disguised as a retry-exhausted error from deploy_promote.
         assert (
-            "failed after" not in str(excinfo.value).lower()
-        ), "syntax error should not be masked by a retry-exhausted message"
+            "failed after" not in msg
+        ), f"syntax error should not be masked by a retry-exhausted message; got: {msg}"
+        # The original syntax error must actually surface. Materialize phrases
+        # parser errors as "Unexpected keyword ..."; match either that or the
+        # generic "syntax" wording.
+        assert (
+            "unexpected" in msg or "syntax" in msg
+        ), f"expected the underlying syntax error to surface; got: {msg}"
 
     def test_try_atomic_swap_raises_missing_object_errors_immediately(self, project):
         """A missing-object error is not a DDL conflict and must raise
         immediately, not be retried as if it were one."""
-        with pytest.raises(Exception) as excinfo:
-            run_dbt(
-                [
-                    "run-operation",
-                    "_test_try_atomic_swap",
-                    "--args",
-                    "{swap_sql: 'ALTER SCHEMA does_not_exist_xyz SWAP WITH also_missing_xyz'}",
-                ],
-            )
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "_test_try_atomic_swap",
+                "--args",
+                "{swap_sql: 'ALTER SCHEMA does_not_exist_xyz SWAP WITH also_missing_xyz'}",
+            ],
+            expect_pass=False,
+        )
+        msg = log_output.lower()
         assert (
-            "failed after" not in str(excinfo.value).lower()
-        ), "missing-object error should not be masked by a retry-exhausted message"
+            "failed after" not in msg
+        ), f"missing-object error should not be masked by a retry-exhausted message; got: {msg}"
+        # The original missing-object error must actually surface.
+        assert (
+            "does_not_exist_xyz" in msg or "unknown schema" in msg or "not found" in msg
+        ), f"expected the underlying missing-object error to surface; got: {msg}"
 
     def test_deploy_promote_succeeds_under_concurrent_ddl(self, project):
         """Injects continuous concurrent DDL on a second connection while
@@ -1237,15 +1249,17 @@ class TestDeployPromoteRetry:
         churn = threading.Thread(target=churn_ddl, daemon=True)
         churn.start()
         try:
-            # Use retry_backoff=0 so the test runs quickly even across many
-            # retries, and max_retries high enough that we'll almost
-            # certainly catch a conflict window.
+            # `retry_backoff` has to be non-zero: with continuous concurrent
+            # DDL and zero backoff, each swap retry races the churn thread
+            # with no quiet window and loses every time. A short backoff
+            # gives the swap a reliable window between churn DDLs. Keep
+            # `max_retries * retry_backoff` modest so CI time stays bounded.
             _, log_output = run_dbt_and_capture(
                 [
                     "run-operation",
                     "deploy_promote",
                     "--args",
-                    "{max_retries: 50, retry_backoff: 0}",
+                    "{max_retries: 20, retry_backoff: 0.1}",
                 ]
             )
         finally:

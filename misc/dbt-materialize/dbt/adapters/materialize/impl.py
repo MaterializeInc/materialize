@@ -376,8 +376,11 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
             try:
                 with handle.cursor() as cursor:
                     cursor.execute("ROLLBACK")
-            except psycopg2.Error:
-                pass
+            except psycopg2.Error as rollback_err:
+                logger.debug(
+                    f"ROLLBACK after aborted swap failed (connection may be "
+                    f"broken): {rollback_err}"
+                )
             if getattr(e, "pgcode", None) == self._DDL_CONFLICT_SQLSTATE:
                 logger.info(f"Atomic swap aborted by concurrent DDL: {e}")
                 return False
