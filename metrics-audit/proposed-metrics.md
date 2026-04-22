@@ -1,11 +1,17 @@
 # Materialize Prometheus Metrics Proposal
 
-## Metric Naming Conventions should be the standard prometheus naming conventions
-- All metrics are prefixed with `mz_`
-- Use snake_case for metric names
-- Counter metrics are suffixed with `_total` where appropriate
-- Histogram metrics use `_seconds` or `_bytes` suffixes as appropriate
-- Labels use snake_case and provide dimensional filtering
+## Jun note:
+- I copied this from [github.com/MaterializeInc/observability-demo/blob/main/proposed-metrics.md](github.com/MaterializeInc/observability-demo/blob/main/proposed-metrics.md) and annotated them through:
+- Existing metric column
+- Notes column
+- General notes per section to discuss limitations and feedback
+
+## Throughout this whole exercise, the top level things we need to do are:
+- Create a single prometheus endpoint, proxy all processes' metrics through environmentd, and create a design for replicas outside of adapter such that we can add object/cluster/replica names to each series.
+- Instead of scraping kubelet's cadvisor, we need to expose the replica utilization metrics ourselves to account for the memory limiter as well as Cloud customers not having access to our cadvisor endpoints
+- Expose some Dataflow metrics (e.g. scheduling elapsed, park time, arrangement records) to our prometheus registry instead of just our builtin logs. We most likely need to prefilter some of this to match our Cloud promsql exporter queries. A rough plan is described in `export_builtin_logs_to_prometheus.md`
+- Extend our metrics! macro to indicate stability/versioning of replicas such that we don't accidentally remove some. Not sure what the versioning scheme should be.
+
 
 ## Environment-Level Metrics
 
@@ -513,25 +519,3 @@ General notes:
 | `mz_table_write_duration_seconds` | Histogram | `table`, `cluster` | Write operation latency | `mz_append_table_duration_seconds` (adapter/src/metrics.rs) |
 
 ---
-
-## Data sources
-I think we can re-use a bunch of our existing data sources for these metrics. Hopefully claude got this right!
-
-| Proposed Metric | Source Table |
-|-----------------|--------------|
-| `mz_cluster_*_utilization_ratio` | `mz_internal.mz_cluster_replica_utilization` |
-| `mz_source_*` | `mz_internal.mz_source_statistics` |
-| `mz_sink_*` | `mz_internal.mz_sink_statistics` |
-| `mz_*_status` | `mz_internal.mz_*_statuses`, `mz_internal.mz_hydration_statuses` |
-| `mz_*_freshness_seconds` | `mz_internal.mz_wallclock_global_lag` |
-| `mz_cluster_scheduling_parks_ns_total` | `mz_internal.mz_scheduling_parks_histogram` |
-| `mz_cluster_headroom_ratio` | Derived from `mz_cluster_scheduling_parks_ns_total` |
-| `mz_dataflow_*` | `mz_internal.mz_dataflow_arrangement_sizes`, `mz_internal.mz_scheduling_elapsed` |
-| `mz_catalog_ddl_operations_total` | `mz_catalog.mz_audit_events` |
-| `mz_catalog_grant_revoke_total` | `mz_catalog.mz_audit_events` |
-| `mz_catalog_objects_total` | `mz_catalog.mz_objects` |
-| `mz_catalog_dependencies_total` | `mz_internal.mz_object_dependencies` |
-| `mz_catalog_notices_*` | `mz_internal.mz_notices` |
-| `mz_external_connections_total` | `mz_catalog.mz_connections` |
-| `mz_privatelink_status` | `mz_internal.mz_aws_privatelink_connection_statuses` |
-| `mz_privatelink_status_changes_total` | `mz_internal.mz_aws_privatelink_connection_status_history` |
