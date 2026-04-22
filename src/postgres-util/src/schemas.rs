@@ -36,10 +36,10 @@ pub async fn get_pg_major_version(client: &Client) -> Result<u32, PostgresError>
     // server_version_num is an integer like 140005 for version 14.5
     // NOTE: We use the statement SELECT instead of SHOW because older Aurora
     // versions don't support SHOW via a replication channel.
-    let query = "SELECT current_setting('server_version_num')";
+    let query = "SELECT pg_catalog.current_setting('server_version_num') AS server_version_num";
     let row = simple_query_opt(client, query).await?;
     let version_num: u32 = row
-        .and_then(|r| r.get("current_setting").map(|s| s.parse().ok()))
+        .and_then(|r| r.get("server_version_num").map(|s| s.parse().ok()))
         .flatten()
         .ok_or_else(|| {
             PostgresError::Generic(anyhow::anyhow!("failed to get PostgreSQL version"))
