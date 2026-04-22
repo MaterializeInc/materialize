@@ -82,6 +82,12 @@ mod columnar_timestamp {
         fn push(&mut self, item: D) {
             self.0.push(item)
         }
+        /// Forward bulk `extend` so the inner container's specialized
+        /// `Extend` path runs instead of the default per-item loop.
+        #[inline(always)]
+        fn extend(&mut self, iter: impl IntoIterator<Item = D>) {
+            self.0.extend(iter);
+        }
     }
     impl<T: columnar::Clear> columnar::Clear for Timestamps<T> {
         #[inline(always)]
