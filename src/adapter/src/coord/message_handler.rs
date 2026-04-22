@@ -19,6 +19,7 @@ use mz_catalog::memory::objects::ClusterReplicaProcessStatus;
 use mz_controller::ControllerResponse;
 use mz_controller::clusters::{ClusterEvent, ClusterStatus};
 use mz_ore::instrument;
+use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::option::OptionExt;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -129,6 +130,17 @@ impl Coordinator {
             }
             Message::StorageUsagePrune(expired) => {
                 self.storage_usage_prune(expired).boxed_local().await;
+            }
+            Message::ArrangementSizesSchedule => {
+                self.schedule_arrangement_sizes_collection()
+                    .boxed_local()
+                    .await;
+            }
+            Message::ArrangementSizesSnapshot => {
+                self.arrangement_sizes_snapshot().boxed_local().await;
+            }
+            Message::ArrangementSizesPrune(expired) => {
+                self.arrangement_sizes_prune(expired).boxed_local().await;
             }
             Message::RetireExecute {
                 otel_ctx,
@@ -337,6 +349,201 @@ impl Coordinator {
             if internal_cmd_tx.send(Message::StorageUsageFetch).is_err() {
                 // If sending fails, the main thread has shutdown.
             }
+        });
+    }
+
+    /// Schedules the next per-object arrangement sizes snapshot.
+    ///
+    /// Re-reads the interval dyncfg on every call so operators can retune
+    /// cadence without a restart. Aligns to an `organization_id`-seeded offset
+    /// within the interval so collections stay consistent across restarts and
+    /// don't synchronize across environments.
+    pub async fn schedule_arrangement_sizes_collection(&self) {
+        let interval_duration = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_COLLECTION_INTERVAL
+            .get(self.catalog().system_config().dyncfgs());
+
+        const SEED_LEN: usize = 32;
+        let mut seed = [0; SEED_LEN];
+        for (i, byte) in self
+            .catalog()
+            .state()
+            .config()
+            .environment_id
+            .organization_id()
+            .as_bytes()
+            .into_iter()
+            .take(SEED_LEN)
+            .enumerate()
+        {
+            seed[i] = *byte;
+        }
+        let interval_ms: EpochMillis = EpochMillis::try_from(interval_duration.as_millis())
+            .expect("arrangement_size_collection_interval must fit into u64");
+        // `rand::random_range` panics on an empty range.
+        let interval_ms = interval_ms.max(1);
+        let offset = rngs::SmallRng::from_seed(seed).random_range(0..interval_ms);
+        let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
+
+        let previous_collection_ts = (now_ts - (now_ts % interval_ms)) + offset;
+        let next_collection_ts = if previous_collection_ts > now_ts {
+            previous_collection_ts
+        } else {
+            previous_collection_ts + interval_ms
+        };
+        let sleep_for = Duration::from_millis(next_collection_ts - now_ts);
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| "arrangement_sizes_collection", async move {
+            tokio::time::sleep(sleep_for).await;
+            // Best-effort: if the coordinator is shutting down, just drop.
+            let _ = internal_cmd_tx.send(Message::ArrangementSizesSnapshot);
+        });
+    }
+
+    /// Snapshots the current contents of `mz_object_arrangement_sizes` and
+    /// appends them to `mz_object_arrangement_size_history`, tagged with a
+    /// shared `collection_timestamp`. Reschedules on completion.
+    #[mz_ore::instrument(level = "debug")]
+    async fn arrangement_sizes_snapshot(&mut self) {
+        // The catalog server is not writable in read-only mode.
+        if self.controller.read_only() {
+            self.schedule_arrangement_sizes_collection().await;
+            return;
+        }
+
+        let collection_timer = self
+            .metrics
+            .arrangement_sizes_collection_time_seconds
+            .start_timer();
+
+        let live_item_id = self
+            .catalog()
+            .resolve_builtin_storage_collection(
+                &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED,
+            );
+        let live_global_id = self.catalog.get_entry(&live_item_id).latest_global_id();
+        let history_item_id = self
+            .catalog()
+            .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
+
+        let read_ts = self.get_local_read_ts().await;
+        let snapshot = match self
+            .controller
+            .storage_collections
+            .snapshot(live_global_id, read_ts)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("arrangement sizes snapshot failed: {e:?}");
+                drop(collection_timer);
+                self.schedule_arrangement_sizes_collection().await;
+                return;
+            }
+        };
+
+        // `collection_ts` is stamped after the snapshot so it's always >= the
+        // state the rows describe, and monotone across restarts. The snapshot
+        // read and this stamp aren't atomic, but the resulting skew is bounded
+        // by snapshot latency and negligible at this cadence.
+        let collection_ts: EpochMillis = self.get_local_write_ts().await.timestamp.into();
+        let collection_datum = Datum::TimestampTz(
+            mz_ore::now::to_datetime(collection_ts)
+                .try_into()
+                .expect("collection_timestamp must fit into TimestampTz"),
+        );
+
+        let mut consolidated = snapshot;
+        differential_dataflow::consolidation::consolidate(&mut consolidated);
+
+        // Column positions in `mz_object_arrangement_sizes`.
+        const LIVE_COL_REPLICA_ID: usize = 0;
+        const LIVE_COL_OBJECT_ID: usize = 1;
+        const LIVE_COL_SIZE: usize = 2;
+        const LIVE_COL_COUNT: usize = 3;
+
+        let mut skipped_malformed: u64 = 0;
+        let mut skipped_null_size: u64 = 0;
+        let updates: Vec<BuiltinTableUpdate> = consolidated
+            .into_iter()
+            .filter_map(|(row, diff)| {
+                if diff != 1 {
+                    return None;
+                }
+                let datums = row.unpack();
+                // Surface schema drift via a warn log below rather than silently
+                // skipping entire snapshots.
+                if datums.len() != LIVE_COL_COUNT {
+                    skipped_malformed += 1;
+                    return None;
+                }
+                let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
+                let object_id = datums[LIVE_COL_OBJECT_ID].unwrap_str();
+                let size_datum = datums[LIVE_COL_SIZE];
+                // The history table's `size` is non-null; fabricating zero would
+                // be misleading, so drop.
+                if size_datum.is_null() {
+                    skipped_null_size += 1;
+                    return None;
+                }
+                let size = size_datum.unwrap_int64();
+                let new_row = Row::pack_slice(&[
+                    Datum::String(replica_id),
+                    Datum::String(object_id),
+                    Datum::Int64(size),
+                    collection_datum,
+                ]);
+                Some(BuiltinTableUpdate::row(history_item_id, new_row, Diff::ONE))
+            })
+            .collect();
+        if skipped_malformed > 0 {
+            warn!(
+                "mz_object_arrangement_sizes schema drift: skipped {skipped_malformed} rows \
+                 with unexpected arity"
+            );
+        }
+        if skipped_null_size > 0 {
+            tracing::debug!("skipped {skipped_null_size} live rows with null size");
+        }
+
+        let row_count = updates.len();
+        // Captures snapshot + row construction. The async table-apply below
+        // is captured separately by `mz_append_table_duration_seconds`.
+        collection_timer.observe_duration();
+
+        if !updates.is_empty() {
+            self.metrics
+                .arrangement_sizes_rows_written
+                .inc_by(u64::cast_from(row_count));
+            // TODO(arrangement-sizes): when the writeable-catalog-server plumbing
+            // in https://github.com/MaterializeInc/materialize/pull/35436 lands,
+            // append directly on `mz_catalog_server` instead of going through
+            // the environmentd builtin-table-update path.
+            let (fut, _) = self.builtin_table_update().execute(updates).await;
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            let task_span =
+                info_span!(parent: None, "coord::arrangement_sizes_snapshot::table_updates");
+            OpenTelemetryContext::obtain().attach_as_parent_to(&task_span);
+            task::spawn(|| "arrangement_sizes_snapshot_apply", async move {
+                fut.instrument(task_span).await;
+                if let Err(e) = internal_cmd_tx.send(Message::ArrangementSizesSchedule) {
+                    warn!("internal_cmd_rx dropped before we could send: {e:?}");
+                }
+            });
+        } else {
+            self.schedule_arrangement_sizes_collection().await;
+        }
+
+        tracing::debug!(
+            "appended {row_count} rows to mz_object_arrangement_size_history at ts {collection_ts}"
+        );
+    }
+
+    #[mz_ore::instrument(level = "debug")]
+    async fn arrangement_sizes_prune(&mut self, expired: Vec<BuiltinTableUpdate>) {
+        let (fut, _) = self.builtin_table_update().execute(expired).await;
+        task::spawn(|| "arrangement_sizes_pruning_apply", async move {
+            fut.await;
         });
     }
 
