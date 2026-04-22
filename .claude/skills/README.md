@@ -8,6 +8,12 @@ SKILL.md description, or can be invoked explicitly with `/<skill-name>`.
 > read this file when deciding which skills to trigger -- it uses the `name` and
 > `description` fields in each skill's SKILL.md frontmatter.
 
+## Console
+
+| Skill | Trigger | What it does |
+|---|---|---|
+| **console-papercut** | Papercut issues, CNS-* references | Pulls a papercut from Linear, fixes it using existing codebase patterns, verifies in browser, and opens a PR |
+
 ## Development Workflow
 
 | Skill | When to use | What it does |
