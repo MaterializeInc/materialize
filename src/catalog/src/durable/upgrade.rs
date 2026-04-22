@@ -469,7 +469,7 @@ async fn run_versioned_upgrade<V1: IntoStateUpdateKindJson, V2: IntoStateUpdateK
             .into_iter()
             .map(|(kind, diff)| StateUpdate { kind, ts, diff });
         commit_ts = commit_ts.step_forward();
-        unopened_catalog_state.apply_updates(updates)?;
+        unopened_catalog_state.apply_updates_and_consolidate(updates)?;
     }
 
     // 5. Consolidate snapshot to remove old versions.

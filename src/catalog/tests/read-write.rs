@@ -10,6 +10,7 @@
 #![recursion_limit = "256"]
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
@@ -17,11 +18,12 @@ use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
-    CatalogError, DurableCatalogError, FenceError, Item, TestCatalogStateBuilder,
+    CatalogError, DurableCatalogError, FenceError, Item, Metrics, TestCatalogStateBuilder,
     USER_ITEM_ALLOC_KEY, test_bootstrap_args,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
+use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
 use mz_persist_client::PersistClient;
 use mz_proto::RustType;
@@ -552,4 +554,94 @@ async fn test_persist_ddl_detection_with_batch_allocated_ids() {
     );
 
     Box::new(state).expire().await;
+}
+
+/// Regression test for incident-970: quadratic consolidation during catalog sync.
+///
+/// When a reader syncs through K timestamps, apply_updates() was calling
+/// consolidate() on the entire snapshot for each timestamp, resulting in
+/// O(K * N log N) work instead of O(N log N). This test verifies that syncing
+/// through many timestamps only consolidates the snapshot a constant number of
+/// times, not once per timestamp.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_sync_consolidation_not_quadratic() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let state_builder =
+        TestCatalogStateBuilder::new(persist_client).with_default_deploy_generation();
+    // Share metrics between writer and reader so we can observe consolidation counts.
+    let state_builder = state_builder.with_metrics(Arc::clone(&metrics));
+
+    // Open a writer catalog.
+    let mut writer = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    let _ = writer.sync_to_current_updates().await.unwrap();
+
+    // Open a read-only catalog, caught up to the current upper.
+    let mut reader = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = reader.sync_to_current_updates().await.unwrap();
+
+    // Writer creates many databases, each in its own transaction at a distinct
+    // timestamp. This mirrors the incident scenario where DDL happened across
+    // many timestamps while a read-only envd was restarting.
+    let num_timestamps: u64 = 100;
+    for i in 0..num_timestamps {
+        let mut txn = writer.transaction().await.unwrap();
+        txn.insert_user_database(
+            &format!("db_{i}"),
+            RoleId::User(1),
+            Vec::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+    }
+
+    // Record the consolidation counter before the reader syncs.
+    let consolidations_before = metrics.snapshot_consolidations.get();
+
+    // Reader syncs through all timestamps. With the quadratic bug, this would
+    // call consolidate() once per timestamp (num_timestamps times). With the
+    // fix, it should consolidate only once after processing all timestamps.
+    let updates = reader.sync_to_current_updates().await.unwrap();
+    let consolidations_after = metrics.snapshot_consolidations.get();
+    let consolidations_during_sync = consolidations_after - consolidations_before;
+
+    // Verify correctness: reader received updates and can see all databases.
+    assert!(
+        !updates.is_empty(),
+        "reader should have received updates from writer"
+    );
+    let snapshot = reader.snapshot().await.unwrap();
+    for i in 0..num_timestamps {
+        let db_name = format!("db_{i}");
+        let found = snapshot.databases.values().any(|db| db.name == db_name);
+        assert!(found, "database {db_name} not found in reader snapshot");
+    }
+
+    // The key assertion: consolidation should happen once during the sync,
+    // NOT once per timestamp.
+    assert_eq!(
+        consolidations_during_sync, 1,
+        "sync through {num_timestamps} timestamps triggered {consolidations_during_sync} \
+         snapshot consolidations, suggesting quadratic behavior"
+    );
+
+    Box::new(writer).expire().await;
+    Box::new(reader).expire().await;
 }

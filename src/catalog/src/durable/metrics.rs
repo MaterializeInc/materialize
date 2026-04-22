@@ -25,6 +25,7 @@ pub struct Metrics {
     pub sync_latency_seconds: Counter,
     pub collection_entries: IntGaugeVec,
     pub allocate_id_seconds: Histogram,
+    pub snapshot_consolidations: IntCounter,
 }
 
 impl Metrics {
@@ -68,6 +69,10 @@ impl Metrics {
                 name: "mz_catalog_allocate_id_seconds",
                 help: "The time it takes to allocate IDs in the durable catalog.",
                 buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            snapshot_consolidations: registry.register(metric!(
+                name: "mz_catalog_snapshot_consolidations",
+                help: "Count of snapshot consolidation passes.",
             )),
         }
     }

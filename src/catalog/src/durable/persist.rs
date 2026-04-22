@@ -597,11 +597,37 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             }
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
+        // Consolidate once after all timestamps, not per-timestamp. This is safe because
+        // nothing in the loop reads from self.snapshot: the update_applier maintains its
+        // own internal state (configs, settings, fence tokens) independently. Consolidating
+        // per-timestamp was O(K * N log N); consolidating once is O(N log N).
+        self.consolidate();
         Ok(())
     }
 
+    /// Apply a batch of updates and then consolidate the snapshot. This is the
+    /// typical entry point for callers that apply updates in a single batch.
+    ///
+    /// For hot loops that apply updates across many timestamps (e.g., sync_inner),
+    /// use apply_updates directly and call consolidate() once at the end to
+    /// avoid O(K * N log N) behavior.
+    pub(crate) fn apply_updates_and_consolidate(
+        &mut self,
+        updates: impl IntoIterator<Item = StateUpdate<T>>,
+    ) -> Result<(), FenceError> {
+        self.apply_updates(updates)?;
+        self.consolidate();
+        Ok(())
+    }
+
+    /// Apply a batch of updates to the catalog state without consolidating.
+    ///
+    /// Does NOT consolidate the snapshot afterward. If you are calling this once,
+    /// prefer apply_updates_and_consolidate. This method exists for loops that
+    /// call it many times as consolidating per call would be O(K * N log N) instead
+    /// of O(N log N).
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) fn apply_updates(
+    fn apply_updates(
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate<T>>,
     ) -> Result<(), FenceError> {
@@ -644,13 +670,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             return Err(err);
         }
 
-        self.consolidate();
-
         Ok(())
     }
 
     #[mz_ore::instrument]
     pub(crate) fn consolidate(&mut self) {
+        self.metrics.snapshot_consolidations.inc();
         soft_assert_no_log!(
             self.snapshot
                 .windows(2)
@@ -1042,7 +1067,7 @@ impl UnopenedPersistCatalogState {
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
-        handle.apply_updates(updates)?;
+        handle.apply_updates_and_consolidate(updates)?;
         info!(
             "startup: envd serve: catalog init: apply updates complete in {:?}",
             apply_start.elapsed()
@@ -1238,7 +1263,7 @@ impl UnopenedPersistCatalogState {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
         });
-        catalog.apply_updates(updates)?;
+        catalog.apply_updates_and_consolidate(updates)?;
 
         let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
@@ -1284,7 +1309,7 @@ impl UnopenedPersistCatalogState {
             let (txn_batch, _) = txn.into_parts();
             // The upper here doesn't matter because we are only applying the updates in memory.
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
-            catalog.apply_updates(updates)?;
+            catalog.apply_updates_and_consolidate(updates)?;
         } else {
             txn.commit_internal(commit_ts).await?;
         }
@@ -1787,7 +1812,7 @@ impl DurableCatalogState for PersistCatalogState {
                         ts: commit_ts,
                         diff,
                     });
-                    catalog.apply_updates(updates)?;
+                    catalog.apply_updates_and_consolidate(updates)?;
                     catalog.upper = commit_ts.step_forward();
                     catalog.upper
                 }
