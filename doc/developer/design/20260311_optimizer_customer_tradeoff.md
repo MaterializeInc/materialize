@@ -222,7 +222,7 @@ We propose the following shift:
  - Generate `Lir` versions of the various `*Func`s. This will require a preparatory PR to improve the associated macros, but should not be too complex (even though it generates a fair bit of code; we can engineer that code to point to common implementations of `eval`, so we won't get major code duplication). We will likely want to fold this in to work that parameterizes type holding `*Func`s to hold _either_ `Sql*Type` or `Repr*Type`.
    + Some of the `TableFunc`s hold on to types for typechecking, but don't need those types for evaluation. We could leave these and `AggregateFunc`s alone.
    + Many of the other `*Func`s have functions that use their stored  types in their `eval` method... they _must_ hold `Sql` types.
-     * `UnaryFunc`: `CastArrayToString`, `CastListToString`, `CastRecordToString`, `CastMapToString`, `CastStringToList`, `CastStringToMap`, `MapBuildFromRecordList`
+     * `UnaryFunc`: `CastArrayToString`, `CastListToString`, `CastRangeToString`, `CastRecordToString`, `CastMapToString`, `CastStringToList`, `CastStringToMap`, `MapBuildFromRecordList`
      * `VariadicFunc`: `ArrayCreate`, `ArrayToString`, `CaseLiteral`
 
  - Write `LirScalarExpr`, which omits `CallUnmaterializable` (because it should be resolved before LIR).
