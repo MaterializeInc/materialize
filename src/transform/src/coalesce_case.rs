@@ -112,9 +112,9 @@ impl CoalesceCase {
     }
 
     fn try_combine_coalesce_case(&self, expr: &mut MirScalarExpr) {
-        // COALESCE(CASE WHEN e_cond THEN NULL ELSE e_else END, ...)
+        // COALESCE(CASE WHEN e_cond THEN e_then ELSE e_else END, ...)
         // ->
-        // CASE WHEN e_cond THEN COALESCE(...) ELSE COALESCE(e_else, ...) END
+        // CASE WHEN e_cond THEN COALESCE(e_then, ...) ELSE COALESCE(e_else, ...) END
         //
         // ... and flipped
         expr.flatten_associative();
@@ -122,44 +122,32 @@ impl CoalesceCase {
         if let MirScalarExpr::CallVariadic { func, exprs } = expr
             && *func == VariadicFunc::Coalesce(Coalesce)
         {
-            if let MirScalarExpr::If { cond: _, then, els } = &exprs[0] {
-                if then.is_literal_null() {
-                    let MirScalarExpr::If {
-                        mut cond,
-                        then: _,
-                        mut els,
-                    } = exprs.remove(0)
-                    else {
-                        unreachable!();
-                    };
-                    let exprs = std::mem::take(exprs);
-                    let f = MirScalarExpr::call_variadic(
-                        VariadicFunc::Coalesce(Coalesce),
-                        std::iter::once(els.take())
-                            .chain(exprs.iter().cloned())
-                            .collect(),
-                    );
-                    let t = MirScalarExpr::call_variadic(VariadicFunc::Coalesce(Coalesce), exprs);
-                    *expr = cond.take().if_then_else(t, f);
-                } else if els.is_literal_null() {
-                    let MirScalarExpr::If {
-                        mut cond,
-                        mut then,
-                        els: _,
-                    } = exprs.remove(0)
-                    else {
-                        unreachable!();
-                    };
-                    let exprs = std::mem::take(exprs);
-                    let t = MirScalarExpr::call_variadic(
-                        VariadicFunc::Coalesce(Coalesce),
-                        std::iter::once(then.take())
-                            .chain(exprs.iter().cloned())
-                            .collect(),
-                    );
-                    let f = MirScalarExpr::call_variadic(VariadicFunc::Coalesce(Coalesce), exprs);
-                    *expr = cond.take().if_then_else(t, f);
-                }
+            if let MirScalarExpr::If { .. } = &exprs[0] {
+                let mut exprs = std::mem::take(exprs);
+                if let MirScalarExpr::If {
+                    mut cond,
+                    mut then,
+                    mut els,
+                } = exprs.remove(0)
+                {
+                    let cond = cond.take();
+
+                    let mut then_exprs = Vec::with_capacity(exprs.len() + 1);
+                    then_exprs.push(then.take());
+                    then_exprs.extend(exprs.iter().cloned());
+
+                    let mut else_exprs = Vec::with_capacity(exprs.len() + 1);
+                    else_exprs.push(els.take());
+                    else_exprs.append(&mut exprs);
+
+                    let t =
+                        MirScalarExpr::call_variadic(VariadicFunc::Coalesce(Coalesce), then_exprs);
+                    let f =
+                        MirScalarExpr::call_variadic(VariadicFunc::Coalesce(Coalesce), else_exprs);
+                    *expr = cond.if_then_else(t, f);
+                } else {
+                    unreachable!();
+                };
             }
         }
     }
