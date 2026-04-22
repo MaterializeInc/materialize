@@ -303,6 +303,7 @@ where
         }
     }
 
+    #[inline]
     fn seek_key(&mut self, storage: &Self::Storage, key: columnar::Ref<'_, K>) {
         let end = storage.key_count();
         let keys = storage.storage.lists.values.borrow();
@@ -511,6 +512,7 @@ where
     }
 
     /// Copy one key's subtree from `source` with time compaction + consolidation.
+    #[inline]
     fn copy_key(&mut self, source: &KVUpdates<K, V, T, R>, key_idx: usize) {
         let init_vals = Len::len(&self.result.rest.lists.values.borrow());
         let vr = child_range(source.rest.lists.bounds.borrow(), key_idx);
@@ -615,6 +617,7 @@ where
     }
 
     /// Collect `(time, diff)` pairs for a val, applying time compaction.
+    #[inline]
     fn stash_updates(&mut self, source: &KVUpdates<K, V, T, R>, val_idx: usize) {
         let range = child_range(source.rest.rest.bounds.borrow(), val_idx);
         let times = source.rest.rest.values.0.borrow();

@@ -32,13 +32,14 @@ use crate::columnar::Column;
 /// Flush threshold, in flat `((K, V), T, R)` tuples, before the chunker
 /// sorts+consolidates `pending` and emits a trie chunk.
 ///
-/// Byte-based: 2× 2 MiB budget, so each flush produces roughly one
-/// "target-sized" typed chunk post-dedup. Mirrors DD's `ColumnationChunker`
-/// 64-KiB heuristic scaled up; factorized chunks dedup K/V across the leaf
-/// range, so larger chunks reap more dedup savings.
+/// Matches DD's `ColumnationChunker` default: a 64-KiB chunk budget with a
+/// 2× pending budget (so pending reaches ~128 KiB before flushing).
+/// `size_of::<((K, V), T, R)>()` is only the stack footprint — for `Row`-like
+/// types with heap overflow the actual RAM can be several × this budget, so
+/// the constant is a heuristic, not a hard cap.
 #[inline]
 fn pending_flush_target<K, V, T, R>() -> usize {
-    const TARGET_BYTES: usize = 2 * 1024 * 1024;
+    const TARGET_BYTES: usize = 64 * 1024;
     let size = std::mem::size_of::<((K, V), T, R)>();
     let per_chunk = if size == 0 {
         TARGET_BYTES

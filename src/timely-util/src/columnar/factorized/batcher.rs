@@ -49,14 +49,16 @@ fn val_range_in_chunk<K: Columnar, V: Columnar, T: Columnar, R: Columnar>(
     child_range(chunk.rest.lists.bounds.borrow(), key_idx)
 }
 
-/// Target leaf count for an emitted chunk — byte-based: 2 MiB / sizeof::<(T, R)>().
+/// Target leaf count for an emitted chunk — byte-based: 64 KiB / sizeof::<(T, R)>().
 ///
-/// Replaces the old fixed `CHUNK_TARGET = 1024`. Byte-based sizing produces
-/// O(batch_size / 2 MiB) chunks regardless of tuple size, so merge passes
-/// through `MergeBatcher` amortize over fewer, larger chunks.
+/// Replaces the old fixed `CHUNK_TARGET = 1024`. Matches DD's
+/// `ColumnationChunker` 64-KiB heuristic so per-batcher RAM stays bounded
+/// when many concurrent arrangements share the worker (e.g. one batcher per
+/// source / cluster). Merge passes through `MergeBatcher` still amortize over
+/// uniformly sized chunks.
 #[inline]
 fn chunk_target_leaves<T, R>() -> usize {
-    const TARGET_BYTES: usize = 2 * 1024 * 1024;
+    const TARGET_BYTES: usize = 64 * 1024;
     let size = std::mem::size_of::<(T, R)>();
     if size == 0 {
         TARGET_BYTES
