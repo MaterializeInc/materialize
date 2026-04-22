@@ -411,6 +411,19 @@ impl Coordinator {
             return;
         }
 
+        // Delay writes until every compute object has hydrated, so we
+        // don't record partial sizes from still-building dataflows.
+        // Sticky: later snapshots skip this check. Gate retries run at
+        // the full collection interval, so the first snapshot can lag
+        // hydration by up to one interval.
+        if !self.arrangement_sizes_hydration_observed {
+            if !self.check_arrangement_sizes_hydration().await {
+                self.schedule_arrangement_sizes_collection().await;
+                return;
+            }
+            self.arrangement_sizes_hydration_observed = true;
+        }
+
         let collection_timer = self
             .metrics
             .arrangement_sizes_collection_time_seconds
@@ -545,6 +558,32 @@ impl Coordinator {
         task::spawn(|| "arrangement_sizes_pruning_apply", async move {
             fut.await;
         });
+    }
+
+    /// Returns `true` when every row in `mz_compute_hydration_times` has a
+    /// non-null `time_ns` (i.e. every compute object on every replica has
+    /// finished its initial hydration). An empty collection also returns
+    /// `true`. On snapshot failure, returns `false` so the caller retries.
+    async fn check_arrangement_sizes_hydration(&self) -> bool {
+        let item_id = self
+            .catalog()
+            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_COMPUTE_HYDRATION_TIMES);
+        let global_id = self.catalog.get_entry(&item_id).latest_global_id();
+        let read_ts = self.get_local_read_ts().await;
+        let mut snapshot = match self
+            .controller
+            .storage_collections
+            .snapshot(global_id, read_ts)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("arrangement-sizes hydration gate snapshot failed: {e:?}");
+                return false;
+            }
+        };
+        differential_dataflow::consolidation::consolidate(&mut snapshot);
+        arrangement_sizes_all_hydrated(&snapshot)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1026,5 +1065,90 @@ impl Coordinator {
                 }
             });
         }
+    }
+}
+
+/// Returns `true` when every `+1` row in a consolidated snapshot of
+/// `mz_compute_hydration_times` has a non-null `time_ns` (column 2), i.e.
+/// every compute object on every replica has finished hydrating at least
+/// once. Empty input returns `true`. Unexpected row shape returns `false`
+/// so the caller re-polls rather than crashing on schema drift.
+fn arrangement_sizes_all_hydrated(snapshot: &[(mz_repr::Row, i64)]) -> bool {
+    const HYDRATION_COL_TIME_NS: usize = 2;
+    for (row, diff) in snapshot {
+        if *diff != 1 {
+            continue;
+        }
+        let datums = row.unpack();
+        let Some(time_ns) = datums.get(HYDRATION_COL_TIME_NS) else {
+            return false;
+        };
+        if time_ns.is_null() {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod arrangement_sizes_hydration_tests {
+    use mz_repr::{Datum, Row};
+
+    use super::arrangement_sizes_all_hydrated;
+
+    // Columns: (replica_id, object_id, time_ns). `time_ns` is the value
+    // under test; the other columns are packed with realistic defaults so
+    // shape drift would surface.
+    fn hydration_row(time_ns: Option<u64>) -> Row {
+        Row::pack_slice(&[
+            Datum::String("r1"),
+            Datum::String("u1"),
+            match time_ns {
+                Some(ns) => Datum::UInt64(ns),
+                None => Datum::Null,
+            },
+        ])
+    }
+
+    #[mz_ore::test]
+    fn empty_snapshot_is_hydrated() {
+        assert!(arrangement_sizes_all_hydrated(&[]));
+    }
+
+    #[mz_ore::test]
+    fn all_non_null_is_hydrated() {
+        let rows = vec![
+            (hydration_row(Some(100)), 1),
+            (hydration_row(Some(200)), 1),
+        ];
+        assert!(arrangement_sizes_all_hydrated(&rows));
+    }
+
+    #[mz_ore::test]
+    fn any_null_blocks_hydration() {
+        let rows = vec![
+            (hydration_row(Some(100)), 1),
+            (hydration_row(None), 1),
+            (hydration_row(Some(300)), 1),
+        ];
+        assert!(!arrangement_sizes_all_hydrated(&rows));
+    }
+
+    #[mz_ore::test]
+    fn retractions_are_ignored() {
+        // A -1 row represents stale state that consolidation would remove.
+        // We skip it so a retracted null doesn't veto hydration.
+        let rows = vec![
+            (hydration_row(None), -1),
+            (hydration_row(Some(100)), 1),
+        ];
+        assert!(arrangement_sizes_all_hydrated(&rows));
+    }
+
+    #[mz_ore::test]
+    fn malformed_row_blocks_hydration() {
+        let malformed = Row::pack_slice(&[Datum::String("r1"), Datum::String("u1")]);
+        let rows = vec![(malformed, 1)];
+        assert!(!arrangement_sizes_all_hydrated(&rows));
     }
 }

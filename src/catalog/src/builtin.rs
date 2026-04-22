@@ -10845,6 +10845,9 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
+/// Identifies [`MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY`] for the schema-migration
+/// guard in `builtin_schema_migration.rs`, which forbids migrating this table
+/// because its startup pruner assumes it is the only source of retractions.
 pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescription> =
     LazyLock::new(|| SystemObjectDescription {
         schema_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.schema.to_string(),

@@ -566,11 +566,18 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
             GROUP BY export_id, lir_id
         )",
     },
-    // Per-object arrangement sizes via unified introspection subscribe.
-    // Quantization strategy: objects <10MB show real size for precise monitoring;
-    // objects ≥10MB round to nearest 10MB to suppress byte-level differential churn.
-    // Uses mz_dataflow_addresses.address[1] to extract dataflow_id, avoiding an extra join.
-    // Per-worker raw tables aggregate bytes across all workers for total replica memory per object.
+    // Per-object arrangement sizes, one row per `(object_id, replica)`.
+    //
+    // `mz_arrangement_heap_size_raw` and `mz_arrangement_batcher_size_raw` are
+    // differential logs where each `+1` row represents one byte of heap delta;
+    // after consolidation, `COUNT(*)` is the current arrangement size in bytes.
+    //
+    // Objects smaller than 10 MiB report exact bytes; larger ones are rounded
+    // to the nearest 10 MiB to suppress byte-level churn in the collection.
+    //
+    // `mz_dataflow_addresses.address[1]` is the root of each operator's address
+    // tree, which equals the owning `dataflow_id` — so we can go addresses →
+    // operator → dataflow without joining `mz_dataflow_operator_dataflows`.
     SubscribeSpec {
         introspection_type: IntrospectionType::ComputeObjectArrangementSizes,
         sql: "SUBSCRIBE (

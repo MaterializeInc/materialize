@@ -1931,6 +1931,11 @@ pub struct Coordinator {
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
 
+    /// Set once all compute objects have been observed as hydrated, gating
+    /// the first write into `mz_object_arrangement_size_history`. Sticky:
+    /// later partial re-hydrations (e.g. replica restart) don't re-arm it.
+    arrangement_sizes_hydration_observed: bool,
+
     /// Segment analytics client.
     #[derivative(Debug = "ignore")]
     segment_client: Option<mz_segment::Client>,
@@ -4191,27 +4196,11 @@ impl Coordinator {
             differential_dataflow::consolidation::consolidate(&mut current_contents);
 
             let cutoff_ts = u128::from(read_ts).saturating_sub(retention_period.as_millis());
-            let mut expired = Vec::new();
-            for (row, diff) in current_contents {
-                assert_eq!(
-                    diff, 1,
-                    "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
-                );
-                // Column 3 is `collection_timestamp`.
-                let collection_timestamp = row
-                    .unpack()
-                    .get(3)
-                    .expect("definition of mz_object_arrangement_size_history changed")
-                    .unwrap_timestamptz();
-                let collection_timestamp = collection_timestamp.timestamp_millis();
-                let collection_timestamp: u128 = collection_timestamp
-                    .try_into()
-                    .expect("all collections happen after Jan 1 1970");
-                if collection_timestamp < cutoff_ts {
-                    let builtin_update = BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE);
-                    expired.push(builtin_update);
-                }
-            }
+            let expired = arrangement_sizes_expired_retractions(
+                current_contents,
+                cutoff_ts,
+                item_id,
+            );
 
             // TODO(arrangement-sizes): when the writeable-catalog-server
             // plumbing in https://github.com/MaterializeInc/materialize/pull/35436
@@ -4237,6 +4226,40 @@ impl Coordinator {
             })
             .sum()
     }
+}
+
+/// Returns retraction updates for rows in a consolidated
+/// `mz_object_arrangement_size_history` snapshot whose `collection_timestamp`
+/// (column 3) is strictly before `cutoff_ts`.
+///
+/// Panics if any input row has `diff != 1`: the caller must consolidate first,
+/// and a consolidated history table should never contain retractions because
+/// the only source of retractions is this function itself.
+fn arrangement_sizes_expired_retractions(
+    rows: impl IntoIterator<Item = (mz_repr::Row, i64)>,
+    cutoff_ts: u128,
+    item_id: CatalogItemId,
+) -> Vec<BuiltinTableUpdate> {
+    let mut expired = Vec::new();
+    for (row, diff) in rows {
+        assert_eq!(
+            diff, 1,
+            "consolidated contents should not contain retractions: ({row:#?}, {diff:#?})"
+        );
+        let collection_timestamp = row
+            .unpack()
+            .get(3)
+            .expect("definition of mz_object_arrangement_size_history changed")
+            .unwrap_timestamptz()
+            .timestamp_millis();
+        let collection_timestamp: u128 = collection_timestamp
+            .try_into()
+            .expect("all collections happen after Jan 1 1970");
+        if collection_timestamp < cutoff_ts {
+            expired.push(BuiltinTableUpdate::row(item_id, row, Diff::MINUS_ONE));
+        }
+    }
+    expired
 }
 
 #[cfg(test)]
@@ -4700,6 +4723,7 @@ pub fn serve(
                     cloud_resource_controller,
                     storage_usage_client,
                     storage_usage_collection_interval,
+                    arrangement_sizes_hydration_observed: false,
                     segment_client,
                     metrics,
                     optimizer_metrics,
@@ -5163,5 +5187,58 @@ mod id_pool_tests {
     fn test_refill_invalid_range_panics() {
         let mut pool = IdPool::empty();
         pool.refill(10, 5);
+    }
+}
+
+#[cfg(test)]
+mod arrangement_sizes_pruner_tests {
+    use mz_repr::catalog_item_id::CatalogItemId;
+    use mz_repr::{Datum, Row};
+
+    use super::arrangement_sizes_expired_retractions;
+
+    // Pack a row shaped like `mz_object_arrangement_size_history`: the pruner
+    // only cares about column 3 (`collection_timestamp`), but we stuff the
+    // other three columns with realistic values so shape changes would fail.
+    fn history_row(ts_ms: i64) -> Row {
+        let dt = mz_ore::now::to_datetime(ts_ms.try_into().expect("non-negative"));
+        Row::pack_slice(&[
+            Datum::String("r1"),
+            Datum::String("u1"),
+            Datum::Int64(123),
+            Datum::TimestampTz(dt.try_into().expect("fits in TimestampTz")),
+        ])
+    }
+
+    fn item_id() -> CatalogItemId {
+        // Any CatalogItemId will do; tests don't dispatch on it.
+        CatalogItemId::User(42)
+    }
+
+    #[mz_ore::test]
+    fn empty_input_produces_no_retractions() {
+        let out = arrangement_sizes_expired_retractions(Vec::new(), 1_000, item_id());
+        assert!(out.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn retracts_only_rows_strictly_before_cutoff() {
+        // Mixes both sides of the filter and includes a row at exactly
+        // the cutoff timestamp to pin down the strict-less-than boundary.
+        let rows = vec![
+            (history_row(100), 1),
+            (history_row(500), 1),
+            (history_row(1_000), 1), // at cutoff: kept (strict <)
+            (history_row(5_000), 1),
+        ];
+        let out = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
+        assert_eq!(out.len(), 2);
+    }
+
+    #[mz_ore::test]
+    #[should_panic(expected = "consolidated contents should not contain retractions")]
+    fn retraction_in_input_panics() {
+        let rows = vec![(history_row(100), -1)];
+        let _ = arrangement_sizes_expired_retractions(rows, 1_000, item_id());
     }
 }
