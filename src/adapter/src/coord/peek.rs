@@ -219,12 +219,12 @@ impl FastPathPlan {
                     ctx.indent += 1;
                 }
                 if let Some(literal_constraint) = literal_constraint {
-                    writeln!(f, "{}→Index Lookup on {coll} (from storage)", ctx.indent)?;
+                    writeln!(f, "{}→ReadStorage Lookup on {coll}", ctx.indent)?;
                     ctx.indent += 1;
                     let value = mode.expr(literal_constraint, None);
                     writeln!(f, "{}Lookup value: {value}", ctx.indent)?;
                 } else {
-                    writeln!(f, "{}→Indexed {coll} (from storage)", ctx.indent)?;
+                    writeln!(f, "{}→ReadStorage {coll}", ctx.indent)?;
                 }
 
                 ctx.indent.reset();
