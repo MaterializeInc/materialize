@@ -6735,6 +6735,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "smallvec",
+ "timely",
 ]
 
 [[package]]

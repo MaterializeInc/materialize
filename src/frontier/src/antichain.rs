@@ -49,6 +49,11 @@ impl<T> Antichain<T> {
         }
     }
 
+    /// Iterates over the contained elements (0 or 1).
+    pub fn iter(&self) -> std::slice::Iter<'_, T> {
+        self.elements().iter()
+    }
+
     /// Borrows the antichain as an [`AntichainRef`].
     pub fn borrow(&self) -> AntichainRef<'_, T> {
         AntichainRef::new(self.elements())
@@ -379,6 +384,26 @@ impl<T: Clone + Ord> MutableAntichain<T> {
         result
     }
 
+    /// Returns the reference count for `query_time`, or zero if absent.
+    pub fn count_for<O: ?Sized>(&self, query_time: &O) -> i64
+    where
+        T: PartialEq<O>,
+    {
+        self.updates
+            .iter()
+            .find(|(t, _)| t.eq(query_time))
+            .map(|(_, c)| *c)
+            .unwrap_or(0)
+    }
+
+    /// Rebuilds the internal representation and exposes `(time, count)` pairs.
+    pub fn updates(&mut self) -> impl Iterator<Item = &(T, i64)> {
+        if self.clean < self.updates.len() {
+            self.rebuild();
+        }
+        self.updates.iter()
+    }
+
     /// Applies updates and returns frontier changes.
     pub fn update_iter(
         &mut self,
@@ -446,6 +471,15 @@ impl<T: Clone + Ord> From<Antichain<T>> for MutableAntichain<T> {
     fn from(antichain: Antichain<T>) -> Self {
         let mut result = MutableAntichain::new();
         let updates: Vec<_> = antichain.into_iter().map(|t| (t, 1i64)).collect();
+        result.update_iter(updates);
+        result
+    }
+}
+
+impl<'a, T: Clone + Ord> From<AntichainRef<'a, T>> for MutableAntichain<T> {
+    fn from(antichain: AntichainRef<'a, T>) -> Self {
+        let mut result = MutableAntichain::new();
+        let updates: Vec<_> = antichain.iter().map(|t| (t.clone(), 1i64)).collect();
         result.update_iter(updates);
         result
     }

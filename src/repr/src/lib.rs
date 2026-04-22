@@ -77,3 +77,10 @@ pub use crate::timestamp::{Timestamp, TimestampManipulation};
 pub use crate::update::{
     Rows, RowsBuilder, SharedSlice, UpdateCollection, UpdateCollectionBuilder,
 };
+
+// Re-exports from `mz-frontier` so control-plane crates can name these types
+// via `mz_repr::...` and drop their direct `timely` dependency.
+pub use mz_frontier::{
+    Antichain, AntichainRef, ChangeBatch, MutableAntichain, PartialOrder, TotalOrder,
+    consolidate, consolidate_updates,
+};
