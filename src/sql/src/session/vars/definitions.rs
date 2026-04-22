@@ -2270,7 +2270,7 @@ feature_flags!(
     },
     {
         name: enable_coalesce_case_transform,
-        desc: "Allow the optimizer to `COALESCE` of a `NULL`-returning `CASE` into a single `CASE`.",
+        desc: "Allow the optimizer to push `COALESCE` into `CASE WHEN`.",
         default: false,
         enable_for_item_parsing: false,
     },

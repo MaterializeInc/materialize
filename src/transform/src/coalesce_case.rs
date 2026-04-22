@@ -11,8 +11,8 @@
 
 use mz_expr::func::variadic::Coalesce;
 use mz_expr::visit::Visit;
-use mz_expr::{AggregateExpr, JoinImplementation, MirRelationExpr, MirScalarExpr, VariadicFunc};
-use mz_ore::soft_assert_eq_or_log;
+use mz_expr::{AggregateExpr, MirRelationExpr, MirScalarExpr, VariadicFunc};
+use mz_ore::soft_panic_or_log;
 
 use crate::{TransformCtx, TransformError};
 
@@ -71,7 +71,7 @@ impl CoalesceCase {
             }
             MirRelationExpr::Join { equivalences, implementation, .. } => {
                 if implementation.is_implemented() {
-                    soft_assert_eq_or_log!(*implementation, JoinImplementation::Unimplemented, "unexpected implemented Join when optimizing coalesce/case, skipping");
+                    soft_panic_or_log!("unexpected implemented Join when optimizing coalesce/case, skipping: {implementation:?}");
                     return Ok(());
                 }
 
