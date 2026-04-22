@@ -45,13 +45,6 @@ where
     })
     .collect();
 
-    let full_metadata = conn
-        .query_first::<String, String>("SELECT @@binlog_row_metadata".to_string())
-        .await?
-        .unwrap()
-        .to_uppercase()
-        == "FULL";
-
     Ok(expected
         .into_iter()
         .flat_map(|(table, outputs)| {
@@ -71,15 +64,13 @@ where
                             )),
                         );
                         match new_desc {
-                            Ok(desc) => {
-                                match output.desc.determine_compatibility(&desc, full_metadata) {
-                                    Ok(()) => None,
-                                    Err(err) => Some((
-                                        output,
-                                        DefiniteError::IncompatibleSchema(err.to_string()),
-                                    )),
-                                }
-                            }
+                            Ok(desc) => match output.desc.determine_compatibility(&desc) {
+                                Ok(()) => None,
+                                Err(err) => Some((
+                                    output,
+                                    DefiniteError::IncompatibleSchema(err.to_string()),
+                                )),
+                            },
                             Err(err) => {
                                 Some((output, DefiniteError::IncompatibleSchema(err.to_string())))
                             }
