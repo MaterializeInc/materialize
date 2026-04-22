@@ -31,7 +31,7 @@
 //! use mz_ore::id_gen::IdGen;
 //! use mz_repr::{ReprColumnType, ReprRelationType, ReprScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
-//! use mz_transform::{reprtypecheck, Transform, TransformCtx};
+//! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
@@ -70,7 +70,7 @@
 //!    ]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let typecheck_ctx = reprtypecheck::empty_context();
+//! let typecheck_ctx = typecheck::empty_typechecking_context();
 //! let mut df_meta = DataflowMetainfo::default();
 //! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
