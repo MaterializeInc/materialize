@@ -13,7 +13,13 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-try bin/doc --document-private-items
+RESULT=0
+{ stdbuf --output=L --error=L bin/doc --document-private-items |& tee run.log; } || RESULT=$?
+
+if [[ $RESULT -ne 0 ]]; then
+  bin/clear-corrupted-cargo-target-dir run.log
+  exit $RESULT
+fi
 
 try bin/ci-closed-issues-detect --changed-lines-only
 
