@@ -23,7 +23,7 @@ apply pipeline=coalesce_case
 Map (coalesce(case when (#0 = 0) then null::bigint else 2 end, 1))
   Get t0
 ----
-Map (case when (#0 = 0) then coalesce(1) else coalesce(2, 1) end)
+Map (case when (#0 = 0) then coalesce(null, 1) else coalesce(2, 1) end)
   Get t0
 
 # else branch
@@ -32,7 +32,7 @@ apply pipeline=coalesce_case
 Map (coalesce(case when (#0 = 0) then 1 else null::bigint end, 2))
   Get t0
 ----
-Map (case when (#0 = 0) then coalesce(1, 2) else coalesce(2) end)
+Map (case when (#0 = 0) then coalesce(1, 2) else coalesce(null, 2) end)
   Get t0
 
 # doesn't apply
@@ -41,7 +41,7 @@ apply pipeline=coalesce_case
 Map (coalesce(case when (#0 = 0) then 1 else 2 end, 3))
   Get t0
 ----
-Map (coalesce(case when (#0 = 0) then 1 else 2 end, 3))
+Map (case when (#0 = 0) then coalesce(1, 3) else coalesce(2, 3) end)
   Get t0
 
 # then branch, nullable else
@@ -50,7 +50,7 @@ apply pipeline=coalesce_case
 Map (coalesce(case when (#0 = 0) then null::bigint else #1 end, 1))
   Get t0
 ----
-Map (case when (#0 = 0) then coalesce(1) else coalesce(#1, 1) end)
+Map (case when (#0 = 0) then coalesce(null, 1) else coalesce(#1, 1) end)
   Get t0
 
 # else branch, nullable then
@@ -59,5 +59,5 @@ apply pipeline=coalesce_case
 Map (coalesce(case when (#0 = 0) then #1 else null::bigint end, 2))
   Get t0
 ----
-Map (case when (#0 = 0) then coalesce(#1, 2) else coalesce(2) end)
+Map (case when (#0 = 0) then coalesce(#1, 2) else coalesce(null, 2) end)
   Get t0
