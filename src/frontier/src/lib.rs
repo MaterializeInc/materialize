@@ -23,9 +23,14 @@ pub mod change_batch;
 pub mod consolidation;
 pub mod description;
 pub mod difference;
+pub mod order;
+
+#[cfg(feature = "timely-compat")]
+mod timely_compat;
 
 pub use antichain::{Antichain, AntichainRef, MutableAntichain};
 pub use change_batch::ChangeBatch;
 pub use consolidation::{consolidate, consolidate_updates};
 pub use description::Description;
 pub use difference::{IsZero, Monoid, Semigroup};
+pub use order::{PartialOrder, TotalOrder};

@@ -124,6 +124,48 @@ impl<T: Ord> Antichain<T> {
     }
 }
 
+impl<T: Ord + Clone> Antichain<T> {
+    /// Lattice join. For a totally-ordered type an empty antichain is the top
+    /// of the lattice, so join with an empty antichain yields empty.
+    pub fn join(&self, other: &Self) -> Self {
+        match (&self.element, &other.element) {
+            (None, _) | (_, None) => Antichain::new(),
+            (Some(a), Some(b)) => Antichain::from_elem(a.clone().max(b.clone())),
+        }
+    }
+
+    /// In-place lattice join.
+    pub fn join_assign(&mut self, other: &Self) {
+        match (&self.element, &other.element) {
+            (None, _) => {}
+            (Some(_), None) => self.element = None,
+            (Some(a), Some(b)) if b > a => self.element = Some(b.clone()),
+            _ => {}
+        }
+    }
+
+    /// Lattice meet. An empty antichain acts as the identity for meet
+    /// (contributes no elements).
+    pub fn meet(&self, other: &Self) -> Self {
+        match (&self.element, &other.element) {
+            (None, None) => Antichain::new(),
+            (Some(a), None) => Antichain::from_elem(a.clone()),
+            (None, Some(b)) => Antichain::from_elem(b.clone()),
+            (Some(a), Some(b)) => Antichain::from_elem(std::cmp::min(a, b).clone()),
+        }
+    }
+
+    /// In-place lattice meet.
+    pub fn meet_assign(&mut self, other: &Self) {
+        match (&self.element, &other.element) {
+            (_, None) => {}
+            (None, Some(b)) => self.element = Some(b.clone()),
+            (Some(a), Some(b)) if b < a => self.element = Some(b.clone()),
+            _ => {}
+        }
+    }
+}
+
 impl<T> Antichain<T> {
     /// Returns the single element, consuming the antichain.
     ///
@@ -209,6 +251,12 @@ impl<T: Ord> From<Vec<T>> for Antichain<T> {
     }
 }
 
+impl<T: fmt::Display> fmt::Display for Antichain<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.borrow().fmt(f)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AntichainRef
 // ---------------------------------------------------------------------------
@@ -263,6 +311,21 @@ impl<'a, T: fmt::Debug> fmt::Debug for AntichainRef<'a, T> {
     }
 }
 
+impl<'a, T: fmt::Display> fmt::Display for AntichainRef<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("{")?;
+        let mut iter = self.frontier.iter();
+        if let Some(t) = iter.next() {
+            t.fmt(f)?;
+        }
+        for t in iter {
+            f.write_str(", ")?;
+            t.fmt(f)?;
+        }
+        f.write_str("}")
+    }
+}
+
 impl<'a, T: PartialEq> PartialEq for AntichainRef<'a, T> {
     fn eq(&self, other: &Self) -> bool {
         self.frontier == other.frontier
@@ -277,7 +340,7 @@ impl<'a, T: Eq> Eq for AntichainRef<'a, T> {}
 /// A multiset-based frontier tracker for totally-ordered time domains.
 ///
 /// Tracks the minimum time with a positive reference count.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(serialize = "T: Ord + Serialize", deserialize = "T: Ord + Deserialize<'de>"))]
 pub struct MutableAntichain<T> {
     updates: Vec<(T, i64)>,

@@ -12,3 +12,10 @@ workspace = true
 [dependencies]
 serde.workspace = true
 smallvec = { workspace = true, features = ["serde"] }
+timely = { workspace = true, optional = true }
+
+[features]
+default = []
+# Conversions between `mz_frontier::Antichain` and `timely::progress::Antichain`
+# for crates that need to cross the persist/txn-wal/timely-util boundary.
+timely-compat = ["dep:timely"]
