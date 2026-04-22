@@ -929,45 +929,41 @@ impl ColReader {
                     .map(|n| !n.is_valid(idx))
                     .unwrap_or(false);
 
-                // Read finite bound values into temporary rows
-                let lower_row = if lower_is_infinite {
+                // Read finite bounds into owned Rows so the packing closures
+                // handed to `push_range_with` can capture them by move.
+                let lower_bound = if lower_is_infinite {
                     None
                 } else {
                     let mut temp = SharedRow::get();
                     lower.read(idx, &mut temp.packer())?;
-                    Some(temp.clone())
+                    let row = temp.clone();
+                    Some(move |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
+                        packer.push(row.unpack_first());
+                        Ok(())
+                    })
                 };
 
-                let upper_row = if upper_is_infinite {
+                let upper_bound = if upper_is_infinite {
                     None
                 } else {
                     let mut temp = SharedRow::get();
                     upper.read(idx, &mut temp.packer())?;
-                    Some(temp.clone())
+                    let row = temp.clone();
+                    Some(move |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
+                        packer.push(row.unpack_first());
+                        Ok(())
+                    })
                 };
-
-                let lb_inclusive = lower_inclusive.value(idx);
-                let ub_inclusive = upper_inclusive.value(idx);
 
                 packer
                     .push_range_with(
                         RangeLowerBound {
-                            inclusive: lb_inclusive,
-                            bound: lower_row.as_ref().map(|row| {
-                                |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
-                                    packer.push(row.unpack_first());
-                                    Ok(())
-                                }
-                            }),
+                            inclusive: lower_inclusive.value(idx),
+                            bound: lower_bound,
                         },
                         RangeUpperBound {
-                            inclusive: ub_inclusive,
-                            bound: upper_row.as_ref().map(|row| {
-                                |packer: &mut RowPacker| -> Result<(), anyhow::Error> {
-                                    packer.push(row.unpack_first());
-                                    Ok(())
-                                }
-                            }),
+                            inclusive: upper_inclusive.value(idx),
+                            bound: upper_bound,
                         },
                     )
                     .context("pack range")?;

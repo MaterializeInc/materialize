@@ -973,82 +973,57 @@ impl ArrowColumn {
                             .field_builder::<ArrowColumn>(1)
                             .unwrap()
                             .append_datum(Datum::Null)?;
-                        if let ColBuilder::BooleanBuilder(b) = &mut struct_builder
+                        struct_builder
                             .field_builder::<ArrowColumn>(2)
                             .unwrap()
-                            .inner
-                        {
-                            b.append_value(false);
-                        }
-                        if let ColBuilder::BooleanBuilder(b) = &mut struct_builder
+                            .append_datum(Datum::False)?;
+                        struct_builder
                             .field_builder::<ArrowColumn>(3)
                             .unwrap()
-                            .inner
-                        {
-                            b.append_value(false);
-                        }
-                        if let ColBuilder::BooleanBuilder(b) = &mut struct_builder
+                            .append_datum(Datum::False)?;
+                        struct_builder
                             .field_builder::<ArrowColumn>(4)
                             .unwrap()
-                            .inner
-                        {
-                            b.append_value(true);
-                        }
+                            .append_datum(Datum::True)?;
                     }
                     Some(inner) => {
-                        // Lower bound
-                        match inner.lower.bound {
-                            Some(nested) => {
-                                struct_builder
-                                    .field_builder::<ArrowColumn>(0)
-                                    .unwrap()
-                                    .append_datum(nested.datum())?;
-                            }
-                            None => {
-                                struct_builder
-                                    .field_builder::<ArrowColumn>(0)
-                                    .unwrap()
-                                    .append_datum(Datum::Null)?;
-                            }
-                        }
-                        // Upper bound
-                        match inner.upper.bound {
-                            Some(nested) => {
-                                struct_builder
-                                    .field_builder::<ArrowColumn>(1)
-                                    .unwrap()
-                                    .append_datum(nested.datum())?;
-                            }
-                            None => {
-                                struct_builder
-                                    .field_builder::<ArrowColumn>(1)
-                                    .unwrap()
-                                    .append_datum(Datum::Null)?;
-                            }
-                        }
-                        if let ColBuilder::BooleanBuilder(b) = &mut struct_builder
+                        struct_builder
+                            .field_builder::<ArrowColumn>(0)
+                            .unwrap()
+                            .append_datum(
+                                inner.lower.bound.map(|n| n.datum()).unwrap_or(Datum::Null),
+                            )?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(1)
+                            .unwrap()
+                            .append_datum(
+                                inner.upper.bound.map(|n| n.datum()).unwrap_or(Datum::Null),
+                            )?;
+                        struct_builder
                             .field_builder::<ArrowColumn>(2)
                             .unwrap()
-                            .inner
-                        {
-                            b.append_value(inner.lower.inclusive);
-                        }
-                        if let ColBuilder::BooleanBuilder(b) = &mut struct_builder
+                            .append_datum(if inner.lower.inclusive {
+                                Datum::True
+                            } else {
+                                Datum::False
+                            })?;
+                        struct_builder
                             .field_builder::<ArrowColumn>(3)
                             .unwrap()
-                            .inner
-                        {
-                            b.append_value(inner.upper.inclusive);
-                        }
-                        if let ColBuilder::BooleanBuilder(b) = &mut struct_builder
+                            .append_datum(if inner.upper.inclusive {
+                                Datum::True
+                            } else {
+                                Datum::False
+                            })?;
+                        struct_builder
                             .field_builder::<ArrowColumn>(4)
                             .unwrap()
-                            .inner
-                        {
-                            b.append_value(false);
-                        }
+                            .append_datum(Datum::False)?;
                     }
                 }
+                // Mark the struct row as non-null. StructBuilder tracks per-row
+                // validity independently from the child builders, so this call
+                // is required once per outer row regardless of the field values.
                 struct_builder.append(true);
             }
             (ColBuilder::IntervalMonthDayNanoBuilder(builder), Datum::Interval(iv)) => {
