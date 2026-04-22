@@ -24,7 +24,6 @@ use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::batching_oracle::BatchingTimestampOracle;
 use mz_timestamp_oracle::{self, TimestampOracle, TimestampOracleConfig, WriteTimestamp};
-use timely::progress::Timestamp as _;
 use tracing::{Instrument, debug, error, info};
 
 use crate::AdapterError;

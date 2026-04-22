@@ -23,7 +23,7 @@ use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_types::sources::Timeline;
 use serde::{Deserialize, Serialize};
-use timely::progress::{Antichain, Timestamp as _};
+use timely::progress::Antichain;
 
 use crate::AdapterError;
 use crate::catalog::CatalogState;
@@ -887,7 +887,7 @@ mod constraints {
     use differential_dataflow::lattice::Lattice;
     use mz_storage_types::sources::Timeline;
     use serde::{Deserialize, Serialize};
-    use timely::progress::{Antichain, Timestamp};
+    use timely::progress::Antichain;
 
     use mz_compute_types::ComputeInstanceId;
     use mz_repr::GlobalId;
