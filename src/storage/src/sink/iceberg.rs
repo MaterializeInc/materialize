@@ -309,9 +309,18 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
             self.equality_ids.clone(),
         );
 
-        if is_snapshot {
-            builder = builder.with_max_seen_rows(0);
-        }
+        // Snapshot batches only produce inserts, so disable seen_rows tracking
+        // to save memory. For incremental batches, disable eviction: the
+        // DeltaWriter falls back to equality deletes when a seen row is
+        // evicted, but equality deletes only apply to prior snapshots (lower
+        // sequence number). Evicting a row inserted in this same session would
+        // silently drop the delete and leave both old and new values in the
+        // committed snapshot.
+        builder = if is_snapshot {
+            builder.with_max_seen_rows(0)
+        } else {
+            builder.with_max_seen_rows(usize::MAX)
+        };
 
         Ok(Box::new(
             builder
