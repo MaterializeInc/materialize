@@ -303,14 +303,14 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/3 sort-rows=true
 # Ensure that at least one file is written even when the input is empty.
 $ s3-verify-keys bucket=copytos3 prefix-path=parquet_test/4 key-pattern=^parquet_test/4/mz.*\.parquet$
 
-# Confirm that unimplemented types will early exit before writing to s3
+# Confirm that unsupported types error when writing to s3 parquet
 ! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'
   WITH (
     AWS CONNECTION = aws_conn,
     MAX FILE SIZE = "100MB",
     FORMAT = 'parquet'
   );
-contains:Cannot encode the following columns/types: ["interval: Interval"]
+contains:Arrow interval type MonthDayNano to parquet that is not yet implemented
 
 # now should succeed since incomplete sentinel was never written
 > COPY (SELECT 1::int)  TO 's3://copytos3/parquet_test/5'

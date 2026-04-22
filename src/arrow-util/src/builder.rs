@@ -350,9 +350,10 @@ where
                 ),
             }
         }
-        // arrow::datatypes::IntervalUnit::MonthDayNano is not yet implemented in the arrow parquet writer
-        // https://github.com/apache/arrow-rs/blob/0d031cc8aa81296cb1bdfedea7a7cb4ec6aa54ea/parquet/src/arrow/arrow_writer/mod.rs#L859
-        // SqlScalarType::Interval => DataType::Interval(arrow::datatypes::IntervalUnit::DayTime)
+        SqlScalarType::Interval => (
+            DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano),
+            "interval",
+        ),
         SqlScalarType::Array(inner) => {
             // Postgres / MZ Arrays are weird, since they can be multi-dimensional but this is not
             // enforced in the type system, so can change per-value.
@@ -426,6 +427,53 @@ where
                 arrow_fields.push(Arc::new(field));
             }
             (DataType::Struct(arrow_fields.into()), "record")
+        }
+        SqlScalarType::Range { element_type } => {
+            // Ranges are represented as Arrow Structs with 5 fields:
+            //   - lower: nullable element value (the bound datum, null = infinite)
+            //   - upper: nullable element value (the bound datum, null = infinite)
+            //   - lower_inclusive: bool
+            //   - upper_inclusive: bool
+            //   - empty: bool
+            let (inner_type, inner_name) = scalar_to_arrow_datatype_impl(element_type, overrides)?;
+            let lower_field = Arc::new(field_with_typename(
+                "lower",
+                inner_type.clone(),
+                true,
+                &inner_name,
+            ));
+            let upper_field = Arc::new(field_with_typename("upper", inner_type, true, &inner_name));
+            let lower_inclusive_field = Arc::new(field_with_typename(
+                "lower_inclusive",
+                DataType::Boolean,
+                false,
+                "boolean",
+            ));
+            let upper_inclusive_field = Arc::new(field_with_typename(
+                "upper_inclusive",
+                DataType::Boolean,
+                false,
+                "boolean",
+            ));
+            let empty_field = Arc::new(field_with_typename(
+                "empty",
+                DataType::Boolean,
+                false,
+                "boolean",
+            ));
+            (
+                DataType::Struct(
+                    [
+                        lower_field,
+                        upper_field,
+                        lower_inclusive_field,
+                        upper_inclusive_field,
+                        empty_field,
+                    ]
+                    .into(),
+                ),
+                "range",
+            )
         }
         _ => anyhow::bail!("{:?} unimplemented", scalar_type),
     };
@@ -543,6 +591,11 @@ fn builder_for_datatype(
             } else {
                 anyhow::bail!("Expected map entries to be a struct")
             }
+        }
+        DataType::Interval(arrow::datatypes::IntervalUnit::MonthDayNano) => {
+            ColBuilder::IntervalMonthDayNanoBuilder(IntervalMonthDayNanoBuilder::with_capacity(
+                item_capacity,
+            ))
         }
         _ => anyhow::bail!("{:?} unimplemented", data_type),
     };
@@ -728,7 +781,8 @@ make_col_builder!(
     FixedSizeBinaryBuilder,
     StringBuilder,
     LargeStringBuilder,
-    Decimal128Builder
+    Decimal128Builder,
+    IntervalMonthDayNanoBuilder
 );
 
 impl ArrowColumn {
@@ -766,6 +820,9 @@ impl ArrowColumn {
                 builder.append_value(val.as_bytes())?
             }
             (ColBuilder::StringBuilder(builder), Datum::String(s)) => builder.append_value(s),
+            (ColBuilder::StringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
+                builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
+            }
             (ColBuilder::LargeStringBuilder(builder), _) if self.extension_type_name == "jsonb" => {
                 builder.append_value(JsonbRef::from_datum(datum).to_serde_json().to_string())
             }
@@ -786,6 +843,14 @@ impl ArrowColumn {
             }
             (ColBuilder::Decimal128Builder(builder), Datum::MzTimestamp(ts)) => {
                 builder.append_value(i128::from(u64::from(ts)))
+            }
+            // Interval-to-string conversion for destinations that don't support
+            // interval types natively (e.g., Iceberg).
+            (ColBuilder::StringBuilder(builder), Datum::Interval(iv)) => {
+                builder.append_value(iv.to_string())
+            }
+            (ColBuilder::LargeStringBuilder(builder), Datum::Interval(iv)) => {
+                builder.append_value(iv.to_string())
             }
             (ColBuilder::Decimal128Builder(builder), Datum::Numeric(mut dec)) => {
                 if dec.0.is_special() {
@@ -889,6 +954,83 @@ impl ArrowColumn {
                     field_builder.append_datum(datum)?;
                 }
                 struct_builder.append(true);
+            }
+            (ColBuilder::StructBuilder(struct_builder), Datum::Range(range)) => {
+                // Ranges are represented as a struct with 5 fields:
+                //   0: lower (nullable element value)
+                //   1: upper (nullable element value)
+                //   2: lower_inclusive (bool)
+                //   3: upper_inclusive (bool)
+                //   4: empty (bool)
+                match range.inner {
+                    None => {
+                        // Empty range: null bounds, inclusive=false, empty=true
+                        struct_builder
+                            .field_builder::<ArrowColumn>(0)
+                            .unwrap()
+                            .append_datum(Datum::Null)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(1)
+                            .unwrap()
+                            .append_datum(Datum::Null)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(2)
+                            .unwrap()
+                            .append_datum(Datum::False)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(3)
+                            .unwrap()
+                            .append_datum(Datum::False)?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(4)
+                            .unwrap()
+                            .append_datum(Datum::True)?;
+                    }
+                    Some(inner) => {
+                        struct_builder
+                            .field_builder::<ArrowColumn>(0)
+                            .unwrap()
+                            .append_datum(
+                                inner.lower.bound.map(|n| n.datum()).unwrap_or(Datum::Null),
+                            )?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(1)
+                            .unwrap()
+                            .append_datum(
+                                inner.upper.bound.map(|n| n.datum()).unwrap_or(Datum::Null),
+                            )?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(2)
+                            .unwrap()
+                            .append_datum(if inner.lower.inclusive {
+                                Datum::True
+                            } else {
+                                Datum::False
+                            })?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(3)
+                            .unwrap()
+                            .append_datum(if inner.upper.inclusive {
+                                Datum::True
+                            } else {
+                                Datum::False
+                            })?;
+                        struct_builder
+                            .field_builder::<ArrowColumn>(4)
+                            .unwrap()
+                            .append_datum(Datum::False)?;
+                    }
+                }
+                // Mark the struct row as non-null. StructBuilder tracks per-row
+                // validity independently from the child builders, so this call
+                // is required once per outer row regardless of the field values.
+                struct_builder.append(true);
+            }
+            (ColBuilder::IntervalMonthDayNanoBuilder(builder), Datum::Interval(iv)) => {
+                let nanos = iv.micros * 1_000;
+                builder.append_value(arrow::datatypes::IntervalMonthDayNano::new(
+                    iv.months, iv.days, nanos,
+                ));
             }
             (builder, datum) => {
                 anyhow::bail!("Datum {:?} does not match builder {:?}", datum, builder)
