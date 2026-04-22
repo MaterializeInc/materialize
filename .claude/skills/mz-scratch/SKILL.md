@@ -123,11 +123,24 @@ bin/scratch ssh <id> "git config --global user.name '$name' \
   && git config --global user.email '$email'"
 ```
 
-### 4. Clone extra repos on request
+### 4. Install skills on request
+
+Consult the [mz-skills README](https://github.com/MaterializeInc/mz-skills) to find the install URL for a
+skill. Install globally (`-g`) so skills are available regardless of the working directory:
 
 ```bash
-bin/scratch ssh <id> 'git clone https://github.com/MaterializeInc/mz-release.git'
+bin/scratch ssh <id> 'npx skills install -g -y <skill-url>'
 ```
+
+For example, to install mz-release (homed at `MaterializeInc/mz-release`):
+
+```bash
+bin/scratch ssh <id> 'npx skills install -g -y \
+  https://github.com/MaterializeInc/mz-release/blob/main/.claude/skills/mz-release/SKILL.md'
+```
+
+**If the URL from the README returns a 404 or the skill isn't found**, the README may be out of date.
+Ask the user to locate the correct URL before proceeding.
 
 ## Transferring Claude Code credentials
 
@@ -185,6 +198,13 @@ Claude Code on `dev-box` is at `/usr/local/bin/claude` (pre-installed).
 
 Default `claude -p` text mode emits only the final answer. Use stream-json
 so tool uses, tool results, and intermediate events are visible.
+
+**Wrap the remote `claude -p` invocation in `nohup`** so it survives SSH
+disconnection. The output already goes to a file via `run_in_background`; `nohup`
+just ensures the process isn't killed by SIGHUP if the connection drops. To
+re-monitor after reconnection, re-tail the same output file — the stream continues
+from where it left off. Do not use `screen` for relay sessions — the interactive
+terminal it provides is wasted here and adds unnecessary complexity.
 
 Invoke with `run_in_background: true` so the SSH blocks locally without
 blocking the conversation. Arm a `Monitor` on the output file piping through
@@ -265,8 +285,8 @@ For deterministic read-only lookups, skip `claude -p` entirely and SSH
 directly to run the skill tool:
 
 ```bash
-bin/scratch ssh <id> 'export GITHUB_TOKEN=$(gh auth token) && cd ~/mz-release && \
-  .claude/skills/mz-release/tools/mz_release_tool.sh <version> <cmd>'
+bin/scratch ssh <id> 'export GITHUB_TOKEN=$(gh auth token) && \
+  ~/.claude/skills/mz-release/tools/mz_release_tool.sh <version> <cmd>'
 ```
 
 No Claude API cost, uses the populated remote state. Reserve `claude -p`
@@ -303,6 +323,11 @@ instance afterward.
 - Forgetting to cancel stale crons when plans change.
 - Using `claude -p --continue` once multiple named sessions exist on the
   same instance — use `--resume <uuid>` with the captured session id.
+- Invoking remote `claude -p` without `nohup` — an SSH disconnect will SIGHUP
+  the process and kill it mid-turn. Always wrap: `nohup claude -p ... > file 2>&1 &`.
+- Installing a skill from a hardcoded URL without first checking the
+  [mz-skills README](https://github.com/MaterializeInc/mz-skills). If the URL 404s or the
+  skill isn't found there, the README may be stale — ask the user to provide the correct location.
 
 ## TODO — harden via writing-skills TDD loop
 
