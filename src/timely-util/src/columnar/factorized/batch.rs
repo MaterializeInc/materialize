@@ -759,19 +759,17 @@ where
 }
 
 /// Stream a borrowed trie chunk's `(k, v, (t, r))` tuples into `storage`,
-/// deduplicating keys and vals across the chunk boundary.
+/// deduplicating keys and vals against the builder-owned `(prev_k, prev_v)`
+/// state on every iteration.
 ///
-/// Because chunks within a chain are globally sorted by key, at most one key
-/// can straddle a chunk boundary — and when it does, its val range can only
-/// be extended (never overlap) by the new chunk's first vals. So the only
-/// cross-chunk check needed is on the very first `(k, v)` of this chunk vs.
-/// the `(prev_k, prev_v)` owned by the builder. Within the chunk, the source
-/// trie is already deduplicated (one entry per distinct K, V), so we can
-/// copy keys and vals verbatim once we've disambiguated the boundary.
-///
-/// Mirrors the dedup semantics of [`KVUpdates::form`] but writes into an
-/// existing (cleared or partially-filled) trie. Outer bounds remain unsealed
-/// — the caller closes them exactly once after the final `push`.
+/// Merger output chunks are internally key-unique per chunk, but other
+/// producers (e.g. `reduce_abelian`'s `FactColumn::Typed` output) can emit a
+/// chunk that contains the same `K` at multiple key slots with different val
+/// ranges. The same goes for `V` within a key. So dedup has to happen per
+/// iteration, not just at the chunk boundary. Mirrors [`KVUpdates::form`]'s
+/// `a != prev_a` / `b != prev_b` semantics but writes into an existing
+/// (cleared or partially-filled) trie. Outer bounds remain unsealed — the
+/// caller closes them exactly once after the final `push`.
 #[inline]
 fn push_borrowed_level_into<K, V, T, R>(
     storage: &mut KVUpdates<K, V, T, R>,
@@ -788,22 +786,12 @@ fn push_borrowed_level_into<K, V, T, R>(
     use columnar::Push;
 
     let outer_count = Len::len(&level.lists);
-    let mut first_tuple = true;
     for outer in 0..outer_count {
         for k_idx in super::child_range(level.lists.bounds, outer) {
             let k_ref = level.lists.values.get(k_idx);
+            let k_owned = K::into_owned(k_ref);
 
-            // Cross-chunk boundary check (first K of chunk vs prev).
-            // Within a chunk each K is unique, so after the first tuple we
-            // always seal and open a new key.
-            let k_new = if first_tuple {
-                match prev_k.as_ref() {
-                    Some(pk) => &K::into_owned(k_ref) != pk,
-                    None => true,
-                }
-            } else {
-                true
-            };
+            let k_new = prev_k.as_ref() != Some(&k_owned);
 
             if k_new {
                 if prev_k.is_some() {
@@ -818,26 +806,16 @@ fn push_borrowed_level_into<K, V, T, R>(
                     );
                 }
                 Push::push(&mut storage.lists.values, k_ref);
-                *prev_k = Some(K::into_owned(k_ref));
+                *prev_k = Some(k_owned);
                 *prev_v = None;
             }
 
             let v_range = super::child_range(level.rest.lists.bounds, k_idx);
-            let mut first_v_in_key = true;
             for v_idx in v_range {
                 let v_ref = level.rest.lists.values.get(v_idx);
+                let v_owned = V::into_owned(v_ref);
 
-                // Cross-chunk val check applies only on the very first (K, V)
-                // tuple where the K matched. Otherwise (new key, or later val
-                // within the same key), we always treat as a new val.
-                let v_new = if first_tuple && first_v_in_key && !k_new {
-                    match prev_v.as_ref() {
-                        Some(pv) => &V::into_owned(v_ref) != pv,
-                        None => true,
-                    }
-                } else {
-                    true
-                };
+                let v_new = prev_v.as_ref() != Some(&v_owned);
 
                 if v_new {
                     if prev_v.is_some() {
@@ -848,7 +826,7 @@ fn push_borrowed_level_into<K, V, T, R>(
                         );
                     }
                     Push::push(&mut storage.rest.lists.values, v_ref);
-                    *prev_v = Some(V::into_owned(v_ref));
+                    *prev_v = Some(v_owned);
                 }
 
                 // Copy all (t, r) leaves for this val into `storage`.
@@ -865,8 +843,6 @@ fn push_borrowed_level_into<K, V, T, R>(
                         level.rest.rest.values.1.get(l_idx),
                     );
                 }
-                first_v_in_key = false;
-                first_tuple = false;
             }
         }
     }
