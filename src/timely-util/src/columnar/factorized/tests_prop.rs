@@ -21,7 +21,9 @@
 
 use std::collections::BTreeMap;
 
-use differential_dataflow::trace::{Batch, BatchReader, Builder, Cursor, Description, Merger};
+use differential_dataflow::trace::{
+    Batch, BatchReader, Batcher, Builder, Cursor, Description, Merger,
+};
 use proptest::prelude::*;
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
@@ -29,6 +31,7 @@ use timely::progress::frontier::AntichainRef;
 use super::KVUpdates;
 use super::batch::{FactBatch, FactBuilder};
 use super::column::FactColumn;
+use super::{FactValBatcher, FactValBuilder};
 
 /// Build a FactBatch from sorted data with a given description.
 fn build_fact_batch(
@@ -133,6 +136,8 @@ fn oracle_merge(
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig { cases: 2000, .. ProptestConfig::default() })]
+
     /// Cursor traversal of a FactBatch matches the oracle for any sorted input.
     #[test]
     fn cursor_matches_oracle(
@@ -360,5 +365,325 @@ proptest! {
         let builder_result = collect_cursor(&builder_batch);
 
         prop_assert_eq!(builder_result, form_result);
+    }
+
+    /// End-to-end [`FactValBatcher`] pipeline: drive chunker → internal merger
+    /// → extract → builder with incremental `push_container` calls and multiple
+    /// seal frontiers, and verify against an oracle that consolidates the input
+    /// and splits by the same frontiers.
+    ///
+    /// This is the broadest regression test: it exercises every stage of the
+    /// batcher and will catch any duplication / dropped / mis-consolidated
+    /// update that the narrower per-stage tests might miss.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn batcher_matches_oracle(
+        push_data in prop::collection::vec(
+            prop::collection::vec(
+                (0..4u64, 0..3u64, 0..15u64, -2..3i64),
+                1..20,
+            ),
+            1..10,
+        ),
+        upper_points in prop::collection::vec(0..20u64, 1..6),
+    ) {
+        // Flatten all pushes so the oracle knows the full input.
+        let all_updates: Vec<((u64, u64), u64, i64)> = push_data
+            .iter()
+            .flatten()
+            .map(|&(k, v, t, d)| ((k, v), t, d))
+            .collect();
+
+        // Oracle: consolidate everything, then partition by each seal upper.
+        // After each seal, the output batch contains only times `< upper`;
+        // times `>= upper` carry into the next round.
+        let mut oracle_map: BTreeMap<(u64, u64, u64), i64> = BTreeMap::new();
+        for &((k, v), t, d) in &all_updates {
+            *oracle_map.entry((k, v, t)).or_default() += d;
+        }
+        oracle_map.retain(|_, d| *d != 0);
+
+        // Deduplicate + sort upper_points; ensure we end at infinity.
+        let mut uppers: Vec<u64> = upper_points.clone();
+        uppers.sort();
+        uppers.dedup();
+
+        // Per-seal-round expected content: (k, v, (t, d)) with t < this upper
+        // AND t >= previous upper.
+        let mut rounds: Vec<Vec<(u64, u64, Vec<(u64, i64)>)>> = Vec::new();
+        let mut prev_upper = 0u64;
+        for &u in &uppers {
+            let mut grouped: BTreeMap<u64, BTreeMap<u64, Vec<(u64, i64)>>> = BTreeMap::new();
+            for (&(k, v, t), &d) in &oracle_map {
+                if t >= prev_upper && t < u {
+                    grouped.entry(k).or_default().entry(v).or_default().push((t, d));
+                }
+            }
+            let mut flat = Vec::new();
+            for (k, vals) in grouped {
+                for (v, times) in vals {
+                    flat.push((k, v, times));
+                }
+            }
+            rounds.push(flat);
+            prev_upper = u;
+        }
+
+        // Final round (after last upper): times >= last_upper.
+        {
+            let mut grouped: BTreeMap<u64, BTreeMap<u64, Vec<(u64, i64)>>> = BTreeMap::new();
+            for (&(k, v, t), &d) in &oracle_map {
+                if t >= prev_upper {
+                    grouped.entry(k).or_default().entry(v).or_default().push((t, d));
+                }
+            }
+            let mut flat = Vec::new();
+            for (k, vals) in grouped {
+                for (v, times) in vals {
+                    flat.push((k, v, times));
+                }
+            }
+            rounds.push(flat);
+        }
+
+        // Drive the batcher: push ALL data upfront (via multiple
+        // push_container calls so we exercise multi-chunk chains). Then
+        // seal at each upper in turn, and a final seal at infinity.
+        let mut batcher: FactValBatcher<u64, u64, u64, i64> = Batcher::new(None, 0);
+        for pd in push_data {
+            let mut triples: Vec<((u64, u64), u64, i64)> =
+                pd.into_iter().map(|(k, v, t, d)| ((k, v), t, d)).collect();
+            if !triples.is_empty() {
+                batcher.push_container(&mut triples);
+            }
+        }
+
+        for (round_idx, &upper) in uppers.iter().enumerate() {
+            let batch: std::rc::Rc<FactBatch<u64, u64, u64, i64>> = batcher
+                .seal::<FactValBuilder<u64, u64, u64, i64>>(Antichain::from_elem(upper));
+            let got = collect_cursor(&*batch);
+            prop_assert_eq!(&got, &rounds[round_idx],
+                "round {} upper={} diverged from oracle", round_idx, upper);
+        }
+
+        let final_batch: std::rc::Rc<FactBatch<u64, u64, u64, i64>> =
+            batcher.seal::<FactValBuilder<u64, u64, u64, i64>>(Antichain::new());
+        let got = collect_cursor(&*final_batch);
+        prop_assert_eq!(&got, &rounds[rounds.len() - 1],
+            "final round diverged from oracle");
+    }
+
+    /// Variant of [`batcher_matches_oracle`] that aggressively interleaves
+    /// small incremental pushes with seals — mimicking the compute pipeline
+    /// where `DataflowBatcher::seal` is invoked per-worker-step with a tiny
+    /// upper advancement. Forces many chunker flushes, many short chains,
+    /// many extract rounds that funnel `kept` back into the chain stack.
+    ///
+    /// The test aggregates all batches emitted across all rounds and
+    /// compares them against the full oracle, so we can exercise arbitrary
+    /// push-and-seal interleavings without per-round partition logic.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn batcher_incremental_matches_oracle(
+        data in prop::collection::vec(
+            (0..4u64, 0..3u64, 0..15u64, -2..3i64),
+            0..80,
+        ),
+        upper_points in prop::collection::vec(0..18u64, 2..8),
+        split_points in prop::collection::vec(any::<usize>(), 0..10),
+    ) {
+        // Oracle: consolidate everything.
+        let mut oracle_map: BTreeMap<(u64, u64, u64), i64> = BTreeMap::new();
+        for &(k, v, t, d) in &data {
+            *oracle_map.entry((k, v, t)).or_default() += d;
+        }
+        oracle_map.retain(|_, d| *d != 0);
+
+        let mut grouped: BTreeMap<u64, BTreeMap<u64, Vec<(u64, i64)>>> = BTreeMap::new();
+        for (&(k, v, t), &d) in &oracle_map {
+            grouped.entry(k).or_default().entry(v).or_default().push((t, d));
+        }
+        let mut expected: Vec<(u64, u64, Vec<(u64, i64)>)> = Vec::new();
+        for (k, vals) in grouped {
+            for (v, times) in vals {
+                expected.push((k, v, times));
+            }
+        }
+
+        // Sort and dedup uppers; drop zero (seal at upper=0 is useless) and
+        // sort in increasing order so successive seals advance.
+        let mut uppers: Vec<u64> = upper_points;
+        uppers.retain(|&u| u > 0);
+        uppers.sort();
+        uppers.dedup();
+
+        // Sort and dedup split points; translate into actual indices within
+        // `data`.
+        let mut splits: Vec<usize> = split_points
+            .into_iter()
+            .map(|p| p % (data.len() + 1))
+            .collect();
+        splits.push(0);
+        splits.push(data.len());
+        splits.sort();
+        splits.dedup();
+
+        let mut batcher: FactValBatcher<u64, u64, u64, i64> = Batcher::new(None, 0);
+
+        // Merge splits and uppers into an event stream: at each step, either
+        // push the next split slice, or seal at the next upper. Alternate
+        // between push and seal to exercise all orderings.
+        let mut push_iter = splits.windows(2);
+        let mut seal_iter = uppers.iter();
+
+        // Collected batches across all seals.
+        let mut all_collected: Vec<(u64, u64, u64, i64)> = Vec::new();
+
+        loop {
+            // Push one slice.
+            match push_iter.next() {
+                Some(win) => {
+                    let slice = &data[win[0]..win[1]];
+                    if !slice.is_empty() {
+                        let mut triples: Vec<((u64, u64), u64, i64)> =
+                            slice.iter().map(|&(k, v, t, d)| ((k, v), t, d)).collect();
+                        batcher.push_container(&mut triples);
+                    }
+                }
+                None => break,
+            }
+            // Then optionally seal.
+            if let Some(&upper) = seal_iter.next() {
+                let batch: std::rc::Rc<FactBatch<u64, u64, u64, i64>> = batcher
+                    .seal::<FactValBuilder<u64, u64, u64, i64>>(Antichain::from_elem(upper));
+                let got = collect_cursor(&*batch);
+                for (k, v, times) in got {
+                    for (t, d) in times {
+                        all_collected.push((k, v, t, d));
+                    }
+                }
+            }
+        }
+
+        // Seal any remaining uppers without more pushes.
+        for &upper in seal_iter {
+            let batch: std::rc::Rc<FactBatch<u64, u64, u64, i64>> = batcher
+                .seal::<FactValBuilder<u64, u64, u64, i64>>(Antichain::from_elem(upper));
+            let got = collect_cursor(&*batch);
+            for (k, v, times) in got {
+                for (t, d) in times {
+                    all_collected.push((k, v, t, d));
+                }
+            }
+        }
+
+        // Final seal to capture any remaining data.
+        let final_batch: std::rc::Rc<FactBatch<u64, u64, u64, i64>> =
+            batcher.seal::<FactValBuilder<u64, u64, u64, i64>>(Antichain::new());
+        let got = collect_cursor(&*final_batch);
+        for (k, v, times) in got {
+            for (t, d) in times {
+                all_collected.push((k, v, t, d));
+            }
+        }
+
+        // Consolidate all_collected (in case same (k,v,t) appears in more
+        // than one seal round — which would be a bug, but we consolidate
+        // here so the comparison catches net-effect discrepancies too).
+        let mut collected_map: BTreeMap<(u64, u64, u64), i64> = BTreeMap::new();
+        for (k, v, t, d) in all_collected {
+            *collected_map.entry((k, v, t)).or_default() += d;
+        }
+        collected_map.retain(|_, d| *d != 0);
+
+        let mut collected_grouped: BTreeMap<u64, BTreeMap<u64, Vec<(u64, i64)>>> =
+            BTreeMap::new();
+        for ((k, v, t), d) in collected_map {
+            collected_grouped.entry(k).or_default().entry(v).or_default().push((t, d));
+        }
+        let mut actual: Vec<(u64, u64, Vec<(u64, i64)>)> = Vec::new();
+        for (k, vals) in collected_grouped {
+            for (v, times) in vals {
+                actual.push((k, v, times));
+            }
+        }
+
+        prop_assert_eq!(actual, expected);
+    }
+
+    /// Merge a chain of batches (as a spine would), alternating the compaction
+    /// frontier. Models the compute pipeline where multiple sealed batches
+    /// are merged pairwise and time-compacted.
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn multi_batch_merge_matches_oracle(
+        batches_data in prop::collection::vec(
+            prop::collection::vec(
+                (0..5u64, 0..4u64, 0..15u64, -2..3i64),
+                0..30,
+            ),
+            2..6,
+        ),
+        compaction_times in prop::collection::vec(0..18u64, 1..5),
+    ) {
+        // Oracle: consolidate all tuples with the FINAL compaction time
+        // advancing every time. If we compact to `max_compaction`, times
+        // get pushed forward; diffs for same (k, v, final_t) consolidate.
+        let max_compaction = compaction_times.iter().copied().max().unwrap_or(0);
+        let mut oracle_map: BTreeMap<(u64, u64, u64), i64> = BTreeMap::new();
+        for batch in &batches_data {
+            for &(k, v, t, d) in batch {
+                let t_final = t.max(max_compaction);
+                *oracle_map.entry((k, v, t_final)).or_default() += d;
+            }
+        }
+        oracle_map.retain(|_, d| *d != 0);
+        let mut grouped: BTreeMap<u64, BTreeMap<u64, Vec<(u64, i64)>>> = BTreeMap::new();
+        for ((k, v, t), d) in oracle_map {
+            grouped.entry(k).or_default().entry(v).or_default().push((t, d));
+        }
+        let mut expected: Vec<(u64, u64, Vec<(u64, i64)>)> = Vec::new();
+        for (k, vals) in grouped {
+            for (v, times) in vals {
+                expected.push((k, v, times));
+            }
+        }
+
+        // Build one FactBatch per batches_data element. Lower/upper across
+        // the whole sequence: [0, ∞). Each batch covers [0, 1000) for
+        // simplicity; we fake the adjacent-lower/upper invariant by
+        // chaining [0, 1000) → [1000, 2000) etc.
+        let mut batches: Vec<FactBatch<u64, u64, u64, i64>> = Vec::new();
+        for (i, bd) in batches_data.iter().enumerate() {
+            let mut sorted: Vec<(u64, u64, u64, i64)> = bd.clone();
+            sort_input(&mut sorted);
+            let lower = (i as u64) * 1000;
+            let upper = ((i + 1) as u64) * 1000;
+            batches.push(build_fact_batch(&sorted, lower, upper));
+        }
+
+        // Merge pairwise. After each merge, advance since by the next
+        // compaction time.
+        let mut compaction_iter = compaction_times.iter().copied();
+        let mut current = batches.remove(0);
+        for batch in batches {
+            let compaction = compaction_iter.next().unwrap_or(max_compaction);
+            let frontier = Antichain::from_elem(compaction);
+            let mut merger = current.begin_merge(&batch, frontier.borrow());
+            merger.work(&current, &batch, &mut isize::MAX);
+            current = merger.done();
+        }
+        // Final merge with the max compaction to push all times forward.
+        let frontier = Antichain::from_elem(max_compaction);
+        let empty = FactBatch::<u64, u64, u64, i64>::empty(
+            current.upper().clone(),
+            current.upper().clone(),
+        );
+        let mut merger = current.begin_merge(&empty, frontier.borrow());
+        merger.work(&current, &empty, &mut isize::MAX);
+        let final_batch = merger.done();
+
+        let actual = collect_cursor(&final_batch);
+        prop_assert_eq!(actual, expected);
     }
 }
