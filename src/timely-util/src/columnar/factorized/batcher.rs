@@ -96,9 +96,9 @@ where
 /// Serialize `trie` to an aligned `FactColumn::Align` buffer, then reset `trie`
 /// for reuse.
 ///
-/// The destination buffer is sized to the next [`TARGET_WORDS`] stride above
-/// the current trie's footprint. `trie.clear()` preserves all `Vec`
-/// allocations so subsequent `form`/`push` operations avoid reallocation.
+/// The destination buffer is sized to exactly the trie's serialized footprint
+/// — no rounding up. `trie.clear()` preserves all `Vec` allocations so
+/// subsequent `form`/`push` operations avoid reallocation.
 pub(super) fn freeze_into_aligned<K, V, T, R>(
     trie: &mut KVUpdates<K, V, T, R>,
 ) -> FactColumn<K, V, T, R>
@@ -110,8 +110,7 @@ where
 {
     let borrowed = trie.borrowed();
     let words = indexed::length_in_words(&borrowed);
-    let round = ((words + (TARGET_WORDS - 1)) & !(TARGET_WORDS - 1)).max(TARGET_WORDS);
-    let mut alloc = crate::containers::alloc_aligned_zeroed(round);
+    let mut alloc = crate::containers::alloc_aligned_zeroed(words);
     indexed::write(
         &mut Cursor::new(bytemuck::cast_slice_mut::<u64, u8>(&mut alloc[..])),
         &borrowed,
