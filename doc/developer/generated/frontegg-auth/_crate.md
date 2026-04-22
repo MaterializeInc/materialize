@@ -1,6 +1,6 @@
 ---
 source: src/frontegg-auth/src/lib.rs
-revision: e757b4d11b
+revision: ad614d5d6a
 ---
 
 # frontegg-auth

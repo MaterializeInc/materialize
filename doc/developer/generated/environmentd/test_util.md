@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/test_util.rs
-revision: bce428d203
+revision: aaed3fa7d3
 ---
 
 # environmentd::test_util

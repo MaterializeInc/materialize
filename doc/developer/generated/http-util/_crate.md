@@ -1,6 +1,6 @@
 ---
 source: src/http-util/src/lib.rs
-revision: 0fe64e4f52
+revision: aaed3fa7d3
 ---
 
 # mz-http-util
@@ -20,6 +20,7 @@ It exports a collection of axum handler functions and a macro for serving static
 * `handle_prometheus` — encodes Prometheus metrics from a `MetricsRegistry` into the text exposition format.
 * `handle_reload_tracing_filter` — accepts a JSON body with a new `EnvFilter` string and reloads the tracing layer via a `TracingHandle`.
 * `handle_tracing` — returns the current tracing level filter as JSON.
+* `origin_is_allowed` — returns `true` if an `Origin` header value matches any entry in an allowed list; supports bare `*` (any origin), exact match, and wildcard subdomain globs (`*.example.com`).
 * `build_cors_allowed_origin` — constructs a `tower-http` `AllowOrigin` policy from a list of allowed origin header values, supporting exact matches, wildcard subdomain globs (`*.example.org`), and a bare `*` for unrestricted access.
 * `DynamicFilterTarget` — the deserialized JSON body type for `handle_reload_tracing_filter`.
 
