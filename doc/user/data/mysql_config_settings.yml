@@ -15,10 +15,6 @@ rows:
     Value: "`FULL`"
     Notes: ""
 
-  - MySQL Configuration: "`binlog_row_metadata`"
-    Value: "`FULL`"
-    Notes: "Required when using the `CREATE TABLE FROM SOURCE` syntax."
-
   - MySQL Configuration: "`gtid_mode`"
     Value: "`ON`"
     Notes: "{{ $gtid_mode_note }}"

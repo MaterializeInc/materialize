@@ -95,16 +95,13 @@ impl MySqlTableDesc {
         // ignore extra columns from `other.columns`.
         let mut other_columns = other.columns.iter();
         for self_column in &self.columns {
-            let other_column = other_columns
-                .by_ref()
-                .find(|c| c.name == self_column.name)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "column {} no longer present in table {}",
-                        self_column.name,
-                        self.name
-                    )
-                })?;
+            let other_column = other_columns.next().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "column {} no longer present in table {}",
+                    self_column.name,
+                    self.name
+                )
+            })?;
             if !self_column.is_compatible(other_column) {
                 bail!(
                     "column {} in table {} has been altered",

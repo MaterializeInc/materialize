@@ -34,7 +34,6 @@ mysql_args=(
     --enforce_gtid_consistency=ON
     --binlog-format=row
     --binlog-row-image=full
-    --binlog-row-metadata=full
     --server-id=1
     --max-connections=500
 )

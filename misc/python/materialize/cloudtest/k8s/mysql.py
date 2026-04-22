@@ -67,7 +67,6 @@ class MySqlDeployment(K8sDeployment):
                 "--binlog-format=row",
                 "--log-slave-updates",
                 "--binlog-row-image=full",
-                "--binlog-row-metadata=full",
                 "--server-id=1",
             ],
             env=env,
