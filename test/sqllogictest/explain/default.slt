@@ -2128,3 +2128,76 @@ Explained Query:
 Target cluster: no_replicas
 
 EOF
+
+# fast path operator names
+statement ok
+CREATE TABLE fp_t_raw(x int, y text);
+
+statement ok
+CREATE MATERIALIZED VIEW fp_mv_filtered AS SELECT * FROM fp_t_raw WHERE x IS NOT NULL;
+
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered LIMIT 5
+----
+Explained Query (fast path):
+  Finish limit=5 output=[#0, #1]
+    →Map/Filter/Project
+      →ReadStorage materialize.public.fp_mv_filtered
+
+Target cluster: no_replicas
+
+EOF
+
+# this does not seem to be successfully hitting the `ReadStorage`/`Lookup` path, so we don't have 100% coverage :(
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered WHERE x=15 AND y='hello' LIMIT 5
+----
+Explained Query:
+  Finish limit=5 output=[#0, #1]
+    →Read materialize.public.fp_mv_filtered
+
+Source materialize.public.fp_mv_filtered
+  filter=((#0{x} = 15) AND (#1{y} = "hello"))
+
+Target cluster: no_replicas
+
+EOF
+
+statement ok
+CREATE INDEX fp_idx ON fp_mv_filtered(x, y);
+
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered LIMIT 5
+----
+Explained Query (fast path):
+  Finish limit=5 output=[#0, #1]
+    →Map/Filter/Project
+      →Indexed materialize.public.fp_mv_filtered (using materialize.public.fp_idx)
+
+Used Indexes:
+  - materialize.public.fp_idx (fast path limit)
+
+Target cluster: no_replicas
+
+EOF
+
+query T multiline
+EXPLAIN
+SELECT * FROM fp_mv_filtered WHERE x=15 AND y='hello' LIMIT 5
+----
+Explained Query (fast path):
+  Finish limit=5 output=[#0, #1]
+    →Map/Filter/Project
+      Project: #0, #1
+      →Index Lookup on materialize.public.fp_mv_filtered (using materialize.public.fp_idx)
+        Lookup values: (15, "hello")
+
+Used Indexes:
+  - materialize.public.fp_idx (lookup)
+
+Target cluster: no_replicas
+
+EOF
