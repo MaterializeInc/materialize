@@ -24,7 +24,6 @@ use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan}
 use mz_dyncfg::ConfigSet;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -35,6 +34,7 @@ use timely::dataflow::operators::OkErr;
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{RowRowAgent, RowRowEnter};
@@ -258,7 +258,7 @@ where
                             closure
                                 .apply(&mut datums_local, &temp_storage, &mut row_builder)
                                 .map(|row| row.cloned())
-                                .map_err(DataflowError::from)
+                                .map_err(DataflowErrorSer::from)
                                 .transpose()
                         }
                     });
@@ -302,7 +302,7 @@ where
                         closure
                             .apply(&mut datums_local, &temp_storage, &mut row_builder)
                             .map(|row| row.cloned())
-                            .map_err(DataflowError::from)
+                            .map_err(DataflowErrorSer::from)
                             .transpose()
                     }
                 });
@@ -335,7 +335,7 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<VecCollection<'s, T, DataflowError, Diff>>,
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) -> VecCollection<'s, T, Row, Diff> {
         // If we have only a streamed collection, we must first form an arrangement.
         if let JoinedFlavor::Collection(stream) = joined {
@@ -464,7 +464,7 @@ where
         closure: JoinClosure,
     ) -> (
         VecCollection<'s, T, Row, Diff>,
-        Option<VecCollection<'s, T, DataflowError, Diff>>,
+        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     )
     where
         Tr1: TraceReader<Time = T, Diff = Diff> + Clone + 'static,
@@ -491,7 +491,7 @@ where
                     closure
                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                         .map(|row| row.cloned())
-                        .map_err(DataflowError::from)
+                        .map_err(DataflowErrorSer::from)
                         .transpose()
                 })
                 .inner

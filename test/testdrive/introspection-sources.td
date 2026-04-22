@@ -290,7 +290,7 @@ true true true true true
 
 # Cast to numeric to get its rounding behavior
 > SELECT records, (size::numeric/1024/1024)::int FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%vt5_idx'
-10000 1
+10000 0
 
 > DROP TABLE t5 CASCADE
 

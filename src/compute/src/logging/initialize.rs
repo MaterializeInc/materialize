@@ -10,11 +10,6 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use crate::arrangement::manager::TraceBundle;
-use crate::extensions::arrange::{KeyCollection, MzArrange};
-use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
-use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
-use crate::typedefs::{ErrBatcher, ErrBuilder};
 use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
@@ -23,7 +18,6 @@ use mz_dyncfg::ConfigSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_repr::{Diff, Timestamp};
 use mz_storage_operators::persist_source::Subtime;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
@@ -34,6 +28,13 @@ use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
 use timely::order::Product;
 use timely::progress::reachability::logging::{TrackerEvent, TrackerEventBuilder};
+
+use crate::arrangement::manager::TraceBundle;
+use crate::extensions::arrange::{KeyCollection, MzArrange};
+use crate::logging::compute::{ComputeEvent, ComputeEventBuilder};
+use crate::logging::{BatchLogger, EventQueue, SharedLoggingState};
+use crate::render::errors::DataflowErrorSer;
+use crate::typedefs::{ErrBatcher, ErrBuilder};
 
 /// Initialize logging dataflows.
 ///
@@ -176,7 +177,7 @@ impl LoggingContext<'_> {
             collections.extend(prometheus_collections);
 
             let errs = scope.scoped("logging errors", |scope| {
-                let collection: KeyCollection<_, DataflowError, Diff> =
+                let collection: KeyCollection<_, DataflowErrorSer, Diff> =
                     VecCollection::empty(scope).into();
                 collection
                     .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
