@@ -313,7 +313,9 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                         let mut as_of = Antichain::new();
                         for upper in resume_uppers.values() {
                             for t in upper.elements() {
-                                let mut t_prime = t.step_back().unwrap_or_else(T::minimum);
+                                let mut t_prime = t
+                                    .step_back()
+                                    .unwrap_or_else(<T as timely::progress::Timestamp>::minimum);
                                 if !remap_since.is_empty() {
                                     t_prime.advance_by(remap_since.borrow());
                                     as_of.insert(t_prime);
@@ -436,7 +438,7 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                         let mut read_hold = Antichain::from_iter(
                             upper
                                 .iter()
-                                .map(|t| t.step_back().unwrap_or_else(T::minimum)),
+                                .map(|t| t.step_back().unwrap_or_else(<T as timely::progress::Timestamp>::minimum)),
                         );
                         read_hold.join_assign(&description.as_of);
                         description.with_snapshot = description.with_snapshot
