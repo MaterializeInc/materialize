@@ -168,6 +168,9 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
+
+    /// The storage worker forwards its introspection logs to the compute worker.
+    pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 }
 
 impl ComputeState {
@@ -180,6 +183,7 @@ impl ComputeState {
         context: ComputeInstanceContext,
         metrics_registry: MetricsRegistry,
         workers_per_process: usize,
+        storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
@@ -207,6 +211,7 @@ impl ComputeState {
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
+            storage_log_reader,
         }
     }
 
@@ -361,8 +366,6 @@ pub(crate) struct ActiveComputeState<'a> {
     pub compute_state: &'a mut ComputeState,
     /// The channel over which frontier information is reported.
     pub response_tx: &'a mut ResponseSender,
-    /// Reader for storage timely logging events (consumed during CreateInstance).
-    pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 }
 
 /// A token that keeps a sink alive.
@@ -419,7 +422,7 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state.apply_expiration_offset(offset);
         }
 
-        let storage_log_reader = self.storage_log_reader.take();
+        let storage_log_reader = self.compute_state.storage_log_reader.take();
         self.initialize_logging(config.logging, storage_log_reader);
 
         self.compute_state.peek_stash_persist_location = Some(config.peek_stash_persist_location);

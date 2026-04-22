@@ -424,8 +424,7 @@ impl<'w> Worker<'w> {
     }
 
     fn handle_command(&mut self, cmd: ComputeCommand) {
-        let is_create_instance = matches!(&cmd, ComputeCommand::CreateInstance(_));
-        if is_create_instance {
+        if matches!(&cmd, ComputeCommand::CreateInstance(_)) {
             self.compute_state = Some(ComputeState::new(
                 Arc::clone(&self.persist_clients),
                 self.txns_ctx.clone(),
@@ -434,17 +433,10 @@ impl<'w> Worker<'w> {
                 self.context.clone(),
                 self.metrics_registry.clone(),
                 self.workers_per_process,
+                self.storage_log_reader.take(),
             ));
         }
-        // Take the storage log reader before borrowing self for activate_compute.
-        let storage_log_reader = if is_create_instance {
-            self.storage_log_reader.take()
-        } else {
-            None
-        };
-        let mut active = self.activate_compute().unwrap();
-        active.storage_log_reader = storage_log_reader;
-        active.handle_compute_command(cmd);
+        self.activate_compute().unwrap().handle_compute_command(cmd);
     }
 
     fn activate_compute(&mut self) -> Option<ActiveComputeState<'_>> {
@@ -453,7 +445,6 @@ impl<'w> Worker<'w> {
                 timely_worker: &mut *self.timely_worker,
                 compute_state,
                 response_tx: &mut self.response_tx,
-                storage_log_reader: None,
             })
         } else {
             None
