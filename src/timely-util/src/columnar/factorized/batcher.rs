@@ -349,10 +349,18 @@ where
         }
         self.leaves_in_chunk += self.staging.len();
         self.vals_this_key += 1;
-        for (t, r) in self.staging.drain(..) {
-            columnar::Push::push(&mut self.result.rest.rest.values.0, &t);
-            columnar::Push::push(&mut self.result.rest.rest.values.1, &r);
-        }
+        // Two sequential passes — one per container — keep writes to each
+        // backing `Vec` hot in cache. Interleaved pushes pingpong between
+        // `values.0` and `values.1`'s memory.
+        columnar::Push::extend(
+            &mut self.result.rest.rest.values.0,
+            self.staging.iter().map(|(t, _)| t),
+        );
+        columnar::Push::extend(
+            &mut self.result.rest.rest.values.1,
+            self.staging.iter().map(|(_, r)| r),
+        );
+        self.staging.clear();
         columnar::Push::push(
             &mut self.result.rest.rest.bounds,
             u64::cast_from(Len::len(&self.result.rest.rest.values.0.borrow())),

@@ -264,10 +264,16 @@ mod columnar {
         }
     }
 
-    impl<T: Copy, TC: Push<T>> Push<&Overflowing<T>> for Overflows<T, TC> {
+    impl<'a, T: Copy, TC: Push<T>> Push<&'a Overflowing<T>> for Overflows<T, TC> {
         #[inline(always)]
-        fn push(&mut self, item: &Overflowing<T>) {
+        fn push(&mut self, item: &'a Overflowing<T>) {
             self.0.push(item.0);
+        }
+        /// Forward bulk `extend` to the inner container so `Vec<T>`'s
+        /// specialized `Extend` path runs instead of the default per-item loop.
+        #[inline(always)]
+        fn extend(&mut self, iter: impl IntoIterator<Item = &'a Overflowing<T>>) {
+            self.0.extend(iter.into_iter().map(|o| o.0));
         }
     }
 }
