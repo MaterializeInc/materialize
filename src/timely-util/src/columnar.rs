@@ -19,6 +19,7 @@
 
 pub mod batcher;
 pub mod builder;
+pub mod factorized;
 
 use std::hash::Hash;
 

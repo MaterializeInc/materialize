@@ -1971,8 +1971,7 @@ checksum = "5b63caa9aa9397e2d9480a9b13673856c78d8ac123288526c37d7839f2a86990"
 [[package]]
 name = "columnar"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "161f39fb04ec1e1446e76f65ee5fc19f59240d9095b0b89b9a325da608c927f1"
+source = "git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index#02abf8380525df720596350e382eac62e5333249"
 dependencies = [
  "bytemuck",
  "columnar_derive",
@@ -1981,9 +1980,8 @@ dependencies = [
 
 [[package]]
 name = "columnar_derive"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d874c276acb8ce8e425e2822c54ce67a444dc407ec97767bbfc6490acc9fa2d"
+version = "0.12.1"
+source = "git+https://github.com/antiguru/columnar?branch=feature%2Fcursor-index#02abf8380525df720596350e382eac62e5333249"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6130,6 +6128,7 @@ dependencies = [
  "columnar",
  "columnation",
  "core_affinity",
+ "criterion",
  "dec",
  "differential-dataflow",
  "differential-dogs3",
@@ -8438,6 +8437,7 @@ dependencies = [
  "lgalloc",
  "mz-ore",
  "num-traits",
+ "proptest",
  "serde",
  "timely",
  "tokio",

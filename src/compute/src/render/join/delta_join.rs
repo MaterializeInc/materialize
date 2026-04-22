@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
-use differential_dataflow::trace::implementations::BatchContainer;
+use differential_dataflow::trace::implementations::{BatchContainer, LayoutExt};
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
 use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::dyncfgs::ENABLE_HALF_JOIN2;
@@ -201,13 +201,25 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         let (oks, errs) =
                             match arrangements.get(&(lookup_relation, lookup_key)).unwrap() {
                                 Ok(local) => {
+                                    fn cmp_le<T: RenderTimestamp>(
+                                        t1: <RowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <RowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).le(t2)
+                                    }
+                                    fn cmp_lt<T: RenderTimestamp>(
+                                        t1: <RowRowAgent<T, Diff> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <RowRowAgent<T, Diff> as LayoutExt>::owned_time(t1).lt(t2)
+                                    }
                                     if source_relation < lookup_relation {
                                         build_halfjoin::<_, RowRowAgent<_, _>, _>(
                                             update_stream,
                                             local.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.le(t2),
+                                            cmp_le::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
@@ -217,20 +229,33 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                             local.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.lt(t2),
+                                            cmp_lt::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
                                     }
                                 }
                                 Err(trace) => {
+                                    type Enter<T> = RowRowEnter<mz_repr::Timestamp, Diff, T>;
+                                    fn cmp_le<T: RenderTimestamp>(
+                                        t1: <Enter<T> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <Enter<T> as LayoutExt>::owned_time(t1).le(t2)
+                                    }
+                                    fn cmp_lt<T: RenderTimestamp>(
+                                        t1: <Enter<T> as LayoutExt>::TimeGat<'_>,
+                                        t2: &T,
+                                    ) -> bool {
+                                        <Enter<T> as LayoutExt>::owned_time(t1).lt(t2)
+                                    }
                                     if source_relation < lookup_relation {
                                         build_halfjoin::<_, RowRowEnter<_, _, _>, _>(
                                             update_stream,
                                             trace.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.le(t2),
+                                            cmp_le::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
@@ -240,7 +265,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                             trace.clone().enter_region(region),
                                             stream_key,
                                             stream_thinning,
-                                            |t1, t2| t1.lt(t2),
+                                            cmp_lt::<T>,
                                             closure,
                                             Rc::clone(&self.config_set),
                                         )
@@ -608,7 +633,6 @@ fn build_update_stream<'scope, T, Tr>(
 )
 where
     T: RenderTimestamp,
-    for<'a, 'b> &'a T: PartialEq<Tr::TimeGat<'b>>,
     Tr: for<'a> TraceReader<Time = T, Diff = Diff> + Clone + 'static,
     for<'a> Tr::Key<'a>: ToDatumIter,
     for<'a> Tr::Val<'a>: ToDatumIter,
@@ -638,12 +662,15 @@ where
                                 while let Some(val) = cursor.get_val(batch) {
                                     // Collect contributing (time, diff) pairs before invoking the closure.
                                     cursor.map_times(batch, |time, diff| {
+                                        let owned_time = Tr::owned_time(time);
                                         if source_relation == 0
-                                            || inner_as_of.elements().iter().all(|e| e != time)
+                                            || inner_as_of
+                                                .elements()
+                                                .iter()
+                                                .all(|e| e != &owned_time)
                                         {
                                             // TODO: Consolidate as we push, defensively.
-                                            times_diffs
-                                                .push((Tr::owned_time(time), Tr::owned_diff(diff)));
+                                            times_diffs.push((owned_time, Tr::owned_diff(diff)));
                                         }
                                     });
                                     differential_dataflow::consolidation::consolidate(

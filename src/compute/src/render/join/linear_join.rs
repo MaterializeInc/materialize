@@ -26,7 +26,7 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -36,8 +36,7 @@ use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
-use crate::row_spine::{RowRowBuilder, RowRowSpine};
-use crate::typedefs::{RowRowAgent, RowRowEnter};
+use crate::typedefs::{RowRowAgent, RowRowBuilder, RowRowColBatcher, RowRowEnter, RowRowSpine};
 
 /// Available linear join implementations.
 ///
@@ -184,7 +183,8 @@ impl YieldSpec {
 enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// Streamed data as a collection.
     Collection(VecCollection<'scope, T, Row, Diff>),
-    /// A dataflow-local arrangement.
+    /// A dataflow-local factorized arrangement backed by
+    /// [`crate::typedefs::RowRowAgent`].
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
     /// An imported arrangement.
     Trace(Arranged<'scope, RowRowEnter<mz_repr::Timestamp, Diff, T>>),
@@ -380,18 +380,17 @@ where
 
             errors.push(errs.as_collection());
 
-            let arranged = keyed
-                .mz_arrange_core::<
-                    _,
-                    Col2ValBatcher<_, _, _, _>,
-                    RowRowBuilder<_, _>,
-                    RowRowSpine<_, _>,
-                >(
-                    ExchangeCore::<ColumnBuilder<_>, _>::new_core(
-                        columnar_exchange::<Row, Row, T, Diff>,
-                    ),
-                    "JoinStage"
-                );
+            let arranged = keyed.mz_arrange_core::<
+                _,
+                RowRowColBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >(
+                ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                    columnar_exchange::<Row, Row, T, Diff>,
+                ),
+                "JoinStage",
+            );
             joined = JoinedFlavor::Local(arranged);
         }
 

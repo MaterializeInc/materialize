@@ -24,8 +24,40 @@ use mz_timely_util::columnation::{ColInternalMerger, ColumnationChunker};
 use crate::row_spine::RowValBuilder;
 use crate::typedefs::spines::{ColKeyBatcher, ColKeyBuilder, ColValBatcher, ColValBuilder};
 
-pub use crate::row_spine::{RowRowSpine, RowSpine, RowValBatcher, RowValSpine};
+pub use crate::row_spine::{RowBatcher, RowBuilder, RowSpine, RowValBatcher, RowValSpine};
 pub use crate::typedefs::spines::{ColKeySpine, ColValSpine};
+
+// --- Factorized (trie-structured) Row arrangement aliases ---
+//
+// Backed by the KVUpdates trie from `mz_timely_util::columnar::factorized`.
+// Keys and values are deduplicated via the trie's K → V → (T, R) structure.
+
+/// Factorized trie-structured spine for `Row` keys and values.
+pub type RowRowSpine<T, R> =
+    mz_timely_util::columnar::factorized::FactValSpine<mz_repr::Row, mz_repr::Row, T, R>;
+/// Batcher for [`RowRowSpine`].
+pub type RowRowBatcher<T, R> =
+    mz_timely_util::columnar::factorized::FactValBatcher<mz_repr::Row, mz_repr::Row, T, R>;
+/// Columnar-input batcher for [`RowRowSpine`], consuming the
+/// `Column<((Row, Row), T, R)>` wire format used by the existing RowRow
+/// columnar arrange pipeline.
+pub type RowRowColBatcher<T, R> =
+    mz_timely_util::columnar::factorized::FactColValBatcher<mz_repr::Row, mz_repr::Row, T, R>;
+/// Builder for [`RowRowSpine`].
+pub type RowRowBuilder<T, R> =
+    mz_timely_util::columnar::factorized::FactValBuilder<mz_repr::Row, mz_repr::Row, T, R>;
+/// Column-input builder for [`RowRowSpine`], used by reduce-style callsites
+/// (`reduce_abelian`, `threshold_arrangement`) whose `Bu::Input` must be a
+/// `PushInto`-capable `Container`.
+pub type RowRowReduceBuilder<T, R> =
+    mz_timely_util::columnar::factorized::FactColValBuilder<mz_repr::Row, mz_repr::Row, T, R>;
+/// Trace agent for [`RowRowSpine`].
+pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
+/// Arranged trace for [`RowRowAgent`].
+pub type RowRowArrangement<'scope, T> = Arranged<'scope, RowRowAgent<T, Diff>>;
+/// Imported `RowRow` trace used by
+/// [`ArrangementFlavor::Local`](crate::render::context::ArrangementFlavor).
+pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
 
 pub(crate) mod spines {
     use std::rc::Rc;
@@ -92,10 +124,6 @@ pub type KeyEnter<K, T, R, TEnter> = TraceEnter<TraceFrontier<KeyAgent<K, T, R>>
 pub type RowValAgent<V, T, R> = TraceAgent<RowValSpine<V, T, R>>;
 pub type RowValArrangement<'scope, T, V> = Arranged<'scope, RowValAgent<V, T, Diff>>;
 pub type RowValEnter<V, T, R, TEnter> = TraceEnter<TraceFrontier<RowValAgent<V, T, R>>, TEnter>;
-// Row specialized spines and agents.
-pub type RowRowAgent<T, R> = TraceAgent<RowRowSpine<T, R>>;
-pub type RowRowArrangement<'scope, T> = Arranged<'scope, RowRowAgent<T, Diff>>;
-pub type RowRowEnter<T, R, TEnter> = TraceEnter<TraceFrontier<RowRowAgent<T, R>>, TEnter>;
 // Row specialized spines and agents.
 pub type RowAgent<T, R> = TraceAgent<RowSpine<T, R>>;
 pub type RowArrangement<'scope, T> = Arranged<'scope, RowAgent<T, Diff>>;

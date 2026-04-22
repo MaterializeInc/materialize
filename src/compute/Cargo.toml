@@ -50,5 +50,12 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 core_affinity = "0.8.3"
 
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "arrange_row"
+harness = false
+
 [features]
 default = []

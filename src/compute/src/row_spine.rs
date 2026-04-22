@@ -8,13 +8,12 @@
 // by the Apache License, Version 2.0.
 
 pub use self::container::DatumContainer;
-pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine,
+    RowBatcher, RowBuilder, RowSpine, RowValBatcher, RowValBuilder, RowValSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
+pub use mz_repr::DatumSeq;
 
 /// Spines specialized to contain `Row` types in keys and values.
 mod spines {
@@ -33,45 +32,32 @@ mod spines {
     use crate::row_spine::{DatumContainer, OffsetOptimized};
     use crate::typedefs::{KeyBatcher, KeyValBatcher};
 
-    pub type RowRowSpine<T, R> = Spine<Rc<OrdValBatch<RowRowLayout<((Row, Row), T, R)>>>>;
-    pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
-    pub type RowRowBuilder<T, R> = RcBuilder<
-        OrdValBuilder<RowRowLayout<((Row, Row), T, R)>, ColumnationStack<((Row, Row), T, R)>>,
-    >;
-
+    /// Spine for `Row` keys with arbitrary `Columnation` values.
     pub type RowValSpine<V, T, R> = Spine<Rc<OrdValBatch<RowValLayout<((Row, V), T, R)>>>>;
+    /// Batcher for [`RowValSpine`].
     pub type RowValBatcher<V, T, R> = KeyValBatcher<Row, V, T, R>;
+    /// Builder for [`RowValSpine`].
     pub type RowValBuilder<V, T, R> = RcBuilder<
         OrdValBuilder<RowValLayout<((Row, V), T, R)>, ColumnationStack<((Row, V), T, R)>>,
     >;
 
+    /// Key-only spine specialized for `Row` keys.
     pub type RowSpine<T, R> = Spine<Rc<OrdKeyBatch<RowLayout<((Row, ()), T, R)>>>>;
+    /// Batcher for [`RowSpine`].
     pub type RowBatcher<T, R> = KeyBatcher<Row, T, R>;
+    /// Builder for [`RowSpine`].
     pub type RowBuilder<T, R> =
         RcBuilder<OrdKeyBuilder<RowLayout<((Row, ()), T, R)>, ColumnationStack<((Row, ()), T, R)>>>;
 
-    /// A layout based on timely stacks
-    pub struct RowRowLayout<U: Update<Key = Row, Val = Row>> {
-        phantom: std::marker::PhantomData<U>,
-    }
+    /// Layout for [`RowValSpine`]: `DatumContainer` keys, `ColumnationStack` values.
     pub struct RowValLayout<U: Update<Key = Row>> {
         phantom: std::marker::PhantomData<U>,
     }
+    /// Layout for [`RowSpine`]: `DatumContainer` keys, unit values.
     pub struct RowLayout<U: Update<Key = Row, Val = ()>> {
         phantom: std::marker::PhantomData<U>,
     }
 
-    impl<U: Update<Key = Row, Val = Row>> Layout for RowRowLayout<U>
-    where
-        U::Time: Columnation,
-        U::Diff: Columnation,
-    {
-        type KeyContainer = DatumContainer;
-        type ValContainer = DatumContainer;
-        type TimeContainer = ColumnationStack<U::Time>;
-        type DiffContainer = ColumnationStack<U::Diff>;
-        type OffsetContainer = OffsetOptimized;
-    }
     impl<U: Update<Key = Row>> Layout for RowValLayout<U>
     where
         U::Val: Columnation,
@@ -100,12 +86,10 @@ mod spines {
 /// A `Row`-specialized container using dictionary compression.
 mod container {
 
-    use std::cmp::Ordering;
-
     use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
-    use mz_repr::{Datum, Row, RowPacker, read_datum};
+    use mz_repr::{DatumSeq, Row};
 
     use super::bytes_container::BytesContainer;
 
@@ -142,7 +126,7 @@ mod container {
 
         #[inline(always)]
         fn push_ref(&mut self, item: Self::ReadItem<'_>) {
-            self.bytes.push_into(item.bytes);
+            self.bytes.push_into(item.as_bytes());
         }
 
         #[inline(always)]
@@ -176,9 +160,8 @@ mod container {
 
         #[inline(always)]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
-            DatumSeq {
-                bytes: self.bytes.index(index),
-            }
+            // SAFETY: `DatumContainer` only accepts validly-encoded row bytes.
+            unsafe { DatumSeq::from_bytes(self.bytes.index(index)) }
         }
 
         #[inline(always)]
@@ -205,90 +188,6 @@ mod container {
         }
     }
 
-    #[derive(Debug)]
-    pub struct DatumSeq<'a> {
-        bytes: &'a [u8],
-    }
-
-    impl<'a> DatumSeq<'a> {
-        #[inline]
-        pub fn copy_into(&self, row: &mut RowPacker) {
-            // SAFETY: `self.bytes` is a correctly formatted row.
-            unsafe { row.extend_by_slice_unchecked(self.bytes) }
-        }
-        #[inline]
-        fn as_bytes(&self) -> &'a [u8] {
-            self.bytes
-        }
-        #[inline]
-        pub fn to_row(&self) -> Row {
-            // SAFETY: `self.bytes` is a correctly formatted row.
-            unsafe { Row::from_bytes_unchecked(self.bytes) }
-        }
-    }
-
-    impl<'a> Copy for DatumSeq<'a> {}
-    impl<'a> Clone for DatumSeq<'a> {
-        #[inline(always)]
-        fn clone(&self) -> Self {
-            *self
-        }
-    }
-
-    impl<'a, 'b> PartialEq<DatumSeq<'a>> for DatumSeq<'b> {
-        #[inline]
-        fn eq(&self, other: &DatumSeq<'a>) -> bool {
-            self.bytes.eq(other.bytes)
-        }
-    }
-    impl<'a> PartialEq<&Row> for DatumSeq<'a> {
-        #[inline]
-        fn eq(&self, other: &&Row) -> bool {
-            self.bytes.eq(other.data())
-        }
-    }
-    impl<'a> Eq for DatumSeq<'a> {}
-    impl<'a, 'b> PartialOrd<DatumSeq<'a>> for DatumSeq<'b> {
-        #[inline]
-        fn partial_cmp(&self, other: &DatumSeq<'a>) -> Option<Ordering> {
-            Some(self.cmp(other))
-        }
-    }
-    impl<'a> Ord for DatumSeq<'a> {
-        #[inline]
-        fn cmp(&self, other: &Self) -> Ordering {
-            match self.bytes.len().cmp(&other.bytes.len()) {
-                std::cmp::Ordering::Less => std::cmp::Ordering::Less,
-                std::cmp::Ordering::Greater => std::cmp::Ordering::Greater,
-                std::cmp::Ordering::Equal => self.bytes.cmp(other.bytes),
-            }
-        }
-    }
-    impl<'a> Iterator for DatumSeq<'a> {
-        type Item = Datum<'a>;
-        #[inline]
-        fn next(&mut self) -> Option<Self::Item> {
-            if self.bytes.is_empty() {
-                None
-            } else {
-                let result = unsafe { read_datum(&mut self.bytes) };
-                Some(result)
-            }
-        }
-    }
-
-    use mz_repr::fixed_length::ToDatumIter;
-    impl<'long> ToDatumIter for DatumSeq<'long> {
-        type DatumIter<'short>
-            = DatumSeq<'short>
-        where
-            Self: 'short;
-        #[inline]
-        fn to_datum_iter<'short>(&'short self) -> Self::DatumIter<'short> {
-            *self
-        }
-    }
-
     #[cfg(test)]
     mod tests {
         use crate::row_spine::DatumContainer;
@@ -308,7 +207,7 @@ mod container {
 
                 // When run under miri this catches undefined bytes written to data
                 // eg by calling push_copy! on a type which contains undefined padding values
-                println!("{:?}", container.index(0).bytes);
+                println!("{:?}", container.index(0).as_bytes());
 
                 let datums2 = container.index(0).collect::<Vec<_>>();
                 assert_eq!(datums, datums2);

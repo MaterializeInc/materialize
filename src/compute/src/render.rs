@@ -161,8 +161,11 @@ use crate::logging::compute::{
 };
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
-use crate::row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
-use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
+use crate::row_spine::DatumSeq;
+use crate::typedefs::{
+    ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp, RowRowBatcher, RowRowBuilder,
+    RowRowSpine,
+};
 
 pub mod context;
 pub(crate) mod continual_task;
@@ -810,13 +813,13 @@ where
 
         match bundle.arrangement(&idx.key) {
             Some(ArrangementFlavor::Local(oks, errs)) => {
-                // TODO: The following as_collection/leave/arrange sequence could be optimized.
-                //   * Combine as_collection and leave into a single function.
-                //   * Use columnar to extract columns from the batches to implement leave.
+                // The `leave(outer)` region boundary loses trace identity, so we
+                // still need to re-arrange on the way out. Produce a Fact spine
+                // directly now that TraceBundle stores RowRowAgent.
                 let mut oks = oks
                     .as_collection(|k, v| (k.to_row(), v.to_row()))
                     .leave(outer)
-                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, _>(
+                    .mz_arrange::<RowRowBatcher<_, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
                         "Arrange export iterative",
                     );
 

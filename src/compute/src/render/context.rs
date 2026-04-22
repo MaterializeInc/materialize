@@ -29,7 +29,7 @@ use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::operator::CollectionExt;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
@@ -44,9 +44,9 @@ use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
 use crate::render::errors::ErrorLogger;
 use crate::render::{LinearJoinSpec, RenderTimestamp};
-use crate::row_spine::{DatumSeq, RowRowBuilder};
+use crate::row_spine::DatumSeq;
 use crate::typedefs::{
-    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter, RowRowSpine,
+    ErrAgent, ErrBatcher, ErrBuilder, ErrEnter, ErrSpine, RowRowAgent, RowRowEnter,
 };
 
 /// Dataflow-local collections and arrangements.
@@ -209,7 +209,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
 /// Describes flavor of arrangement: local or imported trace.
 #[derive(Clone)]
 pub enum ArrangementFlavor<'scope, T: RenderTimestamp> {
-    /// A dataflow-local arrangement.
+    /// A dataflow-local factorized (trie-structured) arrangement.
+    ///
+    /// Backed by the [`crate::typedefs::RowRowSpine`]. Cursors surface
+    /// `&RowRef` at `Key<'a>` / `Val<'a>`, so consumers walking keys/values do
+    /// so via [`mz_repr::fixed_length::ToDatumIter`].
     Local(
         Arranged<'scope, RowRowAgent<T, Diff>>,
         Arranged<'scope, ErrAgent<T, Diff>>,
@@ -240,20 +244,22 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         VecCollection<'scope, T, Row, Diff>,
         VecCollection<'scope, T, DataflowError, Diff>,
     ) {
-        let mut datums = DatumVec::new();
-        let logic = move |k: DatumSeq, v: DatumSeq| {
-            let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k);
-            datums_borrow.extend(v);
-            SharedRow::pack(&**datums_borrow)
+        let make_logic = || {
+            let mut datums = DatumVec::new();
+            move |k: DatumSeq, v: DatumSeq| {
+                let mut datums_borrow = datums.borrow();
+                datums_borrow.extend(k.to_datum_iter());
+                datums_borrow.extend(v.to_datum_iter());
+                SharedRow::pack(&**datums_borrow)
+            }
         };
         match &self {
             ArrangementFlavor::Local(oks, errs) => (
-                oks.clone().as_collection(logic),
+                oks.clone().as_collection(make_logic()),
                 errs.clone().as_collection(|k, &()| k.clone()),
             ),
             ArrangementFlavor::Trace(_, oks, errs) => (
-                oks.clone().as_collection(logic),
+                oks.clone().as_collection(make_logic()),
                 errs.clone().as_collection(|k, &()| k.clone()),
             ),
         }
@@ -290,23 +296,30 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         // arrangement, as well as provides time to accumulate our produced output.
         let refuel = 1000000;
 
-        let mut datums = DatumVec::new();
-        let logic = move |k: DatumSeq, v: DatumSeq, t, d| {
-            let mut datums_borrow = datums.borrow();
-            datums_borrow.extend(k.to_datum_iter().take(max_demand));
-            let max_demand = max_demand.saturating_sub(datums_borrow.len());
-            datums_borrow.extend(v.to_datum_iter().take(max_demand));
-            logic(&mut datums_borrow, t, d)
-        };
-
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let mut datums = DatumVec::new();
+                let wrapped = move |k: DatumSeq, v: DatumSeq, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                    let remaining = max_demand.saturating_sub(datums_borrow.len());
+                    datums_borrow.extend(v.to_datum_iter().take(remaining));
+                    logic(&mut datums_borrow, t, d)
+                };
+                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, wrapped, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, logic, refuel);
+                let mut datums = DatumVec::new();
+                let wrapped = move |k: DatumSeq, v: DatumSeq, t, d| {
+                    let mut datums_borrow = datums.borrow();
+                    datums_borrow.extend(k.to_datum_iter().take(max_demand));
+                    let remaining = max_demand.saturating_sub(datums_borrow.len());
+                    datums_borrow.extend(v.to_datum_iter().take(remaining));
+                    logic(&mut datums_borrow, t, d)
+                };
+                let oks = CollectionBundle::<T>::flat_map_core(oks.clone(), key, wrapped, refuel);
                 let errs = errs.clone().as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
@@ -781,7 +794,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .collection
                     .take()
                     .expect("Collection constructed above");
-                let (oks, errs_keyed, passthrough) =
+                let (oks_fact, errs_keyed, passthrough) =
                     Self::arrange_collection(&name, oks, key.clone(), thinning.clone());
                 let errs_concat: KeyCollection<_, _, _> = errs.clone().concat(errs_keyed).into();
                 self.collection = Some((passthrough, errs));
@@ -789,19 +802,26 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     errs_concat.mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
                         &format!("{}-errors", name),
                     );
-                self.arranged
-                    .insert(key, ArrangementFlavor::Local(oks, errs));
+                let arrangement = ArrangementFlavor::Local(oks_fact, errs);
+                self.arranged.insert(key, arrangement);
             }
         }
         self
     }
 
-    /// Builds an arrangement from a collection, using the specified key and value thinning.
+    /// Builds a factorized arrangement from a collection, using the specified key and value
+    /// thinning.
     ///
     /// The arrangement's key is based on the `key` expressions, and the value the input with
     /// the `thinning` applied to it. It selects which of the input columns are included in the
     /// value of the arrangement. The thinning is in support of permuting arrangements such that
     /// columns in the key are not included in the value.
+    ///
+    /// Emits columnar `((Row, Row), T, Diff)` chunks via [`ColumnBuilder`] and exchanges them
+    /// with the `columnar_exchange` PACT. The downstream batcher
+    /// ([`RowRowColBatcher`](crate::typedefs::RowRowColBatcher)) decodes columnar input
+    /// into owned tuples and produces factorized trie chunks, landing in a
+    /// [`RowRowSpine`](crate::typedefs::RowRowSpine).
     ///
     /// In addition to the ok and err streams, we produce a passthrough stream that forwards
     /// the input as-is, which allows downstream consumers to reuse the collection without
@@ -812,7 +832,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
-        Arranged<'scope, RowRowAgent<T, Diff>>,
+        Arranged<'scope, crate::typedefs::RowRowAgent<T, Diff>>,
         VecCollection<'scope, T, DataflowError, Diff>,
         VecCollection<'scope, T, Row, Diff>,
     ) {
@@ -865,14 +885,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         let oks = ok_stream
             .mz_arrange_core::<
                 _,
-                Col2ValBatcher<_, _, _, _>,
-                RowRowBuilder<_, _>,
-                RowRowSpine<_, _>,
+                crate::typedefs::RowRowColBatcher<T, Diff>,
+                crate::typedefs::RowRowBuilder<T, Diff>,
+                crate::typedefs::RowRowSpine<T, Diff>,
             >(
                 ExchangeCore::<ColumnBuilder<_>, _>::new_core(
                     columnar_exchange::<Row, Row, T, Diff>,
                 ),
-                name
+                name,
             );
         (
             oks,

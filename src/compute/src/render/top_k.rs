@@ -21,7 +21,6 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::Variable as SemigroupVariable;
 use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::implementations::merge_batcher::container::InternalMerge;
 use differential_dataflow::trace::{Builder, Trace};
 use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::plan::top_k::{
@@ -44,10 +43,11 @@ use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::MaybeValidatingRow;
-use crate::row_spine::{
-    DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
+use crate::row_spine::{DatumSeq, RowBatcher, RowBuilder, RowValBuilder, RowValSpine};
+use crate::typedefs::{
+    KeyBatcher, MzTimestamp, RowRowBatcher, RowRowBuilder, RowRowReduceBuilder, RowRowSpine,
+    RowSpine,
 };
-use crate::typedefs::{KeyBatcher, MzTimestamp, RowRowSpine, RowSpine};
 
 // The implementation requires integer timestamps to be able to delay feedback for monotonic inputs.
 impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
@@ -431,7 +431,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         } else {
             // Build non-validating topk stage.
             let (input, stage) =
-                build_topk_negated_stage::<T, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+                build_topk_negated_stage::<T, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                     &input, order_key, offset, limit, arity,
                 );
             // Turn arrangement into collection.
@@ -499,7 +499,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             .mz_arrange::<RowBatcher<_, _>, RowBuilder<_, _>, RowSpine<_, _>>(
                 "Arranged MonotonicTop1 partial [val: empty]",
             )
-            .mz_reduce_abelian::<_, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
+            .mz_reduce_abelian::<_, RowRowReduceBuilder<_, _>, RowRowSpine<_, _>>(
                 "MonotonicTop1",
                 move |_key, input, output| {
                     let accum: &monoids::Top1Monoid = &input[0].1;
@@ -532,10 +532,7 @@ where
     T: MzTimestamp,
     Bu: Builder<
             Time = T,
-            Input: Container
-                       + InternalMerge
-                       + ClearContainer
-                       + PushInto<((Row, Tr::ValOwn), T, Diff)>,
+            Input: Container + ClearContainer + PushInto<((Row, Tr::ValOwn), T, Diff)>,
             Output = Tr::Batch,
         >,
     Tr: for<'a> Trace<
@@ -569,7 +566,9 @@ where
     let reduced = arranged
         .clone()
         .mz_reduce_abelian::<_, Bu, Tr>("Reduced TopK input", {
-            move |mut hash_key, source, target: &mut Vec<(Tr::ValOwn, Diff)>| {
+            move |mut hash_key,
+                  source: &[(DatumSeq<'_>, Diff)],
+                  target: &mut Vec<(Tr::ValOwn, Diff)>| {
                 // Unpack the limit, either into an integer literal or an expression to evaluate.
                 let limit = match &limit {
                     Some(Ok(lit)) => Some(*lit),

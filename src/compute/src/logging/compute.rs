@@ -23,7 +23,7 @@ use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
+use mz_timely_util::columnar::{Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -40,8 +40,7 @@ use crate::logging::{
     ComputeLog, EventQueue, LogCollection, LogVariant, OutputSessionColumnar, PermutedRowPacker,
     SharedLoggingState, Update,
 };
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::RowRowSpine;
+use crate::typedefs::{RowRowBuilder, RowRowColBatcher, RowRowSpine};
 
 /// Type alias for a logger of compute events.
 pub type Logger = timely::logging_core::Logger<ComputeEventBuilder>;
@@ -435,9 +434,9 @@ pub(super) fn construct<'scope>(
                 let trace = stream
                     .mz_arrange_core::<
                         _,
-                        Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
-                        RowRowSpine<_, _>,
+                        RowRowColBatcher<Timestamp, Diff>,
+                        RowRowBuilder<Timestamp, Diff>,
+                        RowRowSpine<Timestamp, Diff>,
                     >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {

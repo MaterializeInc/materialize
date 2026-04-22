@@ -21,7 +21,7 @@ use differential_dataflow::logging::{
 use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
+use mz_timely_util::columnar::columnar_exchange;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::InputCapability;
@@ -36,8 +36,7 @@ use crate::logging::{
     DifferentialLog, EventQueue, LogCollection, LogVariant, SharedLoggingState,
     consolidate_and_pack,
 };
-use crate::row_spine::RowRowBuilder;
-use crate::typedefs::{KeyBatcher, RowRowSpine};
+use crate::typedefs::{KeyBatcher, RowRowBuilder, RowRowColBatcher, RowRowSpine};
 
 /// The return type of [`construct`].
 pub(super) struct Return {
@@ -190,9 +189,9 @@ pub(super) fn construct(
                 let trace = collection
                     .mz_arrange_core::<
                         _,
-                        Col2ValBatcher<_, _, _, _>,
-                        RowRowBuilder<_, _>,
-                        RowRowSpine<_, _>,
+                        RowRowColBatcher<Timestamp, Diff>,
+                        RowRowBuilder<Timestamp, Diff>,
+                        RowRowSpine<Timestamp, Diff>,
                     >(exchange, &format!("Arrange {variant:?}"))
                     .trace;
                 let collection = LogCollection {

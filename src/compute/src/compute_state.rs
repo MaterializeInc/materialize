@@ -78,6 +78,8 @@ use crate::server::{ComputeInstanceContext, ResponseSender};
 mod peek_result_iterator;
 mod peek_stash;
 
+use peek_result_iterator::IntoDiff;
+
 /// Worker-local state that is maintained across dataflows.
 ///
 /// This state is restricted to the COMPUTE state, the deterministic, idempotent work
@@ -1486,7 +1488,7 @@ impl IndexPeek {
             let mut copies = Diff::ZERO;
             cursor.map_times(&storage, |time, diff| {
                 if time.less_equal(&self.peek.timestamp) {
-                    copies += diff;
+                    copies += diff.into_diff();
                 }
             });
             if copies.is_negative() {
@@ -1535,8 +1537,8 @@ impl IndexPeek {
                 Key<'a>: ToDatumIter + Eq,
                 KeyContainer: BatchContainer<Owned = Row>,
                 Val<'a>: ToDatumIter,
-                TimeGat<'a>: PartialOrder<Timestamp>,
-                DiffGat<'a> = &'a Diff,
+                TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+                DiffGat<'a>: IntoDiff,
             >,
     {
         let max_result_size = usize::cast_from(max_result_size);

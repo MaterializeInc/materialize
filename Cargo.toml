@@ -307,7 +307,8 @@ cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
 clap = { version = "4.5.60", features = ["derive"] }
-columnar = "0.12.1"
+# TODO: switch back to crates.io after frankmcsherry/columnar#105 is released
+columnar = { git = "https://github.com/antiguru/columnar", branch = "feature/cursor-index" }
 columnation = "0.1.2"
 compact_bytes = "0.2.1"
 compile-time-run = "0.2.12"
@@ -549,6 +550,7 @@ timely = { opt-level = 3 }
 differential-dataflow = { opt-level = 3 }
 mz-compute = { opt-level = 3 }
 mz-transform = { opt-level = 3 }
+mz-timely-util = { opt-level = 3 }
 
 # Recommended by insta
 insta = { opt-level = 3 }
@@ -579,6 +581,11 @@ inherits = "optimized"
 debug = "line-tables-only"
 debug-assertions = true
 
+[profile.bench]
+lto = "off"
+debug = "full"
+incremental = false
+
 # IMPORTANT: when patching a dependency, you should only depend on "main",
 # "master", or an upstream release branch (e.g., "v7.x"). Do *not* depend on a
 # feature/patch branch (e.g., "fix-thing" or "pr-1234"). Feature/patch branches
@@ -586,6 +593,10 @@ debug-assertions = true
 # merged), after which point it becomes impossible to build that historical
 # version of Materialize.
 [patch.crates-io]
+# Pin columnar to our fork's feature branch so differential-dataflow uses
+# the same version as the workspace (avoids "multiple columnar versions" errors).
+columnar = { git = "https://github.com/antiguru/columnar", branch = "feature/cursor-index" }
+
 # Waiting on https://github.com/sfackler/rust-postgres/pull/752.
 postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres" }

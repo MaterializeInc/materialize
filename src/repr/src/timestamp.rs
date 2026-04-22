@@ -56,6 +56,13 @@ impl PartialEq<Timestamp> for &Timestamp {
     }
 }
 
+impl mz_timely_util::columnar::factorized::SortPrefix for Timestamp {
+    #[inline(always)]
+    fn sort_prefix(&self) -> u128 {
+        u128::from(self.internal)
+    }
+}
+
 impl RustType<ProtoTimestamp> for Timestamp {
     fn into_proto(&self) -> ProtoTimestamp {
         ProtoTimestamp {
@@ -82,6 +89,12 @@ mod columnar_timestamp {
         fn push(&mut self, item: D) {
             self.0.push(item)
         }
+        /// Forward bulk `extend` so the inner container's specialized
+        /// `Extend` path runs instead of the default per-item loop.
+        #[inline(always)]
+        fn extend(&mut self, iter: impl IntoIterator<Item = D>) {
+            self.0.extend(iter);
+        }
     }
     impl<T: columnar::Clear> columnar::Clear for Timestamps<T> {
         #[inline(always)]
@@ -97,10 +110,36 @@ mod columnar_timestamp {
     }
     impl<'a> columnar::Index for Timestamps<&'a [Timestamp]> {
         type Ref = Timestamp;
+        type Cursor<'b>
+            = TimestampsCursor<'a>
+        where
+            Self: 'b;
 
         #[inline(always)]
         fn get(&self, index: usize) -> Self::Ref {
             self.0[index]
+        }
+
+        #[inline(always)]
+        fn cursor(&self, range: core::ops::Range<usize>) -> Self::Cursor<'_> {
+            TimestampsCursor {
+                slice: self.0,
+                range,
+            }
+        }
+    }
+
+    /// Cursor over a range of `Timestamps<&[Timestamp]>`, yields `Timestamp` by value.
+    pub struct TimestampsCursor<'a> {
+        slice: &'a [Timestamp],
+        range: core::ops::Range<usize>,
+    }
+
+    impl<'a> Iterator for TimestampsCursor<'a> {
+        type Item = Timestamp;
+        #[inline(always)]
+        fn next(&mut self) -> Option<Self::Item> {
+            self.range.next().map(|i| self.slice[i])
         }
     }
 
@@ -162,12 +201,14 @@ mod columnar_timestamp {
     }
 
     impl<'a> columnar::AsBytes<'a> for Timestamps<&'a [Timestamp]> {
+        const SLICE_COUNT: usize = 1;
         #[inline(always)]
-        fn as_bytes(&self) -> impl Iterator<Item = (u64, &'a [u8])> {
-            std::iter::once((
+        fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
+            debug_assert_eq!(index, 0);
+            (
                 u64::cast_from(align_of::<Timestamp>()),
                 bytemuck::cast_slice(self.0),
-            ))
+            )
         }
     }
     impl<'a> columnar::FromBytes<'a> for Timestamps<&'a [Timestamp]> {

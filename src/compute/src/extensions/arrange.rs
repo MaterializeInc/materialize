@@ -28,7 +28,7 @@ use crate::logging::compute::{
     ArrangementHeapSizeOperator, ComputeEvent, ComputeEventBuilder,
 };
 use crate::typedefs::{
-    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
+    KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowValAgent,
 };
 
 /// Extension trait to arrange data.
@@ -381,30 +381,6 @@ where
     }
 }
 
-impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowRowAgent<T, R>>
-where
-    T: MzTimestamp,
-    R: Semigroup + Ord + MzArrangeData + 'static,
-{
-    fn log_arrangement_size(self) -> Self {
-        log_arrangement_size_inner(self, |batch| {
-            let (mut size, mut capacity, mut allocations) = (0, 0, 0);
-            let mut callback = |siz, cap| {
-                size += siz;
-                capacity += cap;
-                allocations += usize::from(cap > 0);
-            };
-            batch.storage.keys.heap_size(&mut callback);
-            batch.storage.vals.offs.heap_size(&mut callback);
-            batch.storage.vals.vals.heap_size(&mut callback);
-            batch.storage.upds.offs.heap_size(&mut callback);
-            batch.storage.upds.times.heap_size(&mut callback);
-            batch.storage.upds.diffs.heap_size(&mut callback);
-            (size, capacity, allocations)
-        })
-    }
-}
-
 impl<'scope, T, R> ArrangementSize for Arranged<'scope, RowAgent<T, R>>
 where
     T: MzTimestamp,
@@ -423,6 +399,31 @@ where
             batch.storage.upds.times.heap_size(&mut callback);
             batch.storage.upds.diffs.heap_size(&mut callback);
             (size, capacity, allocations)
+        })
+    }
+}
+
+/// [`ArrangementSize`] impl for factorized trie-structured spines.
+///
+/// Uses `length_in_words * 8` on the borrowed trie to approximate heap size
+/// (serialized byte count ≈ in-memory footprint for stride-backed columns).
+/// Capacity matches size; allocation count is one per batch.
+impl<'scope, T, K, V, R> ArrangementSize
+    for Arranged<
+        'scope,
+        TraceAgent<Spine<Rc<mz_timely_util::columnar::factorized::batch::FactBatch<K, V, T, R>>>>,
+    >
+where
+    T: MzTimestamp,
+    K: MzData + Ord + Clone + 'static,
+    V: MzData + Ord + Clone + 'static,
+    R: Semigroup + Ord + Clone + MzData + 'static,
+{
+    fn log_arrangement_size(self) -> Self {
+        log_arrangement_size_inner(self, |batch| {
+            let borrowed = batch.storage.borrowed();
+            let size = columnar::bytes::indexed::length_in_words(&borrowed) * 8;
+            (size, size, 1)
         })
     }
 }
