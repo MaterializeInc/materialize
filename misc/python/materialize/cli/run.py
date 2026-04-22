@@ -360,6 +360,14 @@ def main() -> int:
 
         command = _cargo_command(args, "nextest", "run")
 
+        features = []
+        if args.foundationdb:
+            features.append("foundationdb")
+        if args.features:
+            features.extend(args.features.split(","))
+        if features:
+            command += [f"--features={','.join(features)}"]
+
         for package in args.package:
             command += ["--package", package]
         for test in args.test:
