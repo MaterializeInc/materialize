@@ -199,6 +199,9 @@ A proactive, Mztrail-like thing would help as well.)
 We would want to make `mz-debug` aware of frozen clusters.
 Some kind of `COPY CLUSTER` comand may help users experiment: copy a frozen cluster, unfreeze it, find a new plan you like, freeze _that_, and then green/blue the new one into place.
 
+When using DBT, users should receive an error when attempting to make changes to a frozen cluster.
+Whether that error is soft---i.e., the DBT run continues---or not is less clear.
+
 ### Why at the cluster level?
 
 We propose freezing at the cluster level.
@@ -217,6 +220,11 @@ Worse still, several of these `*Func` types reference external types, like `rege
 We propose the following shift:
 
  - Generate `Lir` versions of the various `*Func`s. This will require a preparatory PR to improve the associated macros, but should not be too complex (even though it generates a fair bit of code; we can engineer that code to point to common implementations of `eval`, so we won't get major code duplication). We will likely want to fold this in to work that parameterizes type holding `*Func`s to hold _either_ `Sql*Type` or `Repr*Type`.
+   + Some of the `TableFunc`s hold on to types for typechecking, but don't need those types for evaluation. We could leave these and `AggregateFunc`s alone.
+   + Many of the other `*Func`s have functions that use their stored  types in their `eval` method... they _must_ hold `Sql` types.
+     * `UnaryFunc`: `CastArrayToString`, `CastListToString`, `CastRecordToString`, `CastMapToString`, `CastStringToList`, `CastStringToMap`, `MapBuildFromRecordList`
+     * `VariadicFunc`: `ArrayCreate`, `ArrayToString`, `CaseLiteral`
+
  - Write `LirScalarExpr`, which omits `CallUnmaterializable` (because it should be resolved before LIR).
  - Ensure that we only serialize the MZ-controlled bits. Wherever `Lir*Func` would include an external structure, ensure we store the information that lets us regenerate that structure using `#[serde(default=...)]` (e.g., store the original regex string, not the `regex::Regex` value).
  - Add a version number to top-level `LIR`.
