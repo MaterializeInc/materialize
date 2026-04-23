@@ -70,13 +70,11 @@ impl AzureBlobConfig {
     ) -> Result<Self, Error> {
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
-            // `TransportOptions::new(Arc::new(reqwest::Client))` used to plumb
-            // `knobs.operation_attempt_timeout/read_timeout/connect_timeout`
-            // here. After the reqwest 0.13 bump, azure_core 0.21 pins reqwest
-            // 0.12 internally, so our 0.13 client no longer implements its
-            // `HttpClient` trait. The azure_sdk migration (separate PR)
-            // restores this plumbing against the new SDK; the outer
-            // `operation_timeout` still applies via the retry policy.
+            // Per-attempt/read/connect-timeout plumbing via `TransportOptions`
+            // was dropped: azure_core 0.21 pins reqwest 0.12 internally, so our
+            // 0.13 client no longer satisfies its `HttpClient` trait. Restored
+            // on the new SDK in the azure_sdk migration PR; `operation_timeout`
+            // still applies via the retry policy.
             ClientBuilder::with_location(
                 CloudLocation::Emulator {
                     address: url.domain().expect("domain for Azure emulator").to_string(),

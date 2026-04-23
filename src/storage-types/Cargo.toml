@@ -61,10 +61,7 @@ prost.workspace = true
 rdkafka.workspace = true
 regex.workspace = true
 reqwest.workspace = true
-# The `iceberg::io::AwsCredentialLoad` trait (re-exported from reqsign 0.16)
-# is defined against reqwest 0.12, so impls must use that version's
-# `reqwest::Client`. Remove once the iceberg fork bumps to a reqsign that
-# supports reqwest 0.13.
+# For impls of `iceberg::io::AwsCredentialLoad` (reqsign 0.16); see workspace Cargo.toml.
 reqwest_0_12 = { workspace = true }
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }

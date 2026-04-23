@@ -100,9 +100,7 @@ impl AwsSdkCredentialLoader {
 impl AwsCredentialLoad for AwsSdkCredentialLoader {
     async fn load_credential(
         &self,
-        // reqsign 0.16 (via the iceberg fork) is pinned to reqwest 0.12, so
-        // this impl must match that version's `Client` type rather than the
-        // workspace reqwest 0.13.
+        // reqsign 0.16 trait signature; see `reqwest_0_12` in workspace Cargo.toml.
         _client: reqwest_0_12::Client,
     ) -> anyhow::Result<Option<AwsCredential>> {
         let creds = self

@@ -128,9 +128,7 @@ skip = [
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
-    # Used via `reqwest_0_12` workspace alias to satisfy reqsign 0.16's
-    # `AwsCredentialLoad` trait (dragged in by our iceberg fork).
-    # Remove once iceberg bumps to a reqsign that supports reqwest 0.13.
+    # reqwest_0_12 workspace alias; see Cargo.toml.
     { name = "reqwest", version = "0.12" },
 ]
 
