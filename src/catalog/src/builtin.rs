@@ -2495,47 +2495,105 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_indexes",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_INDEXES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("on_id", SqlScalarType::String.nullable(false))
-        .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column("create_sql", SqlScalarType::String.nullable(false))
-        .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the index."),
-        ("oid", "A PostgreSQL-compatible OID for the index."),
-        ("name", "The name of the index."),
-        (
-            "on_id",
-            "The ID of the relation on which the index is built.",
-        ),
-        (
-            "cluster_id",
-            "The ID of the cluster in which the index is built.",
-        ),
-        (
-            "owner_id",
-            "The role ID of the owner of the index. Corresponds to `mz_roles.id`.",
-        ),
-        ("create_sql", "The `CREATE` SQL statement for the index."),
-        (
-            "redacted_create_sql",
-            "The redacted `CREATE` SQL statement for the index.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
+
+pub static MZ_INDEXES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_indexes",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_INDEXES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("on_id", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the index."),
+            ("oid", "A PostgreSQL-compatible OID for the index."),
+            ("name", "The name of the index."),
+            (
+                "on_id",
+                "The ID of the relation on which the index is built.",
+            ),
+            (
+                "cluster_id",
+                "The ID of the cluster in which the index is built.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the index. Corresponds to `mz_roles.id`.",
+            ),
+            ("create_sql", "The `CREATE` SQL statement for the index."),
+            (
+                "redacted_create_sql",
+                "The redacted `CREATE` SQL statement for the index.",
+            ),
+        ]),
+        sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL on_id,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+WITH
+    user_indexes AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'on_id' AS on_id,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'cluster_id' AS cluster_id,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' = 'index'
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'GidMapping'
+    ),
+    builtin_indexes AS (
+        SELECT
+            m.id,
+            i.oid,
+            i.name,
+            onm.id AS on_id,
+            c.id AS cluster_id,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            i.create_sql,
+            mz_internal.redact_sql(i.create_sql) AS redacted_create_sql
+        FROM mz_internal.mz_builtin_indexes i
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN builtin_mappings onm ON onm.schema_name = i.on_schema_name AND onm.name = i.on_name
+        JOIN mz_clusters c ON c.name = i.cluster_name
+    )
+SELECT * FROM user_indexes
+UNION ALL
+SELECT * FROM builtin_indexes").into_boxed_str()),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    }
 });
+
 pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     name: "mz_index_columns",
     schema: MZ_CATALOG_SCHEMA,
@@ -14379,7 +14437,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
         Builtin::Table(&MZ_COLUMNS),
-        Builtin::Table(&MZ_INDEXES),
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::Table(&MZ_TABLES),
         Builtin::Table(&MZ_SOURCES),
@@ -14431,6 +14488,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
+        Builtin::MaterializedView(&MZ_INDEXES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
         Builtin::Table(&MZ_CONTINUAL_TASKS),

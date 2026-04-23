@@ -210,6 +210,13 @@ mz_audit_events  object_type
 mz_audit_events  occurred_at
 mz_audit_events  user
 mz_base_types  id
+mz_builtin_indexes  cluster_name
+mz_builtin_indexes  create_sql
+mz_builtin_indexes  name
+mz_builtin_indexes  oid
+mz_builtin_indexes  on_name
+mz_builtin_indexes  on_schema_name
+mz_builtin_indexes  schema_name
 mz_builtin_materialized_views  cluster_name
 mz_builtin_materialized_views  create_sql
 mz_builtin_materialized_views  definition
