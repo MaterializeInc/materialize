@@ -1,12 +1,14 @@
-# Claude Code Skills for Materialize
+# Agent Skills for Materialize
 
-This directory contains skills that teach Claude Code how to work effectively in
-the Materialize codebase. Skills are triggered automatically based on their
-SKILL.md description, or can be invoked explicitly with `/<skill-name>`.
+This directory contains skills that teach coding agents how to work effectively
+in the Materialize codebase. The canonical path is `.agents/skills/`;
+`.claude/skills` is a compatibility symlink for Claude Code. Skills are
+triggered automatically based on their `SKILL.md` metadata, or can be invoked
+explicitly with `$<skill-name>` in Codex and `/<skill-name>` in Claude Code.
 
-> **Note:** This README is for humans browsing the repo. Claude Code does not
-> read this file when deciding which skills to trigger -- it uses the `name` and
-> `description` fields in each skill's SKILL.md frontmatter.
+> **Note:** This README is for humans browsing the repo. Agent runtimes do not
+> read this file when deciding which skills to trigger; they use the `name` and
+> `description` fields in each skill's `SKILL.md` frontmatter.
 
 ## Development Workflow
 
