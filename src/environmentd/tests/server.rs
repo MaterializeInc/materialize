@@ -5318,6 +5318,53 @@ fn test_mcp_agent_with_data_product() {
                 &HTTP_DEFAULT_USER.name
             ))
             .unwrap();
+
+        // Indexed regular view: cheap to query via the in-memory arrangement,
+        // should appear as a data product.
+        super_user
+            .batch_execute(
+                "CREATE VIEW test_indexed_view AS SELECT 2::int AS id, 'gadget'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "CREATE INDEX test_indexed_view_idx IN CLUSTER quickstart ON test_indexed_view (id)",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_indexed_view TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Non-indexed regular view: would trigger full recompute on query,
+        // must NOT appear as a data product.
+        super_user
+            .batch_execute(
+                "CREATE VIEW test_unindexed_view AS SELECT 3::int AS id, 'sprocket'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_unindexed_view TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
+
+        // Materialized view without an explicit index: bounded query cost
+        // (Persist-backed), should appear as a data product.
+        super_user
+            .batch_execute(
+                "CREATE MATERIALIZED VIEW test_unindexed_mv IN CLUSTER quickstart AS SELECT 4::int AS id, 'bolt'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(&format!(
+                "GRANT SELECT ON test_unindexed_mv TO {}",
+                &HTTP_DEFAULT_USER.name
+            ))
+            .unwrap();
     }
 
     // get_data_products should now return our data product.
@@ -5336,9 +5383,32 @@ fn test_mcp_agent_with_data_product() {
     assert_eq!(status, StatusCode::OK);
     let result_text = body["result"]["content"][0]["text"].as_str().unwrap();
     let products: serde_json::Value = serde_json::from_str(result_text).unwrap();
+    let has_object = |needle: &str| {
+        products.as_array().unwrap().iter().any(|p| {
+            p.as_array()
+                .map(|arr| arr[0].as_str().unwrap_or("").contains(needle))
+                .unwrap_or(false)
+        })
+    };
+    // Indexed MV: appears.
     assert!(
-        products.as_array().unwrap().len() >= 1,
-        "expected at least one data product"
+        has_object("test_products"),
+        "indexed MV should appear as a data product"
+    );
+    // Indexed regular view: appears (in-memory arrangement is cheap to query).
+    assert!(
+        has_object("test_indexed_view"),
+        "indexed view should appear as a data product"
+    );
+    // Non-indexed MV: appears (Persist-backed, bounded query cost).
+    assert!(
+        has_object("test_unindexed_mv"),
+        "non-indexed materialized view should appear as a data product"
+    );
+    // Non-indexed regular view: excluded (would trigger full recompute).
+    assert!(
+        !has_object("test_unindexed_view"),
+        "non-indexed view must NOT appear as a data product"
     );
     // Find our product
     let product = products

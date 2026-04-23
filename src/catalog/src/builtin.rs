@@ -11676,9 +11676,10 @@ FROM
 
 /// Lightweight data product discovery for MCP (Model Context Protocol).
 ///
-/// Lists materialized views that the current user has SELECT privileges on.
-/// Indexes and comments are optional enrichment — any MV accessible via RBAC
-/// appears as a data product.
+/// Lists materialized views and indexed views that the current user has
+/// SELECT privileges on. Non-indexed regular views are excluded because
+/// querying them would trigger a full recompute. Comments are optional
+/// enrichment.
 /// Used by the `get_data_products` and `read_data_product` MCP tools.
 /// Does not include schema details: use `mz_mcp_data_product_details` for that.
 pub static MZ_MCP_DATA_PRODUCTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
@@ -11720,7 +11721,7 @@ LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
 LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.object_sub_id IS NULL
 LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
 WHERE op.privilege_type = 'SELECT'
-  AND o.type = 'materialized-view'
+  AND (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 "#,
     access: vec![PUBLIC_SELECT],
@@ -11730,8 +11731,10 @@ WHERE op.privilege_type = 'SELECT'
 ///
 /// Extends `mz_mcp_data_products` with column types, index keys (when
 /// available), and column comments, formatted as a JSON Schema object.
-/// Used by the `get_data_product_details` MCP tool. Indexes and comments
-/// are optional enrichment.
+/// Used by the `get_data_product_details` MCP tool. Lists materialized
+/// views and indexed views; non-indexed regular views are excluded to
+/// avoid triggering full recompute on query. Comments are optional
+/// enrichment.
 pub static MZ_MCP_DATA_PRODUCT_DETAILS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_mcp_data_product_details",
     schema: MZ_INTERNAL_SCHEMA,
@@ -11835,7 +11838,7 @@ LEFT JOIN mz_internal.mz_comments cts_idx ON cts_idx.id = i.id AND cts_idx.objec
 LEFT JOIN mz_internal.mz_comments cts_obj ON cts_obj.id = o.id AND cts_obj.object_sub_id IS NULL
 LEFT JOIN mz_internal.mz_comments cts_col ON cts_col.id = o.id AND cts_col.object_sub_id = ccol.position
 WHERE op.privilege_type = 'SELECT'
-  AND o.type = 'materialized-view'
+  AND (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 GROUP BY 1, 2, 3
 )

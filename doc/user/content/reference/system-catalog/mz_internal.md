@@ -542,10 +542,12 @@ each materialized view with a refresh strategy other than `on-commit`.
 
 ## `mz_mcp_data_products`
 
-The `mz_mcp_data_products` view lists data products (materialized views)
-that are available through the Model Context Protocol (MCP) server and
-that the current user has SELECT access on. Indexes and comments are optional
-enrichment. This is a lightweight discovery view. Use
+The `mz_mcp_data_products` view lists data products (materialized views
+and indexed views) that are available through the Model Context Protocol
+(MCP) server and that the current user has SELECT access on. Non-indexed
+regular views are excluded to avoid triggering a full recompute when an
+agent queries the data product. Comments are optional enrichment. This
+is a lightweight discovery view. Use
 [`mz_mcp_data_product_details`](#mz_mcp_data_product_details) for full column
 schema information.
 
