@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/fusion/filter.rs
-revision: 52af3ba2a1
+revision: 09f8729224
 ---
 
 # mz-transform::fusion::filter

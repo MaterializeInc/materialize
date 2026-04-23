@@ -1,6 +1,6 @@
 ---
 source: src/txn-wal/src/lib.rs
-revision: 901d0526a1
+revision: 09f8729224
 ---
 
 # mz-txn-wal

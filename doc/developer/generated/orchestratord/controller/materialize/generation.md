@@ -1,6 +1,6 @@
 ---
 source: src/orchestratord/src/controller/materialize/generation.rs
-revision: b1e123e786
+revision: f495cf372e
 ---
 
 # mz-orchestratord::controller::materialize::generation
@@ -11,3 +11,4 @@ Builds the `StatefulSet`, `Service`, and `ConfigMap` resources for a specific ge
 MCP routes (agents and developer) are enabled by default on both public and internal listeners.
 Key types include `DeploymentStatus` (simplified external deployment state), `Resources` (the generated Kubernetes resources for a generation), `ConnectionInfo`, and `LoginCredentials`.
 Uses the `ListenersConfig` types from `mz-server-core` to generate listener configuration for the deployed environmentd.
+Service creation distinguishes between headless and VIP-bearing services via a `headless` parameter on `create_base_service_object`: the public environment service is headless (`cluster_ip: "None"`), while generation-specific services omit `cluster_ip` so Kubernetes assigns a VIP.

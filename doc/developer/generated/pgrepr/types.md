@@ -1,6 +1,6 @@
 ---
 source: src/pgrepr/src/types.rs
-revision: 6f79fa38d4
+revision: dbb3e2748c
 ---
 
 # mz-pgrepr::types

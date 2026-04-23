@@ -1,6 +1,6 @@
 ---
 source: src/transform/src/lib.rs
-revision: de1872534e
+revision: 4f4538b61a
 ---
 
 # mz-transform
@@ -13,6 +13,7 @@ Provides semantics-preserving transformations of `MirRelationExpr` that improve 
 * `canonicalization` — structural normalization: `ReduceScalars`, `FlatMapElimination`, `ProjectionExtraction`, `TopKElision`.
 * `canonicalize_mfp` — MFP canonicalization and CSE.
 * `case_literal` — rewrites If-chains matching a single expression against literals into `CaseLiteral` variadic functions with O(log n) BTreeMap lookup.
+* `coalesce_case` — pushes `COALESCE` into `CASE WHEN` branches (`COALESCE(CASE WHEN e1 THEN e2 ELSE e3, ...) => CASE WHEN e1 THEN COALESCE(e2, ...) ELSE COALESCE(e3, ...)`); runs in the fixpoint before join implementation, guarded by `enable_coalesce_case_transform`.
 * `collect_notices` — collects optimizer notices that do not fit other transforms.
 * `column_knowledge` — per-column literal/nullability propagation.
 * `compound` — staging area for `UnionNegateFusion`.

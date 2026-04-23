@@ -1,6 +1,6 @@
 ---
 source: src/storage-client/src/storage_collections.rs
-revision: b55d3dee25
+revision: 2bbb5eb8ee
 ---
 
 # storage-client::storage_collections

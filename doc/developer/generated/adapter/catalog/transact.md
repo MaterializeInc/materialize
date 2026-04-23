@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/transact.rs
-revision: a632912d24
+revision: 2bbb5eb8ee
 ---
 
 # adapter::catalog::transact
@@ -9,3 +9,4 @@ Implements catalog transactions: `Catalog::transact` opens a durable `Transactio
 The module enforces referential integrity, privilege checks, and naming constraints within the transaction, and writes audit log events and storage-usage records as side effects.
 Zero-downtime deployment logic (0dt) is also managed here; DDL operations can be gated behind deployment-readiness checks during the cutover window.
 `InjectedAuditEvent` struct and `Op::InjectAuditEvents` variant allow manually appending audit log entries at the current oracle write timestamp. `CREATE ROLE` audit events use `EventDetails::CreateRoleV1` which includes the `auto_provision_source` field.
+When dropping items, all storage collections associated with a dropped entry are scheduled for removal unconditionally; whether the item was a replacement target is not considered at this stage.

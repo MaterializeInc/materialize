@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/pure/error.rs
-revision: c5e6beb8de
+revision: fc8d9dc1e4
 ---
 
 # mz-sql::pure::error
