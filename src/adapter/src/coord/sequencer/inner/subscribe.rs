@@ -189,7 +189,7 @@ impl Coordinator {
 
         // SUBSCRIBE AS OF, similar to peeks, doesn't need to worry about transaction
         // timestamp semantics.
-        if when == &QueryWhen::Immediately {
+        if explain_ctx.needs_cluster() && when == &QueryWhen::Immediately {
             // If this isn't a SUBSCRIBE AS OF, the SUBSCRIBE can be in a transaction if it's the
             // only operation.
             session.add_transaction_ops(TransactionOps::Subscribe)?;
