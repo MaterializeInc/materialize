@@ -560,6 +560,20 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
+        // Track the snapshot size so we can consolidate when it doubles. This
+        // bounds memory usage during catch-up: without it, the snapshot grows
+        // with every retract+insert pair across timestamps. Ideally, we would
+        // consolidate once after all timestamps, not per-timestamp, but heuristically
+        // snapshot based on doubling behavior to bound memory
+        // This behavior is safe because nothing in the loop reads from self.snapshot:
+        // the update_applier maintains its own internal state (configs, settings,
+        // fence tokens) independently. Consolidating per-timestamp was O(K * N log N);
+        // consolidating once is O(N log N).
+
+        // Use a minimum threshold to avoid consolidating on every Progress
+        // event when the snapshot is small or empty (since 0 * 2 = 0).
+        let mut size_at_last_consolidation = max(self.snapshot.len(), 8);
+
         while self.upper < target_upper {
             let listen_events = self.listen.fetch_next().await;
             for listen_event in listen_events {
@@ -586,6 +600,12 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                             );
                             self.apply_updates(updates)?;
                         }
+                        // Consolidate when the snapshot has doubled in size to
+                        // bound memory.
+                        if self.snapshot.len() >= size_at_last_consolidation * 2 {
+                            self.consolidate();
+                            size_at_last_consolidation = self.snapshot.len();
+                        }
                     }
                     ListenEvent::Updates(batch_updates) => {
                         for update in batch_updates {
@@ -597,11 +617,35 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             }
         }
         assert_eq!(updates, BTreeMap::new(), "all updates should be applied");
+        // Always consolidate at the end to ensure the snapshot is clean.
+        self.consolidate();
         Ok(())
     }
 
+    /// Apply a batch of updates and then consolidate the snapshot. This is the
+    /// typical entry point for callers that apply updates in a single batch.
+    ///
+    /// For hot loops that apply updates across many timestamps (e.g., `sync_inner`),
+    /// use `apply_updates` directly and call `consolidate()` periodically (e.g.,
+    /// on snapshot doubling) to bound memory while staying amortized O(N log N).
+    pub(crate) fn apply_updates_and_consolidate(
+        &mut self,
+        updates: impl IntoIterator<Item = StateUpdate<T>>,
+    ) -> Result<(), FenceError> {
+        self.apply_updates(updates)?;
+        self.consolidate();
+        Ok(())
+    }
+
+    /// Apply a batch of updates to the catalog state without consolidating.
+    ///
+    /// Does NOT consolidate the snapshot afterward. If you are calling this once,
+    /// prefer `apply_updates_and_consolidate`. This method exists for loops that
+    /// call it many times — consolidating per call would be O(K * N log N) instead
+    /// of O(N log N). Callers should consolidate periodically (e.g., on snapshot
+    /// doubling) to bound memory.
     #[mz_ore::instrument(level = "debug")]
-    pub(crate) fn apply_updates(
+    fn apply_updates(
         &mut self,
         updates: impl IntoIterator<Item = StateUpdate<T>>,
     ) -> Result<(), FenceError> {
@@ -639,18 +683,23 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             }
         }
 
+        // Track the high-water mark of the unconsolidated snapshot size.
+        let len = i64::try_from(self.snapshot.len()).unwrap_or(i64::MAX);
+        if len > self.metrics.snapshot_max_entries.get() {
+            self.metrics.snapshot_max_entries.set(len);
+        }
+
         errors.sort();
         if let Some(err) = errors.into_iter().next() {
             return Err(err);
         }
-
-        self.consolidate();
 
         Ok(())
     }
 
     #[mz_ore::instrument]
     pub(crate) fn consolidate(&mut self) {
+        self.metrics.snapshot_consolidations.inc();
         soft_assert_no_log!(
             self.snapshot
                 .windows(2)
@@ -1042,7 +1091,7 @@ impl UnopenedPersistCatalogState {
         let updates = snapshot
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate { kind, ts, diff });
-        handle.apply_updates(updates)?;
+        handle.apply_updates_and_consolidate(updates)?;
         info!(
             "startup: envd serve: catalog init: apply updates complete in {:?}",
             apply_start.elapsed()
@@ -1238,7 +1287,7 @@ impl UnopenedPersistCatalogState {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
         });
-        catalog.apply_updates(updates)?;
+        catalog.apply_updates_and_consolidate(updates)?;
 
         let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
@@ -1284,7 +1333,7 @@ impl UnopenedPersistCatalogState {
             let (txn_batch, _) = txn.into_parts();
             // The upper here doesn't matter because we are only applying the updates in memory.
             let updates = StateUpdate::from_txn_batch_ts(txn_batch, catalog.upper);
-            catalog.apply_updates(updates)?;
+            catalog.apply_updates_and_consolidate(updates)?;
         } else {
             txn.commit_internal(commit_ts).await?;
         }
@@ -1787,7 +1836,7 @@ impl DurableCatalogState for PersistCatalogState {
                         ts: commit_ts,
                         diff,
                     });
-                    catalog.apply_updates(updates)?;
+                    catalog.apply_updates_and_consolidate(updates)?;
                     catalog.upper = commit_ts.step_forward();
                     catalog.upper
                 }
