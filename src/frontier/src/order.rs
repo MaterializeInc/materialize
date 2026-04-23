@@ -74,3 +74,29 @@ impl<T: Ord> PartialOrder for MutableAntichain<T> {
         PartialOrder::less_equal(&self.frontier(), &other.frontier())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #[test]
+        fn primitive_partial_order_matches_le(a in any::<u64>(), b in any::<u64>()) {
+            prop_assert_eq!(PartialOrder::less_equal(&a, &b), a <= b);
+            prop_assert_eq!(PartialOrder::less_than(&a, &b), a < b);
+        }
+
+        #[test]
+        fn antichain_less_equal_consistent_with_lattice(
+            a in prop::collection::vec(any::<u32>(), 0..5).prop_map(Antichain::from),
+            b in prop::collection::vec(any::<u32>(), 0..5).prop_map(Antichain::from),
+        ) {
+            // `less_equal` agrees with the lattice join: `a <= b` iff `a.join(b) == b`.
+            let le = PartialOrder::less_equal(&a, &b);
+            let join_eq = a.join(&b) == b;
+            prop_assert_eq!(le, join_eq);
+        }
+    }
+}

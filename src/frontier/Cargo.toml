@@ -14,6 +14,12 @@ serde.workspace = true
 smallvec = { workspace = true, features = ["serde"] }
 timely = { workspace = true, optional = true }
 
+[dev-dependencies]
+bincode.workspace = true
+differential-dataflow.workspace = true
+proptest.workspace = true
+timely.workspace = true
+
 [features]
 default = []
 # Conversions between `mz_frontier::Antichain` and `timely::progress::Antichain`

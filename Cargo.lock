@@ -6733,6 +6733,9 @@ dependencies = [
 name = "mz-frontier"
 version = "0.0.0"
 dependencies = [
+ "bincode",
+ "differential-dataflow",
+ "proptest",
  "serde",
  "smallvec",
  "timely",

@@ -490,3 +490,239 @@ impl<T> Default for MutableAntichain<T> {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::order::PartialOrder as FrontierPartialOrder;
+
+    fn arb_antichain() -> impl Strategy<Value = Antichain<u32>> {
+        prop::collection::vec(any::<u32>(), 0..8).prop_map(Antichain::from)
+    }
+
+    proptest! {
+        #[test]
+        fn at_most_one_element(v in prop::collection::vec(any::<u32>(), 0..32)) {
+            let a: Antichain<u32> = v.into_iter().collect();
+            prop_assert!(a.elements().len() <= 1);
+        }
+
+        #[test]
+        fn contains_minimum(v in prop::collection::vec(any::<u32>(), 1..32)) {
+            let a: Antichain<u32> = v.iter().copied().collect();
+            let min = v.iter().copied().min().unwrap();
+            prop_assert_eq!(a.as_option().copied(), Some(min));
+        }
+
+        #[test]
+        fn insert_keeps_minimum(a in any::<u32>(), b in any::<u32>()) {
+            let mut ac = Antichain::from_elem(a);
+            let changed = ac.insert(b);
+            if b < a {
+                prop_assert!(changed);
+                prop_assert_eq!(ac.into_element(), b);
+            } else {
+                prop_assert!(!changed);
+                prop_assert_eq!(ac.into_element(), a);
+            }
+        }
+
+        #[test]
+        fn less_equal_element_matches_le(a in any::<u32>(), b in any::<u32>()) {
+            let ac = Antichain::from_elem(a);
+            prop_assert_eq!(ac.less_equal(&b), a <= b);
+            prop_assert_eq!(ac.less_than(&b), a < b);
+        }
+
+        #[test]
+        fn empty_is_neither_le_nor_lt_any_element(t in any::<u32>()) {
+            let empty: Antichain<u32> = Antichain::new();
+            prop_assert!(!empty.less_equal(&t));
+            prop_assert!(!empty.less_than(&t));
+        }
+
+        // ---- Lattice laws ----
+        #[test]
+        fn join_commutative(a in arb_antichain(), b in arb_antichain()) {
+            prop_assert_eq!(a.join(&b), b.join(&a));
+        }
+
+        #[test]
+        fn join_associative(a in arb_antichain(), b in arb_antichain(), c in arb_antichain()) {
+            prop_assert_eq!(a.join(&b).join(&c), a.join(&b.join(&c)));
+        }
+
+        #[test]
+        fn join_idempotent(a in arb_antichain()) {
+            prop_assert_eq!(a.join(&a), a.clone());
+        }
+
+        #[test]
+        fn meet_commutative(a in arb_antichain(), b in arb_antichain()) {
+            prop_assert_eq!(a.meet(&b), b.meet(&a));
+        }
+
+        #[test]
+        fn meet_associative(a in arb_antichain(), b in arb_antichain(), c in arb_antichain()) {
+            prop_assert_eq!(a.meet(&b).meet(&c), a.meet(&b.meet(&c)));
+        }
+
+        #[test]
+        fn meet_idempotent(a in arb_antichain()) {
+            prop_assert_eq!(a.meet(&a), a.clone());
+        }
+
+        #[test]
+        fn absorption(a in arb_antichain(), b in arb_antichain()) {
+            prop_assert_eq!(a.join(&a.meet(&b)), a.clone());
+            prop_assert_eq!(a.meet(&a.join(&b)), a.clone());
+        }
+
+        #[test]
+        fn empty_absorbs_join(a in arb_antichain()) {
+            let empty: Antichain<u32> = Antichain::new();
+            prop_assert_eq!(empty.join(&a), empty.clone());
+            prop_assert_eq!(a.join(&empty), empty);
+        }
+
+        #[test]
+        fn empty_is_identity_for_meet(a in arb_antichain()) {
+            let empty: Antichain<u32> = Antichain::new();
+            prop_assert_eq!(empty.meet(&a), a.clone());
+            prop_assert_eq!(a.meet(&empty), a);
+        }
+
+        #[test]
+        fn join_assign_matches_join(a in arb_antichain(), b in arb_antichain()) {
+            let joined = a.join(&b);
+            let mut a_mut = a.clone();
+            a_mut.join_assign(&b);
+            prop_assert_eq!(joined, a_mut);
+        }
+
+        #[test]
+        fn meet_assign_matches_meet(a in arb_antichain(), b in arb_antichain()) {
+            let met = a.meet(&b);
+            let mut a_mut = a.clone();
+            a_mut.meet_assign(&b);
+            prop_assert_eq!(met, a_mut);
+        }
+
+        // ---- Partial order semantics ----
+        #[test]
+        fn partial_order_reflexive(a in arb_antichain()) {
+            prop_assert!(FrontierPartialOrder::less_equal(&a, &a));
+            prop_assert!(!FrontierPartialOrder::less_than(&a, &a));
+        }
+
+        #[test]
+        fn partial_order_antisymmetric(a in arb_antichain(), b in arb_antichain()) {
+            if FrontierPartialOrder::less_equal(&a, &b)
+                && FrontierPartialOrder::less_equal(&b, &a)
+            {
+                prop_assert_eq!(a, b);
+            }
+        }
+
+        #[test]
+        fn partial_order_transitive(a in arb_antichain(), b in arb_antichain(), c in arb_antichain()) {
+            if FrontierPartialOrder::less_equal(&a, &b)
+                && FrontierPartialOrder::less_equal(&b, &c)
+            {
+                prop_assert!(FrontierPartialOrder::less_equal(&a, &c));
+            }
+        }
+
+        #[test]
+        fn join_is_lub(a in arb_antichain(), b in arb_antichain()) {
+            let j = a.join(&b);
+            prop_assert!(FrontierPartialOrder::less_equal(&a, &j));
+            prop_assert!(FrontierPartialOrder::less_equal(&b, &j));
+        }
+
+        #[test]
+        fn meet_is_glb(a in arb_antichain(), b in arb_antichain()) {
+            let m = a.meet(&b);
+            prop_assert!(FrontierPartialOrder::less_equal(&m, &a));
+            prop_assert!(FrontierPartialOrder::less_equal(&m, &b));
+        }
+
+        // ---- Serialization roundtrip ----
+        #[test]
+        fn serde_roundtrip(a in arb_antichain()) {
+            let bytes = bincode::serialize(&a).unwrap();
+            let back: Antichain<u32> = bincode::deserialize(&bytes).unwrap();
+            prop_assert_eq!(a, back);
+        }
+
+        // ---- Display ----
+        #[test]
+        fn display_format(a in arb_antichain()) {
+            let s = format!("{}", a);
+            match a.as_option() {
+                None => prop_assert_eq!(s, "{}"),
+                Some(t) => prop_assert_eq!(s, format!("{{{}}}", t)),
+            }
+        }
+
+        // ---- AntichainRef ----
+        #[test]
+        fn antichain_ref_roundtrip(a in arb_antichain()) {
+            let owned = a.borrow().to_owned();
+            prop_assert_eq!(a, owned);
+        }
+
+        // ---- MutableAntichain ----
+        #[test]
+        fn mutable_frontier_tracks_minimum_positive(updates in prop::collection::vec((any::<u32>(), -2i64..=2), 0..20)) {
+            let mut m: MutableAntichain<u32> = MutableAntichain::new();
+            m.update_iter(updates.iter().cloned());
+
+            // Compute the frontier semantically: minimum time with positive net count.
+            let mut counts: BTreeMap<u32, i64> = BTreeMap::new();
+            for (t, d) in &updates {
+                *counts.entry(*t).or_insert(0) += d;
+            }
+            let expected: Option<u32> = counts
+                .iter()
+                .filter(|(_, c)| **c > 0)
+                .map(|(t, _)| *t)
+                .min();
+
+            match expected {
+                None => prop_assert!(m.frontier().is_empty()),
+                Some(t) => prop_assert_eq!(m.frontier().first().copied(), Some(t)),
+            }
+        }
+
+        #[test]
+        fn mutable_refcount_cancels(t in any::<u32>()) {
+            let mut m = MutableAntichain::new();
+            m.update_iter([(t, 1)]);
+            prop_assert!(!m.is_empty());
+            m.update_iter([(t, -1)]);
+            prop_assert!(m.is_empty());
+        }
+
+        #[test]
+        fn mutable_count_for_matches(updates in prop::collection::vec((any::<u16>(), -2i64..=2), 0..20), query in any::<u16>()) {
+            let mut m: MutableAntichain<u16> = MutableAntichain::new();
+            m.update_iter(updates.iter().cloned());
+            let expected: i64 = updates.iter().filter(|(t, _)| *t == query).map(|(_, d)| *d).sum();
+            prop_assert_eq!(m.count_for(&query), expected);
+        }
+
+        #[test]
+        fn from_antichain_gives_refcount_one(a in arb_antichain()) {
+            let m: MutableAntichain<u32> = a.clone().into();
+            match a.as_option() {
+                None => prop_assert!(m.is_empty()),
+                Some(t) => prop_assert_eq!(m.frontier().first().copied(), Some(*t)),
+            }
+        }
+    }
+}

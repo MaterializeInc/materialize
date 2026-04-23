@@ -57,3 +57,63 @@ impl<T> ChangeBatch<T> {
 }
 
 impl<T> Default for ChangeBatch<T> { fn default() -> Self { Self::new() } }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use proptest::prelude::*;
+
+    use super::*;
+
+    proptest! {
+        #[test]
+        fn compact_sums_per_key(updates in prop::collection::vec((any::<u16>(), -4i64..=4), 0..30)) {
+            let mut batch = ChangeBatch::new();
+            for (t, d) in &updates {
+                batch.update(*t, *d);
+            }
+            let mut expected: BTreeMap<u16, i64> = BTreeMap::new();
+            for (t, d) in &updates {
+                *expected.entry(*t).or_insert(0) += d;
+            }
+            expected.retain(|_, v| *v != 0);
+
+            let compacted: Vec<(u16, i64)> = batch.drain().collect();
+            let got: BTreeMap<u16, i64> = compacted.into_iter().collect();
+            prop_assert_eq!(got, expected);
+        }
+
+        #[test]
+        fn compact_drops_zero_sum(t in any::<u16>(), a in -4i64..=4, b in -4i64..=4) {
+            let mut batch = ChangeBatch::new();
+            batch.update(t, a);
+            batch.update(t, b);
+            let n = batch.len();
+            if a + b == 0 {
+                prop_assert_eq!(n, 0);
+            } else {
+                prop_assert_eq!(n, 1);
+            }
+        }
+
+        #[test]
+        fn drain_into_merges(a in prop::collection::vec((any::<u16>(), -4i64..=4), 0..15),
+                             b in prop::collection::vec((any::<u16>(), -4i64..=4), 0..15)) {
+            let mut left = ChangeBatch::new();
+            for (t, d) in &a { left.update(*t, *d); }
+            let mut right = ChangeBatch::new();
+            for (t, d) in &b { right.update(*t, *d); }
+            left.drain_into(&mut right);
+            prop_assert!(left.is_empty());
+
+            let mut expected: BTreeMap<u16, i64> = BTreeMap::new();
+            for (t, d) in a.iter().chain(b.iter()) {
+                *expected.entry(*t).or_insert(0) += d;
+            }
+            expected.retain(|_, v| *v != 0);
+            let got: BTreeMap<u16, i64> = right.drain().collect();
+            prop_assert_eq!(got, expected);
+        }
+    }
+}
