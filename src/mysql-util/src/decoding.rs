@@ -30,9 +30,44 @@ pub fn pack_mysql_row(
     table_desc: &MySqlTableDesc,
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
-    let row_values = row.unwrap();
 
-    for values in table_desc.columns.iter().zip_longest(row_values) {
+    // If a column name begins with '@', then the binlog does not have full row metadata,
+    // meaning that full column names are not available and we need to rely on the order
+    // of the columns in the upstream table matching the order of the columns in the row.
+    // This is a fallback for MySQL servers that do not have `binlog_row_metadata` set to
+    // `FULL`. If the first column name does not begin with '@', then we can assume that
+    // full metadata is available and we can match columns by name.
+    let row_values: Vec<Value> = if row
+        .columns_ref()
+        .first()
+        .is_some_and(|col| col.name_ref().starts_with(b"@"))
+    {
+        row.unwrap()
+    } else {
+        row.columns_ref()
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| {
+                table_desc
+                    .columns
+                    .iter()
+                    .filter(|col| col.column_type.is_some())
+                    .any(|c| c.name.as_str() == col.name_str())
+            })
+            .map(|(i, _)| {
+                row.as_ref(i)
+                    .expect("Can't unwrap row if some of columns was taken")
+                    .clone()
+            })
+            .collect()
+    };
+
+    for values in table_desc
+        .columns
+        .iter()
+        .filter(|col| col.column_type.is_some())
+        .zip_longest(row_values)
+    {
         let (col_desc, value) = match values {
             EitherOrBoth::Both(col_desc, value) => (col_desc, value),
             EitherOrBoth::Left(col_desc) => {
