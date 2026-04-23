@@ -2687,7 +2687,7 @@ pub enum EvalError {
     OutOfDomain(DomainLimit, DomainLimit, Box<str>),
     ComplexOutOfRange(Box<str>),
     MultipleRowsFromSubquery,
-    NegativeRowsFromSubquery,
+    MultiplicityError(MultiplicityError),
     Undefined(Box<str>),
     LikePatternTooLong,
     LikeEscapeTooLong,
@@ -2873,9 +2873,7 @@ impl fmt::Display for EvalError {
             EvalError::MultipleRowsFromSubquery => {
                 write!(f, "more than one record produced in subquery")
             }
-            EvalError::NegativeRowsFromSubquery => {
-                write!(f, "negative number of rows produced in subquery")
-            }
+            EvalError::MultiplicityError(err) => err.fmt(f),
             EvalError::Undefined(s) => {
                 write!(f, "{} is undefined", s)
             }
@@ -3039,6 +3037,115 @@ impl From<InvalidRangeError> for EvalError {
     }
 }
 
+/// An error indicating that a dataflow operator (or a peek result, or ...)
+/// observed a record multiplicity that is incompatible with the operator
+/// evaluating it. Typically caused by a Materialize source containing
+/// invalid data, or by incorrect usage of the `repeat_row` table function.
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub struct MultiplicityError {
+    pub kind: MultiplicityErrorKind,
+    /// Short identifier for where the error was detected, e.g. "DistinctBy",
+    /// "ReduceMinsMaxes", "index peek", "persist peek", "S3 oneshot sink",
+    /// "constant result", "scalar subquery".
+    pub code_place: Box<str>,
+    /// Optional per-site diagnostic (key, value, count, accumulator, …).
+    /// Rendered after `". Details: "` when non-empty.
+    pub detail: Box<str>,
+}
+
+/// Describes why a [`MultiplicityError`] was raised.
+#[derive(
+    Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    Hash,
+    MzReflect
+)]
+pub enum MultiplicityErrorKind {
+    /// Saw a record with multiplicity < 0 where only non-negative was allowed.
+    Negative,
+    /// Saw a record with multiplicity <= 0 where only positive was allowed.
+    NonPositive,
+    /// Input to a monotonic operator contained a retraction.
+    NonMonotonicInput,
+    /// The running accumulator is inconsistent with the record count
+    /// (net-zero rows with non-zero sum, or unsigned sum went negative).
+    InconsistentAccumulator,
+}
+
+impl fmt::Display for MultiplicityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let problem = match self.kind {
+            MultiplicityErrorKind::Negative => "negative record multiplicity",
+            MultiplicityErrorKind::NonPositive => "non-positive record multiplicity",
+            MultiplicityErrorKind::NonMonotonicInput => "non-monotonic input",
+            MultiplicityErrorKind::InconsistentAccumulator => "inconsistent aggregate state",
+        };
+        write!(
+            f,
+            "{problem} in {code_place}; this usually indicates that a \
+             Materialize source contains invalid data (for example, \
+             retractions for rows that were never inserted). This can be \
+             caused either by a bug or misconfiguration in the external \
+             system feeding the source, or by a bug in Materialize. It \
+             can also occur due to incorrect usage of the repeat_row \
+             table function.",
+            code_place = self.code_place,
+        )?;
+        if !self.detail.is_empty() {
+            write!(f, " Details: {}", self.detail)?;
+        }
+        Ok(())
+    }
+}
+
+/// Shared static title for every [`MultiplicityError`], so all occurrences
+/// merge into a single Sentry group regardless of kind or site.
+pub const MULTIPLICITY_ERROR_TITLE: &str = "invalid record multiplicity";
+
+/// Log a [`MultiplicityError`] using the standard "static title + [customer-data]
+/// tagged details" contract, without needing an `ErrorLogger` instance.
+///
+/// Use this from call sites that don't have an `ErrorLogger` in scope (peek
+/// paths, S3 oneshot sink, constant-result fast path in the coordinator).
+/// Compute dataflow rendering code that has an `ErrorLogger` in scope should
+/// prefer `ErrorLogger::log_multiplicity_error`, which additionally attaches
+/// the dataflow name as a structured field.
+///
+/// `kind` and `code_place` are emitted as structured tracing fields.
+/// `detail` is emitted in the `[customer-data]`-tagged message body.
+pub fn log_multiplicity_error(err: &MultiplicityError) {
+    tracing::warn!(
+        kind = ?err.kind,
+        code_place = %err.code_place,
+        "[customer-data] {}: {}",
+        MULTIPLICITY_ERROR_TITLE,
+        err.detail,
+    );
+    // Note: simply `tracing::error!(MULTIPLICITY_ERROR_TITLE);` wouldn't work well, because it
+    // would surprisingly print as `MULTIPLICITY_ERROR_TITLE="invalid record multiplicity"`.
+    tracing::error!("{}", MULTIPLICITY_ERROR_TITLE);
+}
+
 impl RustType<ProtoEvalError> for EvalError {
     fn into_proto(&self) -> ProtoEvalError {
         use proto_eval_error::Kind::*;
@@ -3156,7 +3263,14 @@ impl RustType<ProtoEvalError> for EvalError {
             }),
             EvalError::ComplexOutOfRange(v) => ComplexOutOfRange(v.into_proto()),
             EvalError::MultipleRowsFromSubquery => MultipleRowsFromSubquery(()),
-            EvalError::NegativeRowsFromSubquery => NegativeRowsFromSubquery(()),
+            EvalError::MultiplicityError(err) => {
+                let kind: ProtoMultiplicityErrorKind = err.kind.into();
+                MultiplicityError(ProtoMultiplicityError {
+                    kind: i32::from(kind),
+                    code_place: err.code_place.clone().into(),
+                    detail: err.detail.clone().into(),
+                })
+            }
             EvalError::Undefined(v) => Undefined(v.into_proto()),
             EvalError::LikePatternTooLong => LikePatternTooLong(()),
             EvalError::LikeEscapeTooLong => LikeEscapeTooLong(()),
@@ -3291,7 +3405,31 @@ impl RustType<ProtoEvalError> for EvalError {
                 )),
                 ComplexOutOfRange(v) => Ok(EvalError::ComplexOutOfRange(v.into())),
                 MultipleRowsFromSubquery(()) => Ok(EvalError::MultipleRowsFromSubquery),
-                NegativeRowsFromSubquery(()) => Ok(EvalError::NegativeRowsFromSubquery),
+                // Read-compat: `EvalError::NegativeRowsFromSubquery` was
+                // removed in favor of `MultiplicityError`. Persisted error
+                // collections written before that change may still contain
+                // this variant. Map it onto the equivalent `MultiplicityError`.
+                // We never write this variant from `into_proto`.
+                NegativeRowsFromSubquery(()) => {
+                    Ok(EvalError::MultiplicityError(super::MultiplicityError {
+                        kind: super::MultiplicityErrorKind::Negative,
+                        code_place: "scalar subquery".into(),
+                        detail: "".into(),
+                    }))
+                }
+                MultiplicityError(v) => {
+                    let kind = proto_eval_error::ProtoMultiplicityErrorKind::try_from(v.kind)
+                        .map_err(|_| {
+                            TryFromProtoError::UnknownEnumVariant(
+                                "ProtoMultiplicityErrorKind".into(),
+                            )
+                        })?;
+                    Ok(EvalError::MultiplicityError(super::MultiplicityError {
+                        kind: kind.try_into()?,
+                        code_place: v.code_place.into(),
+                        detail: v.detail.into(),
+                    }))
+                }
                 Undefined(v) => Ok(EvalError::Undefined(v.into())),
                 LikePatternTooLong(()) => Ok(EvalError::LikePatternTooLong),
                 LikeEscapeTooLong(()) => Ok(EvalError::LikeEscapeTooLong),
@@ -3335,6 +3473,43 @@ impl RustType<ProtoEvalError> for EvalError {
                 RedactError(s) => Ok(EvalError::RedactError(s.into())),
             },
             None => Err(TryFromProtoError::missing_field("ProtoEvalError::kind")),
+        }
+    }
+}
+
+impl From<MultiplicityErrorKind> for proto_eval_error::ProtoMultiplicityErrorKind {
+    fn from(kind: MultiplicityErrorKind) -> Self {
+        use proto_eval_error::ProtoMultiplicityErrorKind as P;
+        match kind {
+            MultiplicityErrorKind::Negative => P::MultiplicityErrorKindNegative,
+            MultiplicityErrorKind::NonPositive => P::MultiplicityErrorKindNonPositive,
+            MultiplicityErrorKind::NonMonotonicInput => P::MultiplicityErrorKindNonMonotonicInput,
+            MultiplicityErrorKind::InconsistentAccumulator => {
+                P::MultiplicityErrorKindInconsistentAccumulator
+            }
+        }
+    }
+}
+
+impl TryFrom<proto_eval_error::ProtoMultiplicityErrorKind> for MultiplicityErrorKind {
+    type Error = TryFromProtoError;
+
+    fn try_from(
+        kind: proto_eval_error::ProtoMultiplicityErrorKind,
+    ) -> Result<Self, TryFromProtoError> {
+        use proto_eval_error::ProtoMultiplicityErrorKind as P;
+        match kind {
+            P::MultiplicityErrorKindUnspecified => Err(TryFromProtoError::UnknownEnumVariant(
+                "ProtoMultiplicityErrorKind::Unspecified".into(),
+            )),
+            P::MultiplicityErrorKindNegative => Ok(MultiplicityErrorKind::Negative),
+            P::MultiplicityErrorKindNonPositive => Ok(MultiplicityErrorKind::NonPositive),
+            P::MultiplicityErrorKindNonMonotonicInput => {
+                Ok(MultiplicityErrorKind::NonMonotonicInput)
+            }
+            P::MultiplicityErrorKindInconsistentAccumulator => {
+                Ok(MultiplicityErrorKind::InconsistentAccumulator)
+            }
         }
     }
 }

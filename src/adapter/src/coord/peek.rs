@@ -32,8 +32,8 @@ use mz_controller_types::ClusterId;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
 use mz_expr::{
-    EvalError, Id, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr, RowSetFinishing,
-    RowSetFinishingIncremental, permutation_for_arrangement,
+    EvalError, Id, MirRelationExpr, MirScalarExpr, MultiplicityErrorKind, OptimizedMirRelationExpr,
+    RowSetFinishing, RowSetFinishingIncremental, permutation_for_arrangement,
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
@@ -676,9 +676,11 @@ impl crate::coord::Coordinator {
             let mut results = Vec::new();
             for (row, count) in rows {
                 if count.is_negative() {
-                    Err(EvalError::InvalidParameterValue(
-                        format!("Negative multiplicity in constant result: {}", count).into(),
-                    ))?
+                    Err(EvalError::MultiplicityError(mz_expr::MultiplicityError {
+                        kind: MultiplicityErrorKind::Negative,
+                        code_place: "constant result".into(),
+                        detail: format!("count={}", count).into(),
+                    }))?
                 };
                 if count.is_positive() {
                     let count = usize::cast_from(

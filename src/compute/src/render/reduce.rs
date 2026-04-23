@@ -32,7 +32,8 @@ use mz_compute_types::plan::reduce::{
     ReducePlan, ReductionType, SingleBasicPlan, reduction_type,
 };
 use mz_expr::{
-    AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr, SafeMfpPlan,
+    AggregateExpr, AggregateFunc, EvalError, MapFilterProject, MirScalarExpr,
+    MultiplicityErrorKind, SafeMfpPlan,
 };
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
@@ -304,9 +305,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     if count.is_positive() {
                         continue;
                     }
-                    let message = "Non-positive multiplicity in DistinctBy";
-                    error_logger.log(message, &format!("row={key:?}, count={count}"));
-                    output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
+                    let err = mz_expr::MultiplicityError {
+                        kind: MultiplicityErrorKind::NonPositive,
+                        code_place: "DistinctBy".into(),
+                        detail: format!("row={key:?}, count={count}").into(),
+                    };
+                    error_logger.log_multiplicity_error(&err);
+                    output.push((EvalError::MultiplicityError(err).into(), Diff::ONE));
                     return;
                 }
                 // If `mfp_after` can error, then evaluate it here.
@@ -473,15 +478,15 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             if validating {
                 let (oks, errs) = self
                     .build_reduce_inaccumulable_distinct::<
-                        RowValBuilder<Result<(), String>, _, _>,
-                        RowValSpine<Result<(), String>, _, _>,
+                        RowValBuilder<Result<(), DataflowErrorSer>, _, _>,
+                        RowValSpine<Result<(), DataflowErrorSer>, _, _>,
                     >(keyed, None)
                     .as_collection(|k, v| {
                         (
                             k.to_row(),
                             v.as_ref()
                                 .map(|&()| ())
-                                .map_err(|m| m.as_str().into()),
+                                .map_err(|m| m.clone()),
                         )
                     })
                     .map_fallible::<
@@ -494,9 +499,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         "Demux Errors",
                         move |(key_val, result)| match result {
                             Ok(()) => Ok(pairer.split(&key_val)),
-                            Err(m) => {
-                                Err(EvalError::Internal(m).into())
-                            }
+                            Err(m) => Err(m),
                         },
                     );
                 err_output = Some(errs);
@@ -626,12 +629,16 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                         continue;
                                     }
                                     let value = value.to_row();
-                                    let message =
-                                        "Non-positive accumulation in ReduceInaccumulable";
-                                    error_logger
-                                        .log(message, &format!("value={value:?}, count={count}"));
-                                    let err = EvalError::Internal(message.into());
-                                    target.push((err.into(), Diff::ONE));
+                                    let err = mz_expr::MultiplicityError {
+                                        kind: MultiplicityErrorKind::NonPositive,
+                                        code_place: "ReduceInaccumulable".into(),
+                                        detail: format!("value={value:?}, count={count}").into(),
+                                    };
+                                    error_logger.log_multiplicity_error(&err);
+                                    target.push((
+                                        EvalError::MultiplicityError(err).into(),
+                                        Diff::ONE,
+                                    ));
                                     return;
                                 }
                             }
@@ -726,7 +733,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                 KeyContainer: BatchContainer<Owned = Row>,
                 Time = T,
                 Diff = Diff,
-                ValOwn: Data + MaybeValidatingRow<(), String>,
+                ValOwn: Data + MaybeValidatingRow<(), DataflowErrorSer>,
             > + 'static,
         Bu: Builder<
                 Time = T,
@@ -757,9 +764,16 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                             continue;
                         }
 
-                        let message = "Non-positive accumulation in ReduceInaccumulable DISTINCT";
-                        error_logger.log(message, &format!("value={value:?}, count={count}"));
-                        t.push((err(message.to_string()), Diff::ONE));
+                        let m_err = mz_expr::MultiplicityError {
+                            kind: MultiplicityErrorKind::NonPositive,
+                            code_place: "ReduceInaccumulable DISTINCT".into(),
+                            detail: format!("value={value:?}, count={count}").into(),
+                        };
+                        error_logger.log_multiplicity_error(&m_err);
+                        t.push((
+                            err(DataflowErrorSer::from(EvalError::MultiplicityError(m_err))),
+                            Diff::ONE,
+                        ));
                         return;
                     }
                 }
@@ -894,12 +908,14 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                             continue;
                                         }
                                         let val = val.to_row();
-                                        let message =
-                                            "Non-positive accumulation in ReduceMinsMaxes";
-                                        error_logger
-                                            .log(message, &format!("val={val:?}, count={count}"));
+                                        let err = mz_expr::MultiplicityError {
+                                            kind: MultiplicityErrorKind::NonPositive,
+                                            code_place: "ReduceMinsMaxes".into(),
+                                            detail: format!("val={val:?}, count={count}").into(),
+                                        };
+                                        error_logger.log_multiplicity_error(&err);
                                         target.push((
-                                            EvalError::Internal(message.into()).into(),
+                                            EvalError::MultiplicityError(err).into(),
                                             Diff::ONE,
                                         ));
                                         return;
@@ -1008,11 +1024,12 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         let mut hash_key_iter = hash_key.iter();
                         let _hash = hash_key_iter.next();
                         let key = SharedRow::pack(hash_key_iter);
-                        let message = format!(
-                            "Invalid data in source, saw non-positive accumulation \
-                                         for key {key:?} in hierarchical mins-maxes aggregate"
-                        );
-                        Err(EvalError::Internal(message.into()).into())
+                        Err(EvalError::MultiplicityError(mz_expr::MultiplicityError {
+                            kind: MultiplicityErrorKind::NonPositive,
+                            code_place: "hierarchical mins-maxes aggregate".into(),
+                            detail: format!("key={key:?}").into(),
+                        })
+                        .into())
                     }
                     Ok(values) => Ok((hash_key, values)),
                 },
@@ -1081,10 +1098,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         if count.is_positive() {
                             continue;
                         }
-                        error_logger.log(
-                            "Non-positive accumulation in MinsMaxesHierarchical",
-                            &format!("key={key:?}, value={value:?}, count={count}"),
-                        );
+                        error_logger.log_multiplicity_error(&mz_expr::MultiplicityError {
+                            kind: MultiplicityErrorKind::NonPositive,
+                            code_place: "MinsMaxesHierarchical".into(),
+                            detail: format!("key={key:?}, value={value:?}, count={count}").into(),
+                        });
                         // After complaining, output an error here so that we can eventually
                         // report it in an error stream.
                         target.push((
@@ -1160,12 +1178,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         // It should be now possible to ensure that we have a monotonic collection.
         let error_logger = self.error_logger();
         let (partial, validation_errs) = collection.ensure_monotonic(move |data, diff| {
-            error_logger.log(
-                "Non-monotonic input to ReduceMonotonic",
-                &format!("data={data:?}, diff={diff}"),
-            );
-            let m = "tried to build a monotonic reduction on non-monotonic input".into();
-            (EvalError::Internal(m).into(), Diff::ONE)
+            let err = mz_expr::MultiplicityError {
+                kind: MultiplicityErrorKind::NonMonotonicInput,
+                code_place: "ReduceMonotonic".into(),
+                detail: format!("data={data:?}, diff={diff}").into(),
+            };
+            error_logger.log_multiplicity_error(&err);
+            (EvalError::MultiplicityError(err).into(), Diff::ONE)
         });
         // We can place our rows directly into the diff field, and
         // only keep the relevant one corresponding to evaluating our
@@ -1407,33 +1426,39 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         // We first test here if inputs without net-positive records are present,
                         // producing an error to the logs and to the query output if that is the case.
                         if total == Diff::ZERO && !accum.is_zero() {
-                            error_logger.log(
-                                "Net-zero records with non-zero accumulation in ReduceAccumulable",
-                                &format!("aggr={aggr:?}, accum={accum:?}"),
-                            );
                             let key = key.to_row();
-                            let message = format!(
-                                "Invalid data in source, saw net-zero records for key {key} \
-                                 with non-zero accumulation in accumulable aggregate"
-                            );
-                            output.push((EvalError::Internal(message.into()).into(), Diff::ONE));
+                            let err = mz_expr::MultiplicityError {
+                                kind: MultiplicityErrorKind::InconsistentAccumulator,
+                                code_place: "ReduceAccumulable".into(),
+                                detail: format!(
+                                    "net-zero records with non-zero accumulation, \
+                                     key={key}, aggr={aggr:?}, accum={accum:?}"
+                                )
+                                .into(),
+                            };
+                            error_logger.log_multiplicity_error(&err);
+                            output.push((EvalError::MultiplicityError(err).into(), Diff::ONE));
                         }
                         match (&aggr.func, &accum) {
                             (AggregateFunc::SumUInt16, Accum::SimpleNumber { accum, .. })
                             | (AggregateFunc::SumUInt32, Accum::SimpleNumber { accum, .. })
                             | (AggregateFunc::SumUInt64, Accum::SimpleNumber { accum, .. }) => {
                                 if accum.is_negative() {
-                                    error_logger.log(
-                                    "Invalid negative unsigned aggregation in ReduceAccumulable",
-                                    &format!("aggr={aggr:?}, accum={accum:?}"),
-                                );
                                     let key = key.to_row();
-                                    let message = format!(
-                                        "Invalid data in source, saw negative accumulation with \
-                                         unsigned type for key {key}"
-                                    );
-                                    let err = EvalError::Internal(message.into());
-                                    output.push((err.into(), Diff::ONE));
+                                    let err = mz_expr::MultiplicityError {
+                                        kind: MultiplicityErrorKind::InconsistentAccumulator,
+                                        code_place: "ReduceAccumulable".into(),
+                                        detail: format!(
+                                            "negative accumulation with unsigned sum, \
+                                             key={key}, aggr={aggr:?}, accum={accum:?}"
+                                        )
+                                        .into(),
+                                    };
+                                    error_logger.log_multiplicity_error(&err);
+                                    output.push((
+                                        EvalError::MultiplicityError(err).into(),
+                                        Diff::ONE,
+                                    ));
                                 }
                             }
                             _ => (), // no more errors to check for at this point!
@@ -2215,9 +2240,16 @@ mod monoids {
                     }
                 }
                 (lhs, rhs) => {
-                    soft_panic_or_log!(
-                        "Mismatched monoid variants in reduction! lhs: {lhs:?} rhs: {rhs:?}"
+                    // `lhs`/`rhs` are `Row`s, which are customer data, so keep them
+                    // out of the panic/Sentry title and into a `[customer-data]`-tagged
+                    // breadcrumb. `mod monoids` has no access to an `ErrorLogger` here,
+                    // so we emit the warn line inline and keep the static title for
+                    // `soft_panic_or_log!`.
+                    tracing::warn!(
+                        "[customer-data] mismatched monoid variants in reduction \
+                         (lhs={lhs:?}, rhs={rhs:?})"
                     );
+                    soft_panic_or_log!("mismatched monoid variants in reduction");
                 }
             }
         }

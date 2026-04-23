@@ -668,12 +668,12 @@ def workflow_test_github_4433(c: Composition) -> None:
 
             # Run a query that would generate a panic before the fix.
             ! SELECT * FROM sum_and_max;
-            contains:Non-positive accumulation in ReduceMinsMaxes
+            contains:non-positive record multiplicity in ReduceMinsMaxes
             """))
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
-        assert "Non-positive accumulation in ReduceMinsMaxes" in c1.stdout
+        assert "invalid record multiplicity" in c1.stdout
 
 
 def workflow_test_github_4966(c: Composition) -> None:
@@ -727,7 +727,7 @@ def workflow_test_github_4966(c: Composition) -> None:
             # The query below would not fail previously, but now should produce
             # a SQL-level error that is observable by users.
             ! SELECT SUM(data) FROM data;
-            contains:Invalid data in source, saw net-zero records for key
+            contains:inconsistent aggregate state in ReduceAccumulable
 
             # It should be possible to fix the data in the source and make the error
             # go away.
@@ -739,10 +739,7 @@ def workflow_test_github_4966(c: Composition) -> None:
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
-        assert (
-            "Net-zero records with non-zero accumulation in ReduceAccumulable"
-            in c1.stdout
-        )
+        assert "invalid record multiplicity" in c1.stdout
 
 
 def workflow_test_github_5087(c: Composition) -> None:
@@ -810,10 +807,9 @@ def workflow_test_github_5087(c: Composition) -> None:
 
             # Run a queries that would generate panics before the fix.
             ! SELECT SUM(data2) FROM data;
-            contains:Invalid data in source, saw negative accumulation with unsigned type for key
-
+            contains:inconsistent aggregate state in ReduceAccumulable
             ! SELECT SUM(data4) FROM data;
-            contains:Invalid data in source, saw negative accumulation with unsigned type for key
+            contains:inconsistent aggregate state in ReduceAccumulable
 
             ! SELECT * FROM constant_sums;
             contains:constant folding encountered reduce on collection with non-positive multiplicities
@@ -822,7 +818,7 @@ def workflow_test_github_5087(c: Composition) -> None:
             # is now rectified, i.e., instead of wrapping to a negative number, we produce
             # an error upon seeing invalid multiplicities.
             ! SELECT SUM(data8) FROM data;
-            contains:Invalid data in source, saw negative accumulation with unsigned type for key
+            contains:inconsistent aggregate state in ReduceAccumulable
 
             # Test repairs
             > INSERT INTO base VALUES (1, 1, 1, 1), (1, 1, 1, 1);
@@ -886,7 +882,7 @@ def workflow_test_github_5087(c: Composition) -> None:
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
-        assert "Invalid negative unsigned aggregation in ReduceAccumulable" in c1.stdout
+        assert "invalid record multiplicity" in c1.stdout
 
 
 def workflow_test_github_5086(c: Composition) -> None:
@@ -954,10 +950,9 @@ def workflow_test_github_5086(c: Composition) -> None:
 
             # The query below would return a null previously, but now fails cleanly.
             ! SELECT * FROM max_data;
-            contains:Invalid data in source, saw non-positive accumulation for key
-
+            contains:non-positive record multiplicity in hierarchical mins-maxes aggregate
             ! SELECT * FROM max_group_by_data;
-            contains:Invalid data in source, saw non-positive accumulation for key
+            contains:non-positive record multiplicity in hierarchical mins-maxes aggregate
 
             # Repairing the error must be possible.
             > INSERT INTO base VALUES (1, 2), (2, 1);
@@ -972,7 +967,9 @@ def workflow_test_github_5086(c: Composition) -> None:
 
         # ensure that an error was put into the logs
         c1 = c.invoke("logs", "clusterd1", capture=True)
-        assert "Non-positive accumulation in MinsMaxesHierarchical" in c1.stdout
+        assert "invalid record multiplicity" in c1.stdout
+        # The old ERROR-level Sentry titles no longer appear; keep the negative assertion
+        # for the former `ReduceMinsMaxes` title to guard against regressions.
         assert "Negative accumulation in ReduceMinsMaxes" not in c1.stdout
 
 
