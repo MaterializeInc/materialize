@@ -18,8 +18,8 @@ use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
 use mz_catalog::durable::objects::{DurableType, IdAlloc};
 use mz_catalog::durable::{
-    CatalogError, DurableCatalogError, FenceError, Item, Metrics, TestCatalogStateBuilder,
-    USER_ITEM_ALLOC_KEY, test_bootstrap_args,
+    CatalogError, Database, DurableCatalogError, FenceError, Item, Metrics,
+    TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
 };
 use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
@@ -634,12 +634,107 @@ async fn test_persist_sync_consolidation_not_quadratic() {
         assert!(found, "database {db_name} not found in reader snapshot");
     }
 
-    // The key assertion: consolidation should happen once during the sync,
-    // NOT once per timestamp.
-    assert_eq!(
-        consolidations_during_sync, 1,
+    // The key assertion: consolidation should happen O(log N) times during
+    // the sync (from the doubling strategy), NOT once per timestamp (which
+    // would be num_timestamps = 100). We allow a generous bound here.
+    assert!(
+        consolidations_during_sync < 10,
         "sync through {num_timestamps} timestamps triggered {consolidations_during_sync} \
-         snapshot consolidations, suggesting quadratic behavior"
+         snapshot consolidations, suggesting quadratic behavior (expected < 10)"
+    );
+
+    Box::new(writer).expire().await;
+    Box::new(reader).expire().await;
+}
+
+/// Verify that the reader's snapshot stays bounded during sync catch-up, even
+/// when the writer churns the same object many times across timestamps. Without
+/// the doubling consolidation in `sync_inner`, the snapshot would grow with
+/// every retract+insert pair; with it, the snapshot stays within ~2x the live
+/// catalog size.
+#[mz_ore::test(tokio::test)]
+#[cfg_attr(miri, ignore)]
+async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
+    let persist_client = PersistClient::new_for_tests().await;
+    let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
+    let state_builder = TestCatalogStateBuilder::new(persist_client)
+        .with_default_deploy_generation()
+        .with_metrics(Arc::clone(&metrics));
+
+    // Open writer, create one database to churn.
+    let mut writer = state_builder
+        .clone()
+        .unwrap_build()
+        .await
+        .open(SYSTEM_TIME().into(), &test_bootstrap_args())
+        .await
+        .unwrap()
+        .0;
+    let _ = writer.sync_to_current_updates().await.unwrap();
+
+    let mut txn = writer.transaction().await.unwrap();
+    let (db_id, db_oid) = txn
+        .insert_user_database("churn_db", RoleId::User(1), Vec::new(), &HashSet::new())
+        .unwrap();
+    let _ = txn.get_and_commit_op_updates();
+    let commit_ts = txn.upper();
+    txn.commit(commit_ts).await.unwrap();
+
+    // Open reader, sync to current state.
+    let mut reader = state_builder
+        .unwrap_build()
+        .await
+        .open_read_only(&test_bootstrap_args())
+        .await
+        .unwrap();
+    let _ = reader.sync_to_current_updates().await.unwrap();
+    let peak_before = metrics.snapshot_max_entries.get();
+
+    // Rename the same database 200 times, each in its own transaction.
+    let num_renames: u64 = 200;
+    let mut db = Database {
+        id: db_id,
+        oid: db_oid,
+        name: "churn_db".to_string(),
+        owner_id: RoleId::User(1),
+        privileges: Vec::new(),
+    };
+    for i in 0..num_renames {
+        let mut txn = writer.transaction().await.unwrap();
+        db.name = format!("churn_db_{i}");
+        txn.update_database(db.id, db.clone()).unwrap();
+        let _ = txn.get_and_commit_op_updates();
+        let commit_ts = txn.upper();
+        txn.commit(commit_ts).await.unwrap();
+    }
+
+    // Reader syncs through all 200 renames.
+    let _ = reader.sync_to_current_updates().await.unwrap();
+
+    // Verify correctness: only one database, with the final name.
+    let snapshot = reader.snapshot().await.unwrap();
+    let churn_dbs: Vec<_> = snapshot
+        .databases
+        .values()
+        .filter(|d| d.name.starts_with("churn_db"))
+        .collect();
+    assert_eq!(churn_dbs.len(), 1, "{churn_dbs:#?}");
+    assert_eq!(churn_dbs[0].name, format!("churn_db_{}", num_renames - 1));
+
+    // The key assertion: the snapshot high-water mark should stay bounded,
+    // not grow proportionally to num_renames. The doubling consolidation
+    // keeps it within ~2x the live catalog size.
+    let peak_after = metrics.snapshot_max_entries.get();
+    let peak_delta = peak_after - peak_before;
+    // With doubling consolidation, the snapshot stays within ~2x the live
+    // catalog size. Without consolidation this would grow by ~387 for 200
+    // renames; with it, the delta should be much smaller.
+    let bounded = peak_before * 2;
+    assert!(
+        peak_delta < bounded,
+        "peak unconsolidated snapshot grew by {peak_delta} over {num_renames} \
+         renames (peak_before={peak_before}, peak_after={peak_after}); \
+         expected < {bounded}"
     );
 
     Box::new(writer).expire().await;
