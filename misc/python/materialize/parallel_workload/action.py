@@ -531,6 +531,7 @@ class CopyToS3Action(Action):
                 "timeout: error trying to connect",
                 "cannot represent decimal value",  # parquet limitation
                 "Cannot represent special numeric value",  # parquet limitation
+                "Arrow interval type MonthDayNano to parquet that is not yet implemented",  # arrow-rs limitation
             ]
         )
         if exe.db.complexity == Complexity.DDL:
