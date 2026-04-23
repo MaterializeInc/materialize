@@ -216,3 +216,15 @@ EXPLAIN LOCALLY OPTIMIZED PLAN FOR SUBSCRIBE t
 # Test error case: SUBSCRIBE on non-existent table
 statement error unknown catalog item 'nonexistent'
 EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE nonexistent
+
+statement ok
+BEGIN
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+
+statement ok
+EXPLAIN OPTIMIZED PLAN FOR SUBSCRIBE t
+
+statement ok
+COMMIT
