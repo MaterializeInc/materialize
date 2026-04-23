@@ -5320,7 +5320,8 @@ fn test_mcp_agent_with_data_product() {
             .unwrap();
 
         // Indexed regular view: cheap to query via the in-memory arrangement,
-        // should appear as a data product.
+        // should appear as a data product. Comment on the view (not the index)
+        // exercises the object-comment fallback path.
         super_user
             .batch_execute(
                 "CREATE VIEW test_indexed_view AS SELECT 2::int AS id, 'gadget'::text AS name",
@@ -5330,6 +5331,9 @@ fn test_mcp_agent_with_data_product() {
             .batch_execute(
                 "CREATE INDEX test_indexed_view_idx IN CLUSTER quickstart ON test_indexed_view (id)",
             )
+            .unwrap();
+        super_user
+            .batch_execute("COMMENT ON VIEW test_indexed_view IS 'View-level description'")
             .unwrap();
         super_user
             .batch_execute(&format!(
@@ -5353,10 +5357,16 @@ fn test_mcp_agent_with_data_product() {
             .unwrap();
 
         // Materialized view without an explicit index: bounded query cost
-        // (Persist-backed), should appear as a data product.
+        // (Persist-backed), should appear as a data product. Comment on the MV
+        // itself exercises the object-comment fallback path.
         super_user
             .batch_execute(
                 "CREATE MATERIALIZED VIEW test_unindexed_mv IN CLUSTER quickstart AS SELECT 4::int AS id, 'bolt'::text AS name",
+            )
+            .unwrap();
+        super_user
+            .batch_execute(
+                "COMMENT ON MATERIALIZED VIEW test_unindexed_mv IS 'MV-level description'",
             )
             .unwrap();
         super_user
@@ -5410,6 +5420,43 @@ fn test_mcp_agent_with_data_product() {
         !has_object("test_unindexed_view"),
         "non-indexed view must NOT appear as a data product"
     );
+
+    // Description fallback: index comment is preferred, object comment is used
+    // when no index comment exists.
+    let find_product = |needle: &str| -> &serde_json::Value {
+        products
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| {
+                p.as_array()
+                    .map(|arr| arr[0].as_str().unwrap_or("").contains(needle))
+                    .unwrap_or(false)
+            })
+            .unwrap_or_else(|| panic!("{needle} should exist as a data product"))
+    };
+    let description_of = |needle: &str| -> String {
+        find_product(needle).as_array().unwrap()[2]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    assert_eq!(
+        description_of("test_products"),
+        "A test data product for integration testing",
+        "indexed MV with an index comment should use the index comment"
+    );
+    assert_eq!(
+        description_of("test_indexed_view"),
+        "View-level description",
+        "indexed view without an index comment should fall back to the view comment"
+    );
+    assert_eq!(
+        description_of("test_unindexed_mv"),
+        "MV-level description",
+        "non-indexed MV should use its own comment as description"
+    );
+
     // Find our product
     let product = products
         .as_array()
@@ -5444,6 +5491,31 @@ fn test_mcp_agent_with_data_product() {
     assert_eq!(status, StatusCode::OK);
     assert!(body["result"]["content"][0]["text"].as_str().is_some());
     assert!(body["error"].is_null());
+
+    // get_data_product_details should also resolve the indexed view, proving
+    // the filter change is applied consistently to mz_mcp_data_product_details.
+    let indexed_view_name = find_product("test_indexed_view").as_array().unwrap()[0]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, body) = mcp_post(
+        &agents_url,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 20,
+            "method": "tools/call",
+            "params": {
+                "name": "get_data_product_details",
+                "arguments": {"name": indexed_view_name}
+            }
+        }),
+    );
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "indexed view should be resolvable via get_data_product_details, got: {body}"
+    );
+    assert!(body["result"]["content"][0]["text"].as_str().is_some());
 
     // read_data_product should return the row from the view.
     let (status, body) = mcp_post(
