@@ -113,7 +113,7 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3",
     "use-resize-observer": "^9.1.0",
-    "uuid": "^13.0.0",
+    "uuid": "^14.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
