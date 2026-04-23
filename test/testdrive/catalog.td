@@ -535,7 +535,6 @@ mz_role_auth                   ""
 mz_roles                       ""
 mz_role_parameters             ""
 mz_sinks                       ""
-mz_sources                     ""
 mz_ssh_tunnel_connections      ""
 mz_system_privileges           ""
 mz_tables                      ""
@@ -560,6 +559,7 @@ mz_databases        mz_catalog_server   ""
 mz_role_members     mz_catalog_server   ""
 mz_schemas          mz_catalog_server   ""
 mz_secrets          mz_catalog_server   ""
+mz_sources          mz_catalog_server   ""
 mz_materialized_views mz_catalog_server ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
@@ -630,6 +630,7 @@ name                                     comment
 ------------------------------------------------
 mz_activity_log_thinned                  ""
 mz_builtin_materialized_views            ""
+mz_builtin_sources                       ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""

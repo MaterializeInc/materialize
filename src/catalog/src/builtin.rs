@@ -2721,79 +2721,152 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
-pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_sources",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_SOURCES_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_column("name", SqlScalarType::String.nullable(false))
-        .with_column("type", SqlScalarType::String.nullable(false))
-        .with_column("connection_id", SqlScalarType::String.nullable(true))
-        .with_column("size", SqlScalarType::String.nullable(true))
-        .with_column("envelope_type", SqlScalarType::String.nullable(true))
-        .with_column("key_format", SqlScalarType::String.nullable(true))
-        .with_column("value_format", SqlScalarType::String.nullable(true))
-        .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_column(
-            "privileges",
-            SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
-        )
-        .with_column("create_sql", SqlScalarType::String.nullable(true))
-        .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
-        .with_key(vec![0])
-        .with_key(vec![1])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "Materialize's unique ID for the source."),
-        ("oid", "A PostgreSQL-compatible OID for the source."),
-        (
-            "schema_id",
-            "The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`.",
-        ),
-        ("name", "The name of the source."),
-        (
-            "type",
-            "The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.",
-        ),
-        (
-            "connection_id",
-            "The ID of the connection associated with the source, if any. Corresponds to `mz_connections.id`.",
-        ),
-        ("size", "*Deprecated* The size of the source."),
-        (
-            "envelope_type",
-            "For Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
-        ),
-        (
-            "key_format",
-            "For Kafka sources, the format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
-        ),
-        (
-            "value_format",
-            "For Kafka sources, the format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
-        ),
-        (
-            "cluster_id",
-            "The ID of the cluster maintaining the source. Corresponds to `mz_clusters.id`.",
-        ),
-        (
-            "owner_id",
-            "The role ID of the owner of the source. Corresponds to `mz_roles.id`.",
-        ),
-        ("privileges", "The privileges granted on the source."),
-        ("create_sql", "The `CREATE` SQL statement for the source."),
-        (
-            "redacted_create_sql",
-            "The redacted `CREATE` SQL statement for the source.",
-        ),
-    ]),
-    is_retained_metrics_object: true,
-    access: vec![PUBLIC_SELECT],
+
+pub static MZ_SOURCES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_sources",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_SOURCES_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("type", SqlScalarType::String.nullable(false))
+            .with_column("connection_id", SqlScalarType::String.nullable(true))
+            .with_column("size", SqlScalarType::String.nullable(true))
+            .with_column("envelope_type", SqlScalarType::String.nullable(true))
+            .with_column("key_format", SqlScalarType::String.nullable(true))
+            .with_column("value_format", SqlScalarType::String.nullable(true))
+            .with_column("cluster_id", SqlScalarType::String.nullable(true))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("create_sql", SqlScalarType::String.nullable(true))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "Materialize's unique ID for the source."),
+            ("oid", "A PostgreSQL-compatible OID for the source."),
+            (
+                "schema_id",
+                "The ID of the schema to which the source belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the source."),
+            (
+                "type",
+                "The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.",
+            ),
+            (
+                "connection_id",
+                "The ID of the connection associated with the source, if any. Corresponds to `mz_connections.id`.",
+            ),
+            ("size", "*Deprecated* The size of the source."),
+            (
+                "envelope_type",
+                "For Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
+            ),
+            (
+                "key_format",
+                "For Kafka sources, the format of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.",
+            ),
+            (
+                "value_format",
+                "For Kafka sources, the format of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.",
+            ),
+            (
+                "cluster_id",
+                "The ID of the cluster maintaining the source. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the source. Corresponds to `mz_roles.id`.",
+            ),
+            ("privileges", "The privileges granted on the source."),
+            ("create_sql", "The `CREATE` SQL statement for the source."),
+            (
+                "redacted_create_sql",
+                "The redacted `CREATE` SQL statement for the source.",
+            ),
+        ]),
+        sql: Box::leak(format!("
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL type,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL privileges
+) AS
+WITH
+    user_sources AS (
+        SELECT
+            mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+            (data->'value'->>'oid')::oid AS oid,
+            mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+            data->'value'->>'name' AS name,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'source_type' AS type,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'connection_id' AS connection_id,
+            NULL AS size,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'envelope_type' AS envelope_type,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'key_format' AS key_format,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'value_format' AS value_format,
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'cluster_id' AS cluster_id,
+            mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+            mz_internal.parse_catalog_privileges(data->'value'->'privileges') AS privileges,
+            data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+            mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'Item' AND
+            mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type' IN ('source', 'subsource')
+    ),
+    builtin_mappings AS (
+        SELECT
+            data->'key'->>'schema_name' AS schema_name,
+            data->'key'->>'object_name' AS name,
+            's' || (data->'value'->>'catalog_id') AS id
+        FROM mz_internal.mz_catalog_raw
+        WHERE
+            data->>'kind' = 'GidMapping' AND
+            data->'key'->>'object_type' = '2'
+    ),
+    builtin_sources AS (
+        SELECT
+            m.id,
+            src.oid,
+            s.id AS schema_id,
+            src.name,
+            src.type,
+            NULL AS connection_id,
+            NULL AS size,
+            NULL AS envelope_type,
+            NULL AS key_format,
+            NULL AS value_format,
+            NULL AS cluster_id,
+            '{MZ_SYSTEM_ROLE_ID}' AS owner_id,
+            src.privileges,
+            NULL AS create_sql,
+            NULL AS redacted_create_sql
+        FROM mz_internal.mz_builtin_sources src
+        JOIN builtin_mappings m USING (schema_name, name)
+        JOIN mz_schemas s ON s.name = src.schema_name
+        WHERE s.database_id IS NULL
+    )
+SELECT * FROM user_sources
+UNION ALL
+SELECT * FROM builtin_sources").into_boxed_str()),
+        is_retained_metrics_object: true,
+        access: vec![PUBLIC_SELECT],
+    }
 });
+
 pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
         name: "mz_sinks",
@@ -14382,7 +14455,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_INDEXES),
         Builtin::Table(&MZ_INDEX_COLUMNS),
         Builtin::Table(&MZ_TABLES),
-        Builtin::Table(&MZ_SOURCES),
+        Builtin::MaterializedView(&MZ_SOURCES),
         Builtin::Table(&MZ_SOURCE_REFERENCES),
         Builtin::Table(&MZ_POSTGRES_SOURCES),
         Builtin::Table(&MZ_POSTGRES_SOURCE_TABLES),
