@@ -7109,6 +7109,7 @@ dependencies = [
  "differential-dataflow",
  "fail",
  "futures-util",
+ "hmac",
  "itertools 0.14.0",
  "md-5",
  "mz-aws-util",

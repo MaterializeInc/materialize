@@ -11,6 +11,8 @@
 
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+#[cfg(test)]
+use std::time::Duration;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -24,11 +26,17 @@ use azure_storage_blob::models::{
 };
 use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
 use futures_util::{StreamExt, TryStreamExt};
+#[cfg(test)]
+use tracing::info;
 use url::Url;
+#[cfg(test)]
+use uuid::Uuid;
 
 use mz_dyncfg::ConfigSet;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
+#[cfg(test)]
+use mz_ore::metrics::MetricsRegistry;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
@@ -103,14 +111,21 @@ impl AzureBlobConfig {
         });
 
         let client = if account == AZURITE_ACCOUNT {
-            // Azurite test support is restored in a follow-up commit (it
-            // needs the new SDK's `Policy` trait to implement Shared Key
-            // signing, which the old SDK provided built-in).
-            let _ = (url, container);
-            return Err(Error::from(
-                "Azurite emulator temporarily unsupported; restored in the \
-                 Azurite shared-key follow-up commit",
-            ));
+            #[cfg(test)]
+            {
+                info!("Connecting to Azure emulator");
+                azurite::add_shared_key_policy(&mut options);
+                let container_url = azurite::container_url(&url, &container)?;
+                BlobContainerClient::from_url(container_url, None, Some(options))
+                    .map_err(|e| Error::from(format!("azure container client: {e}")))?
+            }
+            #[cfg(not(test))]
+            {
+                let _ = (url, container);
+                return Err(Error::from(
+                    "Azurite emulator is only supported in test builds",
+                ));
+            }
         } else {
             let endpoint = format!("https://{account}.blob.core.windows.net/");
             if let Some(sas) = url.query() {
@@ -139,13 +154,61 @@ impl AzureBlobConfig {
     }
 
     /// Returns a new [AzureBlobConfig] for use in unit tests.
-    ///
-    /// Stubbed for now: Azurite requires Shared Key signing, which is
-    /// restored in a follow-up commit. Returning `None` makes all
-    /// Azurite-dependent tests skip.
     #[cfg(test)]
     pub fn new_for_test() -> Result<Option<Self>, Error> {
-        Ok(None)
+        struct TestBlobKnobs;
+        impl Debug for TestBlobKnobs {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.debug_struct("TestBlobKnobs").finish_non_exhaustive()
+            }
+        }
+        impl BlobKnobs for TestBlobKnobs {
+            fn operation_timeout(&self) -> Duration {
+                Duration::from_secs(30)
+            }
+
+            fn operation_attempt_timeout(&self) -> Duration {
+                Duration::from_secs(10)
+            }
+
+            fn connect_timeout(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+
+            fn read_timeout(&self) -> Duration {
+                Duration::from_secs(5)
+            }
+
+            fn is_cc_active(&self) -> bool {
+                false
+            }
+        }
+
+        let container_name = match std::env::var(Self::EXTERNAL_TESTS_AZURE_CONTAINER) {
+            Ok(container) => container,
+            Err(_) => {
+                assert!(
+                    !mz_ore::env::is_var_truthy("CI"),
+                    "CI is supposed to run this test but something has gone wrong!"
+                );
+                return Ok(None);
+            }
+        };
+
+        let prefix = Uuid::new_v4().to_string();
+        let metrics = S3BlobMetrics::new(&MetricsRegistry::new());
+
+        let config = AzureBlobConfig::new(
+            AZURITE_ACCOUNT.to_string(),
+            container_name.clone(),
+            prefix,
+            metrics,
+            Url::parse(&format!("http://localhost:40111/{}", container_name)).expect("valid url"),
+            Box::new(TestBlobKnobs),
+            Arc::new(ConfigSet::default()),
+        )?;
+
+        Ok(Some(config))
     }
 }
 
@@ -176,11 +239,24 @@ impl Debug for AzureBlob {
 
 impl AzureBlob {
     /// Opens the given location for non-exclusive read-write access.
-    // `open` is intentionally `async`: the follow-up commit adds a
-    // `#[cfg(test)]` Azurite container-create call that awaits. The
-    // production path currently performs no awaits.
-    #[allow(clippy::unused_async)]
+    // `open` is async only for the `#[cfg(test)]` Azurite container-create
+    // call below; the production path performs no awaits.
+    #[cfg_attr(not(test), allow(clippy::unused_async))]
     pub async fn open(config: AzureBlobConfig) -> Result<Self, ExternalError> {
+        // In tests we may be pointed at a freshly-spun-up Azurite instance
+        // where the container hasn't been created yet.
+        #[cfg(test)]
+        {
+            if azurite::is_emulator_url(config.client.url()) {
+                if let Err(error) = config.client.create(None).await {
+                    info!(
+                        ?error,
+                        "failed to create emulator container; this is expected on repeat runs"
+                    );
+                }
+            }
+        }
+
         let ret = AzureBlob {
             metrics: config.metrics,
             client: config.client,
@@ -364,6 +440,9 @@ enum PreSizedBuffer {
     Sized(mz_ore::lgbytes::MetricsRegion<u8>),
     Unknown(SegmentedBytes),
 }
+
+#[cfg(test)]
+mod azurite;
 
 #[cfg(test)]
 mod tests {

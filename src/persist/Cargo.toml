@@ -78,6 +78,7 @@ workspace = true
 features = ["asm"]
 
 [dev-dependencies]
+hmac.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json.workspace = true
 tempfile.workspace = true
