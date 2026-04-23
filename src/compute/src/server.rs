@@ -29,6 +29,7 @@ use mz_ore::halt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
+use mz_storage_operators::persist::SharedBatches;
 use mz_storage_types::connections::ConnectionContext;
 use mz_txn_wal::operator::TxnsContext;
 use timely::progress::Antichain;
@@ -59,6 +60,8 @@ pub struct ComputeInstanceContext {
 struct Config {
     /// `persist` client cache.
     pub persist_clients: Arc<PersistClientCache>,
+    /// Shared persist batch state.
+    pub persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -83,6 +86,7 @@ pub async fn serve(
     context: ComputeInstanceContext,
 ) -> Result<impl Fn() -> Box<dyn ComputeClient> + use<>, Error> {
     let config = Config {
+        persist_batches: SharedBatches::new(),
         persist_clients,
         txns_ctx,
         tracing_handle,
@@ -214,6 +218,7 @@ struct Worker<'w> {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers
     persist_clients: Arc<PersistClientCache>,
+    persist_batches: SharedBatches,
     /// Context necessary for rendering txn-wal operators.
     txns_ctx: TxnsContext,
     /// A process-global handle to tracing configuration.
@@ -263,6 +268,7 @@ impl ClusterSpec for Config {
             metrics,
             context: self.context.clone(),
             persist_clients: Arc::clone(&self.persist_clients),
+            persist_batches: self.persist_batches.clone(),
             txns_ctx: self.txns_ctx.clone(),
             compute_state: None,
             tracing_handle: Arc::clone(&self.tracing_handle),
@@ -400,6 +406,7 @@ impl<'w> Worker<'w> {
             ComputeCommand::CreateInstance(_) => {
                 self.compute_state = Some(ComputeState::new(
                     Arc::clone(&self.persist_clients),
+                    self.persist_batches.clone(),
                     self.txns_ctx.clone(),
                     self.metrics.clone(),
                     Arc::clone(&self.tracing_handle),

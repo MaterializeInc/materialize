@@ -535,7 +535,7 @@ impl PersistClient {
     /// enough that we can reasonably chunk them up: O(KB) is definitely fine,
     /// O(MB) come talk to us.
     #[instrument(level = "debug", fields(shard = %shard_id))]
-    pub async fn batch_builder<K, V, T, D>(
+    pub fn batch_builder<K, V, T, D>(
         &self,
         shard_id: ShardId,
         write_schemas: Schemas<K, V>,

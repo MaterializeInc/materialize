@@ -134,6 +134,7 @@ use mz_persist_client::write::WriteHandle;
 use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_storage_operators::persist::{SharedBatchId, SharedBatches};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -254,6 +255,7 @@ where
 
     let persist_api = PersistApi {
         persist_clients: Arc::clone(&compute_state.persist_clients),
+        persist_batches: compute_state.persist_batches.clone(),
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
@@ -333,6 +335,7 @@ fn advance(frontier: &mut Antichain<Timestamp>, new: Antichain<Timestamp>) -> bo
 #[derive(Clone)]
 struct PersistApi {
     persist_clients: Arc<PersistClientCache>,
+    persist_batches: SharedBatches,
     collection: CollectionMetadata,
     shard_name: String,
     purpose: String,
@@ -423,6 +426,7 @@ struct BatchDescription {
     lower: Antichain<Timestamp>,
     upper: Antichain<Timestamp>,
     append_worker: usize,
+    shared_id: SharedBatchId,
 }
 
 impl BatchDescription {
@@ -432,6 +436,7 @@ impl BatchDescription {
             lower,
             upper,
             append_worker,
+            shared_id: SharedBatchId::new(),
         }
     }
 }
@@ -732,6 +737,11 @@ mod mint {
 /// Implementation of the `write` operator.
 mod write {
     use super::*;
+    use mz_persist_client::Schemas;
+
+    use mz_persist_types::ShardId;
+    use mz_persist_types::part::PartBuilder;
+    use mz_storage_operators::persist::SharedBatchBuilder;
 
     /// Render the `write` operator.
     ///
@@ -794,12 +804,21 @@ mod write {
             // need to hold onto the initial capabilities.
             drop(capabilities);
 
-            let writer = persist_api.open_writer().await;
+            let shard_id = persist_api.collection.data_shard;
+            let persist_client = persist_api.open_client().await;
+            let schemas = Schemas {
+                id: None,
+                key: Arc::new(persist_api.collection.relation_desc.clone()),
+                val: Arc::new(UnitSchema),
+            };
             let sink_metrics = persist_api.open_metrics().await;
             let mut state = State::new(
                 sink_id,
                 worker_id,
-                writer,
+                shard_id,
+                schemas,
+                persist_client,
+                persist_api.persist_batches.clone(),
                 sink_metrics,
                 logging,
                 as_of,
@@ -864,7 +883,7 @@ mod write {
                         match event {
                             Event::Data(cap, data) => {
                                 for desc in data {
-                                    state.absorb_batch_description(desc, cap.clone());
+                                    state.absorb_batch_description(desc, cap.clone()).await;
                                 }
                                 state.maybe_write_batch().await
                             }
@@ -888,7 +907,10 @@ mod write {
     struct State {
         sink_id: GlobalId,
         worker_id: usize,
-        persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        shard_id: ShardId,
+        schemas: Schemas<SourceData, ()>,
+        persist_client: PersistClient,
+        shared_writers: SharedBatches,
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
@@ -904,8 +926,8 @@ mod write {
         /// description might still be valid even if its `lower` is before the persist frontiers we
         /// observe.
         persist_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
-        /// The current valid batch description and associated output capability, if any.
-        batch_description: Option<(BatchDescription, Capability<Timestamp>)>,
+        /// The current valid batch description and associated state, if any.
+        batch_description: Option<(BatchDescription, Capability<Timestamp>, SharedBatchBuilder)>,
         /// A request to force a consolidation of `corrections` once both `desired_frontiers` and
         /// `persist_frontiers` become greater than the given frontier.
         ///
@@ -920,7 +942,10 @@ mod write {
         fn new(
             sink_id: GlobalId,
             worker_id: usize,
-            persist_writer: WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+            shard_id: ShardId,
+            schemas: Schemas<SourceData, ()>,
+            persist_client: PersistClient,
+            shared_writers: SharedBatches,
             metrics: SinkMetrics,
             logging: Option<Logging>,
             as_of: Antichain<Timestamp>,
@@ -935,7 +960,10 @@ mod write {
             let mut state = Self {
                 sink_id,
                 worker_id,
-                persist_writer,
+                persist_client,
+                shared_writers,
+                shard_id,
+                schemas,
                 corrections: OkErr::new(
                     Correction::new(
                         metrics.clone(),
@@ -973,7 +1001,7 @@ mod write {
                 worker = %self.worker_id,
                 desired_frontier = ?self.desired_frontiers.frontier().elements(),
                 persist_frontier = ?self.persist_frontiers.frontier().elements(),
-                batch_description = ?self.batch_description.as_ref().map(|(d, _)| d),
+                batch_description = ?self.batch_description.as_ref().map(|(d, _, _)| d),
                 message,
             );
         }
@@ -1043,7 +1071,11 @@ mod write {
             }
         }
 
-        fn absorb_batch_description(&mut self, desc: BatchDescription, cap: Capability<Timestamp>) {
+        async fn absorb_batch_description(
+            &mut self,
+            desc: BatchDescription,
+            cap: Capability<Timestamp>,
+        ) {
             // The incoming batch description is outdated if we already have a batch description
             // with a greater `lower`.
             //
@@ -1051,21 +1083,35 @@ mod write {
             // `lower` with the `persist_frontier`. The persist frontier observed by the `write`
             // operator is initialized with the shard's read frontier, so it can be greater than
             // the shard's write frontier.
-            if let Some((prev, _)) = &self.batch_description {
+            if let Some((prev, _, _)) = &self.batch_description {
                 if PartialOrder::less_than(&desc.lower, &prev.lower) {
                     self.trace(format!("skipping outdated batch description: {desc:?}"));
                     return;
                 }
             }
 
-            self.batch_description = Some((desc, cap));
+            // To avoid leaking batches, wait for any pending write to finish and then drop the batch.
+            if let Some((_, _, batch)) = self.batch_description.take() {
+                if let Some(batch) = batch.finish().await {
+                    batch.delete().await;
+                }
+            }
+            let shared_writer = self.shared_writers.builder(
+                desc.shared_id,
+                self.persist_client.clone(),
+                self.shard_id,
+                self.schemas.clone(),
+                desc.lower.clone(),
+                desc.upper.clone(),
+            );
+            self.batch_description = Some((desc, cap, shared_writer));
             self.trace("set batch description");
         }
 
         async fn maybe_write_batch(
             &mut self,
         ) -> Option<(BatchDescription, ProtoBatch, Capability<Timestamp>)> {
-            let (desc, _cap) = self.batch_description.as_ref()?;
+            let (desc, _cap, _batch) = self.batch_description.as_ref()?;
 
             // We can write a new batch if we have seen all `persist` updates before `lower` and
             // all `desired` updates up to `upper`.
@@ -1077,31 +1123,31 @@ mod write {
                 return None;
             }
 
-            let (desc, cap) = self.batch_description.take()?;
+            let (desc, cap, batch) = self.batch_description.take()?;
 
             let ok_updates = self.corrections.ok.updates_before(&desc.upper);
             let err_updates = self.corrections.err.updates_before(&desc.upper);
 
             let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
             let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r.into_inner()));
-            let mut updates = oks.chain(errs).peekable();
+            let updates = oks.chain(errs);
 
-            // Don't write empty batches.
-            if updates.peek().is_none() {
-                drop(updates);
-                self.trace("skipping empty batch");
-                return None;
+            let mut builder = PartBuilder::new(&*self.schemas.key, &*self.schemas.val);
+            for ((k, v), t, d) in updates {
+                builder.push(&k, &v, t, d);
+                if builder.len() >= 1000 {
+                    let part = builder.finish_and_replace(&*self.schemas.key, &*self.schemas.val);
+                    batch.push(part).await;
+                }
             }
-
-            let batch = self
-                .persist_writer
-                .batch(updates, desc.lower.clone(), desc.upper.clone())
-                .await
-                .expect("valid usage")
-                .into_transmittable_batch();
+            let part = builder.finish();
+            batch.push(part).await;
+            // We must finish this batch even if we didn't write any data, since we may end up
+            // being assigned the shared batch.
+            let batch = batch.finish().await?;
 
             self.trace("wrote a batch");
-            Some((desc, batch, cap))
+            Some((desc, batch.into_transmittable_batch(), cap))
         }
     }
 }
