@@ -1027,7 +1027,12 @@ impl ArrowColumn {
                 struct_builder.append(true);
             }
             (ColBuilder::IntervalMonthDayNanoBuilder(builder), Datum::Interval(iv)) => {
-                let nanos = iv.micros * 1_000;
+                let nanos = iv.micros.checked_mul(1_000).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "interval microseconds {} overflow i64 nanoseconds",
+                        iv.micros
+                    )
+                })?;
                 builder.append_value(arrow::datatypes::IntervalMonthDayNano::new(
                     iv.months, iv.days, nanos,
                 ));
