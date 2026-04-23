@@ -865,12 +865,17 @@ impl<S> tracing_subscriber::layer::Filter<S> for OpenTelemetryRateLimitingFilter
 where
     S: tracing::Subscriber + for<'lookup> LookupSpan<'lookup>,
 {
+    // NB: `enabled` must stay non-mutating. tracing-subscriber calls both `enabled`
+    // and then `event_enabled` for every event; if `should_log` ran in both, the
+    // first call would insert the callsite into `last_logged` and the second would
+    // see it within the backoff window and suppress — dropping every OpenTelemetry
+    // event, including the first.
     fn enabled(
         &self,
-        metadata: &tracing::Metadata<'_>,
+        _metadata: &tracing::Metadata<'_>,
         _ctx: &tracing_subscriber::layer::Context<'_, S>,
     ) -> bool {
-        self.should_log(metadata)
+        true
     }
 
     fn event_enabled(
