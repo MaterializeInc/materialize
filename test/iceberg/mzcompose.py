@@ -262,3 +262,16 @@ def workflow_commit_conflict(c: Composition) -> None:
         "--var=aws-endpoint=minio:9000",
         "commit-conflict-verify.td",
     )
+
+
+def workflow_large_upsert_batch(c: Composition) -> None:
+    """Regression test for database-issues#11326: DeltaWriter seen_rows
+    eviction caused equality deletes within the same snapshot, which
+    have no effect — leaving duplicate rows in the committed table."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "large-upsert-batch.td",
+    )

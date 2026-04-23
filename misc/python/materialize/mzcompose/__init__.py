@@ -73,6 +73,7 @@ def get_minimal_system_parameters(
         "enable_alter_swap": "true",
         "enable_case_literal_transform": "true",
         "enable_cast_elimination": "true",
+        "enable_coalesce_case_transform": "true",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
@@ -200,6 +201,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_case_literal_transform",
             "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_coalesce_case_transform",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(

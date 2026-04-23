@@ -55,7 +55,7 @@ where
             .build_https()
             .expect("failed to create HTTPS transport");
 
-        let mut data_source = ld::PollingDataSourceBuilder::new();
+        let mut data_source = ld::StreamingDataSourceBuilder::new();
         data_source.transport(transport.clone());
 
         let mut event_processor = ld::EventProcessorBuilder::new();

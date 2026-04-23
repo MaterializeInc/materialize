@@ -113,7 +113,7 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.6.3",
     "use-resize-observer": "^9.1.0",
-    "uuid": "^13.0.0",
+    "uuid": "^14.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
@@ -161,7 +161,7 @@
     "eslint-plugin-simple-import-sort": "^12.1.1",
     "eslint-plugin-unicorn": "^56.0.0",
     "extract-zip": "^2.0.1",
-    "fast-xml-parser": "^5.5.7",
+    "fast-xml-parser": "^5.7.0",
     "intersection-observer": "^0.12.2",
     "jotai-devtools": "^0.10.1",
     "jsdom": "^25.0.1",

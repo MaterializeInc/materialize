@@ -9,14 +9,14 @@
 # Source License, use of this software will be governed by the Apache License,
 # Version 2.0.
 #
-# gen-claude-skill -- Generate a Claude Code skill bundle from the
+# gen-claude-skill -- Generate a shared agent skill bundle from the
 # documentation.
 #
 # Usage: bin/gen-claude-skill [OUTPUT_DIR]
 #
 # Arguments: OUTPUT_DIR  Directory to output the skill files. The OUTPUT_DIR
 #   directory is cleaned before generation.
-#   Default: .claude/skills/materialize-docs.
+#   Default: .agents/skills/materialize-docs.
 #   For publishing to the website,
 #   we will output to doc/user/public/markdown-docs directory.
 #
@@ -30,12 +30,12 @@ cd "$(dirname "$0")/.."
 
 # For publishing to the website, we will output to doc/user/public/markdown-docs
 # directory. The OUTPUT_DIR directory is cleaned before generation.
-OUTPUT_DIR="${1:-.claude/skills/materialize-docs}"
+OUTPUT_DIR="${1:-.agents/skills/materialize-docs}"
 
 # Ensure output directory exists
 mkdir -p "$OUTPUT_DIR"
 
-echo "Generating Claude skill from documentation..."
+echo "Generating agent skill from documentation..."
 echo "Output directory: $OUTPUT_DIR"
 
 # Build documentation with skill output format
@@ -49,7 +49,7 @@ hugo --config config.toml,config.skill.toml \
 
 cd ../..
 
-# Rename the home page to SKILL.md (Claude skill convention)
+# Rename the home page to SKILL.md (shared skill convention)
 if [[ -f "$OUTPUT_DIR/index.md" ]]; then
     mv "$OUTPUT_DIR/index.md" "$OUTPUT_DIR/SKILL.md"
 fi

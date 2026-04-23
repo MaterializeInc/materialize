@@ -15,7 +15,7 @@
 //! use mz_expr::{MirRelationExpr, MirScalarExpr};
 //! use mz_repr::{ReprColumnType, ReprRelationType, ReprScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
-//! use mz_transform::{reprtypecheck, Transform, TransformCtx};
+//! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::fusion::filter::Filter;
@@ -38,7 +38,7 @@
 //!     .filter(vec![predicate2.clone()]);
 //!
 //! let features = OptimizerFeatures::default();
-//! let typecheck_ctx = reprtypecheck::empty_context();
+//! let typecheck_ctx = typecheck::empty_typechecking_context();
 //! let mut df_meta = DataflowMetainfo::default();
 //! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!

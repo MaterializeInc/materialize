@@ -828,6 +828,8 @@ impl Type {
             &postgres_types::Type::VARCHAR_ARRAY => "character varying[]",
             &postgres_types::Type::BOOL => "boolean",
             &postgres_types::Type::BPCHAR => "character",
+            &postgres_types::Type::CHAR => "\"char\"",
+            &postgres_types::Type::CHAR_ARRAY => "\"char\"[]",
             &postgres_types::Type::FLOAT4 => "real",
             &postgres_types::Type::FLOAT8 => "double precision",
             &postgres_types::Type::INT2 => "smallint",

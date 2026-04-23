@@ -854,6 +854,9 @@ mod scalar {
                 } else if input.eat(kw::OR) {
                     exp_opd = true;
                     Op::Var(VariadicFunc::Or(func::variadic::Or))
+                } else if input.eat(kw::coalesce) {
+                    exp_opd = true;
+                    Op::Var(VariadicFunc::Coalesce(func::variadic::Coalesce))
                 } else if input.eat(kw::IS) {
                     let negate = input.eat(kw::NOT);
 
@@ -1172,6 +1175,7 @@ mod scalar {
             "ltrim" => parse_binary(func::TrimLeading.into()),
             // Supported variadic functions:
             "greatest" => parse_variadic(VariadicFunc::Greatest(func::variadic::Greatest)),
+            "coalesce" => parse_variadic(VariadicFunc::Coalesce(func::variadic::Coalesce)),
             _ => Err(Error::new(ident.span(), "unsupported function name")),
         }
     }
@@ -1639,6 +1643,7 @@ mod kw {
     syn::custom_keyword!(asc);
     // case when ... then ... else ... end
     syn::custom_keyword!(case);
+    syn::custom_keyword!(coalesce);
     syn::custom_keyword!(Constant);
     syn::custom_keyword!(CrossJoin);
     syn::custom_keyword!(cte);

@@ -204,7 +204,7 @@ fn ld_config(api_key: &str, metrics: &Metrics, now_fn: &NowFn) -> ld::Config {
     let mut event_processor = ld::EventProcessorBuilder::new();
     event_processor.transport(cse_transport);
 
-    let mut data_source = ld::PollingDataSourceBuilder::new();
+    let mut data_source = ld::StreamingDataSourceBuilder::new();
     data_source.transport(data_source_transport);
 
     ld::ConfigBuilder::new(api_key)
