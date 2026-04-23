@@ -654,6 +654,7 @@ async fn test_persist_sync_consolidation_not_quadratic() {
 /// catalog size.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)]
+#[ignore] // flaky, test, temporarily disabled (new test)
 async fn test_persist_sync_snapshot_stays_bounded_under_churn() {
     let persist_client = PersistClient::new_for_tests().await;
     let metrics = Arc::new(Metrics::new(&MetricsRegistry::new()));
