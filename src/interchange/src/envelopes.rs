@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor};
-use itertools::{Either, EitherOrBoth};
+use itertools::EitherOrBoth;
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
 use mz_repr::{
@@ -68,18 +68,12 @@ where
         befores.sort_by_key(|(t, _v, _diff)| *t);
         afters.sort_by_key(|(t, _v, _diff)| *t);
 
-        // Fan `(time, val, count)` out to `count` copies of `(time, val)`.
-        // `iter::repeat(x).take(n)` clones on every `next()` — including the
-        // first — so using it with `count == 1` (the snapshot common case)
-        // does a gratuitous clone. `iter::once` moves the value; we only
-        // fall back to `iter::repeat` when fan-out is actually needed.
-        let fan_out = |(t, v, cnt): (B::Time, B::ValOwn, usize)| {
-            if cnt == 1 {
-                Either::Left(iter::once((t, v)))
-            } else {
-                Either::Right(iter::repeat((t, v)).take(cnt))
-            }
-        };
+        // The use of `repeat_n()` here is a bit subtle, but load bearing.
+        // In the common case, cnt = 1, and we want to avoid cloning the value if possible. In the naive
+        // implementation, we might use `iter::repeat((t, v)).take(cnt)`, but that would clone `v` `cnt` times even
+        // when `cnt = 1`. By contrast, `repeat_n((t, v), cnt)` will return the original `(t, v)` when `cnt = 1`,
+        // and only clone when `cnt > 1`.
+        let fan_out = |(t, v, cnt): (B::Time, B::ValOwn, usize)| iter::repeat_n((t, v), cnt);
         let befores_iter = befores.drain(..).flat_map(fan_out);
         let afters_iter = afters.drain(..).flat_map(fan_out);
 

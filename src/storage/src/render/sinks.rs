@@ -12,7 +12,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use differential_dataflow::operators::arrange::{Arrange, TraceAgent};
+use differential_dataflow::operators::arrange::{Arrange, Arranged, TraceAgent};
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::trace::implementations::ord_neu::{
     OrdValBatcher, OrdValSpine, RcOrdValBuilder,
@@ -148,8 +148,8 @@ fn arrange_sink_input<'scope>(
     // Allow access to `arrange_named` because we cannot access Mz's wrapper
     // from here. TODO(database-issues#5046): Revisit with cluster unification.
     #[allow(clippy::disallowed_methods)]
-    let arranged = keyed.arrange_named::<OrdValBatcher<_, _, _, _>, RcOrdValBuilder<_, _, _, _>, OrdValSpine<_, _, _, _>>("Arrange Sink");
-    arranged.stream
+    let Arranged {stream, trace: _} = keyed.arrange_named::<OrdValBatcher<_, _, _, _>, RcOrdValBuilder<_, _, _, _>, OrdValSpine<_, _, _, _>>("Arrange Sink");
+    stream
 }
 
 /// Rate-limited detector for primary-key uniqueness violations as a sink's
