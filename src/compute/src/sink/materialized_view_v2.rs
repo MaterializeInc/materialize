@@ -447,17 +447,55 @@ mod write {
 
     /// Commands sent from the Timely operator to the Tokio write task.
     enum WriteCommand {
-        /// Forward desired updates to the corrections buffer.
-        Desired(Result<Vec<(Row, Timestamp, Diff)>, Vec<(DataflowError, Timestamp, Diff)>>),
-        /// Forward persist updates (negated) to the corrections buffer.
-        Persist(Result<Vec<(Row, Timestamp, Diff)>, Vec<(DataflowError, Timestamp, Diff)>>),
-        /// The persist frontier advanced. Used for `advance_since` and consolidation.
-        PersistFrontier(Antichain<Timestamp>),
-        /// Force a consolidation of the corrections buffer.
-        ForceConsolidation,
+        /// A coalesced batch of work gathered during a single operator activation.
+        ///
+        /// The Timely closure accumulates all updates observed across the four data inputs plus
+        /// any frontier advancement and forced-consolidation flag, and sends a single
+        /// `WriteCommand::Batch` per activation. This keeps the channel overhead independent of
+        /// the number of Timely chunks processed per activation.
+        Batch(BatchUpdates),
         /// Write a batch with the given description. The task drains corrections and writes
         /// them to persist.
         WriteBatch(BatchDescription),
+    }
+
+    /// The payload of a coalesced [`WriteCommand::Batch`].
+    struct BatchUpdates {
+        /// Positive contributions from the `desired` ok input.
+        desired_ok: Vec<(Row, Timestamp, Diff)>,
+        /// Positive contributions from the `desired` err input.
+        desired_err: Vec<(DataflowError, Timestamp, Diff)>,
+        /// Negative contributions from the `persist` ok input.
+        persist_ok: Vec<(Row, Timestamp, Diff)>,
+        /// Negative contributions from the `persist` err input.
+        persist_err: Vec<(DataflowError, Timestamp, Diff)>,
+        /// The new persist frontier, if it advanced this activation.
+        persist_frontier: Option<Antichain<Timestamp>>,
+        /// Whether a consolidation of the corrections buffer should be forced.
+        force_consolidation: bool,
+    }
+
+    impl BatchUpdates {
+        fn new() -> Self {
+            Self {
+                desired_ok: Vec::new(),
+                desired_err: Vec::new(),
+                persist_ok: Vec::new(),
+                persist_err: Vec::new(),
+                persist_frontier: None,
+                force_consolidation: false,
+            }
+        }
+
+        /// Returns true if there is no work in this batch.
+        fn is_empty(&self) -> bool {
+            self.desired_ok.is_empty()
+                && self.desired_err.is_empty()
+                && self.persist_ok.is_empty()
+                && self.persist_err.is_empty()
+                && self.persist_frontier.is_none()
+                && !self.force_consolidation
+        }
     }
 
     /// A response from the Tokio write task back to the Timely operator.
@@ -600,26 +638,21 @@ mod write {
                 if let Some(logger) = &mut correction_logger {
                     logger.apply_events();
                 }
-                // Drain all inputs and forward data to the Tokio task.
+                // Coalesce all work from this activation into a single command. This keeps
+                // per-chunk channel overhead low, which matters for hydration when many small
+                // Timely chunks arrive in a single activation sweep.
+                let mut batch = BatchUpdates::new();
                 desired_ok_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Desired(Ok(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
+                    batch.desired_ok.append(data);
                 });
                 desired_err_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Desired(Err(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
+                    batch.desired_err.append(data);
                 });
                 persist_ok_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Persist(Ok(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
+                    batch.persist_ok.append(data);
                 });
                 persist_err_input.for_each(|_cap, data| {
-                    cmd_tx
-                        .send(WriteCommand::Persist(Err(std::mem::take(data))))
-                        .expect("write task unexpectedly gone");
+                    batch.persist_err.append(data);
                 });
 
                 // Accept batch descriptions.
@@ -630,21 +663,22 @@ mod write {
                     }
                 });
 
-                // Track frontiers. Send persist frontier to Tokio task for advance_since.
+                // Track frontiers. Include the new persist frontier in the coalesced batch for
+                // `advance_since`.
                 state.advance_desired_ok_frontier(frontiers[0].frontier());
                 state.advance_desired_err_frontier(frontiers[1].frontier());
                 if state.advance_persist_ok_frontier(frontiers[2].frontier())
                     | state.advance_persist_err_frontier(frontiers[3].frontier())
                 {
-                    cmd_tx
-                        .send(WriteCommand::PersistFrontier(
-                            state.persist_frontiers.frontier().to_owned(),
-                        ))
-                        .expect("write task unexpectedly gone");
+                    batch.persist_frontier = Some(state.persist_frontiers.frontier().to_owned());
                 }
                 if state.should_force_consolidation() {
+                    batch.force_consolidation = true;
+                }
+
+                if !batch.is_empty() {
                     cmd_tx
-                        .send(WriteCommand::ForceConsolidation)
+                        .send(WriteCommand::Batch(batch))
                         .expect("write task unexpectedly gone");
                 }
 
@@ -693,27 +727,32 @@ mod write {
         resp_tx: &mpsc::UnboundedSender<WriteResponse>,
     ) {
         match cmd {
-            WriteCommand::Desired(Ok(mut updates)) => {
-                corrections.ok.insert(&mut updates);
-            }
-            WriteCommand::Desired(Err(mut updates)) => {
-                corrections.err.insert(&mut updates);
-            }
-            WriteCommand::Persist(Ok(mut updates)) => {
-                corrections.ok.insert_negated(&mut updates);
-            }
-            WriteCommand::Persist(Err(mut updates)) => {
-                corrections.err.insert_negated(&mut updates);
-            }
-            WriteCommand::PersistFrontier(frontier) => {
-                // We will only emit times at or after the `persist` frontier, so now is a good
-                // time to advance the times of stashed updates.
-                corrections.ok.advance_since(frontier.clone());
-                corrections.err.advance_since(frontier);
-            }
-            WriteCommand::ForceConsolidation => {
-                corrections.ok.consolidate_at_since();
-                corrections.err.consolidate_at_since();
+            WriteCommand::Batch(mut batch) => {
+                // Apply the same logical sequence of operations that the per-chunk commands
+                // used to: positive desired inserts, negated persist inserts, then optional
+                // frontier advancement and forced consolidation.
+                if !batch.desired_ok.is_empty() {
+                    corrections.ok.insert(&mut batch.desired_ok);
+                }
+                if !batch.desired_err.is_empty() {
+                    corrections.err.insert(&mut batch.desired_err);
+                }
+                if !batch.persist_ok.is_empty() {
+                    corrections.ok.insert_negated(&mut batch.persist_ok);
+                }
+                if !batch.persist_err.is_empty() {
+                    corrections.err.insert_negated(&mut batch.persist_err);
+                }
+                if let Some(frontier) = batch.persist_frontier {
+                    // We will only emit times at or after the `persist` frontier, so now is a
+                    // good time to advance the times of stashed updates.
+                    corrections.ok.advance_since(frontier.clone());
+                    corrections.err.advance_since(frontier);
+                }
+                if batch.force_consolidation {
+                    corrections.ok.consolidate_at_since();
+                    corrections.err.consolidate_at_since();
+                }
             }
             WriteCommand::WriteBatch(desc) => {
                 // Chain ok and err correction iterators directly, avoiding an
