@@ -7,11 +7,35 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-export * from "~/external-library-wrappers/frontegg";
 import type {
   ITeamUserPermission,
   User,
 } from "~/external-library-wrappers/frontegg";
+
+export {
+  AdminPortal,
+  FronteggProvider,
+  type FronteggProviderProps,
+  type FronteggThemeOptions,
+  useAuthUserOrNull,
+  useIsAuthenticated,
+} from "~/external-library-wrappers/frontegg";
+export {
+  type AuthActions,
+  type AuthState,
+  type User,
+} from "~/external-library-wrappers/frontegg";
+export {
+  type ISignUpCompletePayload,
+  type IUserVerifiedPayload,
+} from "~/external-library-wrappers/frontegg";
+export {
+  type ITeamUserPermission,
+  type ITeamUserRole,
+  type ITenantsResponse,
+  UserManagedByEnum,
+} from "~/external-library-wrappers/frontegg";
+export { SocialLoginProviders } from "~/external-library-wrappers/frontegg";
 
 export const dummyValidUser: User = {
   accessToken: "access_token",
@@ -26,24 +50,12 @@ export const dummyValidUser: User = {
   mfaEnrolled: true,
   name: "user",
   permissions: [
-    {
-      key: "materialize.environment.write",
-    },
-    {
-      key: "materialize.environment.read",
-    },
-    {
-      key: "fe.secure.read.tenantApiTokens",
-    },
-    {
-      key: "fe.secure.write.tenantApiTokens",
-    },
-    {
-      key: "fe.secure.delete.tenantApiTokens",
-    },
-    {
-      key: "materialize.invoice.read",
-    },
+    { key: "materialize.environment.write" },
+    { key: "materialize.environment.read" },
+    { key: "fe.secure.read.tenantApiTokens" },
+    { key: "fe.secure.write.tenantApiTokens" },
+    { key: "fe.secure.delete.tenantApiTokens" },
+    { key: "materialize.invoice.read" },
   ] as ITeamUserPermission[],
   profilePictureUrl: "https://cdn.com/image",
   roles: [
@@ -66,12 +78,7 @@ export const dummyValidUser: User = {
 
 export const useAuth = vi.fn(() => ({
   tenantsState: {
-    tenants: [
-      {
-        tenantId: "tenant-id",
-        name: "tenant-name",
-      },
-    ],
+    tenants: [{ tenantId: "tenant-id", name: "tenant-name" }],
   },
 }));
 
