@@ -4566,7 +4566,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "list_n_layers" => Scalar {
             vec![ListAny] => Operation::unary(|ecx, e| {
-                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_N_LAYERS)?;
+                ecx.require_feature_flag(&vars::ENABLE_LIST_N_LAYERS)?;
                 let d = ecx.scalar_type(&e).unwrap_list_n_layers();
                 match i32::try_from(d) {
                     Ok(d) => Ok(HirScalarExpr::literal(Datum::Int32(d), SqlScalarType::Int32)),
@@ -4581,7 +4581,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "list_length_max" => Scalar {
             vec![ListAny, Plain(SqlScalarType::Int64)] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
+                ecx.require_feature_flag(&vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
                 Ok(lhs.call_binary(rhs, BinaryFunc::from(func::ListLengthMax { max_layer })))
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
@@ -4593,7 +4593,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
         },
         "list_remove" => Scalar {
             vec![ListAnyCompatible, ListElementAnyCompatible] => Operation::binary(|ecx, lhs, rhs| {
-                ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_REMOVE)?;
+                ecx.require_feature_flag(&vars::ENABLE_LIST_REMOVE)?;
                 Ok(lhs.call_binary(rhs, func::ListRemove))
             }) => ListAnyCompatible, oid::FUNC_LIST_REMOVE_OID;
         },
@@ -4733,17 +4733,29 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
                 })
             }) => ReturnType::set_of(RecordAny), oid::FUNC_REGEXP_EXTRACT_OID;
         },
-        "repeat_row" => Table {
+        mz_expr::REPEAT_ROW_NAME => Table {
             params!(Int64) => Operation::unary(move |ecx, n| {
-                ecx.require_feature_flag(&crate::session::vars::ENABLE_REPEAT_ROW)?;
+                ecx.require_feature_flag(&vars::ENABLE_REPEAT_ROW)?;
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::Repeat,
+                        func: TableFunc::RepeatRow,
                         exprs: vec![n],
                     },
                     column_names: vec![]
                 })
-            }) => ReturnType::none(true), oid::FUNC_REPEAT_OID;
+            }) => ReturnType::none(true), oid::FUNC_REPEAT_ROW_OID;
+        },
+        "repeat_row_non_negative" => Table {
+            params!(Int64) => Operation::unary(move |ecx, n| {
+                ecx.require_feature_flag(&vars::ENABLE_REPEAT_ROW_NON_NEGATIVE)?;
+                Ok(TableFuncPlan {
+                    imp: TableFuncImpl::CallTable {
+                        func: TableFunc::RepeatRowNonNegative,
+                        exprs: vec![n],
+                    },
+                    column_names: vec![]
+                })
+            }) => ReturnType::none(true), oid::FUNC_REPEAT_ROW_NON_NEGATIVE_OID;
         },
         "seahash" => Scalar {
             params!(String) => UnaryFunc::SeahashString(func::SeahashString)

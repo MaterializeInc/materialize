@@ -26,6 +26,11 @@ ALTER SYSTEM SET enable_repeat_row = true
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row_non_negative = true
+----
+COMPLETE 0
+
 statement ok
 CREATE TABLE y (a JSONB);
 
@@ -462,8 +467,21 @@ SELECT * FROM generate_series(0,3), repeat_row(generate_series);
 3
 3
 
-query II
+query I
+SELECT * FROM generate_series(0,3), repeat_row_non_negative(generate_series);
+----
+1
+2
+2
+3
+3
+3
+
+query error WITH ORDINALITY on repeat_row not yet supported
 SELECT * FROM generate_series(0,3), repeat_row(generate_series) WITH ORDINALITY;
+
+query II
+SELECT * FROM generate_series(0,3), repeat_row_non_negative(generate_series) WITH ORDINALITY;
 ----
 1  1
 2  1
@@ -472,8 +490,11 @@ SELECT * FROM generate_series(0,3), repeat_row(generate_series) WITH ORDINALITY;
 3  2
 3  3
 
-query II
+query error WITH ORDINALITY on repeat_row not yet supported
 SELECT * FROM generate_series(0,3), repeat_row(abs(generate_series - 1)) WITH ORDINALITY;
+
+query II
+SELECT * FROM generate_series(0,3), repeat_row_non_negative(abs(generate_series - 1)) WITH ORDINALITY;
 ----
 0  1
 2  1
@@ -485,6 +506,20 @@ SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row(generate_ser
 ----
 2
 2
+
+query error repeat_row_non_negative got \-1
+SELECT abs(generate_series) FROM generate_series(-1, 2), repeat_row_non_negative(generate_series);
+
+query error repeat_row_non_negative got \-7
+SELECT 4 FROM repeat_row_non_negative(-7);
+
+query I
+SELECT 5 FROM repeat_row(null);
+----
+
+query I
+SELECT 5 FROM repeat_row_non_negative(null);
+----
 
 statement error  Negative multiplicity in constant result: -1
 SELECT * FROM (values ('a')), repeat_row(-1)
@@ -795,10 +830,25 @@ SELECT jsonb_array_elements.generate_series FROM ROWS FROM (jsonb_array_elements
 generate_series
 1
 
-query T colnames,rowsort
+query error repeat_row in ROWS FROM not yet supported
 SELECT repeat_row FROM ROWS FROM (repeat_row(2), generate_series(1, 1));
+
+query error repeat_row in a SELECT clause with multiple table functions not yet supported
+SELECT repeat_row(5), generate_series(1,2);
+
+query TI
+SELECT repeat_row_non_negative(5), generate_series(1,2);
 ----
-repeat_row
+()  NULL
+()  NULL
+()  NULL
+()  1
+()  2
+
+query T colnames,rowsort
+SELECT repeat_row_non_negative FROM ROWS FROM (repeat_row_non_negative(2), generate_series(1, 1));
+----
+repeat_row_non_negative
 ()
 (1)
 
