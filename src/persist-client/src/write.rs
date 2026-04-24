@@ -16,8 +16,7 @@ use std::sync::Arc;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
-use futures::StreamExt;
-use futures::stream::FuturesUnordered;
+use futures::future::join_all;
 use mz_dyncfg::Config;
 use mz_ore::task::RuntimeExt;
 use mz_ore::{instrument, soft_panic_or_log};
@@ -805,20 +804,15 @@ where
                     let cfg = BatchBuilderConfig::new(&self.cfg, self.shard_id());
                     // We could have a large number of inline parts (imagine the
                     // sharded persist_sink), do this flushing concurrently.
-                    let flush_batches = batches
-                        .iter_mut()
-                        .map(|batch| async {
-                            batch
-                                .flush_to_blob(
-                                    &cfg,
-                                    &self.metrics.inline.backpressure,
-                                    &self.isolated_runtime,
-                                    &self.write_schemas,
-                                )
-                                .await
-                        })
-                        .collect::<FuturesUnordered<_>>();
-                    let () = flush_batches.collect::<()>().await;
+                    join_all(batches.iter_mut().map(|batch| {
+                        batch.flush_to_blob(
+                            &cfg,
+                            &self.metrics.inline.backpressure,
+                            &self.isolated_runtime,
+                            &self.write_schemas,
+                        )
+                    }))
+                    .await;
 
                     for batch in batches.iter() {
                         assert_eq!(batch.batch.inline_bytes(), 0);
