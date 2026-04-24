@@ -70,9 +70,9 @@ additional login roles and grant them the same `mcp_agent` role as needed.
 
 The role used to authenticate with the MCP endpoint must have:
 
-- `USAGE` on the database and schema containing the view.
-- `SELECT` on the view.
-- `USAGE` on the cluster where the index is installed.
+- `USAGE` on the database and schema containing the data product.
+- `SELECT` on the data product (a materialized view, or an indexed view).
+- `USAGE` on a cluster where the agent's read queries can run.
 
 Lock the role to the dedicated cluster and schema so that all agent queries
 are isolated.
@@ -141,17 +141,20 @@ tool list.
 
 ## Define and document data products for discovery
 
-The MCP server allows agents to discover and query documented (i.e.,
-[commented](/sql/comment-on/)) data products. In Materialize, you can make a
-materialized view discoverable by indexing the materialized view and adding
-[comments](/sql/comment-on/) to the **index**. You can, optionally, add comments
-columns of the materialized view.
+The MCP server exposes two kinds of objects as data products:
 
-- The [comments on](/sql/comment-on/) the **index** makes the materialized view
-  discoverable and becomes its description.
+- **Materialized views** are exposed automatically. No index is required,
+  because their results are already persisted and cheap to read.
 
-- The [comment on](/sql/comment-on/) the view's columns become parameter
-  descriptions.
+- **Regular views** are exposed only if they have an [index](/sql/create-index).
+  Non-indexed views are excluded because querying them would recompute their
+  SQL from scratch against the underlying sources and tables, which can
+  overload the cluster.
+
+[Comments](/sql/comment-on/) on the data product and its columns are optional
+enrichment; when present, they become the tool description and column
+descriptions surfaced to the agent. We recommend adding comments to help a
+language model understand **when** and **how** to use each tool.
 
 ### 1. Create a dedicated cluster and schema
 
@@ -163,28 +166,34 @@ limits visibility to only the data products you choose to expose.
 CREATE CLUSTER mcp_cluster SIZE '25cc';
 ```
 
-### 2. Index a materialized view
+### 2. Create a materialized view (or an indexed view)
 
-Every indexed column becomes a required input parameter in the tool's schema.
+Create a materialized view in the dedicated schema. It becomes a data product
+automatically.
 
 ```mzsql
 SET CLUSTER mcp_cluster;
 
+CREATE MATERIALIZED VIEW mcp_schema.payment_status AS
+SELECT order_id, status, updated_at FROM ...;
+```
+
+If you want to expose a regular view instead, add an index on it. Every
+indexed column becomes a required input parameter in the tool's schema.
+
+```mzsql
 CREATE INDEX payment_status_order_id_idx ON mcp_schema.payment_status (order_id);
 ```
 
-### 3. Comment on the index and columns.
+### 3. (Optional) Add descriptions with comments
 
-The [comment on](/sql/comment-on/) the **index** becomes the data product's description.
-
-The [comment on](/sql/comment-on/) the view's columns become parameter
-descriptions.
-
-Write comments that help a language model understand **when** and **how** to use
-the tool.
+Comments are optional but recommended: they become the description the agent
+sees when deciding whether to use a tool. If the data product has an index,
+a comment on the index is preferred; otherwise, a comment on the view or
+materialized view itself is used.
 
 ```mzsql
-COMMENT ON INDEX mcp_schema.payment_status_order_id_idx IS
+COMMENT ON MATERIALIZED VIEW mcp_schema.payment_status IS
   'Given an order ID, return the current payment status and last update time.
    Use this tool to drive user-facing payment tracking.';
 
@@ -203,9 +212,9 @@ SELECT * FROM mz_internal.mz_mcp_data_products;
 
 If a data product is missing, check that:
 
-- The view has an index with a [comment](/sql/comment-on/).
-- The role has `USAGE` on the database, schema, and cluster.
-- The role has `SELECT` on the view.
+- The object is a materialized view, or a regular view with an [index](/sql/create-index).
+- The role has `USAGE` on the database and schema.
+- The role has `SELECT` on the object.
 
 ## Connect to the MCP server
 
