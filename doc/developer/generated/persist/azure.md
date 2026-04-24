@@ -1,6 +1,6 @@
 ---
 source: src/persist/src/azure.rs
-revision: a3b8bc5bf6
+revision: 6d7c3bb255
 ---
 
 # persist::azure
