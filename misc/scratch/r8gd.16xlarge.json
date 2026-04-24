@@ -1,0 +1,8 @@
+{
+    "name": "production-like ARM",
+    "launch_script": "true",
+    "instance_type": "r8gd.16xlarge",
+    "ami": "ami-0fa7e089c838c371e",
+    "size_gb": 200,
+    "tags": {}
+}

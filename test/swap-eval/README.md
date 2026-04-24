@@ -26,7 +26,7 @@ The total memory+disk budget is held constant across swap sizes (~32 GiB heap-li
 
 Prereqs on the host:
 
-* Linux with swap enabled on fast storage (this work ran on `r8gd.16xlarge` with 3.5 TiB of NVMe swap)
+* Linux with swap enabled on fast storage (this work ran on `r8gd.16xlarge` with 3.5 TiB of NVMe swap — `bin/scratch create r8gd.16xlarge.json` provisions a matching instance)
 * Cockroach reachable at `localhost:26257`
 * A Materialize checkout with `bin/environmentd --optimized` built
 
