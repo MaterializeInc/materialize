@@ -167,6 +167,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             args.azurite,
             sanity_restart,
         )
+
+        # Check for schedule-stack corruption when storage introspection
+        # logs are enabled (enable_storage_introspection_logs defaults to
+        # true via get_minimal_system_parameters).  The LIFO stack in
+        # DemuxHandler::handle_schedule can't handle interleaved Start/Stop
+        # events from concatenated storage + compute log streams.
+        logs = (c.invoke("logs", "materialized", capture=True).stdout or "")
+        schedule_errors = logs.count("schedule stop without preceding start")
+        if schedule_errors > 0:
+            print(
+                f"--- Found {schedule_errors} schedule-stack corruption "
+                f"errors (storage introspection interleaving bug)"
+            )
+
         # Don't wait for potentially hanging threads that we are ignoring
         os._exit(0)
         # TODO: Only ignore errors that will be handled by parallel-workload, not others
