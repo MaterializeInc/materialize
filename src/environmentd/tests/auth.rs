@@ -5618,6 +5618,56 @@ async fn test_oidc_group_sync_empty_groups() {
     );
 }
 
+/// Reserved role names (mz_/pg_ prefixes) are filtered out during sync.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_reserved_roles_filtered() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    let token = jwt_with_groups(
+        &oidc_server,
+        serde_json::json!(["analytics", "mz_system", "pg_monitor"]),
+    );
+    let _client = oidc_connect(&server, &token).await.expect("login should succeed");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["analytics"],
+        "reserved roles (mz_system, pg_monitor) should be filtered, only analytics granted"
+    );
+}
+
+/// Missing groups claim preserves existing sync-granted memberships.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`
+async fn test_oidc_group_sync_missing_claim_preserves() {
+    let (server, admin_client, oidc_server) = setup_group_sync_test().await;
+
+    // Grant analytics via sync.
+    let token1 = jwt_with_groups(&oidc_server, serde_json::json!(["analytics"]));
+    let _client1 = oidc_connect(&server, &token1).await.expect("login should succeed");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(role_names, vec!["analytics"], "should have analytics");
+
+    // Connect with no groups claim at all — memberships should be preserved.
+    let token_no_groups = oidc_server.generate_jwt(
+        GROUP_SYNC_USER,
+        GenerateJwtOptions::default(),
+    );
+    let _client2 = oidc_connect(&server, &token_no_groups)
+        .await
+        .expect("login should succeed with no groups claim");
+
+    let role_names = fetch_user_role_memberships(&admin_client, GROUP_SYNC_USER).await;
+    assert_eq!(
+        role_names,
+        vec!["analytics"],
+        "missing groups claim should preserve existing memberships"
+    );
+}
+
 /// Feature gate off prevents any sync from happening.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method`

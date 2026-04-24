@@ -12,7 +12,7 @@
 
 use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
-use mz_adapter_types::dyncfgs::{ALLOW_USER_SESSIONS, OIDC_GROUP_ROLE_SYNC_ENABLED};
+use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_auth::AuthenticatorKind;
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
@@ -770,7 +770,10 @@ impl Coordinator {
         notice_tx: mpsc::UnboundedSender<AdapterNotice>,
     ) {
         // Early return if successful, otherwise cleanup any possible state.
-        match self.handle_startup_inner(&user, &conn_id, &client_ip).await {
+        match self
+            .handle_startup_inner(&user, &conn_id, &client_ip, &notice_tx)
+            .await
+        {
             Ok((role_id, superuser_attribute, session_defaults)) => {
                 let session_type = metrics::session_type_label_value(&user);
                 self.metrics
@@ -873,6 +876,7 @@ impl Coordinator {
         user: &User,
         _conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
+        notice_tx: &mpsc::UnboundedSender<AdapterNotice>,
     ) -> Result<(RoleId, SuperuserAttribute, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
             // If the user has made it to this point, that means they have been fully authenticated.
@@ -911,14 +915,10 @@ impl Coordinator {
         let role_id = role.id;
         let superuser_attribute = role.attributes.superuser;
 
-        // JWT group-to-role sync: if the user has groups from OIDC and sync is enabled,
-        // reconcile their role memberships with the JWT group claims.
-        if let Some(ref groups) = user.groups {
-            let dyncfgs = self.catalog().system_config().dyncfgs();
-            if OIDC_GROUP_ROLE_SYNC_ENABLED.get(dyncfgs) {
-                self.sync_jwt_groups(role_id, groups).await?;
-            }
-        }
+        // JWT group-to-role sync: reconcile role memberships with JWT group claims.
+        // Missing groups claim (None) → skip sync; empty (Some([])) → revoke all.
+        self.maybe_sync_jwt_groups(role_id, user.groups.as_deref(), notice_tx)
+            .await?;
 
         if role_id.is_user() && !ALLOW_USER_SESSIONS.get(self.catalog().system_config().dyncfgs()) {
             return Err(AdapterError::UserSessionsDisallowed);
