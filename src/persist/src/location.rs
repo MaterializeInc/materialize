@@ -16,7 +16,7 @@ use std::time::Instant;
 
 use anyhow::anyhow;
 use async_trait::async_trait;
-use azure_core::StatusCode;
+use azure_core::http::StatusCode;
 use bytes::Bytes;
 use futures_util::Stream;
 use mz_ore::bytes::SegmentedBytes;
@@ -315,16 +315,9 @@ impl From<deadpool_postgres::tokio_postgres::Error> for ExternalError {
 
 impl From<azure_core::Error> for ExternalError {
     fn from(value: azure_core::Error) -> Self {
-        let definitely_determinate = if let Some(http) = value.as_http_error() {
-            match http.status() {
-                // There are many other status codes that _ought_ to be determinate, according to
-                // the HTTP spec, but this includes only codes that we've observed in practice for now.
-                StatusCode::TooManyRequests => true,
-                _ => false,
-            }
-        } else {
-            false
-        };
+        // There are many other status codes that _ought_ to be determinate, according to
+        // the HTTP spec, but this includes only codes that we've observed in practice for now.
+        let definitely_determinate = value.http_status() == Some(StatusCode::TooManyRequests);
         if definitely_determinate {
             ExternalError::Determinate(Determinate {
                 inner: anyhow!(value),

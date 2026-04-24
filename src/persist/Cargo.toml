@@ -30,10 +30,9 @@ aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
 aws-types.workspace = true
-azure_identity.workspace = true
-azure_storage.workspace = true
-azure_storage_blobs.workspace = true
 azure_core.workspace = true
+azure_identity.workspace = true
+azure_storage_blob.workspace = true
 base64.workspace = true
 bytes.workspace = true
 deadpool-postgres.workspace = true
@@ -79,6 +78,7 @@ workspace = true
 features = ["asm"]
 
 [dev-dependencies]
+hmac.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 serde_json.workspace = true
 tempfile.workspace = true

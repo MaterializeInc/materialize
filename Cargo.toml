@@ -288,10 +288,13 @@ aws-smithy-types = { version = "1.1.8", features = ["byte-stream-poll-next"] }
 aws-types = "1.3.9"
 axum = { version = "0.8.8", features = ["ws"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
-azure_core = "0.21.0"
-azure_identity = "0.21.0"
-azure_storage = "0.21.0"
-azure_storage_blobs = "0.21.0"
+# Default features activate `reqwest_rustls` on reqwest, which is what we
+# want for the Azure path (rustls + aws-lc-rs). Persist explicitly selects
+# that backend via `reqwest::ClientBuilder::tls_backend_rustls()` at
+# client construction.
+azure_core = "0.35.0"
+azure_identity = "0.35.0"
+azure_storage_blob = "0.12.0"
 backtrace = "0.3.76"
 base64 = "0.22.1"
 bincode = "1.3.3"

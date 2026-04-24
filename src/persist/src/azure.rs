@@ -9,27 +9,33 @@
 
 //! An Azure Blob Storage implementation of [Blob] storage.
 
-use anyhow::{Context, anyhow};
-use async_trait::async_trait;
-use azure_core::{ExponentialRetryOptions, RetryOptions, StatusCode};
-use azure_identity::create_default_credential;
-use azure_storage::{CloudLocation, EMULATOR_ACCOUNT, prelude::*};
-use azure_storage_blobs::blob::operations::GetBlobResponse;
-use azure_storage_blobs::prelude::*;
-use bytes::Bytes;
-use futures_util::StreamExt;
-use futures_util::stream::FuturesOrdered;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+#[cfg(test)]
 use std::time::Duration;
-use tracing::{info, warn};
+
+use anyhow::anyhow;
+use async_trait::async_trait;
+use azure_core::Bytes;
+use azure_core::credentials::TokenCredential;
+use azure_core::http::{ExponentialRetryOptions, RetryOptions, StatusCode};
+use azure_identity::{DeveloperToolsCredential, WorkloadIdentityCredential};
+use azure_storage_blob::models::{
+    BlobClientDownloadOptions, BlobClientGetPropertiesResultHeaders,
+    BlobContainerClientListBlobsOptions,
+};
+use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
+use futures_util::{StreamExt, TryStreamExt};
+#[cfg(test)]
+use tracing::info;
 use url::Url;
+#[cfg(test)]
 use uuid::Uuid;
 
 use mz_dyncfg::ConfigSet;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::lgbytes::MetricsRegion;
+#[cfg(test)]
 use mz_ore::metrics::MetricsRegistry;
 
 use crate::cfg::BlobKnobs;
@@ -37,8 +43,11 @@ use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
+/// The well-known account name used by Azurite, the Azure Storage emulator.
+const AZURITE_ACCOUNT: &str = "devstoreaccount1";
+
 /// Configuration for opening an [AzureBlob].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AzureBlobConfig {
     // The metrics struct here is a bit of a misnomer. We only need access
     // to the LgBytes metrics, which has an Azure-specific field. For now,
@@ -46,12 +55,23 @@ pub struct AzureBlobConfig {
     //
     // TODO: spin up an AzureBlobMetrics and do the plumbing.
     metrics: S3BlobMetrics,
-    client: ContainerClient,
+    // `BlobContainerClient` is neither `Clone` nor `Debug`; wrap in `Arc`
+    // and implement `Debug` manually.
+    client: Arc<BlobContainerClient>,
     prefix: String,
     cfg: Arc<ConfigSet>,
 }
 
+impl Debug for AzureBlobConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureBlobConfig")
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AzureBlobConfig {
+    #[cfg(test)]
     const EXTERNAL_TESTS_AZURE_CONTAINER: &'static str =
         "MZ_PERSIST_EXTERNAL_STORAGE_TEST_AZURE_CONTAINER";
 
@@ -68,67 +88,73 @@ impl AzureBlobConfig {
         knobs: Box<dyn BlobKnobs>,
         cfg: Arc<ConfigSet>,
     ) -> Result<Self, Error> {
-        let client = if account == EMULATOR_ACCOUNT {
-            info!("Connecting to Azure emulator");
-            // Per-attempt/read/connect-timeout plumbing via `TransportOptions`
-            // was dropped: azure_core 0.21 pins reqwest 0.12 internally, so our
-            // 0.13 client no longer satisfies its `HttpClient` trait. Restored
-            // on the new SDK in the azure_sdk migration PR; `operation_timeout`
-            // still applies via the retry policy.
-            ClientBuilder::with_location(
-                CloudLocation::Emulator {
-                    address: url.domain().expect("domain for Azure emulator").to_string(),
-                    port: url.port().expect("port for Azure emulator"),
-                },
-                StorageCredentials::emulator(),
-            )
-            .retry(RetryOptions::exponential(
-                ExponentialRetryOptions::default().max_total_elapsed(knobs.operation_timeout()),
-            ))
-            .blob_service_client()
-            .container_client(container)
+        let mut options = BlobContainerClientOptions::default();
+
+        // Custom reqwest client to plumb BlobKnobs timeouts, and to pin
+        // rustls + aws-lc-rs for Azure traffic ahead of the workspace-wide
+        // HTTP-clients migration.
+        let reqwest_client = reqwest::ClientBuilder::new()
+            .tls_backend_rustls()
+            .timeout(knobs.operation_attempt_timeout())
+            .read_timeout(knobs.read_timeout())
+            .connect_timeout(knobs.connect_timeout())
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("valid config for azure HTTP client");
+        options.client_options.transport =
+            Some(azure_core::http::Transport::new(Arc::new(reqwest_client)));
+
+        options.client_options.retry = RetryOptions::exponential(ExponentialRetryOptions {
+            max_total_elapsed: azure_core::time::Duration::try_from(knobs.operation_timeout())
+                .expect("operation_timeout in representable range"),
+            ..Default::default()
+        });
+
+        let client = if account == AZURITE_ACCOUNT {
+            #[cfg(test)]
+            {
+                info!("Connecting to Azure emulator");
+                azurite::add_shared_key_policy(&mut options);
+                let container_url = azurite::container_url(&url, &container)?;
+                BlobContainerClient::from_url(container_url, None, Some(options))
+                    .map_err(|e| Error::from(format!("azure container client: {e}")))?
+            }
+            #[cfg(not(test))]
+            {
+                let _ = (url, container);
+                return Err(Error::from(
+                    "Azurite emulator is only supported in test builds",
+                ));
+            }
         } else {
-            let sas_credentials = match url.query() {
-                Some(query) => Some(StorageCredentials::sas_token(query)),
-                None => None,
-            };
-
-            let credentials = match sas_credentials {
-                Some(Ok(credentials)) => credentials,
-                Some(Err(err)) => {
-                    warn!("Failed to parse SAS token: {err}");
-                    // TODO: should we fallback here? Or can we fully rely on query params
-                    // to determine whether a SAS token was provided?
-                    StorageCredentials::token_credential(
-                        create_default_credential().expect("Azure default credentials"),
-                    )
-                }
-                None => {
-                    // Fall back to default credential stack to support auth modes like
-                    // workload identity that are injected into the environment
-                    StorageCredentials::token_credential(
-                        create_default_credential().expect("Azure default credentials"),
-                    )
-                }
-            };
-
-            let service_client = BlobServiceClient::new(account, credentials);
-            service_client.container_client(container)
+            let endpoint = format!("https://{account}.blob.core.windows.net/");
+            if let Some(sas) = url.query() {
+                // SAS is self-authenticating; pass via query string with no credential.
+                let container_url = Url::parse(&format!("{endpoint}{container}?{sas}"))
+                    .map_err(|e| Error::from(format!("bad Azure container URL: {e}")))?;
+                BlobContainerClient::from_url(container_url, None, Some(options))
+                    .map_err(|e| Error::from(format!("azure container client: {e}")))?
+            } else {
+                let credential = create_default_credential().expect("Azure default credentials");
+                BlobContainerClient::new(&endpoint, &container, Some(credential), Some(options))
+                    .map_err(|e| Error::from(format!("azure container client: {e}")))?
+            }
         };
 
         // TODO: some auth modes like user-delegated SAS tokens are time-limited
-        // and need to be refreshed. This can be done through `service_client.update_credentials`
-        // but there'll be a fair bit of plumbing needed to make each mode work
+        // and need to be refreshed. This requires plumbing an updatable
+        // credential through per_try_policies.
 
         Ok(AzureBlobConfig {
             metrics,
-            client,
+            client: Arc::new(client),
             cfg,
             prefix,
         })
     }
 
     /// Returns a new [AzureBlobConfig] for use in unit tests.
+    #[cfg(test)]
     pub fn new_for_test() -> Result<Option<Self>, Error> {
         struct TestBlobKnobs;
         impl Debug for TestBlobKnobs {
@@ -173,7 +199,7 @@ impl AzureBlobConfig {
         let metrics = S3BlobMetrics::new(&MetricsRegistry::new());
 
         let config = AzureBlobConfig::new(
-            EMULATOR_ACCOUNT.to_string(),
+            AZURITE_ACCOUNT.to_string(),
             container_name.clone(),
             prefix,
             metrics,
@@ -186,27 +212,48 @@ impl AzureBlobConfig {
     }
 }
 
+/// Try `WorkloadIdentityCredential` (k8s with Azure AD) first, then fall back
+/// to `DeveloperToolsCredential` (`az login`, etc.) for local use.
+fn create_default_credential() -> azure_core::Result<Arc<dyn TokenCredential>> {
+    if let Ok(cred) = WorkloadIdentityCredential::new(None) {
+        return Ok(cred);
+    }
+    DeveloperToolsCredential::new(None).map(|c| -> Arc<dyn TokenCredential> { c })
+}
+
 /// Implementation of [Blob] backed by Azure Blob Storage.
-#[derive(Debug)]
 pub struct AzureBlob {
     metrics: S3BlobMetrics,
-    client: ContainerClient,
+    client: Arc<BlobContainerClient>,
     prefix: String,
     _cfg: Arc<ConfigSet>,
 }
 
+impl Debug for AzureBlob {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureBlob")
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
+}
+
 impl AzureBlob {
     /// Opens the given location for non-exclusive read-write access.
+    // `open` is async only for the `#[cfg(test)]` Azurite container-create
+    // call below; the production path performs no awaits.
+    #[cfg_attr(not(test), allow(clippy::unused_async))]
     pub async fn open(config: AzureBlobConfig) -> Result<Self, ExternalError> {
-        if config.client.service_client().account() == EMULATOR_ACCOUNT {
-            // TODO: we could move this logic into the test harness.
-            // it's currently here because it's surprisingly annoying to
-            // create the container out-of-band
-            if let Err(error) = config.client.create().await {
-                info!(
-                    ?error,
-                    "failed to create emulator container; this is expected on repeat runs"
-                );
+        // In tests we may be pointed at a freshly-spun-up Azurite instance
+        // where the container hasn't been created yet.
+        #[cfg(test)]
+        {
+            if azurite::is_emulator_url(config.client.url()) {
+                if let Err(error) = config.client.create(None).await {
+                    info!(
+                        ?error,
+                        "failed to create emulator container; this is expected on repeat runs"
+                    );
+                }
             }
         }
 
@@ -229,97 +276,68 @@ impl AzureBlob {
 impl Blob for AzureBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
-        let blob = self.client.blob_client(path);
+        let blob = self.client.blob_client(&path);
 
-        /// Fetch the body of a single [`GetBlobResponse`].
-        async fn fetch_chunk(
-            response: GetBlobResponse,
-            metrics: S3BlobMetrics,
-        ) -> Result<Bytes, ExternalError> {
-            let content_length = response.blob.properties.content_length;
-
-            // Here we're being quite defensive. If `content_length` comes back
-            // as 0 it's most likely incorrect. In that case we'll copy bytes
-            // of the network into a growable buffer, then copy the entire
-            // buffer into lgalloc.
-            let mut buffer = match content_length {
-                1.. => {
-                    let region = metrics
-                        .lgbytes
-                        .persist_azure
-                        .new_region(usize::cast_from(content_length));
-                    PreSizedBuffer::Sized(region)
+        // Pre-allocate an lgalloc region sized to content-length and stream into it.
+        let response = match blob
+            .download(Some(BlobClientDownloadOptions::default()))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                if e.http_status() == Some(StatusCode::NotFound) {
+                    return Ok(None);
                 }
-                0 => PreSizedBuffer::Unknown(SegmentedBytes::new()),
-            };
-
-            let mut body = response.data;
-            while let Some(value) = body.next().await {
-                let value = value
-                    .map_err(|e| ExternalError::from(e.context("azure blob get body error")))?;
-
-                match &mut buffer {
-                    PreSizedBuffer::Sized(region) => region.extend_from_slice(&value),
-                    PreSizedBuffer::Unknown(segments) => segments.push(value),
-                }
+                return Err(ExternalError::from(e.with_context("azure blob get error")));
             }
+        };
 
-            // Spill our bytes to lgalloc, if they aren't already.
-            let lgbytes: Bytes = match buffer {
-                PreSizedBuffer::Sized(region) => region.into(),
-                // Now that we've collected all of the segments, we know the size of our region.
-                PreSizedBuffer::Unknown(segments) => {
-                    let mut region = metrics.lgbytes.persist_azure.new_region(segments.len());
-                    for segment in segments.into_segments() {
-                        region.extend_from_slice(segment.as_ref());
-                    }
-                    region.into()
-                }
-            };
+        let content_length = response.properties.content_length.unwrap_or(0);
+        let mut body = response.body;
 
-            // Report if the content-length header didn't match the number of
-            // bytes we read from the network.
-            if content_length != u64::cast_from(lgbytes.len()) {
-                metrics.get_invalid_resp.inc();
+        let mut buffer = if content_length > 0 {
+            PreSizedBuffer::Sized(
+                self.metrics
+                    .lgbytes
+                    .persist_azure
+                    .new_region(usize::cast_from(content_length)),
+            )
+        } else {
+            // Size unknown: grow into a segmented buffer, then copy into lgalloc.
+            PreSizedBuffer::Unknown(SegmentedBytes::new())
+        };
+
+        while let Some(value) = body.next().await {
+            let value = value
+                .map_err(|e| ExternalError::from(e.with_context("azure blob get body error")))?;
+            match &mut buffer {
+                PreSizedBuffer::Sized(region) => region.extend_from_slice(&value),
+                PreSizedBuffer::Unknown(segments) => segments.push(value),
             }
-
-            Ok(lgbytes)
         }
 
-        let mut requests = FuturesOrdered::new();
-        // TODO: the default chunk size is 1MB. We have not tried tuning it,
-        // but making this configurable / running some benchmarks could be
-        // valuable.
-        let mut stream = blob.get().into_stream();
-
-        while let Some(value) = stream.next().await {
-            // Return early if any of the individual fetch requests return an error.
-            let response = match value {
-                Ok(v) => v,
-                Err(e) => {
-                    if let Some(e) = e.as_http_error() {
-                        if e.status() == StatusCode::NotFound {
-                            return Ok(None);
-                        }
-                    }
-
-                    return Err(ExternalError::from(e.context("azure blob get error")));
+        let lgbytes: Bytes = match buffer {
+            PreSizedBuffer::Sized(region) => region.into(),
+            PreSizedBuffer::Unknown(segments) => {
+                let mut region = self
+                    .metrics
+                    .lgbytes
+                    .persist_azure
+                    .new_region(segments.len());
+                for segment in segments.into_segments() {
+                    region.extend_from_slice(segment.as_ref());
                 }
-            };
+                region.into()
+            }
+        };
 
-            // Drive all of the fetch requests concurrently.
-            let metrics = self.metrics.clone();
-            requests.push_back(fetch_chunk(response, metrics));
+        if content_length > 0 && content_length != u64::cast_from(lgbytes.len()) {
+            self.metrics.get_invalid_resp.inc();
         }
 
-        // Await on all of our chunks.
-        let mut segments = SegmentedBytes::with_capacity(requests.len());
-        while let Some(body) = requests.next().await {
-            let segment = body.context("azure blob get body err")?;
-            segments.push(segment);
-        }
-
-        Ok(Some(segments))
+        let mut out = SegmentedBytes::with_capacity(1);
+        out.push(lgbytes);
+        Ok(Some(out))
     }
 
     async fn list_keys_and_metadata(
@@ -330,27 +348,29 @@ impl Blob for AzureBlob {
         let blob_key_prefix = self.get_path(key_prefix);
         let strippable_root_prefix = format!("{}/", self.prefix);
 
-        let mut stream = self
+        let mut pager = self
             .client
-            .list_blobs()
-            .prefix(blob_key_prefix.clone())
-            .into_stream();
+            .list_blobs(Some(BlobContainerClientListBlobsOptions {
+                prefix: Some(blob_key_prefix),
+                ..Default::default()
+            }))
+            .map_err(|e| ExternalError::from(e.with_context("azure blob list error")))?;
 
-        while let Some(response) = stream.next().await {
-            let response =
-                response.map_err(|e| ExternalError::from(e.context("azure blob list error")))?;
-
-            for blob in response.blobs.items {
-                let azure_storage_blobs::container::operations::list_blobs::BlobItem::Blob(blob) =
-                    blob
-                else {
-                    continue;
-                };
-
-                if let Some(key) = blob.name.strip_prefix(&strippable_root_prefix) {
-                    let size_in_bytes = blob.properties.content_length;
-                    f(BlobMetadata { key, size_in_bytes });
-                }
+        while let Some(blob) = pager
+            .try_next()
+            .await
+            .map_err(|e| ExternalError::from(e.with_context("azure blob list error")))?
+        {
+            let Some(name) = blob.name.as_deref() else {
+                continue;
+            };
+            if let Some(key) = name.strip_prefix(&strippable_root_prefix) {
+                let size_in_bytes = blob
+                    .properties
+                    .as_ref()
+                    .and_then(|p| p.content_length)
+                    .unwrap_or(0);
+                f(BlobMetadata { key, size_in_bytes });
             }
         }
 
@@ -359,63 +379,56 @@ impl Blob for AzureBlob {
 
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let path = self.get_path(key);
-        let blob = self.client.blob_client(path);
+        let blob = self.client.blob_client(&path);
 
-        blob.put_block_blob(value)
+        // `.into()` selects `From<Bytes>`; the inherent `From<Vec<u8>>` would shadow it.
+        blob.upload(value.into(), None)
             .await
-            .map_err(|e| ExternalError::from(e.context("azure blob put error")))?;
+            .map_err(|e| ExternalError::from(e.with_context("azure blob put error")))?;
 
         Ok(())
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let path = self.get_path(key);
-        let blob = self.client.blob_client(path);
+        let blob = self.client.blob_client(&path);
 
-        match blob.get_properties().await {
-            Ok(props) => {
-                let size = usize::cast_from(props.blob.properties.content_length);
-                match blob.delete().await {
-                    Ok(_) => Ok(Some(size)),
-                    Err(e) => {
-                        if let Some(e) = e.as_http_error() {
-                            if e.status() == StatusCode::NotFound {
-                                return Ok(None);
-                            }
-                        }
-                        Err(ExternalError::from(e.context("azure blob delete error")))
-                    }
-                }
-            }
+        let props = match blob.get_properties(None).await {
+            Ok(p) => p,
             Err(e) => {
-                if let Some(e) = e.as_http_error() {
-                    if e.status() == StatusCode::NotFound {
-                        return Ok(None);
-                    }
+                if e.http_status() == Some(StatusCode::NotFound) {
+                    return Ok(None);
                 }
-
-                Err(ExternalError::from(e.context("azure blob error")))
+                return Err(ExternalError::from(e.with_context("azure blob error")));
             }
-        }
+        };
+
+        let size = usize::cast_from(
+            props
+                .content_length()
+                .map_err(|e| ExternalError::from(e.with_context("azure blob error")))?
+                .unwrap_or(0),
+        );
+        blob.delete(None)
+            .await
+            .map_err(|e| ExternalError::from(e.with_context("azure blob delete error")))?;
+        Ok(Some(size))
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         let path = self.get_path(key);
         let blob = self.client.blob_client(&path);
 
-        match blob.get_properties().await {
+        match blob.get_properties(None).await {
             Ok(_) => Ok(()),
             Err(e) => {
-                if let Some(e) = e.as_http_error() {
-                    if e.status() == StatusCode::NotFound {
-                        return Err(Determinate::new(anyhow!(
-                            "azure blob error: unable to restore non-existent key {key}"
-                        ))
-                        .into());
-                    }
+                if e.http_status() == Some(StatusCode::NotFound) {
+                    return Err(Determinate::new(anyhow!(
+                        "azure blob error: unable to restore non-existent key {key}"
+                    ))
+                    .into());
                 }
-
-                Err(ExternalError::from(e.context("azure blob error")))
+                Err(ExternalError::from(e.with_context("azure blob error")))
             }
         }
     }
@@ -424,9 +437,12 @@ impl Blob for AzureBlob {
 /// If possible we'll pre-allocate a chunk of memory in lgalloc and write into
 /// that as we read bytes off the network.
 enum PreSizedBuffer {
-    Sized(MetricsRegion<u8>),
+    Sized(mz_ore::lgbytes::MetricsRegion<u8>),
     Unknown(SegmentedBytes),
 }
+
+#[cfg(test)]
+mod azurite;
 
 #[cfg(test)]
 mod tests {
@@ -455,7 +471,7 @@ mod tests {
             async move {
                 let config = AzureBlobConfig {
                     metrics: config.metrics.clone(),
-                    client: config.client.clone(),
+                    client: Arc::clone(&config.client),
                     cfg: Arc::new(ConfigSet::default()),
                     prefix: config.prefix.clone(),
                 };

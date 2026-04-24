@@ -130,6 +130,19 @@ skip = [
     { name = "hashbrown", version = "0.16.1" },
     # reqwest_0_12 workspace alias; see Cargo.toml.
     { name = "reqwest", version = "0.12" },
+    # The Azure path uses rustls + aws-lc-rs; the rest of the workspace
+    # still uses native-tls pending the HTTP-clients migration PR. Both
+    # stacks coexist in the tree, which introduces these duplicate pairs.
+    # They collapse once the workspace finishes migrating to rustls.
+    { name = "core-foundation", version = "0.9.4" },
+    { name = "cpufeatures", version = "0.2.17" },
+    { name = "getrandom", version = "0.3.3" },
+    { name = "openssl-probe", version = "0.1.6" },
+    { name = "quick-xml", version = "0.38.4" },
+    { name = "rand", version = "0.9.4" },
+    { name = "rand_core", version = "0.9.3" },
+    { name = "security-framework", version = "2.11.1" },
+    { name = "untrusted", version = "0.7.1" },
 ]
 
 [[bans.deny]]
@@ -168,7 +181,6 @@ name = "strum-macros"
 [[bans.deny]]
 name = "log"
 wrappers = [
-    "azure_svc_blobstorage",
     "apache-avro",
     "bindgen",
     "buildid",
@@ -178,6 +190,8 @@ wrappers = [
     "eventsource-client",
     "fail",
     "globset",
+    # Pulled in by rustls-platform-verifier (android target).
+    "jni",
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "launchdarkly-sdk-transport",
@@ -191,6 +205,8 @@ wrappers = [
     "rdkafka",
     "reqsign",
     "reqwest",
+    # Pulled in by reqwest 0.13's rustls backend.
+    "rustls-platform-verifier",
     "tokio-postgres",
     "tokio-tungstenite",
     "tracing-log",
@@ -200,10 +216,15 @@ wrappers = [
     "zopfli",
 ]
 
-# We prefer the system's native TLS or OpenSSL to Rustls, since they are more
-# mature and more widely used.
+# The crypto migration is moving the workspace to rustls + aws-lc-rs. The
+# Azure SDK path is already on it (persist's Azure reqwest client uses
+# `tls_backend_rustls()` explicitly). Other reqwest consumers still use
+# native-tls pending the HTTP-clients migration PR. Keep the ban in place
+# with narrow wrappers so nothing else inadvertently picks up rustls
+# before that migration lands.
 [[bans.deny]]
 name = "rustls"
+wrappers = ["hyper-rustls", "reqwest", "rustls-platform-verifier", "tokio-rustls"]
 
 # once_cell is going to be added to std, and doesn't use macros
 # Unfortunately, its heavily used, so we have lots of exceptions.
