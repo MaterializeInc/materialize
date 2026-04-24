@@ -97,16 +97,13 @@ pub(super) async fn handle_query_event(
                            verification error for {table:?}[{}]: {err:?}",
                            err_output.output_index);
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                    ctx.data_output
-                        .give_fueled(
-                            &gtid_cap,
-                            (
-                                (err_output.output_index, Err(err.into())),
-                                new_gtid.clone(),
-                                Diff::ONE,
-                            ),
-                        )
-                        .await;
+                    let update = (
+                        (err_output.output_index, Err(err.into())),
+                        new_gtid.clone(),
+                        Diff::ONE,
+                    );
+                    let size = std::mem::size_of_val(&update);
+                    ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                     ctx.errored_outputs.insert(err_output.output_index);
                 }
             }
@@ -138,16 +135,13 @@ pub(super) async fn handle_query_event(
                 tracing::info!(%id, "timely-{worker_id} DDL change \
                            dropped output: {dropped_output:?}: {err:?}");
                 let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
-                ctx.data_output
-                    .give_fueled(
-                        &gtid_cap,
-                        (
-                            (dropped_output.output_index, Err(err.into())),
-                            new_gtid.clone(),
-                            Diff::ONE,
-                        ),
-                    )
-                    .await;
+                let update = (
+                    (dropped_output.output_index, Err(err.into())),
+                    new_gtid.clone(),
+                    Diff::ONE,
+                );
+                let size = std::mem::size_of_val(&update);
+                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                 ctx.errored_outputs.insert(dropped_output.output_index);
             }
         }
@@ -172,21 +166,18 @@ pub(super) async fn handle_query_event(
                 if let Some(info) = ctx.table_info.get(&table) {
                     let gtid_cap = ctx.data_cap_set.delayed(new_gtid);
                     for output in info {
-                        ctx.data_output
-                            .give_fueled(
-                                &gtid_cap,
-                                (
-                                    (
-                                        output.output_index,
-                                        Err(DataflowError::from(DefiniteError::TableTruncated(
-                                            table.to_string(),
-                                        ))),
-                                    ),
-                                    new_gtid.clone(),
-                                    Diff::ONE,
-                                ),
-                            )
-                            .await;
+                        let update = (
+                            (
+                                output.output_index,
+                                Err(DataflowError::from(DefiniteError::TableTruncated(
+                                    table.to_string(),
+                                ))),
+                            ),
+                            new_gtid.clone(),
+                            Diff::ONE,
+                        );
+                        let size = std::mem::size_of_val(&update);
+                        ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                         ctx.errored_outputs.insert(output.output_index);
                     }
                 }
@@ -329,8 +320,12 @@ pub(super) async fn handle_rows_event(
                 } else {
                     retractions += 1;
                 }
+                let size = match &data.1 {
+                    Ok(msg) => msg.byte_len(),
+                    Err(_) => 0,
+                };
                 ctx.data_output
-                    .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff))
+                    .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff), size)
                     .await;
             }
         }
@@ -345,7 +340,11 @@ pub(super) async fn handle_rows_event(
     if !event_buffer.is_empty() {
         for d in event_buffer.drain(..) {
             let (rewind_data_cap, _) = ctx.rewinds.get(&d.0.0).unwrap();
-            ctx.data_output.give_fueled(rewind_data_cap, d).await;
+            let size = match &d.0.1 {
+                Ok(msg) => msg.byte_len(),
+                Err(_) => 0,
+            };
+            ctx.data_output.give_fueled(rewind_data_cap, d, size).await;
         }
     }
 

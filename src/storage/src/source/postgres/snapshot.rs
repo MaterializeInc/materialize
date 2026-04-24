@@ -187,7 +187,6 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::container::CapacityContainerBuilder;
-use timely::container::DrainContainer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::vec::Broadcast;
@@ -546,7 +545,10 @@ pub(crate) fn render<'scope>(
                                             MzOffset::from(u64::MAX),
                                             Diff::ONE,
                                         );
-                                        raw_handle.give_fueled(&data_cap_set[0], update).await;
+                                        let size = std::mem::size_of_val(&update);
+                                        raw_handle
+                                            .give_fueled(&data_cap_set[0], update, size)
+                                            .await;
                                     }
                                 }
 
@@ -626,15 +628,14 @@ pub(crate) fn render<'scope>(
             for (&oid, outputs) in tables_to_snapshot.iter() {
                 for (&output_index, info) in outputs.iter() {
                     if let Err(err) = verify_schema(oid, info, &upstream_info) {
+                        let update = (
+                            (oid, output_index, Err(err.into())),
+                            MzOffset::minimum(),
+                            Diff::ONE,
+                        );
+                        let size = std::mem::size_of_val(&update);
                         raw_handle
-                            .give_fueled(
-                                &data_cap_set[0],
-                                (
-                                    (oid, output_index, Err(err.into())),
-                                    MzOffset::minimum(),
-                                    Diff::ONE,
-                                ),
-                            )
+                            .give_fueled(&data_cap_set[0], update, size)
                             .await;
                         continue;
                     }
@@ -691,13 +692,16 @@ pub(crate) fn render<'scope>(
                     let mut stream = pin!(client.copy_out_simple(&query).await?);
 
                     let mut snapshot_staged = 0;
-                    let mut update =
-                        ((oid, output_index, Ok(vec![])), MzOffset::minimum(), Diff::ONE);
                     while let Some(bytes) = stream.try_next().await? {
-                        let data = update.0 .2.as_mut().unwrap();
-                        data.clear();
-                        data.extend_from_slice(&bytes);
-                        raw_handle.give_fueled(&data_cap_set[0], &update).await;
+                        let size = bytes.len();
+                        let update = (
+                            (oid, output_index, Ok(bytes.to_vec())),
+                            MzOffset::minimum(),
+                            Diff::ONE,
+                        );
+                        raw_handle
+                            .give_fueled(&data_cap_set[0], update, size)
+                            .await;
                         snapshot_staged += 1;
                         if snapshot_staged % 1000 == 0 {
                             let stat = &export_statistics[&(oid, output_index)];
@@ -766,11 +770,11 @@ pub(crate) fn render<'scope>(
                 input.for_each_time(|time, data| {
                     let mut session = output.session(&time);
                     for ((oid, output_index, event), time, diff) in
-                        data.flat_map(|data| data.drain())
+                        data.flat_map(|data| data.drain(..))
                     {
                         let output = &table_info
-                            .get(oid)
-                            .and_then(|outputs| outputs.get(output_index))
+                            .get(&oid)
+                            .and_then(|outputs| outputs.get(&output_index))
                             .expect("table_info contains all outputs");
 
                         let event = event
@@ -787,7 +791,7 @@ pub(crate) fn render<'scope>(
                                 })
                             });
 
-                        session.give(((*output_index, event), *time, *diff));
+                        session.give(((output_index, event), time, diff));
                     }
                 });
             }

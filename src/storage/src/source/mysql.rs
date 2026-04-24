@@ -63,8 +63,7 @@ use mz_repr::Diff;
 use mz_repr::GlobalId;
 use mz_storage_types::errors::{DataflowError, SourceError};
 use mz_storage_types::sources::SourceExport;
-use mz_timely_util::columnation::ColumnationStack;
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::AccountedBuilder;
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
@@ -188,13 +187,13 @@ impl SourceRender for MySqlSourceConnection {
             .inner
             .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
-                |((output, data), time, diff): &(
+                |((output, data), time, diff): (
                     (usize, Result<SourceMessage, DataflowError>),
                     _,
                     Diff,
                 )| {
-                    let output = u64::cast_from(*output);
-                    (output, (data.clone(), time.clone(), diff.clone()))
+                    let output = u64::cast_from(output);
+                    (output, (data, time, diff))
                 },
             );
         let mut data_collections = BTreeMap::new();
@@ -381,10 +380,8 @@ pub(crate) struct RewindRequest {
     pub(crate) snapshot_upper: Antichain<GtidPartition>,
 }
 
-type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
-    T,
-    AccountedStackBuilder<CapacityContainerBuilder<ColumnationStack<(D, T, Diff)>>>,
->;
+type StackedAsyncOutputHandle<T, D> =
+    AsyncOutputHandle<T, AccountedBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
 
 async fn return_definite_error(
     err: DefiniteError,
@@ -407,7 +404,11 @@ async fn return_definite_error(
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
             Diff::ONE,
         );
-        data_handle.give_fueled(&data_cap_set[0], update).await;
+        // Definite errors are rare and small; account only for the tuple stack size.
+        let update_size = std::mem::size_of_val(&update);
+        data_handle
+            .give_fueled(&data_cap_set[0], update, update_size)
+            .await;
     }
     definite_error_handle.give(
         &definite_error_cap_set[0],

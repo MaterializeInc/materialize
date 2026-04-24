@@ -29,7 +29,7 @@ use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::AccountedBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Partition;
@@ -258,18 +258,26 @@ fn render_simple_generator<'scope>(
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<AccountedBuilder<
+        CapacityContainerBuilder<
+            Vec<(
+                (usize, Result<SourceMessage, DataflowError>),
+                MzOffset,
+                Diff,
+            )>,
+        >,
+    >>();
     let export_ids: Vec<_> = config.source_exports.keys().copied().collect();
     let partition_count = u64::cast_from(export_ids.len());
     let data_streams: Vec<_> = stream.partition::<CapacityContainerBuilder<_>, _, _>(
         partition_count,
-        |((output, data), time, diff): &(
+        |((output, data), time, diff): (
             (usize, Result<SourceMessage, DataflowError>),
             MzOffset,
             Diff,
         )| {
-            let output = u64::cast_from(*output);
-            (output, (data.clone(), time.clone(), diff.clone()))
+            let output = u64::cast_from(output);
+            (output, (data, time, diff))
         },
     );
     let mut data_collections = BTreeMap::new();
@@ -381,8 +389,12 @@ fn render_simple_generator<'scope>(
                         // Since those are not required downstream we eagerly ignore them here.
                         if resume_offset <= offset {
                             for (&output, message) in outputs.iter().repeat_clone(message) {
+                                let size = match &message {
+                                    Ok(msg) => msg.byte_len(),
+                                    Err(_) => 0,
+                                };
                                 data_output
-                                    .give_fueled(&cap, ((output, message), offset, diff))
+                                    .give_fueled(&cap, ((output, message), offset, diff), size)
                                     .await;
                             }
                         }

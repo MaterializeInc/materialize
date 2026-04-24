@@ -24,7 +24,6 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
-use mz_timely_util::columnation::ColumnationStack;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, StreamVec};
@@ -53,7 +52,7 @@ pub enum ProgressStatisticsUpdate {
     },
 }
 
-pub type StackedCollection<'scope, T, D> = Collection<'scope, T, ColumnationStack<(D, T, Diff)>>;
+pub type StackedCollection<'scope, T, D> = Collection<'scope, T, Vec<(D, T, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
@@ -112,6 +111,13 @@ pub struct SourceMessage {
     pub metadata: Row,
 }
 
+impl SourceMessage {
+    /// Heap-size estimate used to drive fuel accounting in source operators.
+    pub fn byte_len(&self) -> usize {
+        self.key.byte_len() + self.value.byte_len() + self.metadata.byte_len()
+    }
+}
+
 /// The result of probing an upstream system for its write frontier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Probe<T> {
@@ -119,62 +125,6 @@ pub struct Probe<T> {
     pub probe_ts: mz_repr::Timestamp,
     /// The frontier obtain from the upstream system.
     pub upstream_frontier: Antichain<T>,
-}
-
-mod columnation {
-    use columnation::{Columnation, Region};
-    use mz_repr::Row;
-
-    use super::SourceMessage;
-
-    impl Columnation for SourceMessage {
-        type InnerRegion = SourceMessageRegion;
-    }
-
-    #[derive(Default)]
-    pub struct SourceMessageRegion {
-        inner: <Row as Columnation>::InnerRegion,
-    }
-
-    impl Region for SourceMessageRegion {
-        type Item = SourceMessage;
-
-        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
-            SourceMessage {
-                key: unsafe { self.inner.copy(&item.key) },
-                value: unsafe { self.inner.copy(&item.value) },
-                metadata: unsafe { self.inner.copy(&item.metadata) },
-            }
-        }
-
-        fn clear(&mut self) {
-            self.inner.clear()
-        }
-
-        fn reserve_items<'a, I>(&mut self, items: I)
-        where
-            Self: 'a,
-            I: Iterator<Item = &'a Self::Item> + Clone,
-        {
-            self.inner.reserve_items(
-                items
-                    .map(|item| [&item.key, &item.value, &item.metadata])
-                    .flatten(),
-            )
-        }
-
-        fn reserve_regions<'a, I>(&mut self, regions: I)
-        where
-            Self: 'a,
-            I: Iterator<Item = &'a Self> + Clone,
-        {
-            self.inner.reserve_regions(regions.map(|r| &r.inner))
-        }
-
-        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-            self.inner.heap_size(callback)
-        }
-    }
 }
 
 /// A record produced by a source

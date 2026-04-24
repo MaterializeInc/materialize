@@ -106,7 +106,7 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::AccountedBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
@@ -141,7 +141,7 @@ pub(crate) fn render<'scope>(
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
-    let (raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (raw_handle, raw_data) = builder.new_output::<AccountedBuilder<_>>();
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -367,16 +367,13 @@ pub(crate) fn render<'scope>(
                 let mut removed_outputs = BTreeSet::new();
                 for (output, err) in errored_outputs {
                     // Publish the error for this table and stop ingesting it
-                    raw_handle
-                        .give_fueled(
-                            &data_cap_set[0],
-                            (
-                                (output.output_index, Err(err.clone().into())),
-                                GtidPartition::minimum(),
-                                Diff::ONE,
-                            ),
-                        )
-                        .await;
+                    let update = (
+                        (output.output_index, Err(err.clone().into())),
+                        GtidPartition::minimum(),
+                        Diff::ONE,
+                    );
+                    let size = std::mem::size_of_val(&update);
+                    raw_handle.give_fueled(&data_cap_set[0], update, size).await;
                     tracing::warn!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
                     removed_outputs.insert(output.output_index);
@@ -435,16 +432,16 @@ pub(crate) fn render<'scope>(
                                 }
                                 Err(err) => Err(err)?,
                             };
-                            raw_handle
-                                .give_fueled(
-                                    &data_cap_set[0],
-                                    (
-                                        (output.output_index, event),
-                                        GtidPartition::minimum(),
-                                        Diff::ONE,
-                                    ),
-                                )
-                                .await;
+                            let size = match &event {
+                                Ok(msg) => msg.byte_len(),
+                                Err(_) => 0,
+                            };
+                            let update = (
+                                (output.output_index, event),
+                                GtidPartition::minimum(),
+                                Diff::ONE,
+                            );
+                            raw_handle.give_fueled(&data_cap_set[0], update, size).await;
                         }
                         // This overcounting maintains existing behavior but will be removed one readers no longer rely on the value.
                         snapshot_staged_total += u64::cast_from(outputs.len());
