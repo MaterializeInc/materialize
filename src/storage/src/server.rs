@@ -183,10 +183,9 @@ impl ClusterSpec for Config {
                 },
             );
 
-            let mut register = timely_worker
-                .log_register()
-                .expect("Logging must be enabled");
-            register.insert_logger("timely", logger);
+            if let Some(mut register) = timely_worker.log_register() {
+                register.insert_logger("timely", logger);
+            }
         }
 
         Worker::new(
