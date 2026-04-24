@@ -526,6 +526,7 @@ impl DataSubscribe {
         );
         let (data, txns, capture, tokens) = worker.dataflow::<u64, _, _>(|outer| {
             let (data_stream, shard_source_token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                let dyncfgs = client.dyncfgs();
                 let client = client.clone();
                 let (data_stream, token) = shard_source::<String, (), u64, i64, _, _, _>(
                     outer,
@@ -543,6 +544,7 @@ impl DataSubscribe {
                     false.then_some(|| unreachable!()),
                     async {},
                     ErrorHandler::Halt("data_subscribe"),
+                    dyncfgs,
                 );
                 (data_stream.leave(outer), token)
             });

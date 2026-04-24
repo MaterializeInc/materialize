@@ -292,7 +292,7 @@ pub fn build_compute_dataflow(
                         until.clone(),
                         mfp.as_mut(),
                         compute_state.dataflow_max_inflight_bytes(),
-                        start_signal.clone(),
+                        start_signal.clone().into_send_future(),
                         ErrorHandler::Halt("compute_import"),
                     );
 
@@ -1598,6 +1598,15 @@ impl StartSignal {
 
     pub fn has_fired(&self) -> bool {
         self.token_ref.strong_count() == 0
+    }
+
+    /// Returns a Send-safe future that completes when the signal fires.
+    ///
+    /// Unlike `StartSignal` itself, the returned future does not retain a reference to the token,
+    /// so it cannot be used for `drop_on_fire` or `has_fired` checks.
+    pub fn into_send_future(self) -> impl Future<Output = ()> + Send {
+        use futures::FutureExt;
+        self.fut.map(|_| ())
     }
 
     pub fn drop_on_fire(&self, to_drop: Box<dyn Any>) {

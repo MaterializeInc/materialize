@@ -403,7 +403,7 @@ fn persist_source<'s>(
         until,
         map_filter_project,
         compute_state.dataflow_max_inflight_bytes(),
-        start_signal,
+        start_signal.into_send_future(),
         ErrorHandler::Halt("compute persist sink"),
     );
 

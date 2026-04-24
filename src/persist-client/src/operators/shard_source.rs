@@ -27,6 +27,7 @@ use differential_dataflow::Hashable;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_types::stats::PartStats;
@@ -45,9 +46,10 @@ use timely::progress::{Antichain, Timestamp, timestamp::Refines};
 use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
-use crate::cfg::{RetryParameters, USE_CRITICAL_SINCE_SOURCE};
+use crate::cfg::{PERSIST_SHARD_SOURCE_SYNC, RetryParameters, USE_CRITICAL_SINCE_SOURCE};
 use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
 use crate::internal::state::BatchPart;
+use crate::operators::shard_source_sync;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
 
@@ -91,7 +93,7 @@ pub enum ErrorHandler {
     /// Halt the process on error.
     Halt(&'static str),
     /// Signal an error to a higher-level supervisor.
-    Signal(Rc<dyn Fn(anyhow::Error) + 'static>),
+    Signal(Arc<dyn Fn(anyhow::Error) + Send + Sync + 'static>),
 }
 
 impl Debug for ErrorHandler {
@@ -105,8 +107,8 @@ impl Debug for ErrorHandler {
 
 impl ErrorHandler {
     /// Returns a new error handler that uses the provided function to signal an error.
-    pub fn signal(signal_fn: impl Fn(anyhow::Error) + 'static) -> Self {
-        Self::Signal(Rc::new(signal_fn))
+    pub fn signal(signal_fn: impl Fn(anyhow::Error) + Send + Sync + 'static) -> Self {
+        Self::Signal(Arc::new(signal_fn))
     }
 
     /// Signal an error to an error handler. This function never returns: logically it blocks until
@@ -152,9 +154,10 @@ pub fn shard_source<'inner, 'outer, K, V, T, D, DT, TOuter, C>(
     val_schema: Arc<V::Schema>,
     filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + 'static,
     // If Some, an override for the default listen sleep retry parameters.
-    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
-    start_signal: impl Future<Output = ()> + 'static,
+    listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
+    dyncfgs: &ConfigSet,
 ) -> (
     StreamVec<'inner, T, FetchedBlob<K, V, TOuter, D>>,
     Vec<PressOnDropButton>,
@@ -176,6 +179,26 @@ where
     ),
     C: Future<Output = PersistClient> + Send + 'static,
 {
+    if PERSIST_SHARD_SOURCE_SYNC.get(dyncfgs) {
+        return shard_source_sync::shard_source(
+            outer,
+            scope,
+            name,
+            client,
+            shard_id,
+            as_of,
+            snapshot_mode,
+            until,
+            desc_transformer,
+            key_schema,
+            val_schema,
+            filter_fn,
+            listen_sleep,
+            start_signal,
+            error_handler,
+        );
+    }
+
     // WARNING! If emulating any of this code, you should read the doc string on
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
     // panics.
@@ -260,24 +283,24 @@ pub enum SnapshotMode {
 }
 
 #[derive(Debug)]
-struct LeaseManager<T> {
+pub(crate) struct LeaseManager<T> {
     leases: BTreeMap<T, Vec<Lease>>,
 }
 
 impl<T: Timestamp + Codec64> LeaseManager<T> {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             leases: BTreeMap::new(),
         }
     }
 
     /// Track a lease associated with a particular time.
-    fn push_at(&mut self, time: T, lease: Lease) {
+    pub(crate) fn push_at(&mut self, time: T, lease: Lease) {
         self.leases.entry(time).or_default().push(lease);
     }
 
     /// Discard any leases for data that aren't past the given frontier.
-    fn advance_to(&mut self, frontier: AntichainRef<T>)
+    pub(crate) fn advance_to(&mut self, frontier: AntichainRef<T>)
     where
         // If we allowed partial orders, we'd need to reconsider every key on each advance.
         T: TotalOrder,
@@ -738,6 +761,7 @@ mod tests {
         )
         .await;
 
+        let dyncfgs = Arc::clone(&persist_client.cfg.configs);
         let res = timely::execute::execute_directly(move |worker| {
             let until = Antichain::new();
 
@@ -764,6 +788,7 @@ mod tests {
                         false.then_some(|| unreachable!()),
                         async {},
                         ErrorHandler::Halt("test"),
+                        &dyncfgs,
                     );
                     (stream.leave(outer), tokens)
                 });
@@ -808,6 +833,7 @@ mod tests {
         )
         .await;
 
+        let dyncfgs = Arc::clone(&persist_client.cfg.configs);
         let res = timely::execute::execute_directly(move |worker| {
             let as_of = Antichain::from_elem(expected_frontier);
             let until = Antichain::new();
@@ -835,6 +861,7 @@ mod tests {
                         false.then_some(|| unreachable!()),
                         async {},
                         ErrorHandler::Halt("test"),
+                        &dyncfgs,
                     );
                     (stream.leave(outer), tokens)
                 });

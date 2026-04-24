@@ -169,7 +169,7 @@ pub fn persist_source<'scope>(
     until: Antichain<Timestamp>,
     map_filter_project: Option<&mut MfpPlan>,
     max_inflight_bytes: Option<usize>,
-    start_signal: impl Future<Output = ()> + 'static,
+    start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, (Row, Timestamp, Diff)>,
@@ -304,8 +304,8 @@ pub fn persist_source_core<'g, 'outer>(
     map_filter_project: Option<&mut MfpPlan>,
     flow_control: Option<FlowControl<'g, (mz_repr::Timestamp, Subtime)>>,
     // If Some, an override for the default listen sleep retry parameters.
-    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
-    start_signal: impl Future<Output = ()> + 'static,
+    listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
     Stream<
@@ -394,6 +394,7 @@ pub fn persist_source_core<'g, 'outer>(
         listen_sleep,
         start_signal,
         error_handler,
+        &*cfg.configs,
     );
     let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
     (rows, token)
