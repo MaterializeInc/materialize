@@ -51,6 +51,7 @@ from materialize.github import (
     for_github_re,
     get_known_issues_from_github,
 )
+from materialize.linear import get_known_issues_from_linear
 from materialize.observed_error import ObservedBaseError, WithIssue
 from materialize.test_analytics.config.test_analytics_db_config import (
     create_test_analytics_config_with_hostname,
@@ -307,17 +308,26 @@ class ObservedErrorWithIssue(ObservedError, WithIssue):
     issue_ignore_failure: bool
 
     def _get_issue_presentation(self) -> str:
-        issue_presentation = f"#{self.issue_number}"
+        issue_presentation = (
+            self.issue_number
+            if isinstance(self.issue_number, str)
+            else f"#{self.issue_number}"
+        )
         if self.issue_is_closed:
             issue_presentation = f"{issue_presentation}, closed"
 
         return issue_presentation
 
+    def _get_issue_id(self) -> str:
+        if isinstance(self.issue_number, str):
+            return self.issue_number
+        return f"database-issues/{self.issue_number}"
+
     def to_text(self) -> str:
         return f"{self.error_type} {self.issue_title} ({self._get_issue_presentation()}) in {self.location}: {self.error_message_as_text()}{self.error_details_as_text()}"
 
     def to_markdown(self) -> str:
-        ci_failures_url = f"https://ci.dev.materialize.com/#failures?issue={urllib.parse.quote(f'database-issues/{self.issue_number}', safe='')}"
+        ci_failures_url = f"https://ci.dev.materialize.com/#failures?issue={urllib.parse.quote(self._get_issue_id(), safe='')}"
         return f'<a href="{ci_failures_url}">{self.error_type}</a> <a href="{self.issue_url}">{self.issue_title} ({self._get_issue_presentation()})</a> in {self.location_as_markdown()}:\n{self.error_message_as_markdown()}{self.error_details_as_markdown()}{self.additional_collapsed_error_details_as_markdown()}'
 
 
@@ -550,8 +560,13 @@ def annotate_logged_errors(
         "GITHUB_TOKEN"
     )
     known_issues, issues_with_invalid_regex = get_known_issues_from_github(token)
+    linear_known_issues, linear_issues_with_invalid_regex = (
+        get_known_issues_from_linear()
+    )
+    known_issues.extend(linear_known_issues)
     unknown_errors: list[ObservedBaseError] = []
     unknown_errors.extend(issues_with_invalid_regex)
+    unknown_errors.extend(linear_issues_with_invalid_regex)
 
     job = os.getenv("BUILDKITE_JOB_ID")
 
@@ -559,7 +574,7 @@ def annotate_logged_errors(
     ignore_failure: bool = False
 
     # Keep track of known errors so we log each only once
-    already_reported_issue_numbers: set[int] = set()
+    already_reported_issue_numbers: set[int | str] = set()
 
     def handle_error(
         error_message: str,
@@ -1093,7 +1108,11 @@ def store_annotation_in_test_analytics(
             error_type=error.internal_error_type,
             message=error.to_text(),
             issue=(
-                f"database-issues/{error.issue_number}"
+                (
+                    error.issue_number
+                    if isinstance(error.issue_number, str)
+                    else f"database-issues/{error.issue_number}"
+                )
                 if isinstance(error, WithIssue)
                 else None
             ),
