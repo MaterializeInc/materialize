@@ -68,6 +68,14 @@ message ProtoEnvelopeErrorV1 {
   }
 }
 
+// Encoding of `ProtoDataflowError` must be deterministic: compute serializes
+// `DataflowError` to bytes on internal dataflow edges and relies on
+// byte-equality implying semantic equality (for `Ord`, `Hash`, etc.).
+//
+// **Invariant**: NEVER add `map<...>` fields to `ProtoDataflowError` or any
+// message transitively reachable from it. Protobuf `map` fields have
+// unspecified encoding order, which breaks byte-level determinism.
+// `check-protobuf.sh` enforces this.
 message ProtoDataflowError {
   oneof kind {
     ProtoDecodeError decode_error = 1;
