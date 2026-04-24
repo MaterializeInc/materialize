@@ -27,7 +27,6 @@ use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::CollectionExt;
@@ -42,7 +41,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
-use crate::render::errors::ErrorLogger;
+use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, RenderTimestamp};
 use crate::row_spine::{DatumSeq, RowRowBuilder};
 use crate::typedefs::{
@@ -238,7 +237,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         &self,
     ) -> (
         VecCollection<'scope, T, Row, Diff>,
-        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq| {
@@ -278,7 +277,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         mut logic: L,
     ) -> (
         StreamVec<'scope, T, I::Item>,
-        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )
     where
         I: IntoIterator<Item = (D, T, Diff)>,
@@ -362,7 +361,7 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
 pub struct CollectionBundle<'scope, T: RenderTimestamp> {
     pub collection: Option<(
         VecCollection<'scope, T, Row, Diff>,
-        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<'scope, T>>,
 }
@@ -371,7 +370,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
         oks: VecCollection<'scope, T, Row, Diff>,
-        errs: VecCollection<'scope, T, DataflowError, Diff>,
+        errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
@@ -473,7 +472,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         config_set: &ConfigSet,
     ) -> (
         VecCollection<'scope, T, Row, Diff>,
-        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         // Any operator that uses this method was told to use a particular
         // collection during LIR planning, where we should have made
@@ -525,7 +524,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         mut logic: L,
     ) -> (
         StreamVec<'scope, T, I::Item>,
-        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     )
     where
         I: IntoIterator<Item = (D, T, Diff)>,
@@ -658,7 +657,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         config_set: &ConfigSet,
     ) -> (
         VecCollection<'scope, T, mz_repr::Row, Diff>,
-        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
         mfp.optimize();
         let mfp_plan = mfp.clone().into_plan().unwrap();
@@ -813,7 +812,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         thinning: Vec<usize>,
     ) -> (
         Arranged<'scope, RowRowAgent<T, Diff>>,
-        VecCollection<'scope, T, DataflowError, Diff>,
+        VecCollection<'scope, T, DataflowErrorSer, Diff>,
         VecCollection<'scope, T, Row, Diff>,
     ) {
         // This operator implements a `map_fallible`, but produces columnar updates for the ok

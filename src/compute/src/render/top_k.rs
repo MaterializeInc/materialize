@@ -32,7 +32,6 @@ use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, UnaryFunc, func};
 use mz_ore::cast::CastFrom;
 use mz_ore::soft_assert_or_log;
 use mz_repr::{Datum, DatumVec, Diff, ReprScalarType, Row, SharedRow};
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use timely::Container;
 use timely::container::{CapacityContainerBuilder, PushInto};
@@ -43,6 +42,7 @@ use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
 use crate::render::context::{CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::row_spine::{
     DatumSeq, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowValBuilder, RowValSpine,
@@ -153,7 +153,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
                             &format!("data={data:?}, diff={diff}"),
                         );
                         let m = "tried to build monotonic top-k on non-monotonic input".into();
-                        (DataflowError::from(EvalError::Internal(m)), Diff::ONE)
+                        (DataflowErrorSer::from(EvalError::Internal(m)), Diff::ONE)
                     });
                     err_collection = err_collection.concat(errs);
 
@@ -259,7 +259,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         buckets: Vec<u64>,
     ) -> (
         VecCollection<'s, T, Row, Diff>,
-        VecCollection<'s, T, DataflowError, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let pairer = Pairer::new(1);
         let mut datum_vec = mz_repr::DatumVec::new();
@@ -389,7 +389,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         validating: bool,
     ) -> (
         VecCollection<'s, T, (Row, Row), Diff>,
-        Option<VecCollection<'s, T, DataflowError, Diff>>,
+        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) {
         // Form appropriate input by updating the `hash` column (first datum in `hash_key`) by
         // applying `modulus`.
@@ -451,7 +451,7 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         must_consolidate: bool,
     ) -> (
         VecCollection<'s, T, Row, Diff>,
-        VecCollection<'s, T, DataflowError, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         // We can place our rows directly into the diff field, and only keep the relevant one
         // corresponding to evaluating our aggregate, instead of having to do a hierarchical

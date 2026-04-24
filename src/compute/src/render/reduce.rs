@@ -37,7 +37,6 @@ use mz_expr::{
 use mz_repr::adt::numeric::{self, Numeric, NumericAgg};
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow};
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
 use serde::{Deserialize, Serialize};
 use timely::Container;
@@ -47,6 +46,7 @@ use tracing::warn;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::context::{CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
 use crate::render::reduce::monoids::{ReductionMonoid, get_monoid};
 use crate::render::{ArrangementFlavor, Pairer, RenderTimestamp};
@@ -122,7 +122,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
                     let key = match key {
                         Err(e) => {
-                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
+                            return Some((Err(e.into()), time.clone(), diff.clone()));
                         }
                         Ok(Some(key)) => key.clone(),
                         Ok(None) => panic!("Row expected as no predicate was used"),
@@ -135,7 +135,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                         val_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
                     let val = match val {
                         Err(e) => {
-                            return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
+                            return Some((Err(e.into()), time.clone(), diff.clone()));
                         }
                         Ok(Some(val)) => val.clone(),
                         Ok(None) => panic!("Row expected as no predicate was used"),
@@ -168,7 +168,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         &self,
         plan: ReducePlan,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
-        err_input: VecCollection<'s, T, DataflowError, Diff>,
+        err_input: VecCollection<'s, T, DataflowErrorSer, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> CollectionBundle<'s, T> {
@@ -189,7 +189,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         &self,
         plan: ReducePlan,
         collection: VecCollection<'s, T, (Row, Row), Diff>,
-        errors: &mut Vec<VecCollection<'s, T, DataflowError, Diff>>,
+        errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> Arranged<'s, RowRowAgent<T, Diff>> {
@@ -258,7 +258,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         Arranged<'s, TraceAgent<RowRowSpine<T, Diff>>>,
-        VecCollection<'s, T, DataflowError, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let error_logger = self.error_logger();
 
@@ -299,7 +299,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             );
         let errors = arranged.mz_reduce_abelian::<_, RowErrBuilder<_, _>, RowErrSpine<_, _>>(
             "DistinctByErrorCheck",
-            move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowError, _)>| {
+            move |key, input: &[(_, Diff)], output: &mut Vec<(DataflowErrorSer, _)>| {
                 for (_, count) in input.iter() {
                     if count.is_positive() {
                         continue;
@@ -339,7 +339,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowError, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         // We are only using this function to render multiple basic aggregates and
         // stitch them together. If that's not true we should complain.
@@ -447,7 +447,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         fused_unnest_list: bool,
     ) -> (
         RowRowArrangement<'s, T>,
-        Option<VecCollection<'s, T, DataflowError, Diff>>,
+        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) {
         let AggregateExpr {
             func,
@@ -795,7 +795,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowError, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let mut err_output: Option<VecCollection<'s, T, _, _>> = None;
         let outer_scope = input.scope();
@@ -988,7 +988,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         validating: bool,
     ) -> (
         VecCollection<'s, T, (Row, Row), Diff>,
-        Option<VecCollection<'s, T, DataflowError, Diff>>,
+        Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     ) {
         let (input, negated_output, errs) = if validating {
             let (input, reduced) = self
@@ -1136,7 +1136,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowError, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let aggregations = aggr_funcs.len();
         // Gather the relevant values into a vec of rows ordered by aggregation_index
@@ -1261,7 +1261,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         RowRowArrangement<'s, T>,
-        VecCollection<'s, T, DataflowError, Diff>,
+        VecCollection<'s, T, DataflowErrorSer, Diff>,
     ) {
         let collection_scope = collection.scope();
 

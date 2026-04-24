@@ -136,7 +136,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::PressOnDropButton;
 use mz_timely_util::builder_async::{Event, OperatorBuilder};
@@ -154,6 +153,7 @@ use tracing::trace;
 
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::sink::correction::{Correction, Logging};
 use crate::sink::refresh::apply_refresh;
@@ -167,7 +167,7 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
         mut ok_collection: VecCollection<'scope, Timestamp, Row, Diff>,
-        mut err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+        mut err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
         _ct_times: Option<VecCollection<'scope, Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
@@ -214,13 +214,13 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
 /// Type of the `desired` stream, split into `Ok` and `Err` streams.
 type DesiredStreams<'s> = OkErr<
     StreamVec<'s, Timestamp, (Row, Timestamp, Diff)>,
-    StreamVec<'s, Timestamp, (DataflowError, Timestamp, Diff)>,
+    StreamVec<'s, Timestamp, (DataflowErrorSer, Timestamp, Diff)>,
 >;
 
 /// Type of the `persist` stream, split into `Ok` and `Err` streams.
 type PersistStreams<'s> = OkErr<
     StreamVec<'s, Timestamp, (Row, Timestamp, Diff)>,
-    StreamVec<'s, Timestamp, (DataflowError, Timestamp, Diff)>,
+    StreamVec<'s, Timestamp, (DataflowErrorSer, Timestamp, Diff)>,
 >;
 
 /// Type of the `descs` stream.
@@ -237,7 +237,7 @@ pub(super) fn persist_sink<'s>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
     ok_collection: VecCollection<'s, Timestamp, Row, Diff>,
-    err_collection: VecCollection<'s, Timestamp, DataflowError, Diff>,
+    err_collection: VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
@@ -391,21 +391,22 @@ fn persist_source<'s>(
     let until = Antichain::new();
     let map_filter_project = None;
 
-    let (ok_stream, err_stream, token) = mz_storage_operators::persist_source::persist_source(
-        scope,
-        sink_id,
-        Arc::clone(&compute_state.persist_clients),
-        &compute_state.txns_ctx,
-        target,
-        None,
-        as_of,
-        SnapshotMode::Include,
-        until,
-        map_filter_project,
-        compute_state.dataflow_max_inflight_bytes(),
-        start_signal,
-        ErrorHandler::Halt("compute persist sink"),
-    );
+    let (ok_stream, err_stream, token) =
+        mz_storage_operators::persist_source::persist_source::<DataflowErrorSer>(
+            scope,
+            sink_id,
+            Arc::clone(&compute_state.persist_clients),
+            &compute_state.txns_ctx,
+            target,
+            None,
+            as_of,
+            SnapshotMode::Include,
+            until,
+            map_filter_project,
+            compute_state.dataflow_max_inflight_bytes(),
+            start_signal,
+            ErrorHandler::Halt("compute persist sink"),
+        );
 
     let streams = OkErr::new(ok_stream, err_stream);
     (streams, token)
@@ -777,7 +778,7 @@ mod write {
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.
         let exchange_ok = |(d, _, _): &(Row, Timestamp, Diff)| d.hashed();
-        let exchange_err = |(d, _, _): &(DataflowError, Timestamp, Diff)| d.hashed();
+        let exchange_err = |(d, _, _): &(DataflowErrorSer, Timestamp, Diff)| d.hashed();
 
         let mut desired_inputs = OkErr::new(
             op.new_disconnected_input(desired.ok, Exchange::new(exchange_ok)),
@@ -892,7 +893,7 @@ mod write {
         /// Contains `desired - persist`, reflecting the updates we would like to commit to
         /// `persist` in order to "correct" it to track `desired`. This collection is only modified
         /// by updates received from either the `desired` or `persist` inputs.
-        corrections: OkErr<Correction<Row>, Correction<DataflowError>>,
+        corrections: OkErr<Correction<Row>, Correction<DataflowErrorSer>>,
         /// The frontiers of the `desired` inputs.
         desired_frontiers: OkErr<Antichain<Timestamp>, Antichain<Timestamp>>,
         /// The frontiers of the `persist` inputs.
@@ -1083,7 +1084,8 @@ mod write {
             let err_updates = self.corrections.err.updates_before(&desc.upper);
 
             let oks = ok_updates.map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-            let errs = err_updates.map(|(d, t, r)| ((SourceData(Err(d)), ()), t, r.into_inner()));
+            let errs = err_updates
+                .map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
             let mut updates = oks.chain(errs).peekable();
 
             // Don't write empty batches.

@@ -29,7 +29,6 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
@@ -40,6 +39,7 @@ use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
 
 impl<'scope, T: RenderTimestamp> Context<'scope, T> {
@@ -280,7 +280,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                                     final_closure
                                         .apply(&mut datums_local, &temp_storage, &mut row_builder)
                                         .map(|row| row.cloned())
-                                        .map_err(DataflowError::from)
+                                        .map_err(DataflowErrorSer::from)
                                         .transpose()
                                 }
                             });
@@ -331,7 +331,7 @@ fn build_halfjoin<'scope, T, Tr, CF>(
     config_set: Rc<ConfigSet>,
 ) -> (
     VecCollection<'scope, T, (Row, T), Diff>,
-    VecCollection<'scope, T, DataflowError, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
 )
 where
     T: RenderTimestamp,
@@ -382,10 +382,10 @@ fn build_halfjoin2<'scope, T, Tr, CF>(
     comparison: CF,
     closure: JoinClosure,
     mut datums: DatumVec,
-    errs: VecCollection<'scope, T, DataflowError, Diff>,
+    errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
 ) -> (
     VecCollection<'scope, T, (Row, T), Diff>,
-    VecCollection<'scope, T, DataflowError, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
 )
 where
     T: RenderTimestamp,
@@ -433,7 +433,7 @@ where
             // TODO(mcsherry): consider `ok_err()` for `Collection`.
             match data_time {
                 (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
-                (Err(err), _time) => Err((DataflowError::from(err), init_time, diff)),
+                (Err(err), _time) => Err((DataflowErrorSer::from(err), init_time, diff)),
             }
         });
 
@@ -490,10 +490,10 @@ fn build_halfjoin1<'scope, T, Tr, CF>(
     comparison: CF,
     closure: JoinClosure,
     mut datums: DatumVec,
-    errs: VecCollection<'scope, T, DataflowError, Diff>,
+    errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
 ) -> (
     VecCollection<'scope, T, (Row, T), Diff>,
-    VecCollection<'scope, T, DataflowError, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
 )
 where
     T: RenderTimestamp,
@@ -541,7 +541,7 @@ where
         )
         .ok_err(|(data_time, init_time, diff)| match data_time {
             (Ok(data), time) => Ok((data.map(|data| (data, time)), init_time, diff)),
-            (Err(err), _time) => Err((DataflowError::from(err), init_time, diff)),
+            (Err(err), _time) => Err((DataflowErrorSer::from(err), init_time, diff)),
         });
 
         (
@@ -604,7 +604,7 @@ fn build_update_stream<'scope, T, Tr>(
     initial_closure: JoinClosure,
 ) -> (
     VecCollection<'scope, T, Row, Diff>,
-    VecCollection<'scope, T, DataflowError, Diff>,
+    VecCollection<'scope, T, DataflowErrorSer, Diff>,
 )
 where
     T: RenderTimestamp,
@@ -702,6 +702,6 @@ where
 
     (
         ok_stream.as_collection(),
-        err_stream.as_collection().map(DataflowError::from),
+        err_stream.as_collection().map(DataflowErrorSer::from),
     )
 }
