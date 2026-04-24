@@ -1340,7 +1340,7 @@ class DependencySet:
             while True:
                 if time.time() > end_time:
                     raise TimeoutError(
-                        f"Timed out in {dep.name} waiting for {[dep2.name for dep2 in dep.dependencies if dep2 not in built_deps]}"
+                        f"Timed out in {dep.name} waiting for {[dep2 for dep2 in dep.dependencies if dep2 not in built_deps]}"
                     )
                 with lock:
                     if all(dep2 in built_deps for dep2 in dep.dependencies):

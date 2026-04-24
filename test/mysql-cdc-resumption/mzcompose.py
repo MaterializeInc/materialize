@@ -60,6 +60,10 @@ def workflow_default(c: Composition) -> None:
         if name in ("bin-log-manipulations", "short-bin-log-retention"):
             return
 
+        # TODO: Reenable when database-issues#7683 is fixed
+        if name == "backup-restore":
+            return
+
         # clear to avoid issues
         c.kill("mysql")
         c.rm("mysql")

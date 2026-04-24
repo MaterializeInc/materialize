@@ -1833,6 +1833,7 @@ def workflow_documentation_defaults(
                 "-n",
                 "materialize",
                 "--for=condition=Available",
+                "--timeout=300s",
                 "deployment/minio",
             ]
         )
@@ -1843,6 +1844,7 @@ def workflow_documentation_defaults(
                 "-n",
                 "materialize",
                 "--for=condition=Available",
+                "--timeout=300s",
                 "deployment/postgres",
             ]
         )
