@@ -128,8 +128,6 @@ skip = [
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
-    # reqwest_0_12 workspace alias; see Cargo.toml.
-    { name = "reqwest", version = "0.12" },
 ]
 
 [[bans.deny]]
