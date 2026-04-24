@@ -63,6 +63,9 @@ impl Coordinator {
             .get_entry(&replica_frontier_item_id)
             .latest_global_id();
 
+        // `snapshot_latest` requires that the collection consolidates to a
+        // set. `mz_cluster_replica_frontiers` is a controller-managed builtin
+        // written with ±1 diffs, so it satisfies that invariant.
         let live_frontiers = self
             .controller
             .storage_collections
