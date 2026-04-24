@@ -6,10 +6,9 @@
 //! Types for cluster-internal control messages that can be broadcast to all
 //! workers from individual operators/workers.
 
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::Rc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 
 use mz_repr::{GlobalId, Row};
 use mz_rocksdb::config::SharedWriteBufferManager;
@@ -25,8 +24,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::vec::Broadcast;
 use timely::progress::Antichain;
-use timely::scheduling::Activator;
-use timely::worker::Worker as TimelyWorker;
+use timely::scheduling::{Scheduler, SyncActivator};
+use timely::worker::{AsWorker, Worker as TimelyWorker};
 
 use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
 
@@ -130,7 +129,7 @@ pub enum InternalStorageCommand {
 #[derive(Clone)]
 pub struct InternalCommandSender {
     tx: mpsc::Sender<InternalStorageCommand>,
-    activator: Rc<RefCell<Option<Activator>>>,
+    activator: Arc<Mutex<Option<SyncActivator>>>,
 }
 
 impl InternalCommandSender {
@@ -140,7 +139,11 @@ impl InternalCommandSender {
             panic!("internal command channel disconnected");
         }
 
-        self.activator.borrow().as_ref().map(|a| a.activate());
+        self.activator
+            .lock()
+            .expect("poisoned")
+            .as_ref()
+            .map(|a| a.activate());
     }
 }
 
@@ -170,10 +173,10 @@ pub(crate) fn setup_command_sequencer<'w>(
 ) -> (InternalCommandSender, InternalCommandReceiver) {
     let (input_tx, input_rx) = mpsc::channel();
     let (output_tx, output_rx) = mpsc::channel();
-    let activator = Rc::new(RefCell::new(None));
+    let activator = Arc::new(Mutex::new(None));
 
     timely_worker.dataflow_named::<(), _, _>("command_sequencer", {
-        let activator = Rc::clone(&activator);
+        let activator = Arc::clone(&activator);
         move |scope| {
             let scope = scope.with_label();
             // Create a stream of commands received from `input_rx`.
@@ -181,7 +184,8 @@ pub(crate) fn setup_command_sequencer<'w>(
             // The output commands are tagged by worker ID and command index, allowing downstream
             // operators to ensure their correct relative order.
             let stream = source(scope, "command_sequencer::source", |cap, info| {
-                *activator.borrow_mut() = Some(scope.activator_for(info.address));
+                *activator.lock().expect("poisoned") =
+                    Some(scope.sync_activator_for(info.address.to_vec()));
 
                 let worker_id = scope.index();
                 let mut cmd_index = 0;
