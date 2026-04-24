@@ -11,7 +11,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mysql_async::binlog;
 use mz_mysql_util::{
     MySqlError, MySqlTableDesc, QualifiedTableRef, SYSTEM_SCHEMAS, validate_source_privileges,
 };
