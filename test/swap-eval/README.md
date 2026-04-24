@@ -74,13 +74,30 @@ Results land in `/home/ubuntu/swap_results/`:
 
 Collected on r8gd.16xlarge, scale=4, 200 queries per size, serializable isolation.
 
+Hydration and memory traffic:
+
 | size      | mem   | disk  | ratio | hydration | peak RSS | peak swap | pswpout | vs baseline |
 |-----------|-------|-------|-------|-----------|----------|-----------|---------|-------------|
 | baseline  | 128GiB| 64GiB | 1:0.5 | 81s       | 15.0 GiB | 0         | 0       | 1.00x       |
 | swap_1-2  | 11GiB | 21GiB | 1:2   | 90s       | 11.5 GiB | 3.3 GiB   | 1.4M    | 1.11x       |
-| swap_1-5  | 5GiB  | 27GiB | 1:5   | 172s      | 5.3 GiB  | 9.2 GiB   | 9.5M    | 2.12x       |
-| swap_1-12 | 2.5GiB| 29.5GiB| 1:12 | 342s      | 2.7 GiB  | 13.3 GiB  | 27.3M   | 4.22x       |
-| swap_1-30 | 1GiB  | 31GiB | 1:30  | 576s      | 1.1 GiB  | 13.2 GiB  | 49.1M   | 7.11x       |
+| swap_1-5  | 5GiB  | 27GiB | 1:5   | 166s      | 5.3 GiB  | 9.2 GiB   | 9.5M    | 2.05x       |
+| swap_1-12 | 2.5GiB| 29.5GiB| 1:12 | 338s      | 2.7 GiB  | 13.3 GiB  | 27.3M   | 4.18x       |
+| swap_1-30 | 1GiB  | 31GiB | 1:30  | 571s      | 1.1 GiB  | 13.2 GiB  | 49.1M   | 7.06x       |
 
-Baseline working set is 15 GiB. Ratios that cap RSS below the working set pay swap cost roughly proportional to (working_set − memory_limit).
-Above ~1:5 the hydration slowdown grows steeply; 1:30 thrashes (~200 GiB of page-out traffic during hydration).
+Steady-state point-query latency (200 random `SELECT count(*) FROM bids WHERE id = ?` after hydration):
+
+| size      | p50 ms | p95 ms | p99 ms  | mean ms |
+|-----------|--------|--------|---------|---------|
+| baseline  | 6.03   | 6.75   | 89.27   | 7.57    |
+| swap_1-2  | 6.04   | 35.62  | 103.42  | 9.81    |
+| swap_1-5  | 6.85   | 43.54  | 235.69  | 14.68   |
+| swap_1-12 | 7.51   | 62.20  | 273.53  | 18.74   |
+| swap_1-30 | 9.21   | 74.25  | 992.68  | 31.92   |
+
+Takeaways:
+
+* Baseline working set is 15 GiB. Ratios that cap RSS below the working set pay swap cost roughly proportional to `working_set − memory_limit`.
+* Hydration slowdown grows steeply above ~1:5. 1:30 thrashes (~200 GiB of page-out traffic during hydration).
+* Steady-state p50 barely moves across ratios — hot index pages stay resident.
+* Tail latency grows with ratio: p95 climbs 5–11x, p99 explodes at 1:30 (993 ms).
+* Baseline p99 of 89 ms is already elevated vs p95 of 6.75 ms; some outliers exist independent of swap and deserve separate investigation.
