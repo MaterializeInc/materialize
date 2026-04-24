@@ -101,3 +101,24 @@ Takeaways:
 * Steady-state p50 barely moves across ratios — hot index pages stay resident.
 * Tail latency grows with ratio: p95 climbs 5–11x, p99 explodes at 1:30 (993 ms).
 * Baseline p99 of 89 ms is already elevated vs p95 of 6.75 ms; some outliers exist independent of swap and deserve separate investigation.
+
+## Next steps
+
+Not yet done. Captured here so a follow-up session can pick up.
+
+* **Larger workloads.** scale=4 gives a ~4 GiB arrangement and a 15 GiB clusterd RSS.
+  The 1:2 size (11 GiB memory) already barely fits, while 1:12 and 1:30 are forced into swap for most of the working set.
+  To exercise the larger-memory end of the spectrum, bump `--scale` to 8 or 16, or run multiple `lg` clusters side by side.
+  Also worth trying the TPCH scenarios from `test/cluster-spec-sheet` (especially `tpch_mv_strong`) since they stress different access patterns than the self-joining interval expansion in AuctionScenario.
+  Watch for clusterd OOMing at the `mem + disk` heap limit — increase `disk_limit` proportionally if that happens.
+* **Profiling during swap.** Collect a CPU profile (samply or `perf record`) and a jemalloc heap profile on clusterd while under swap pressure.
+  This answers whether the wall-time cost is dominated by page-fault handler work, by memory allocator churn, or by idle waits on swap IO.
+  `mz_compute::arrangement` paths and persist reader decode are the first suspects at high ratios.
+  The per-second VmRSS/VmSwap CSVs already give us the shape of the memory-traffic curve; pairing them with a flame graph closes the loop on where the time is actually going.
+* **Outlier investigation.** Baseline p99 (89 ms) sits well above p95 (6.75 ms) even with zero swap activity.
+  Likely candidates: persist compaction ticking on the index arrangement, a first-touch effect on a cold batch, or catalog maintenance.
+  Worth confirming with a longer query phase (1000+ queries) or by excluding the first 10 queries from the percentile calculation.
+* **Real object store.** `--persist-blob-url` points at the local filesystem here, so persist reads don't pay S3 latency.
+  For an honest comparison to staging, point at a real bucket before re-running the sweep.
+* **Ratio to keep comparing.** The current map fixes total heap budget (`memory_limit + disk_limit`) at 32 GiB across swap sizes, so only the split varies.
+  If GCP publishes a different total budget at the 1:12/1:30 tier, update `swap_sizes.json` to match before drawing conclusions about those SKUs specifically.
