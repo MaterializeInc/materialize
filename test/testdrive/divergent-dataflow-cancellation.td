@@ -14,6 +14,10 @@
 # sources. This also serves to verify that logging is correctly cleaned up under
 # active dataflow cancellation.
 
+# Storage operator IDs are offset by STORAGE_ID_OFFSET (1 << 48).
+# Filter them out so test assertions only see compute operators.
+$ set storage-id-offset=281474976710656
+
 # Introspection subscribes add noise to the introspection sources, so disable them.
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_introspection_subscribes = false
@@ -86,14 +90,14 @@ contains: canceling statement due to statement timeout
 > SELECT *
   FROM mz_introspection.mz_compute_import_frontiers_per_worker
   WHERE export_id NOT LIKE 'si%'
-> SELECT * FROM mz_introspection.mz_compute_operator_durations_histogram_raw LIMIT 10
-> SELECT id, worker_id, address::text FROM mz_introspection.mz_dataflow_addresses_per_worker
-> SELECT * FROM mz_introspection.mz_dataflow_channels_per_worker
-> SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw LIMIT 10
-> SELECT * FROM mz_introspection.mz_dataflow_operators_per_worker
-> SELECT * FROM mz_introspection.mz_message_counts_received_raw LIMIT 10
-> SELECT * FROM mz_introspection.mz_message_counts_sent_raw LIMIT 10
-> SELECT * FROM mz_introspection.mz_scheduling_elapsed_raw LIMIT 10
+> SELECT * FROM mz_introspection.mz_compute_operator_durations_histogram_raw WHERE id < ${storage-id-offset} LIMIT 10
+> SELECT id, worker_id, address::text FROM mz_introspection.mz_dataflow_addresses_per_worker WHERE id < ${storage-id-offset}
+> SELECT * FROM mz_introspection.mz_dataflow_channels_per_worker WHERE id < ${storage-id-offset}
+> SELECT * FROM mz_introspection.mz_dataflow_operator_reachability_raw WHERE id < ${storage-id-offset} LIMIT 10
+> SELECT * FROM mz_introspection.mz_dataflow_operators_per_worker WHERE id < ${storage-id-offset}
+> SELECT * FROM mz_introspection.mz_message_counts_received_raw WHERE channel_id < ${storage-id-offset} LIMIT 10
+> SELECT * FROM mz_introspection.mz_message_counts_sent_raw WHERE channel_id < ${storage-id-offset} LIMIT 10
+> SELECT * FROM mz_introspection.mz_scheduling_elapsed_raw WHERE id < ${storage-id-offset} LIMIT 10
 
 # Cleanup.
 > DROP CLUSTER test CASCADE

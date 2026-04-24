@@ -61,6 +61,7 @@ pub(super) fn construct(
     config: &LoggingConfig,
     event_queue: EventQueue<Vec<(Duration, TimelyEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
 ) -> Return {
     scope.scoped("timely logging", move |scope| {
         let enable_logging = config.enable_logging;
@@ -74,6 +75,25 @@ pub(super) fn construct(
         } else {
             let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
             (empty(scope), token)
+        };
+
+        // If we have a storage log reader, replay it and concatenate with compute logs.
+        let (logs, storage_token) = if let Some(reader) = storage_log_reader {
+            use mz_timely_util::activator::RcActivator;
+            use timely::dataflow::operators::Concatenate;
+
+            let activator = RcActivator::new("storage_timely_activator".to_string(), 128);
+            let (storage_logs, s_token) =
+                [reader].mz_replay(scope, "storage timely logs", config.interval, activator);
+            let merged = scope.concatenate([logs, storage_logs]);
+            (merged, Some(s_token))
+        } else {
+            (logs, None)
+        };
+        // Convert storage token to Rc<dyn Any> so we can stash it alongside the compute token.
+        let storage_token: Rc<dyn std::any::Any> = match storage_token {
+            Some(t) => t,
+            None => Rc::new(()),
         };
 
         // Build a demux operator that splits the replayed event stream up into the separate
@@ -367,9 +387,11 @@ pub(super) fn construct(
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
+                let combined_token: Rc<dyn std::any::Any> =
+                    Rc::new((Rc::clone(&token), Rc::clone(&storage_token)));
                 let collection = LogCollection {
                     trace,
-                    token: Rc::clone(&token),
+                    token: combined_token,
                 };
                 collections.insert(variant, collection);
             }
