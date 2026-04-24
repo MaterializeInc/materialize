@@ -24,8 +24,8 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::vec::Broadcast;
 use timely::progress::Antichain;
-use timely::scheduling::{Scheduler, SyncActivator};
-use timely::worker::{AsWorker, Worker as TimelyWorker};
+use timely::scheduling::SyncActivator;
+use timely::worker::Worker as TimelyWorker;
 
 use crate::statistics::{SinkStatisticsRecord, SourceStatisticsRecord};
 
@@ -185,7 +185,7 @@ pub(crate) fn setup_command_sequencer<'w>(
             // operators to ensure their correct relative order.
             let stream = source(scope, "command_sequencer::source", |cap, info| {
                 *activator.lock().expect("poisoned") =
-                    Some(scope.sync_activator_for(info.address.to_vec()));
+                    Some(scope.worker().sync_activator_for(info.address.to_vec()));
 
                 let worker_id = scope.index();
                 let mut cmd_index = 0;

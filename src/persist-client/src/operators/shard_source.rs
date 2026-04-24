@@ -181,6 +181,7 @@ where
 {
     if PERSIST_SHARD_SOURCE_SYNC.get(dyncfgs) {
         return shard_source_sync::shard_source(
+            outer,
             scope,
             name,
             client,

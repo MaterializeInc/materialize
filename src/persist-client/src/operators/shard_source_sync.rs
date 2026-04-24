@@ -57,7 +57,6 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
-use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
@@ -79,38 +78,38 @@ use crate::{Diagnostics, PersistClient, ShardId};
 ///
 /// This is the sync Timely operator implementation, using Tokio tasks for I/O.
 /// See the [module docs](self) for details.
-pub(crate) fn shard_source<'g, K, V, T, D, DT, G, C>(
-    scope: &mut Child<'g, G, T>,
+pub(crate) fn shard_source<'inner, 'outer, K, V, T, D, DT, TOuter, C>(
+    outer: Scope<'outer, TOuter>,
+    scope: Scope<'inner, T>,
     name: &str,
     client: impl Fn() -> C,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: Option<Antichain<TOuter>>,
     snapshot_mode: SnapshotMode,
-    until: Antichain<G::Timestamp>,
+    until: Antichain<TOuter>,
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
+    filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + 'static,
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<Child<'g, G, T>, FetchedBlob<K, V, G::Timestamp, D>>,
+    StreamVec<'inner, T, FetchedBlob<K, V, TOuter, D>>,
     Vec<PressOnDropButton>,
 )
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
-    T: Refines<G::Timestamp>,
+    TOuter: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+    T: Refines<TOuter>,
     DT: FnOnce(
-        Child<'g, G, T>,
-        StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        Scope<'inner, T>,
+        StreamVec<'inner, T, (usize, ExchangeableBatchPart<TOuter>)>,
         usize,
     ) -> (
-        StreamVec<Child<'g, G, T>, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+        StreamVec<'inner, T, (usize, ExchangeableBatchPart<TOuter>)>,
         Vec<PressOnDropButton>,
     ),
     C: Future<Output = PersistClient> + Send + 'static,
@@ -129,15 +128,15 @@ where
     // metrics.
     let is_transient = !until.is_empty();
 
-    let (descs, descs_token) = shard_source_descs::<K, V, D, G>(
-        &scope.parent,
+    let (descs, descs_token) = shard_source_descs::<K, V, D, TOuter>(
+        outer,
         name,
         client(),
         shard_id.clone(),
         as_of,
         snapshot_mode,
         until,
-        completed_fetches_feedback_stream.leave(),
+        completed_fetches_feedback_stream.leave(outer),
         chosen_worker,
         Arc::clone(&key_schema),
         Arc::clone(&val_schema),
@@ -151,7 +150,7 @@ where
     let descs = descs.enter(scope);
     let descs = match desc_transformer {
         Some(desc_transformer) => {
-            let (descs, extra_tokens) = desc_transformer(scope.clone(), descs, chosen_worker);
+            let (descs, extra_tokens) = desc_transformer(scope, descs, chosen_worker);
             tokens.extend(extra_tokens);
             descs
         }
@@ -313,32 +312,31 @@ async fn descs_task<K, V, D, T>(
     }
 }
 
-fn shard_source_descs<K, V, D, G>(
-    scope: &G,
+fn shard_source_descs<'outer, K, V, D, TOuter>(
+    scope: Scope<'outer, TOuter>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
-    as_of: Option<Antichain<G::Timestamp>>,
+    as_of: Option<Antichain<TOuter>>,
     snapshot_mode: SnapshotMode,
-    until: Antichain<G::Timestamp>,
-    completed_fetches_stream: StreamVec<G, Infallible>,
+    until: Antichain<TOuter>,
+    completed_fetches_stream: StreamVec<'outer, TOuter, Infallible>,
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut filter_fn: impl FnMut(&PartStats, AntichainRef<G::Timestamp>) -> FilterResult + 'static,
+    mut filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + 'static,
     listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
     start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<G, (usize, ExchangeableBatchPart<G::Timestamp>)>,
+    StreamVec<'outer, TOuter, (usize, ExchangeableBatchPart<TOuter>)>,
     PressOnDropButton,
 )
 where
     K: Debug + Codec,
     V: Debug + Codec,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
-    G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
+    TOuter: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
 {
     let worker_index = scope.index();
     let num_workers = scope.peers();
@@ -346,7 +344,7 @@ where
 
     // Shared lease manager between the descs and descs_return operators.
     // Both operators run on the same Timely thread, so Rc sharing is safe.
-    let leases: Rc<RefCell<Option<LeaseManager<G::Timestamp>>>> = Rc::new(RefCell::new(None));
+    let leases: Rc<RefCell<Option<LeaseManager<TOuter>>>> = Rc::new(RefCell::new(None));
 
     // Shared task handle: the Tokio task owns the listen handle (and its SeqNo lease).
     // Both the descs operator and the descs_return operator hold an Rc to this handle,
@@ -361,15 +359,16 @@ where
     {
         let leases = Rc::clone(&leases);
         let return_task_handle = Rc::clone(&shared_task_handle);
-        let mut builder = OperatorBuilderRc::new(
-            format!("shard_source_descs_return({})", name),
-            scope.clone(),
-        );
+        let mut builder =
+            OperatorBuilderRc::new(format!("shard_source_descs_return({})", name), scope);
         // Disconnected input: does not influence any output frontier.
         // This operator doesn't need to use a token because it naturally exits when its input
         // frontier reaches the empty antichain.
-        let mut completed_fetches =
-            builder.new_input_connection(completed_fetches_stream, Pipeline, vec![]);
+        let mut completed_fetches = builder.new_input_connection(
+            completed_fetches_stream,
+            Pipeline,
+            std::iter::empty::<(usize, Antichain<TOuter::Summary>)>(),
+        );
         builder.build(move |_capabilities| {
             move |frontiers| {
                 // Keep the task handle alive until this operator exits.
@@ -384,26 +383,24 @@ where
     }
 
     // -- descs operator (sync + Tokio task): distributes parts to workers --
-    let mut builder =
-        OperatorBuilderRc::new(format!("shard_source_descs({})", name), scope.clone());
+    let mut builder = OperatorBuilderRc::new(format!("shard_source_descs({})", name), scope);
     let info = builder.operator_info();
 
     let (descs_output, descs_stream) = builder.new_output();
     let mut descs_output = OutputBuilder::from(descs_output);
 
     // Shutdown token: caller holds the PressOnDropButton to keep the dataflow alive.
-    let (mut shutdown_handle, shutdown_button) =
-        button(&mut scope.clone(), Rc::clone(&info.address));
+    let (mut shutdown_handle, shutdown_button) = button(scope, Rc::clone(&info.address));
 
     // Set up the Tokio task and channels on the chosen worker only.
     let mut task_state = None;
     if worker_index == chosen_worker {
-        let sync_activator = scope.sync_activator_for(info.address.to_vec());
+        let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         let task_handle = mz_ore::task::spawn(
             || format!("shard_source_descs({})", name_owned),
-            descs_task::<K, V, D, G::Timestamp>(
+            descs_task::<K, V, D, TOuter>(
                 name_owned.clone(),
                 client,
                 shard_id,
@@ -438,7 +435,7 @@ where
         let shared_task_handle = shared_task_handle; // Move into schedule closure.
         let mut cfg: Option<PersistConfig> = None;
         let mut metrics: Option<Arc<Metrics>> = None;
-        let mut current_frontier = Antichain::from_elem(G::Timestamp::minimum());
+        let mut current_frontier = Antichain::from_elem(TOuter::minimum());
         let mut audit_budget_bytes: u64 = 0;
 
         move |_frontiers| {
@@ -625,8 +622,8 @@ async fn fetch_task<K, V, T, D>(
     }
 }
 
-fn shard_source_fetch<K, V, T, D, G>(
-    descs: StreamVec<G, (usize, ExchangeableBatchPart<T>)>,
+fn shard_source_fetch<'inner, K, V, T, D, TInner>(
+    descs: StreamVec<'inner, TInner, (usize, ExchangeableBatchPart<T>)>,
     name: &str,
     client: impl Future<Output = PersistClient> + Send + 'static,
     shard_id: ShardId,
@@ -635,8 +632,8 @@ fn shard_source_fetch<K, V, T, D, G>(
     is_transient: bool,
     error_handler: ErrorHandler,
 ) -> (
-    StreamVec<G, FetchedBlob<K, V, T, D>>,
-    StreamVec<G, Infallible>,
+    StreamVec<'inner, TInner, FetchedBlob<K, V, T, D>>,
+    StreamVec<'inner, TInner, Infallible>,
     PressOnDropButton,
 )
 where
@@ -644,12 +641,10 @@ where
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
-    G: Scope,
-    G::Timestamp: Refines<T>,
+    TInner: Timestamp + Refines<T>,
 {
     let scope = descs.scope();
-    let mut builder =
-        OperatorBuilderRc::new(format!("shard_source_fetch({})", name), scope.clone());
+    let mut builder = OperatorBuilderRc::new(format!("shard_source_fetch({})", name), scope);
     let info = builder.operator_info();
 
     let (fetched_output, fetched_stream) = builder.new_output();
@@ -665,11 +660,10 @@ where
     );
 
     // Shutdown token.
-    let (mut shutdown_handle, shutdown_button) =
-        button(&mut scope.clone(), Rc::clone(&info.address));
+    let (mut shutdown_handle, shutdown_button) = button(scope, Rc::clone(&info.address));
 
     // Set up the Tokio task and channels.
-    let sync_activator = scope.sync_activator_for(info.address.to_vec());
+    let sync_activator = scope.worker().sync_activator_for(info.address.to_vec());
     let (part_tx, part_rx) = mpsc::unbounded_channel();
     let (fetched_tx, fetched_rx) = mpsc::unbounded_channel();
     let name_owned = name.to_owned();
