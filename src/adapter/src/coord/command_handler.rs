@@ -12,7 +12,7 @@
 
 use base64::prelude::*;
 use differential_dataflow::lattice::Lattice;
-use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
+use mz_adapter_types::dyncfgs::{ALLOW_USER_SESSIONS, OIDC_GROUP_ROLE_SYNC_ENABLED};
 use mz_auth::AuthenticatorKind;
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
@@ -909,8 +909,16 @@ impl Coordinator {
             .try_get_role_by_name(&user.name)
             .expect("created above");
         let role_id = role.id;
-
         let superuser_attribute = role.attributes.superuser;
+
+        // JWT group-to-role sync: if the user has groups from OIDC and sync is enabled,
+        // reconcile their role memberships with the JWT group claims.
+        if let Some(ref groups) = user.groups {
+            let dyncfgs = self.catalog().system_config().dyncfgs();
+            if OIDC_GROUP_ROLE_SYNC_ENABLED.get(dyncfgs) {
+                self.sync_jwt_groups(role_id, groups).await?;
+            }
+        }
 
         if role_id.is_user() && !ALLOW_USER_SESSIONS.get(self.catalog().system_config().dyncfgs()) {
             return Err(AdapterError::UserSessionsDisallowed);

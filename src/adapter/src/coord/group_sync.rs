@@ -18,8 +18,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mz_repr::role_id::RoleId;
 use mz_sql::session::user::MZ_JWT_SYNC_ROLE_ID;
+use tracing::warn;
 
 use crate::catalog::Op;
+use crate::coord::Coordinator;
+use crate::AdapterError;
 
 /// Result of computing the group-to-role membership sync diff.
 #[derive(Debug, Clone)]
@@ -85,6 +88,64 @@ pub fn compute_group_sync_diff(
         .collect();
 
     GroupSyncDiff { grants, revokes }
+}
+
+impl Coordinator {
+    /// Syncs the user's role memberships based on JWT group claims.
+    ///
+    /// Resolves group names to catalog role IDs (case-insensitive),
+    /// computes the diff against current memberships, and executes
+    /// grant/revoke operations via `catalog_transact`.
+    pub(crate) async fn sync_jwt_groups(
+        &mut self,
+        member_id: RoleId,
+        groups: &[String],
+    ) -> Result<(), AdapterError> {
+        // Resolve group names to role IDs (case-insensitive).
+        let mut target_role_ids = BTreeSet::new();
+        for group in groups {
+            match self
+                .catalog()
+                .try_get_role_by_name_case_insensitive(group)
+            {
+                Some(role) => {
+                    target_role_ids.insert(role.id);
+                }
+                None => {
+                    warn!(
+                        group = group.as_str(),
+                        "OIDC group has no matching Materialize role, skipping"
+                    );
+                }
+            }
+        }
+
+        // Get the user's current memberships. Clone is needed to release the
+        // immutable catalog borrow before the mutable catalog_transact call below.
+        // This is cheap — role membership maps are typically small.
+        let current_membership = self
+            .catalog()
+            .get_role(&member_id)
+            .membership
+            .map
+            .clone();
+
+        // Compute diff.
+        let diff = compute_group_sync_diff(member_id, &current_membership, &target_role_ids);
+
+        // Skip catalog_transact if no changes (common for reconnect with same groups).
+        if diff.grants.is_empty() && diff.revokes.is_empty() {
+            return Ok(());
+        }
+
+        // Execute ops: revoke first, then grant.
+        let mut ops = diff.revokes;
+        ops.extend(diff.grants);
+
+        self.catalog_transact(None, ops).await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
