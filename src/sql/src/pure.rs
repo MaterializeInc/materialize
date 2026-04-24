@@ -252,6 +252,7 @@ pub enum PurifiedExportDetails {
         text_columns: Option<Vec<Ident>>,
         exclude_columns: Option<Vec<Ident>>,
         initial_gtid_set: String,
+        binlog_full_metadata: bool,
     },
     Postgres {
         table: PostgresTableDesc,
@@ -1101,6 +1102,14 @@ async fn purify_create_source(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
+            let binlog_full_metadata = version_compare::compare_to(
+                mz_mysql_util::query_sys_var(&mut conn, "version").await?,
+                "8.0.1",
+                version_compare::Cmp::Lt,
+            )
+            .expect("failed to parse version string from mysql")
+                && mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata").await? == "FULL";
+
             let reference_client = SourceReferenceClient::MySql {
                 conn: &mut conn,
                 include_system_schemas: mysql::references_system_schemas(external_references),
@@ -1120,6 +1129,7 @@ async fn purify_create_source(
                 source_name,
                 initial_gtid_set.clone(),
                 &reference_policy,
+                binlog_full_metadata,
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -1526,6 +1536,14 @@ async fn purify_alter_source_add_subsources(
             let initial_gtid_set =
                 mz_mysql_util::query_sys_var(&mut conn, "global.gtid_executed").await?;
 
+            let binlog_full_metadata = version_compare::compare_to(
+                mz_mysql_util::query_sys_var(&mut conn, "version").await?,
+                "8.0.1",
+                version_compare::Cmp::Lt,
+            )
+            .expect("failed to parse version string from mysql")
+                && mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata").await? == "FULL";
+
             let requested_references = Some(ExternalReferences::SubsetTables(external_references));
 
             let reference_client = SourceReferenceClient::MySql {
@@ -1547,6 +1565,7 @@ async fn purify_alter_source_add_subsources(
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
+                binlog_full_metadata,
             )
             .await?;
             requested_subsource_map.extend(subsources);
@@ -1882,6 +1901,30 @@ async fn purify_create_table_from_source(
                 )
                 .await?;
 
+            if version_compare::compare_to(
+                mz_mysql_util::query_sys_var(&mut conn, "version").await?,
+                "8.0.1",
+                version_compare::Cmp::Lt,
+            )
+            .expect("failed to parse version string from mysql")
+            {
+                Err(
+                    MySqlSourcePurificationError::UnsupportedBinlogMetadataSetting {
+                        setting: "Using MySQL version < 8.0.1, which does not support full binlog row metadata".to_string(),
+                    },
+                )?;
+            }
+            let binlog_metadata_setting =
+                mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata").await?;
+            let binlog_full_metadata = binlog_metadata_setting.to_uppercase() == "FULL";
+            if !binlog_full_metadata {
+                Err(
+                    MySqlSourcePurificationError::UnsupportedBinlogMetadataSetting {
+                        setting: binlog_metadata_setting,
+                    },
+                )?;
+            }
+
             // Retrieve the current @gtid_executed value of the server to mark as the effective
             // initial snapshot point for this table.
             let initial_gtid_set =
@@ -1909,6 +1952,7 @@ async fn purify_create_table_from_source(
                 &unresolved_source_name,
                 initial_gtid_set,
                 &SourceReferencePolicy::Required,
+                binlog_full_metadata,
             )
             .await?;
             // There should be exactly one source_export returned for this statement

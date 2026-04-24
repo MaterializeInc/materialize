@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mysql_async::binlog;
 use mz_mysql_util::{
     MySqlError, MySqlTableDesc, QualifiedTableRef, SYSTEM_SCHEMAS, validate_source_privileges,
 };
@@ -130,6 +131,7 @@ pub(super) fn generate_source_export_statement_values(
         text_columns,
         exclude_columns,
         initial_gtid_set,
+        binlog_full_metadata,
     } = purified_export.details
     else {
         bail_internal!("purified export details must be mysql");
@@ -188,6 +190,7 @@ pub(super) fn generate_source_export_statement_values(
     let details = SourceExportStatementDetails::MySql {
         table,
         initial_gtid_set,
+        binlog_full_metadata,
     };
 
     let text_columns = text_columns.map(|mut columns| {
@@ -339,6 +342,7 @@ pub(super) async fn purify_source_exports(
     unresolved_source_name: &UnresolvedItemName,
     initial_gtid_set: String,
     reference_policy: &SourceReferencePolicy,
+    binlog_full_metadata: bool,
 ) -> Result<PurifiedSourceExports, PlanError> {
     let requested_exports = match requested_references.as_ref() {
         Some(requested) if matches!(reference_policy, SourceReferencePolicy::NotAllowed) => {
@@ -477,6 +481,7 @@ pub(super) async fn purify_source_exports(
                                 .collect()
                         }),
                         initial_gtid_set: initial_gtid_set.clone(),
+                        binlog_full_metadata,
                     },
                 },
             )
