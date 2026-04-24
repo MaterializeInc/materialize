@@ -11,7 +11,7 @@
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
-use azure_core::{ExponentialRetryOptions, RetryOptions, StatusCode};
+use azure_core::{ExponentialRetryOptions, RetryOptions, StatusCode, TransportOptions};
 use azure_identity::create_default_credential;
 use azure_storage::{CloudLocation, EMULATOR_ACCOUNT, prelude::*};
 use azure_storage_blobs::blob::operations::GetBlobResponse;
@@ -70,11 +70,6 @@ impl AzureBlobConfig {
     ) -> Result<Self, Error> {
         let client = if account == EMULATOR_ACCOUNT {
             info!("Connecting to Azure emulator");
-            // Per-attempt/read/connect-timeout plumbing via `TransportOptions`
-            // was dropped: azure_core 0.21 pins reqwest 0.12 internally, so our
-            // 0.13 client no longer satisfies its `HttpClient` trait. Restored
-            // on the new SDK in the azure_sdk migration PR; `operation_timeout`
-            // still applies via the retry policy.
             ClientBuilder::with_location(
                 CloudLocation::Emulator {
                     address: url.domain().expect("domain for Azure emulator").to_string(),
@@ -82,6 +77,18 @@ impl AzureBlobConfig {
                 },
                 StorageCredentials::emulator(),
             )
+            .transport({
+                // Azure uses reqwest / hyper internally, but we specify a client explicitly to
+                // plumb through our timeouts.
+                TransportOptions::new(Arc::new(
+                    reqwest::ClientBuilder::new()
+                        .timeout(knobs.operation_attempt_timeout())
+                        .read_timeout(knobs.read_timeout())
+                        .connect_timeout(knobs.connect_timeout())
+                        .build()
+                        .expect("valid config for azure HTTP client"),
+                ))
+            })
             .retry(RetryOptions::exponential(
                 ExponentialRetryOptions::default().max_total_elapsed(knobs.operation_timeout()),
             ))

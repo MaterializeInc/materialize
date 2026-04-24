@@ -296,7 +296,7 @@ will_work
 
 > CREATE SOURCE webhook_text_headers_block_list IN CLUSTER webhook_cluster FROM WEBHOOK
   BODY FORMAT TEXT
-  INCLUDE HEADERS (NOT 'accept', NOT 'accept-encoding', NOT 'host')
+  INCLUDE HEADERS (NOT 'accept', NOT 'host')
 
 $ webhook-append name=webhook_text_headers_block_list
 foo
@@ -318,7 +318,7 @@ anotha_one "{x-random=>bar}"
   BODY FORMAT TEXT
   INCLUDE HEADER 'x-timestamp' as event_timestamp
   INCLUDE HEADER 'x-id' as event_id
-  INCLUDE HEADERS (NOT 'accept', NOT 'accept-encoding', NOT 'content-length', NOT 'host', NOT 'x-api-key')
+  INCLUDE HEADERS (NOT 'accept', NOT 'content-length', NOT 'host', NOT 'x-api-key')
   CHECK ( WITH (HEADERS) headers->'x-api-key' = 'abc123' )
 
 $ webhook-append name=webhook_text_filtering_headers x-timestamp=100 x-id=a x-api-key=abc123 content-type=text/example
