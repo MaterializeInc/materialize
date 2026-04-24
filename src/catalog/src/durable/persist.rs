@@ -367,6 +367,10 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     bootstrap_complete: bool,
     /// Metrics for the persist catalog.
     metrics: Arc<Metrics>,
+    /// Snapshot size at the last amortized consolidation, used by
+    /// [`Self::maybe_consolidate`] to decide when to consolidate. Initialized
+    /// lazily on the first call.
+    size_at_last_consolidation: Option<usize>,
 }
 
 impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
@@ -560,19 +564,9 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
 
         let mut updates: BTreeMap<_, Vec<_>> = BTreeMap::new();
 
-        // Track the snapshot size so we can consolidate when it doubles. This
-        // bounds memory usage during catch-up: without it, the snapshot grows
-        // with every retract+insert pair across timestamps. Ideally, we would
-        // consolidate once after all timestamps, not per-timestamp, but heuristically
-        // snapshot based on doubling behavior to bound memory
-        // This behavior is safe because nothing in the loop reads from self.snapshot:
-        // the update_applier maintains its own internal state (configs, settings,
-        // fence tokens) independently. Consolidating per-timestamp was O(K * N log N);
-        // consolidating once is O(N log N).
-
-        // Use a minimum threshold to avoid consolidating on every Progress
-        // event when the snapshot is small or empty (since 0 * 2 = 0).
-        let mut size_at_last_consolidation = max(self.snapshot.len(), 8);
+        // Reset the amortized consolidation tracker so it picks up the
+        // current snapshot size as its baseline.
+        self.size_at_last_consolidation = None;
 
         while self.upper < target_upper {
             let listen_events = self.listen.fetch_next().await;
@@ -599,12 +593,7 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
                                 },
                             );
                             self.apply_updates(updates)?;
-                        }
-                        // Consolidate when the snapshot has doubled in size to
-                        // bound memory.
-                        if self.snapshot.len() >= size_at_last_consolidation * 2 {
-                            self.consolidate();
-                            size_at_last_consolidation = self.snapshot.len();
+                            self.maybe_consolidate();
                         }
                     }
                     ListenEvent::Updates(batch_updates) => {
@@ -695,6 +684,22 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
         }
 
         Ok(())
+    }
+
+    /// Consolidate the snapshot if it has at least doubled in size since the
+    /// last consolidation. This amortizes the O(N log N) consolidation cost
+    /// over many small updates, keeping the total work O(N log N) rather than
+    /// O(K * N log N) for K timestamps.
+    fn maybe_consolidate(&mut self) {
+        let threshold = *self
+            .size_at_last_consolidation
+            // Use a minimum of 8 to avoid consolidating on every update when
+            // the snapshot is small or empty (since 0 * 2 = 0).
+            .get_or_insert_with(|| max(self.snapshot.len(), 8));
+        if self.snapshot.len() >= threshold * 2 {
+            self.consolidate();
+            self.size_at_last_consolidation = Some(self.snapshot.len());
+        }
     }
 
     #[mz_ore::instrument]
@@ -1078,6 +1083,7 @@ impl UnopenedPersistCatalogState {
             catalog_content_version: version,
             bootstrap_complete: false,
             metrics,
+            size_at_last_consolidation: None,
         };
         // If the snapshot is not consolidated, and we see multiple epoch values while applying the
         // updates, then we might accidentally fence ourselves out.
@@ -1274,6 +1280,7 @@ impl UnopenedPersistCatalogState {
             catalog_content_version: self.catalog_content_version,
             bootstrap_complete: false,
             metrics: self.metrics,
+            size_at_last_consolidation: None,
         };
         catalog.metrics.collection_entries.reset();
         // Normally, `collection_entries` is updated in `apply_updates`. The audit log updates skip
