@@ -131,3 +131,17 @@ SELECT 1 FROM mz_internal.mz_statement_execution_history_redacted WHERE 1 = 0
 query I
 SELECT 1 FROM mz_internal.mz_recent_activity_log_redacted WHERE 1 = 0
 ----
+
+# Test that the mz_jwt_sync sentinel role exists and is not loginable.
+# This role is used as the grantor for JWT group-sync-managed role memberships.
+
+query T
+SELECT name FROM mz_roles WHERE name = 'mz_jwt_sync'
+----
+mz_jwt_sync
+
+# mz_jwt_sync should not be a superuser or have login privileges
+query BBB
+SELECT r.inherit, r.rolcanlogin, r.rolsuper FROM mz_roles r WHERE r.name = 'mz_jwt_sync'
+----
+true  false  NULL

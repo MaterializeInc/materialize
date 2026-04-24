@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
+assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -479,6 +480,26 @@ Snapshot {
                 entries: [],
             },
             oid: 16984,
+        },
+        RoleKey {
+            id: System(
+                4,
+            ),
+        }: RoleValue {
+            name: "mz_jwt_sync",
+            attributes: RoleAttributes {
+                inherit: true,
+                superuser: None,
+                login: None,
+                auto_provision_source: None,
+            },
+            membership: RoleMembership {
+                map: [],
+            },
+            vars: RoleVars {
+                entries: [],
+            },
+            oid: 17075,
         },
         RoleKey {
             id: Public,
