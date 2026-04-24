@@ -186,14 +186,12 @@ Differential␠Logging␠Demux  Consolidate␠Differential(BatcherCapacity)  all
 Differential␠Logging␠Demux  Consolidate␠Differential(BatcherRecords)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Differential␠Logging␠Demux  Consolidate␠Differential(BatcherSize)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Differential␠Logging␠Demux  Consolidate␠Differential(Sharing)  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-Filter  Remap␠Storage␠IDs  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 FlatMapReachability  Consolidate␠Timely(Reachability)  mz_timely_util::columnar::Column<(((bool,␠usize,␠usize,␠usize,␠mz_repr::timestamp::Timestamp),␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 PrometheusMetrics  Arrange␠PrometheusMetrics  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
-Remap␠Storage␠IDs  Concatenate  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 Replay␠compute␠logs  Compute␠Logging␠Demux  mz_timely_util::columnar::Column<(core::time::Duration,␠mz_compute::logging::compute::ComputeEvent)>
 Replay␠differential␠logs  Differential␠Logging␠Demux  alloc::vec::Vec<(core::time::Duration,␠differential_dataflow::logging::DifferentialEvent)>
 Replay␠reachability␠logs  FlatMapReachability  mz_timely_util::columnar::Column<(core::time::Duration,␠(usize,␠alloc::vec::Vec<(usize,␠usize,␠bool,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>))>
-Replay␠storage␠timely␠logs  Filter  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
+Replay␠storage␠timely␠logs  Concatenate  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 Replay␠timely␠logs  Concatenate  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 Timely␠Logging␠Demux  Consolidate␠Timely(Addresses)  alloc::vec::Vec<((usize,␠alloc::vec::Vec<usize>),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 Timely␠Logging␠Demux  Consolidate␠Timely(BatchesReceived)  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -247,10 +245,10 @@ GROUP BY type;
 1  mz_timely_util::columnar::Column<((mz_compute::logging::timely::ChannelDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 1  mz_timely_util::columnar::Column<(core::time::Duration,␠(usize,␠alloc::vec::Vec<(usize,␠usize,␠bool,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>))>
 1  mz_timely_util::columnar::Column<(core::time::Duration,␠mz_compute::logging::compute::ComputeEvent)>
+3  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 32  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_compute::row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 32  mz_timely_util::columnar::Column<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 4  alloc::vec::Vec<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 4  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((mz_compute::logging::timely::MessageDatum,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>
-5  alloc::vec::Vec<(core::time::Duration,␠timely::logging::TimelyEvent)>
 8  alloc::vec::Vec<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 8  alloc::vec::Vec<alloc::vec::Vec<mz_timely_util::columnation::ColumnationStack<((usize,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>

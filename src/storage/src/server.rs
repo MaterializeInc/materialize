@@ -23,7 +23,9 @@ use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
 use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
-use timely::logging::TimelyEvent;
+use timely::logging::{
+    ChannelsEvent, MessagesEvent, OperatesEvent, ScheduleEvent, ShutdownEvent, TimelyEvent,
+};
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -151,7 +153,19 @@ impl ClusterSpec for Config {
                 start_offset,
                 move |time: &std::time::Duration,
                       data: &mut Option<Vec<(std::time::Duration, TimelyEvent)>>| {
-                    if let Some(data) = data.take() {
+                    if let Some(mut data) = data.take() {
+                        // Filter park/unpark events and remap IDs before handing events
+                        // off to compute. Compute's park tracking assumes a single
+                        // timely runtime; mixing in storage's park events would break
+                        // it. Remapping ensures storage operator/channel IDs don't
+                        // collide with compute's.
+                        data.retain_mut(|(_, event)| {
+                            if matches!(event, TimelyEvent::Park(_)) {
+                                return false;
+                            }
+                            remap_timely_event_ids(event);
+                            true
+                        });
                         event_pusher.push(Event::Messages(time_ms, data));
                     } else {
                         // Advance progress.
@@ -188,5 +202,57 @@ impl ClusterSpec for Config {
             self.shared_rocksdb_write_buffer_manager.clone(),
         )
         .run();
+    }
+}
+
+/// Offset added to storage operator/channel IDs to avoid collisions with compute IDs.
+///
+/// Large enough that compute IDs (which start from 0 and grow) will never reach it,
+/// but small enough to be representable as a `u64` with room for many storage operators.
+const STORAGE_ID_OFFSET: usize = 1 << 48;
+
+/// Remaps operator, channel, and address IDs in a `TimelyEvent` so that events
+/// forwarded to compute's logging dataflow don't collide with compute's IDs.
+fn remap_timely_event_ids(event: &mut TimelyEvent) {
+    match event {
+        TimelyEvent::Operates(OperatesEvent { id, addr, .. }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+            if let Some(first) = addr.first_mut() {
+                *first = first.wrapping_add(STORAGE_ID_OFFSET);
+            }
+        }
+        TimelyEvent::Channels(ChannelsEvent {
+            id,
+            scope_addr,
+            source,
+            target,
+            ..
+        }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+            if let Some(first) = scope_addr.first_mut() {
+                *first = first.wrapping_add(STORAGE_ID_OFFSET);
+            }
+            source.0 = source.0.wrapping_add(STORAGE_ID_OFFSET);
+            target.0 = target.0.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Shutdown(ShutdownEvent { id }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Schedule(ScheduleEvent { id, .. }) => {
+            *id = id.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Messages(MessagesEvent { channel, .. }) => {
+            *channel = channel.wrapping_add(STORAGE_ID_OFFSET);
+            // source/target in Messages are worker IDs, not operator IDs.
+        }
+        TimelyEvent::PushProgress(e) => {
+            e.op_id = e.op_id.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::CommChannels(e) => {
+            e.identifier = e.identifier.wrapping_add(STORAGE_ID_OFFSET);
+        }
+        TimelyEvent::Park(_) | TimelyEvent::Text(_) => {
+            // No IDs to remap.
+        }
     }
 }
