@@ -13,10 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import threading
 import time
 
+import psycopg2
 import pytest
-from dbt.tests.util import run_dbt
+from dbt.tests.util import run_dbt, run_dbt_and_capture
 from fixtures import (
     test_materialized_view,
     test_materialized_view_deploy,
@@ -1107,6 +1110,255 @@ class TestEndToEndDeployment:
         ), "Sink's view ID should be different after deployment"
 
         run_dbt(["run-operation", "deploy_cleanup", "--vars", project_config])
+
+
+# Test-only macro that exposes `adapter.try_atomic_swap` directly so we can
+# assert on its error classification without needing to reproduce exotic
+# server-side conditions.
+_test_try_atomic_swap_macro = """
+{% macro _test_try_atomic_swap(swap_sql) %}
+    {% set ok = adapter.try_atomic_swap(swap_sql) %}
+    {{ log("try_atomic_swap returned: " ~ ok, info=True) }}
+{% endmacro %}
+"""
+
+
+class TestDeployPromoteRetry:
+    """Covers the retry behavior in deploy_promote.
+
+    The atomic swap should retry on Materialize's concurrent-DDL conflict
+    (SQLSTATE 40001) and raise all other errors immediately.
+    """
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "vars": {
+                "deployment": {
+                    "default": {
+                        "clusters": ["prod"],
+                        "schemas": ["prod"],
+                    }
+                },
+            }
+        }
+
+    @pytest.fixture(scope="class")
+    def macros(self):
+        return {"_test_try_atomic_swap.sql": _test_try_atomic_swap_macro}
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        project.run_sql("DROP CLUSTER IF EXISTS prod CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS prod_dbt_deploy CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS concurrent_probe CASCADE")
+
+    def test_try_atomic_swap_raises_syntax_errors_immediately(self, project):
+        """A syntax error is not a DDL conflict and must surface to the user
+        right away rather than being silently retried."""
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "_test_try_atomic_swap",
+                "--args",
+                "{swap_sql: 'NOT VALID SQL'}",
+            ],
+            expect_pass=False,
+        )
+        msg = log_output.lower()
+        # Must not be disguised as a retry-exhausted error from deploy_promote.
+        assert (
+            "failed after" not in msg
+        ), f"syntax error should not be masked by a retry-exhausted message; got: {msg}"
+        # The original syntax error must actually surface. Materialize phrases
+        # parser errors as "Unexpected keyword ..."; match either that or the
+        # generic "syntax" wording.
+        assert (
+            "unexpected" in msg or "syntax" in msg
+        ), f"expected the underlying syntax error to surface; got: {msg}"
+
+    def test_try_atomic_swap_raises_missing_object_errors_immediately(self, project):
+        """A missing-object error is not a DDL conflict and must raise
+        immediately, not be retried as if it were one."""
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "_test_try_atomic_swap",
+                "--args",
+                "{swap_sql: 'ALTER SCHEMA does_not_exist_xyz SWAP WITH also_missing_xyz'}",
+            ],
+            expect_pass=False,
+        )
+        msg = log_output.lower()
+        assert (
+            "failed after" not in msg
+        ), f"missing-object error should not be masked by a retry-exhausted message; got: {msg}"
+        # The original missing-object error must actually surface.
+        assert (
+            "does_not_exist_xyz" in msg or "unknown schema" in msg or "not found" in msg
+        ), f"expected the underlying missing-object error to surface; got: {msg}"
+
+    def test_deploy_promote_succeeds_under_concurrent_ddl(self, project):
+        """Injects continuous concurrent DDL on a second connection while
+        deploy_promote runs. The swap transaction should hit at least one
+        conflict and then succeed on retry. Asserts both the final state
+        and that the retry path actually fired, so a regression that
+        silently drops the retry loop would be caught."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        before_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        before_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        stop = threading.Event()
+
+        def churn_ddl():
+            conn = psycopg2.connect(
+                host=os.environ.get("DBT_HOST", "localhost"),
+                port=int(os.environ.get("DBT_PORT", 6875)),
+                user="materialize",
+                password="password",
+                dbname="materialize",
+            )
+            conn.autocommit = True
+            try:
+                with conn.cursor() as cur:
+                    while not stop.is_set():
+                        try:
+                            cur.execute("CREATE SCHEMA IF NOT EXISTS concurrent_probe")
+                            cur.execute("DROP SCHEMA IF EXISTS concurrent_probe")
+                        except psycopg2.Error:
+                            pass
+            finally:
+                conn.close()
+
+        churn = threading.Thread(target=churn_ddl, daemon=True)
+        churn.start()
+        try:
+            # `retry_backoff` has to be non-zero: with continuous concurrent
+            # DDL and zero backoff, each swap retry races the churn thread
+            # with no quiet window and loses every time. A short backoff
+            # gives the swap a reliable window between churn DDLs. Keep
+            # `max_retries * retry_backoff` modest so CI time stays bounded.
+            _, log_output = run_dbt_and_capture(
+                [
+                    "run-operation",
+                    "deploy_promote",
+                    "--args",
+                    "{max_retries: 20, retry_backoff: 0.1}",
+                ]
+            )
+        finally:
+            stop.set()
+            churn.join(timeout=5)
+
+        after_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        after_clusters = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_clusters WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+
+        # Schemas and clusters should have swapped identities.
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
+        assert before_clusters["prod"] == after_clusters["prod_dbt_deploy"]
+        assert before_clusters["prod_dbt_deploy"] == after_clusters["prod"]
+
+        # The retry path must have fired at least once. If the churn thread
+        # was unlucky and never raced, this assertion will fail — retry
+        # `max_retries` high enough that the race window is reliably hit.
+        assert (
+            "Retrying atomic swap" in log_output
+        ), "concurrent DDL should have forced at least one retry"
+
+    def test_deploy_promote_happy_path_logs_swap_lines(self, project):
+        """Regression guard: the user-visible "Swapping schemas/clusters"
+        log lines must still fire on a happy-path swap. Without these,
+        customers have no feedback during the deploy."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        _, log_output = run_dbt_and_capture(["run-operation", "deploy_promote"])
+        assert "Swapping schemas prod and prod_dbt_deploy" in log_output, log_output
+        assert "Swapping clusters prod and prod_dbt_deploy" in log_output, log_output
+        # No retries should have happened on the happy path.
+        assert "Retrying atomic swap" not in log_output, log_output
+
+    def test_deploy_promote_max_retries_zero_succeeds_without_conflict(self, project):
+        """Sanity check that `max_retries=0` still permits a successful
+        swap — the retry loop must execute exactly one attempt, not zero."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        before_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        run_dbt(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{max_retries: 0}",
+            ]
+        )
+        after_schemas = dict(
+            project.run_sql(
+                "SELECT name, id FROM mz_schemas WHERE name IN ('prod', 'prod_dbt_deploy')",
+                fetch="all",
+            )
+        )
+        assert before_schemas["prod"] == after_schemas["prod_dbt_deploy"]
+        assert before_schemas["prod_dbt_deploy"] == after_schemas["prod"]
+
+    def test_deploy_promote_raises_retry_exhausted_error(self, project):
+        """Pins down the retry-exhausted failure path. With `max_retries=-1`
+        the retry loop executes zero attempts and must raise the
+        exhaustion error; this covers the branch deterministically without
+        having to race concurrent DDL."""
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA prod_dbt_deploy")
+
+        _, log_output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "deploy_promote",
+                "--args",
+                "{max_retries: -1}",
+            ],
+            expect_pass=False,
+        )
+        assert "failed after" in log_output, log_output
+        assert "attempts" in log_output, log_output
 
 
 def run_with_retry(project, sql, expected_count, retries=5, delay=3, fetch="one"):
