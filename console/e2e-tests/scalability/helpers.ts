@@ -7,14 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-/**
- * Shared infrastructure for console scalability tests.
- *
- * Provides query observation, timing reports, concurrency analysis,
- * SQL labeling, and authentication helpers.
- */
-
-import { BrowserContext, Page, Request } from "@playwright/test";
+import { BrowserContext, expect, Page, Request } from "@playwright/test";
 
 export const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 export const REGION_SLUG =
@@ -43,6 +36,8 @@ export interface QueryRecord {
   responseBytes: number;
   status: number;
   failed: boolean;
+  /** In-flight at audit end — distinct from `failed`. */
+  incomplete: boolean;
   tabIndex: number;
 }
 
@@ -70,113 +65,90 @@ export function objectExplorerUrl(databaseName?: string): string {
   return databaseName ? `${base}/${databaseName}` : base;
 }
 
-const ERROR_PATTERNS = [
-  "trouble reaching your environment",
-  "An error occurred loading cluster data",
-  "Health check failed",
-  "Try again",
+const ERROR_TEXT_PATTERNS = [
+  /trouble reaching your environment/i,
+  /an error occurred/i,
+  /health check failed/i,
+  /try again/i,
 ] as const;
 
-/** Locates known console error messages on the page. */
-function errorLocator(page: Page) {
-  return page.locator(ERROR_PATTERNS.map((e) => `text="${e}"`).join(", "));
-}
-
-/** Throws if any known error message is visible on the page. */
 export async function assertNoErrors(page: Page, label: string) {
-  const errors = errorLocator(page);
-  const count = await errors.count();
-  if (count > 0) {
-    const text = await errors.first().textContent();
-    throw new Error(`[${label}] Error visible on page: "${text}"`);
+  const errorBox = page.locator("[data-testid=error-box]");
+  if ((await errorBox.count()) > 0) {
+    const text = (await errorBox.first().textContent()) ?? "(no text)";
+    throw new Error(`[${label}] ErrorBox visible on page: "${text.trim()}"`);
+  }
+
+  for (const pattern of ERROR_TEXT_PATTERNS) {
+    const matches = page.getByText(pattern);
+    if ((await matches.count()) > 0) {
+      const text = (await matches.first().textContent()) ?? "(no text)";
+      throw new Error(
+        `[${label}] Error text visible on page: "${text.trim()}"`,
+      );
+    }
   }
 }
 
 /**
- * SQL query labels grouped by page.
- *
- * Each label maps to a regex that uniquely identifies the query in the
- * compiled SQL sent to /api/sql. Patterns are derived from the Kysely
- * query builders in console/src/api/materialize/ and verified against
- * compiled snapshots in __snapshots__/ directories.
- *
- * When adding a new label, put it in the correct page group and ensure
- * the regex is specific enough to not match other queries.
+ * Fallback for pre-V2 callers without `query_key` or `--label\n` prefix.
+ * Should shrink as the executeSqlV2 migration progresses.
  */
-
-/** Queries that fire on every page (health checks, auth). */
-export const GLOBAL_QUERIES: Record<string, RegExp> = {
-  healthCheck: /mz_version/,
-  canCreateObjects: /mz_show_my_schema_privileges/,
-  rbacCheck: /mz_is_superuser/,
-};
-
-/** Queries fired on the cluster detail page. */
-export const CLUSTER_DETAIL_QUERIES: Record<string, RegExp> = {
-  clusterFreshness: /lag_history_with_temporal_filter/,
-  replicaUtilizationOverview: /mz_console_cluster_utilization_overview/,
-  replicaUtilizationHistory:
-    /date_bin.*replica_metrics_history|mz_cluster_replica_metrics_history/,
-  deploymentLineage:
-    /mz_cluster_deployment_lineage|current_deployment_cluster_id/,
-  largestMaintainedQueries:
-    /mz_dataflow_arrangement_sizes.*mz_compute_exports.*export_id/,
-  arrangementMemory:
-    /mz_objects.*mz_compute_exports.*mz_dataflow_arrangement_sizes/,
-  indexesList: /mz_indexes.*mz_show_indexes/,
-  largestClusterReplica: /mz_hydration_statuses.*heap_limit|bool_and.*hydrated/,
-  replicasWithUtilization:
-    /cpu_percent.*disk_percent|mz_cluster_replica_utilization/,
-  materializationLag: /mz_wallclock_global_lag_recent_history/,
-  maxReplicasPerCluster: /SHOW max_replicas_per_cluster/,
-  availableClusterSizes: /mz_cluster_replica_sizes.*not like/,
-  clusterReplicas:
-    /mz_cluster_replicas.*mz_cluster_replica_sizes.*heap_limit(?!.*hydrated)/,
-};
-
-/** Queries fired on the cluster list page. */
-export const CLUSTER_LIST_QUERIES: Record<string, RegExp> = {
-  clustersList: /mz_clusters.*jsonArrayFrom|mz_clusters.*latest_status_update/,
-};
-
-/** Queries fired on the sources list page. */
-export const SOURCES_LIST_QUERIES: Record<string, RegExp> = {
-  sourcesList: /mz_sources.*mz_source_statuses/,
-  sourceStatistics: /mz_source_statistics_with_history/,
-};
-
-/** Queries fired on the sinks list page. */
-export const SINKS_LIST_QUERIES: Record<string, RegExp> = {
-  sinksList: /mz_sinks.*mz_sink_statuses/,
-  sinkStatistics: /mz_sink_statistics/,
-  databaseList: /from.*mz_databases.*order by.*name/,
-  databaseDetails: /mz_databases.*mz_object_lifetimes.*occurred_at/,
-};
-
-/**
- * All labels in match order. Page-specific queries are checked first
- * since they contain more distinctive SQL patterns. Global queries
- * (healthCheck, rbacCheck) are checked last as fallbacks — their
- * patterns (mz_version, mz_is_superuser) also appear as subexpressions
- * in page-specific queries.
- */
-const SQL_LABEL_ENTRIES: [string, RegExp][] = [
-  ...Object.entries(CLUSTER_DETAIL_QUERIES),
-  ...Object.entries(CLUSTER_LIST_QUERIES),
-  ...Object.entries(SOURCES_LIST_QUERIES),
-  ...Object.entries(SINKS_LIST_QUERIES),
-  ...Object.entries(GLOBAL_QUERIES),
+const LEGACY_SQL_LABELS: [string, RegExp][] = [
+  ["healthCheck", /mz_version/i],
+  ["canCreateObjects", /mz_show_my_schema_privileges/i],
+  ["rbacCheck", /mz_is_superuser/i],
 ];
 
-function labelSql(sql: string): string {
-  for (const [label, pattern] of SQL_LABEL_ENTRIES) {
-    if (pattern.test(sql)) return label;
+/**
+ * `hashKey` from @tanstack/react-query JSON-stringifies (not hashes), so
+ * `query_key` is a readable array of `{scope, ...}` parts. Joined: `clusters.list`.
+ */
+function labelFromQueryKey(request: Request): string | undefined {
+  try {
+    const url = new URL(request.url());
+    const raw = url.searchParams.get("query_key");
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return undefined;
+    const scopes = parsed
+      .map((part) =>
+        part && typeof part === "object" && typeof part.scope === "string"
+          ? part.scope
+          : undefined,
+      )
+      .filter((s): s is string => !!s);
+    if (scopes.length === 0) return undefined;
+    return scopes.join(".");
+  } catch {
+    return undefined;
   }
-  return sql.substring(0, 80);
 }
 
-/** Extracts SQL from a request body and maps each query to a human-readable label. */
-function parseSql(request: Request): string {
+function labelFromSqlComment(sql: string): string | undefined {
+  const match = sql.match(/^--([^\n]+)\n/);
+  return match ? match[1].trim() : undefined;
+}
+
+function labelFromLegacyRegex(sql: string): string | undefined {
+  for (const [label, pattern] of LEGACY_SQL_LABELS) {
+    if (pattern.test(sql)) return label;
+  }
+  return undefined;
+}
+
+/**
+ * Labeling order:
+ *   1. `query_key` URL param (V2)
+ *   2. `--label\n` SQL comment prefix (V1 with queryKey)
+ *   3. Legacy regex fallback
+ *   4. Truncated SQL
+ */
+function labelRequest(request: Request): string {
+  const fromKey = labelFromQueryKey(request);
+  if (fromKey) return fromKey;
+
+  let sql = "";
   try {
     const body = JSON.parse(request.postData() || "{}");
     const queries: string[] = body.queries
@@ -186,31 +158,40 @@ function parseSql(request: Request): string {
         : [];
     if (queries.length === 0) return "unknown";
 
-    const labels = queries.map((q) => labelSql(q));
+    const labels = queries.map((q) => {
+      const fromComment = labelFromSqlComment(q);
+      if (fromComment) return fromComment;
+      const fromRegex = labelFromLegacyRegex(q);
+      if (fromRegex) return fromRegex;
+      return q.substring(0, 80);
+    });
     const unique = labels.filter((l, i) => i === 0 || l !== labels[i - 1]);
-    return unique.join(" + ");
+    sql = unique.join(" + ");
   } catch {
     return "parse-error";
   }
+  return sql;
 }
 
-/**
- * Attaches request/response listeners to record all /api/sql requests on a page.
- * Uses events instead of route interception so queries are never blocked.
- */
-export function observeQueries(
+export interface RegisteredListeners {
+  records: QueryRecord[];
+  /** Emits `incomplete: true` records for still-pending requests. Call before page close. */
+  finalize: () => void;
+}
+
+export function registerQueryListeners(
   page: Page,
-  records: QueryRecord[],
   tabIndex: number,
-) {
+): RegisteredListeners {
+  const records: QueryRecord[] = [];
   const pending = new Map<Request, { sql: string; startTime: number }>();
 
   page.on("request", (request) => {
     if (!request.url().includes("/api/sql")) return;
     if (request.method() !== "POST") return;
     pending.set(request, {
-      sql: parseSql(request),
-      startTime: Date.now(),
+      sql: labelRequest(request),
+      startTime: performance.now(),
     });
   });
 
@@ -236,13 +217,14 @@ export function observeQueries(
     records.push({
       timestamp: new Date().toISOString(),
       sql: entry.sql,
-      durationMs: Date.now() - entry.startTime,
+      durationMs: performance.now() - entry.startTime,
       queuedMs,
       serverMs,
       downloadMs,
       responseBytes,
       status: response?.status() ?? 0,
       failed: false,
+      incomplete: false,
       tabIndex,
     });
   });
@@ -255,16 +237,40 @@ export function observeQueries(
     records.push({
       timestamp: new Date().toISOString(),
       sql: entry.sql,
-      durationMs: Date.now() - entry.startTime,
+      durationMs: performance.now() - entry.startTime,
       queuedMs: 0,
       serverMs: 0,
       downloadMs: 0,
       responseBytes: 0,
       status: 0,
       failed: true,
+      incomplete: false,
       tabIndex,
     });
   });
+
+  const finalize = () => {
+    const now = performance.now();
+    const nowIso = new Date().toISOString();
+    for (const [, entry] of pending) {
+      records.push({
+        timestamp: nowIso,
+        sql: entry.sql,
+        durationMs: now - entry.startTime,
+        queuedMs: 0,
+        serverMs: 0,
+        downloadMs: 0,
+        responseBytes: 0,
+        status: 0,
+        failed: false,
+        incomplete: true,
+        tabIndex,
+      });
+    }
+    pending.clear();
+  };
+
+  return { records, finalize };
 }
 
 /** Waits for the console shell to render, then settles for 2s. */
@@ -279,26 +285,24 @@ export async function waitForPageLoad(page: Page, timeoutMs = 30_000) {
   await page.waitForTimeout(2_000);
 }
 
-/** Opens a new browser tab, attaches query observers, navigates to the URL, and waits for load. */
+export interface OpenedTab extends RegisteredListeners {
+  page: Page;
+}
+
+/** Caller must invoke `finalize()` and merge `records` at the end of the test. */
 export async function openTab(
   browser: BrowserContext,
   url: string,
-  records: QueryRecord[],
   tabIndex: number,
-): Promise<Page> {
+): Promise<OpenedTab> {
   const page = await browser.newPage();
-  observeQueries(page, records, tabIndex);
+  const listeners = registerQueryListeners(page, tabIndex);
   await page.goto(url);
   console.log(`  [tab ${tabIndex}] final URL: ${page.url()}`);
   await waitForPageLoad(page);
-  return page;
+  return { page, ...listeners };
 }
 
-/**
- * Signs in via Frontegg and saves browser state so subsequent tabs are pre-authenticated.
- * Similar to TestContext.signIn in e2e-tests/util.ts but decoupled from appConfig
- * so it works in both cloud and flexible-deployment modes.
- */
 async function signIn(page: Page): Promise<string> {
   if (!E2E_EMAIL || !E2E_PASSWORD) {
     throw new Error(
@@ -339,16 +343,22 @@ export async function createAuthenticatedContext(browser: {
   return browser.newContext({ storageState: statePath });
 }
 
-/**
- * Prints a full report: query summary table, timing breakdown (queue/server/download),
- * health check diagnostics, and peak concurrency analysis.
- */
-export function printQuerySummary(records: QueryRecord[]) {
-  if (records.length === 0) {
-    console.log("No queries recorded.");
-    return;
-  }
+interface GroupedStats {
+  count: number;
+  avgMs: number;
+  maxMs: number;
+  avgQueue: number;
+  maxQueue: number;
+  avgServer: number;
+  maxServer: number;
+  avgDownload: number;
+  maxDownload: number;
+  totalBytes: number;
+  failures: number;
+  incomplete: number;
+}
 
+function groupRecords(records: QueryRecord[]): Map<string, GroupedStats> {
   const grouped = new Map<
     string,
     {
@@ -363,6 +373,7 @@ export function printQuerySummary(records: QueryRecord[]) {
       maxDownloadMs: number;
       totalBytes: number;
       failures: number;
+      incomplete: number;
     }
   >();
   for (const r of records) {
@@ -379,6 +390,7 @@ export function printQuerySummary(records: QueryRecord[]) {
       maxDownloadMs: 0,
       totalBytes: 0,
       failures: 0,
+      incomplete: 0,
     };
     entry.count++;
     entry.totalMs += r.durationMs;
@@ -390,87 +402,131 @@ export function printQuerySummary(records: QueryRecord[]) {
     entry.totalDownloadMs += r.downloadMs;
     entry.maxDownloadMs = Math.max(entry.maxDownloadMs, r.downloadMs);
     entry.totalBytes += r.responseBytes;
-    if (r.failed || r.status !== 200) entry.failures++;
+    if (r.incomplete) entry.incomplete++;
+    else if (r.failed || r.status !== 200) entry.failures++;
     grouped.set(key, entry);
   }
 
-  // Main summary table
-  console.log("\n=== Query Summary ===");
-  console.log(
-    `${"Query".padEnd(50)} ${"Cnt".padStart(4)} ${"Avg".padStart(7)} ${"Max".padStart(7)} ${"Err".padStart(4)}`,
-  );
-  console.log("-".repeat(75));
+  const result = new Map<string, GroupedStats>();
+  for (const [label, s] of grouped) {
+    result.set(label, {
+      count: s.count,
+      avgMs: Math.round(s.totalMs / s.count),
+      maxMs: Math.round(s.maxMs),
+      avgQueue: Math.round(s.totalQueueMs / s.count),
+      maxQueue: Math.round(s.maxQueueMs),
+      avgServer: Math.round(s.totalServerMs / s.count),
+      maxServer: Math.round(s.maxServerMs),
+      avgDownload: Math.round(s.totalDownloadMs / s.count),
+      maxDownload: Math.round(s.maxDownloadMs),
+      totalBytes: s.totalBytes,
+      failures: s.failures,
+      incomplete: s.incomplete,
+    });
+  }
+  return result;
+}
 
+export function printQuerySummary(records: QueryRecord[]) {
+  if (records.length === 0) {
+    console.log("No queries recorded.");
+    return;
+  }
+
+  const grouped = groupRecords(records);
   const sorted = [...grouped.entries()].sort((a, b) => b[1].maxMs - a[1].maxMs);
-  for (const [label, s] of sorted) {
-    console.log(
-      `${label.padEnd(50)} ${String(s.count).padStart(4)} ${(Math.round(s.totalMs / s.count) + "ms").padStart(7)} ${(s.maxMs + "ms").padStart(7)} ${String(s.failures).padStart(4)}`,
-    );
-  }
 
-  // Timing breakdown table: queue vs server vs download
-  console.log("\n=== Timing Breakdown (avg / max ms) ===");
-  console.log(
-    `${"Query".padEnd(50)} ${"Queue".padStart(12)} ${"Server".padStart(12)} ${"Download".padStart(12)}`,
+  console.log("\n=== Query Summary ===");
+  console.table(
+    Object.fromEntries(
+      sorted.map(([label, s]) => [
+        label,
+        {
+          count: s.count,
+          avgMs: s.avgMs,
+          maxMs: s.maxMs,
+          errors: s.failures,
+          incomplete: s.incomplete,
+        },
+      ]),
+    ),
   );
-  console.log("-".repeat(88));
 
-  for (const [label, s] of sorted) {
-    const avgQ = Math.round(s.totalQueueMs / s.count);
-    const avgS = Math.round(s.totalServerMs / s.count);
-    const avgD = Math.round(s.totalDownloadMs / s.count);
-    console.log(
-      `${label.padEnd(50)} ${`${avgQ}/${s.maxQueueMs}`.padStart(12)} ${`${avgS}/${s.maxServerMs}`.padStart(12)} ${`${avgD}/${s.maxDownloadMs}`.padStart(12)}`,
-    );
-  }
+  console.log("\n=== Timing Breakdown (avg/max ms) ===");
+  console.table(
+    Object.fromEntries(
+      sorted.map(([label, s]) => [
+        label,
+        {
+          queue: `${s.avgQueue}/${s.maxQueue}`,
+          server: `${s.avgServer}/${s.maxServer}`,
+          download: `${s.avgDownload}/${s.maxDownload}`,
+        },
+      ]),
+    ),
+  );
 
-  // Health check summary
   const healthChecks = records.filter((r) => r.sql.includes("healthCheck"));
   if (healthChecks.length > 0) {
-    const maxHc = Math.max(...healthChecks.map((r) => r.durationMs));
-    const maxHcQueue = Math.max(...healthChecks.map((r) => r.queuedMs));
-    const maxHcServer = Math.max(...healthChecks.map((r) => r.serverMs));
+    const maxHc = healthChecks.reduce((m, r) => Math.max(m, r.durationMs), 0);
+    const maxHcQueue = healthChecks.reduce(
+      (m, r) => Math.max(m, r.queuedMs),
+      0,
+    );
+    const maxHcServer = healthChecks.reduce(
+      (m, r) => Math.max(m, r.serverMs),
+      0,
+    );
     const failedHc = healthChecks.filter(
-      (r) => r.failed || r.status !== 200,
+      (r) => !r.incomplete && (r.failed || r.status !== 200),
     ).length;
+    const incompleteHc = healthChecks.filter((r) => r.incomplete).length;
     console.log(
-      `\nHealth check: ${healthChecks.length} calls, max ${maxHc}ms (queue: ${maxHcQueue}ms, server: ${maxHcServer}ms), ${failedHc} failures`,
+      `\nHealth check: ${healthChecks.length} calls, max ${Math.round(maxHc)}ms (queue: ${Math.round(maxHcQueue)}ms, server: ${Math.round(maxHcServer)}ms), ${failedHc} failures, ${incompleteHc} incomplete`,
     );
     if (maxHcQueue > 2000) {
       console.log(
-        `  !! Health checks queued up to ${maxHcQueue}ms — browser connection pool starvation`,
+        `  !! Health checks queued up to ${Math.round(maxHcQueue)}ms — browser connection pool starvation`,
       );
     }
     if (maxHcServer > 5000) {
       console.log(
-        `  !! Health checks waited ${maxHcServer}ms for server response — mz_catalog_server saturated`,
+        `  !! Health checks waited ${Math.round(maxHcServer)}ms for server response — mz_catalog_server saturated`,
       );
     }
   }
 
-  // Concurrency analysis
   printConcurrencySummary(records);
+  printConcurrencyHistogram(records);
 
+  const failed = records.filter(
+    (r) => !r.incomplete && (r.failed || r.status !== 200),
+  ).length;
+  const incomplete = records.filter((r) => r.incomplete).length;
   console.log(`\nTotal requests: ${records.length}`);
-  console.log(
-    `Failed requests: ${records.filter((r) => r.failed || r.status !== 200).length}`,
-  );
+  console.log(`Failed requests: ${failed}`);
+  console.log(`Incomplete (still in flight at end): ${incomplete}`);
 }
 
 /**
- * Compute peak concurrency: the maximum number of requests that were in-flight
- * simultaneously across all tabs.
+ * Sweep-line over start/end events to find the peak in-flight request count.
+ * Each request emits a +1 event at start and -1 at end; running sum of the
+ * sorted event stream gives concurrency at any moment.
  */
 function printConcurrencySummary(records: QueryRecord[]) {
   if (records.length === 0) return;
 
   const events: { time: number; delta: 1 | -1; sql: string }[] = [];
   for (const r of records) {
+    if (r.incomplete) continue;
     const start = new Date(r.timestamp).getTime() - r.durationMs;
     const end = new Date(r.timestamp).getTime();
     events.push({ time: start, delta: 1, sql: r.sql });
     events.push({ time: end, delta: -1, sql: r.sql });
   }
+  // Tiebreak by delta so ends (-1) process before starts (+1) at the same
+  // timestamp — otherwise two sequential requests sharing an end/start ms
+  // would briefly look like 2x concurrency.
   events.sort((a, b) => a.time - b.time || a.delta - b.delta);
 
   let current = 0;
@@ -485,12 +541,13 @@ function printConcurrencySummary(records: QueryRecord[]) {
   }
 
   const peakRequests = records.filter((r) => {
+    if (r.incomplete) return false;
     const start = new Date(r.timestamp).getTime() - r.durationMs;
     const end = new Date(r.timestamp).getTime();
     return start <= peakTime && end > peakTime;
   });
 
-  console.log(`\n=== Concurrency ===`);
+  console.log(`\n=== Concurrency (peak) ===`);
   console.log(
     `Peak concurrent requests: ${peak} (at ${new Date(peakTime).toISOString()})`,
   );
@@ -511,19 +568,79 @@ function printConcurrencySummary(records: QueryRecord[]) {
   }
 }
 
-/** Prints query count and failure count per tab. */
+const HISTOGRAM_BUCKET_MS = 10_000;
+
+/** Active-request count per fixed-interval bucket — complements the single peak number. */
+function printConcurrencyHistogram(records: QueryRecord[]) {
+  const completed = records.filter((r) => !r.incomplete);
+  if (completed.length === 0) return;
+
+  const starts = completed.map(
+    (r) => new Date(r.timestamp).getTime() - r.durationMs,
+  );
+  const ends = completed.map((r) => new Date(r.timestamp).getTime());
+  const windowStart = starts.reduce((m, v) => Math.min(m, v), Infinity);
+  const windowEnd = ends.reduce((m, v) => Math.max(m, v), -Infinity);
+  const bucketCount = Math.ceil(
+    (windowEnd - windowStart) / HISTOGRAM_BUCKET_MS,
+  );
+  if (bucketCount <= 1) return;
+
+  const buckets: { bucketStart: number; active: number }[] = [];
+  for (let i = 0; i < bucketCount; i++) {
+    const bucketStart = windowStart + i * HISTOGRAM_BUCKET_MS;
+    const bucketEnd = bucketStart + HISTOGRAM_BUCKET_MS;
+    const midpoint = (bucketStart + bucketEnd) / 2;
+    let active = 0;
+    for (let j = 0; j < starts.length; j++) {
+      if (starts[j] <= midpoint && ends[j] > midpoint) active++;
+    }
+    buckets.push({ bucketStart, active });
+  }
+
+  console.log(`\n=== Concurrency (${HISTOGRAM_BUCKET_MS / 1000}s buckets) ===`);
+  const maxActive = buckets.reduce((m, b) => Math.max(m, b.active), 1);
+  for (const b of buckets) {
+    const offsetSec = Math.round((b.bucketStart - windowStart) / 1000);
+    const bar = "#".repeat(Math.round((b.active / maxActive) * 30));
+    console.log(
+      `  +${String(offsetSec).padStart(4)}s  ${String(b.active).padStart(3)}  ${bar}`,
+    );
+  }
+}
+
 export function printPerTabSummary(
   records: QueryRecord[],
   tabLabels: string[],
 ) {
   console.log("\n=== Per-Tab Query Count ===");
+  const rows: Record<
+    string,
+    { queries: number; failures: number; incomplete: number }
+  > = {};
   for (let i = 0; i < tabLabels.length; i++) {
     const tabRecords = records.filter((r) => r.tabIndex === i);
     const failed = tabRecords.filter(
-      (r) => r.failed || r.status !== 200,
+      (r) => !r.incomplete && (r.failed || r.status !== 200),
     ).length;
-    console.log(
-      `Tab ${i + 1} (${tabLabels[i]}): ${tabRecords.length} queries, ${failed} failures`,
-    );
+    const incomplete = tabRecords.filter((r) => r.incomplete).length;
+    rows[`Tab ${i + 1} (${tabLabels[i]})`] = {
+      queries: tabRecords.length,
+      failures: failed,
+      incomplete,
+    };
   }
+  console.table(rows);
+}
+
+/** Health check starvation is the multi-tab regression we guard against. */
+export function expectNoFailedHealthChecks(records: QueryRecord[]) {
+  const healthChecks = records.filter((r) => r.sql.includes("healthCheck"));
+  const failedHealthChecks = healthChecks.filter(
+    (r) => !r.incomplete && (r.failed || r.status !== 200),
+  );
+  expect(
+    failedHealthChecks.length,
+    `${failedHealthChecks.length} health checks failed`,
+  ).toBe(0);
 }

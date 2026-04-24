@@ -25,31 +25,26 @@ import {
   clustersListUrl,
   createAuthenticatedContext,
   objectExplorerUrl,
-  observeQueries,
-  QueryRecord,
+  registerQueryListeners,
   sinksListUrl,
   sourcesListUrl,
 } from "./helpers";
 
-/**
- * Measures time until one of the given selectors is visible.
- */
 async function measureUntilVisible(
   page: Page,
   selectors: string | string[],
   timeoutMs = 30_000,
 ): Promise<number> {
-  const start = Date.now();
+  const start = performance.now();
   const selectorList = Array.isArray(selectors) ? selectors : [selectors];
   await Promise.race(
     selectorList.map((s) =>
       page.locator(s).first().waitFor({ state: "visible", timeout: timeoutMs }),
     ),
   );
-  return Date.now() - start;
+  return performance.now() - start;
 }
 
-/** Loads a page in a fresh tab and measures time to content. */
 async function measureColdLoad(
   context: Awaited<ReturnType<typeof createAuthenticatedContext>>,
   name: string,
@@ -57,15 +52,15 @@ async function measureColdLoad(
   selector: string | string[],
 ) {
   const page = await context.newPage();
-  const records: QueryRecord[] = [];
-  observeQueries(page, records, 0);
+  const { records, finalize } = registerQueryListeners(page, 0);
 
   console.log(`\nLoading: ${name}`);
   await page.goto(url);
   const durationMs = await measureUntilVisible(page, selector);
-  console.log(`  Content visible in ${durationMs}ms`);
+  console.log(`  Content visible in ${Math.round(durationMs)}ms`);
 
   await page.waitForTimeout(3_000);
+  finalize();
   console.log(`  Queries during load: ${records.length}`);
 
   await page.close();
@@ -135,8 +130,7 @@ test.describe("Page Load Timing", () => {
   test("navigation flow: cluster list to detail", async ({ browser }) => {
     const context = await createAuthenticatedContext(browser);
     const page = await context.newPage();
-    const records: QueryRecord[] = [];
-    observeQueries(page, records, 0);
+    const { records, finalize } = registerQueryListeners(page, 0);
 
     const timings: { step: string; durationMs: number; queries: number }[] = [];
 
@@ -154,7 +148,7 @@ test.describe("Page Load Timing", () => {
         queries: records.length - queriesBefore,
       });
       console.log(
-        `  ${label}: ${durationMs}ms, ${records.length - queriesBefore} queries`,
+        `  ${label}: ${Math.round(durationMs)}ms, ${records.length - queriesBefore} queries`,
       );
     }
 
@@ -184,16 +178,17 @@ test.describe("Page Load Timing", () => {
       'text="Resource Usage"',
     );
 
+    finalize();
+
     console.log("\n=== Navigation Flow Results ===");
-    console.log(
-      `${"Step".padEnd(45)} ${"Time".padStart(8)} ${"Queries".padStart(8)}`,
+    console.table(
+      Object.fromEntries(
+        timings.map((t) => [
+          t.step,
+          { durationMs: Math.round(t.durationMs), queries: t.queries },
+        ]),
+      ),
     );
-    console.log("-".repeat(63));
-    for (const t of timings) {
-      console.log(
-        `${t.step.padEnd(45)} ${(t.durationMs + "ms").padStart(8)} ${String(t.queries).padStart(8)}`,
-      );
-    }
 
     const cold = timings.find((t) => t.step.includes("2. Click"));
     const cached = timings.find((t) => t.step.includes("4. Click"));
@@ -204,9 +199,11 @@ test.describe("Page Load Timing", () => {
       console.log(
         `\nCache speedup (Cluster Detail): ${speedup}% faster on revisit`,
       );
-      console.log(`  Cold: ${cold.durationMs}ms (${cold.queries} queries)`);
       console.log(
-        `  Cached: ${cached.durationMs}ms (${cached.queries} queries)`,
+        `  Cold: ${Math.round(cold.durationMs)}ms (${cold.queries} queries)`,
+      );
+      console.log(
+        `  Cached: ${Math.round(cached.durationMs)}ms (${cached.queries} queries)`,
       );
     }
 

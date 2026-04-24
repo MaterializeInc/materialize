@@ -16,7 +16,7 @@
  * Setup: see helpers.ts for environment configuration.
  */
 
-import { Page, test } from "@playwright/test";
+import { test } from "@playwright/test";
 
 import {
   assertNoErrors,
@@ -27,6 +27,7 @@ import {
   createAuthenticatedContext,
   HOLD_DURATION_MS,
   MAX_TABS,
+  OpenedTab,
   openTab,
   printPerTabSummary,
   printQuerySummary,
@@ -49,26 +50,26 @@ test.describe("Multi-Tab Stress", () => {
    */
   test("progressive tab stress on cluster detail", async ({ browser }) => {
     const context = await createAuthenticatedContext(browser);
-    const records: QueryRecord[] = [];
-    const pages: Page[] = [];
+    const tabs: OpenedTab[] = [];
     const url = clusterDetailUrl(CLUSTER_ID, CLUSTER_NAME);
 
     console.log(`Opening up to ${MAX_TABS} tabs on: ${url}`);
 
     for (let i = 0; i < MAX_TABS; i++) {
       console.log(`\n--- Opening tab ${i + 1} ---`);
-      const page = await openTab(context, url, records, i);
-      pages.push(page);
+      const tab = await openTab(context, url, i);
+      tabs.push(tab);
 
-      await page.waitForTimeout(5_000);
+      await tab.page.waitForTimeout(5_000);
 
       for (let j = 0; j <= i; j++) {
         await assertNoErrors(
-          pages[j],
+          tabs[j].page,
           `tab ${j + 1} (after opening tab ${i + 1})`,
         );
       }
-      console.log(`Tab ${i + 1}: OK — ${records.length} total queries so far`);
+      const queryCount = tabs.reduce((acc, t) => acc + t.records.length, 0);
+      console.log(`Tab ${i + 1}: OK — ${queryCount} total queries so far`);
     }
 
     console.log(
@@ -76,12 +77,14 @@ test.describe("Multi-Tab Stress", () => {
     );
     const holdStart = Date.now();
     while (Date.now() - holdStart < HOLD_DURATION_MS) {
-      await pages[0].waitForTimeout(10_000);
-      for (let j = 0; j < pages.length; j++) {
-        await assertNoErrors(pages[j], `tab ${j + 1} (during hold)`);
+      await tabs[0].page.waitForTimeout(10_000);
+      for (let j = 0; j < tabs.length; j++) {
+        await assertNoErrors(tabs[j].page, `tab ${j + 1} (during hold)`);
       }
     }
 
+    tabs.forEach((t) => t.finalize());
+    const records: QueryRecord[] = tabs.flatMap((t) => t.records);
     printQuerySummary(records);
     await context.close();
   });
@@ -92,9 +95,8 @@ test.describe("Multi-Tab Stress", () => {
    */
   test("mixed page multi-tab", async ({ browser }) => {
     const context = await createAuthenticatedContext(browser);
-    const records: QueryRecord[] = [];
 
-    const tabs = [
+    const tabSpecs = [
       {
         url: clusterDetailUrl(CLUSTER_ID, CLUSTER_NAME),
         label: "Cluster Detail",
@@ -109,31 +111,33 @@ test.describe("Multi-Tab Stress", () => {
       { url: clustersListUrl(), label: "Clusters List 2" },
     ];
 
-    const pages: Page[] = [];
+    const tabs: OpenedTab[] = [];
 
-    for (let i = 0; i < tabs.length; i++) {
-      console.log(`Opening tab ${i + 1}: ${tabs[i].label}`);
-      const page = await openTab(context, tabs[i].url, records, i);
-      pages.push(page);
-      await page.waitForTimeout(3_000);
+    for (let i = 0; i < tabSpecs.length; i++) {
+      console.log(`Opening tab ${i + 1}: ${tabSpecs[i].label}`);
+      const tab = await openTab(context, tabSpecs[i].url, i);
+      tabs.push(tab);
+      await tab.page.waitForTimeout(3_000);
     }
 
     console.log("\nHolding 6 tabs open for 3 minutes...");
     for (let check = 0; check < 6; check++) {
-      await pages[0].waitForTimeout(30_000);
-      for (let j = 0; j < pages.length; j++) {
+      await tabs[0].page.waitForTimeout(30_000);
+      for (let j = 0; j < tabs.length; j++) {
         await assertNoErrors(
-          pages[j],
-          `${tabs[j].label} (check ${check + 1}/6)`,
+          tabs[j].page,
+          `${tabSpecs[j].label} (check ${check + 1}/6)`,
         );
       }
       console.log(`Check ${check + 1}/6: all tabs OK`);
     }
 
+    tabs.forEach((t) => t.finalize());
+    const records: QueryRecord[] = tabs.flatMap((t) => t.records);
     printQuerySummary(records);
     printPerTabSummary(
       records,
-      tabs.map((t) => t.label),
+      tabSpecs.map((t) => t.label),
     );
     await context.close();
   });
