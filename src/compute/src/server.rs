@@ -30,7 +30,7 @@ use mz_ore::metrics::MetricsRegistry;
 use mz_ore::tracing::TracingHandle;
 use mz_persist_client::cache::PersistClientCache;
 use mz_storage_types::connections::ConnectionContext;
-use mz_timely_util::capture::ArcEventLink;
+use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
 use timely::logging::TimelyEvent;
 use timely::progress::Antichain;
@@ -58,7 +58,7 @@ pub struct ComputeInstanceContext {
 
 /// Type alias for the storage timely log reader.
 pub(crate) type StorageTimelyLogReader =
-    Arc<ArcEventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
+    Arc<EventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
 
 /// Configures the server with compute-specific metrics.
 #[derive(Clone)]

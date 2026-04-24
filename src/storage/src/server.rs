@@ -10,6 +10,7 @@
 //! An interactive dataflow server.
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use mz_cluster::client::{ClusterClient, ClusterSpec};
 use mz_cluster_client::client::TimelyConfig;
@@ -20,7 +21,7 @@ use mz_persist_client::cache::PersistClientCache;
 use mz_rocksdb::config::SharedWriteBufferManager;
 use mz_storage_client::client::{StorageClient, StorageCommand, StorageResponse};
 use mz_storage_types::connections::ConnectionContext;
-use mz_timely_util::capture::ArcEventLink;
+use mz_timely_util::capture::EventLink;
 use mz_txn_wal::operator::TxnsContext;
 use timely::logging::TimelyEvent;
 use timely::worker::Worker as TimelyWorker;
@@ -54,16 +55,11 @@ struct Config {
     pub workers_per_process: usize,
     /// Per-worker writers for forwarding timely logging events to compute,
     /// indexed by local worker index.
-    pub timely_log_writers: Arc<
-        Mutex<
-            Vec<
-                Option<
-                    Arc<ArcEventLink<mz_repr::Timestamp, Vec<(std::time::Duration, TimelyEvent)>>>,
-                >,
-            >,
-        >,
-    >,
+    pub timely_log_writers: Arc<Mutex<Vec<Option<TimelyLogWriter>>>>,
 }
+
+/// Per-worker writer handle for forwarding timely logging events to compute.
+pub(crate) type TimelyLogWriter = Arc<EventLink<mz_repr::Timestamp, Vec<(Duration, TimelyEvent)>>>;
 
 /// Initiates a timely dataflow computation, processing storage commands.
 pub async fn serve(
@@ -75,9 +71,7 @@ pub async fn serve(
     now: NowFn,
     connection_context: ConnectionContext,
     instance_context: StorageInstanceContext,
-    timely_log_writers: Vec<
-        Arc<ArcEventLink<mz_repr::Timestamp, Vec<(std::time::Duration, TimelyEvent)>>>,
-    >,
+    timely_log_writers: Vec<TimelyLogWriter>,
 ) -> Result<impl Fn() -> Box<dyn StorageClient> + use<>, anyhow::Error> {
     let workers_per_process = timely_config.workers;
     // Normalize the log-writer vec to exactly one slot per worker in this process.
