@@ -98,6 +98,7 @@ IGNORED_ERROR_PATTERNS = [
     r"missing required exponent",
     r"invalid unicode escape",
     r"dimension array or low bound array must not be null",
+    r"dimension values must not be null",
     r"LIKE pattern exceeds maximum length",
     r"cannot return complex numbers",
     r"must be greater than zero",

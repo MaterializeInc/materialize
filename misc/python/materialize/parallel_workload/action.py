@@ -532,6 +532,7 @@ class CopyToS3Action(Action):
                 "cannot represent decimal value",  # parquet limitation
                 "Cannot represent special numeric value",  # parquet limitation
                 "Arrow interval type MonthDayNano to parquet that is not yet implemented",  # arrow-rs limitation
+                "overflow i64 nanoseconds",  # arrow IntervalMonthDayNano limitation
             ]
         )
         if exe.db.complexity == Complexity.DDL:

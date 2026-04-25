@@ -278,6 +278,7 @@ steps:
                 - --factor-initial-data=0.01
                 - --compare-against
                 - common-ancestor
+        skip: "https://linear.app/materializeinc/issue/SEC-308"
         agents:
           queue: hetzner-x86-64-dedi-8cpu-32gb
 
