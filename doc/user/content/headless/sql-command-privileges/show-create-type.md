@@ -1,4 +1,4 @@
 ---
 headless: true
 ---
-- `USAGE` privileges on the schema containing the table.
+- `USAGE` privileges on the schema containing the type.
