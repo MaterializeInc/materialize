@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/render/join/delta_join.rs
-revision: b0fa98e931
+revision: bf9d3f5f53
 ---
 
 # mz-compute::render::join::delta_join
