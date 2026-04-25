@@ -380,7 +380,7 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
                     }
                     labels.push_str(lb.name());
                     labels.push_str(":");
-                    labels.push_str(lb.name());
+                    labels.push_str(lb.value());
                 }
                 labels.push_str("}");
             }
