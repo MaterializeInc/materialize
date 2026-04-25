@@ -136,7 +136,9 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_storage_types::sinks::{IcebergSinkConnection, SinkEnvelope, StorageSinkDesc};
+use mz_storage_types::sinks::{
+    IcebergSinkConnection, SinkEnvelope, StorageSinkDesc, iceberg_type_overrides,
+};
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
@@ -469,10 +471,6 @@ impl EnvelopeHandler for AppendEnvelopeHandler {
             .context("Failed to create append record batch")
     }
 }
-
-/// The precision needed to store all UInt64 values in a Decimal128.
-/// UInt64 max value is 18,446,744,073,709,551,615 which has 20 digits.
-const ICEBERG_UINT64_DECIMAL_PRECISION: u8 = 20;
 
 /// Add Parquet field IDs to an Arrow schema. Iceberg requires field IDs in the
 /// Parquet metadata for schema evolution tracking. Field IDs are assigned
@@ -924,32 +922,6 @@ fn retrieve_upper_from_snapshots(
     }
 
     Ok(None)
-}
-
-/// Type overrides for Iceberg-compatible Arrow schemas.
-///
-/// Iceberg doesn't support unsigned integer types, so we map them to compatible types:
-/// - UInt8, UInt16 -> Int32
-/// - UInt32 -> Int64
-/// - UInt64 -> Decimal128(20, 0)
-/// - MzTimestamp (which uses UInt64) -> Decimal128(20, 0)
-fn iceberg_type_overrides(scalar_type: &mz_repr::SqlScalarType) -> Option<(DataType, String)> {
-    use mz_repr::SqlScalarType;
-    match scalar_type {
-        SqlScalarType::UInt16 => Some((DataType::Int32, "uint2".to_string())),
-        SqlScalarType::UInt32 => Some((DataType::Int64, "uint4".to_string())),
-        SqlScalarType::UInt64 => Some((
-            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
-            "uint8".to_string(),
-        )),
-        SqlScalarType::MzTimestamp => Some((
-            DataType::Decimal128(ICEBERG_UINT64_DECIMAL_PRECISION, 0),
-            "mz_timestamp".to_string(),
-        )),
-        // Iceberg doesn't support interval types natively, so we store as string.
-        SqlScalarType::Interval => Some((DataType::LargeUtf8, "interval".to_string())),
-        _ => None,
-    }
 }
 
 /// Convert a Materialize RelationDesc into Arrow and Iceberg schemas.
@@ -1870,6 +1842,7 @@ mod tests {
     use super::*;
     use iceberg::spec::{PrimitiveType, Type};
     use mz_repr::SqlScalarType;
+    use mz_storage_types::sinks::ICEBERG_UINT64_DECIMAL_PRECISION;
 
     #[mz_ore::test]
     fn test_iceberg_type_overrides() {

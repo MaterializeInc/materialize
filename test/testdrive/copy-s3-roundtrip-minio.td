@@ -303,31 +303,30 @@ $ s3-verify-data bucket=copytos3 key=parquet_test/3 sort-rows=true
 # Ensure that at least one file is written even when the input is empty.
 $ s3-verify-keys bucket=copytos3 prefix-path=parquet_test/4 key-pattern=^parquet_test/4/mz.*\.parquet$
 
-# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/11329 is fixed
-# The `!` test below fails at runtime (in the parquet ArrowWriter) after preflight
-# has already written the INCOMPLETE sentinel to S3. The sentinel is not cleaned up
-# on failure, so the follow-up `>` COPY to the same path sees a non-empty bucket and
-# errors with "S3 bucket path is not empty".
-#
-# # Confirm that unsupported types error when writing to s3 parquet
-# ! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'
-#   WITH (
-#     AWS CONNECTION = aws_conn,
-#     MAX FILE SIZE = "100MB",
-#     FORMAT = 'parquet'
-#   );
-# contains:Arrow interval type MonthDayNano to parquet that is not yet implemented
-#
-# # now should succeed since incomplete sentinel was never written
-# > COPY (SELECT 1::int)  TO 's3://copytos3/parquet_test/5'
-#   WITH (
-#     AWS CONNECTION = aws_conn,
-#     MAX FILE SIZE = "100MB",
-#     FORMAT = 'parquet'
-#   );
-#
-# $ s3-verify-data bucket=copytos3 key=parquet_test/5 sort-rows=true
-# 1
+# Confirm that types arrow-rs's parquet writer can't handle are rejected at
+# planning time, before preflight runs. This must not slip through to a
+# runtime failure: preflight writes an INCOMPLETE sentinel that is not
+# cleaned up on failure, which would leave the path in a state that blocks
+# subsequent copies (database-issues#11329).
+! COPY (SELECT '0 day'::interval)  TO 's3://copytos3/parquet_test/5'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'parquet'
+  );
+contains:interval: Interval (unsupported arrow datatype)
+
+# A subsequent COPY to the same path must succeed — the planning-time
+# rejection above runs before preflight writes the INCOMPLETE sentinel.
+> COPY (SELECT 1::int)  TO 's3://copytos3/parquet_test/5'
+  WITH (
+    AWS CONNECTION = aws_conn,
+    MAX FILE SIZE = "100MB",
+    FORMAT = 'parquet'
+  );
+
+$ s3-verify-data bucket=copytos3 key=parquet_test/5 sort-rows=true
+1
 
 # Tests for decimal / numeric type
 

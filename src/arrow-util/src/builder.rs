@@ -125,6 +125,50 @@ impl ArrowBuilder {
         Ok(())
     }
 
+    /// Helper to validate that a RelationDesc, after applying `overrides`, can
+    /// be encoded into Arrow AND converted from Arrow into parquet by
+    /// arrow-rs's `ArrowWriter`.
+    ///
+    /// Arrow encodability is a superset of parquet encodability — some Arrow
+    /// types are not (yet) implemented by arrow-rs's parquet writer. Callers
+    /// that write parquet must reject these up-front: copy-to-s3 writes an
+    /// `INCOMPLETE` sentinel during preflight and does not clean it up on a
+    /// failed upload, so a runtime failure inside the parquet writer leaves
+    /// the path in a state that blocks subsequent copies.
+    ///
+    /// Pass the same `overrides` you pass to [`desc_to_schema_with_overrides`]
+    /// — otherwise this check will reject types your sink is going to remap.
+    /// To add a new banned arrow datatype, extend `parquet_incompatible_type`.
+    pub fn validate_desc_for_parquet<F>(
+        desc: &RelationDesc,
+        overrides: F,
+    ) -> Result<(), anyhow::Error>
+    where
+        F: Fn(&SqlScalarType) -> Option<(DataType, String)>,
+    {
+        let mut errs = vec![];
+        for (col_name, col_type) in desc.iter() {
+            let dt =
+                match scalar_to_arrow_datatype_with_overrides(&col_type.scalar_type, &overrides) {
+                    Ok((dt, _)) => dt,
+                    Err(_) => {
+                        errs.push(format!("{}: {:?}", col_name, col_type.scalar_type));
+                        continue;
+                    }
+                };
+            if let Some(reason) = parquet_incompatible_type(&dt) {
+                errs.push(format!(
+                    "{}: {:?} ({})",
+                    col_name, col_type.scalar_type, reason
+                ));
+            }
+        }
+        if !errs.is_empty() {
+            anyhow::bail!("Cannot encode the following columns/types: {:?}", errs);
+        }
+        Ok(())
+    }
+
     /// Initializes a new ArrowBuilder with the schema of the provided RelationDesc.
     /// `item_capacity` is used to initialize the capacity of each column's builder which defines
     /// the number of values that can be appended to each column before reallocating.
@@ -234,6 +278,64 @@ fn scalar_to_arrow_datatype(
     scalar_type: &SqlScalarType,
 ) -> Result<(DataType, String), anyhow::Error> {
     scalar_to_arrow_datatype_impl(scalar_type, &|_| None)
+}
+
+/// Returns a description of why this Arrow [`DataType`] cannot be written to
+/// parquet by arrow-rs's `ArrowWriter`, or `None` if the type is supported.
+/// Recurses into composite types so a banned type is rejected even if it is
+/// nested inside a list/struct/map.
+///
+/// This is an allowlist mirroring what arrow-rs's parquet writer accepts in
+/// its `get_arrow_column_writer` and `write_leaf` paths. To support a new
+/// leaf type, add an arm to the allowlist match below — but only after
+/// verifying that arrow-rs's parquet writer can actually emit it.
+fn parquet_incompatible_type(dt: &DataType) -> Option<&'static str> {
+    use arrow::datatypes::IntervalUnit;
+    match dt {
+        DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+            parquet_incompatible_type(f.data_type())
+        }
+        DataType::Map(f, _) => parquet_incompatible_type(f.data_type()),
+        DataType::Struct(fields) => fields
+            .iter()
+            .find_map(|f| parquet_incompatible_type(f.data_type())),
+
+        // Allowlist of supported leaf types.
+        DataType::Null
+        | DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::UInt8
+        | DataType::UInt16
+        | DataType::UInt32
+        | DataType::UInt64
+        | DataType::Float16
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Date32
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Timestamp(_, _)
+        | DataType::Duration(_)
+        | DataType::Interval(IntervalUnit::YearMonth | IntervalUnit::DayTime)
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_)
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
+        | DataType::Decimal128(_, _)
+        | DataType::Decimal256(_, _) => None,
+
+        // Fail closed: anything not on the allowlist is rejected.
+        _ => Some("unsupported arrow datatype"),
+    }
 }
 
 /// Return the appropriate Arrow DataType for the given SqlScalarType, with optional

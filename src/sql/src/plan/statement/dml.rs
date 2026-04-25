@@ -1872,8 +1872,10 @@ fn plan_copy_to_expr(
             ))
         }
         CopyFormat::Parquet => {
-            // Validate that the output desc can be formatted as parquet
-            ArrowBuilder::validate_desc(&desc).map_err(|e| sql_err!("{}", e))?;
+            // Validate that the output desc can be formatted as parquet.
+            // COPY TO does not apply any type overrides, so pass `|_| None`.
+            ArrowBuilder::validate_desc_for_parquet(&desc, |_| None)
+                .map_err(|e| sql_err!("{}", e))?;
             S3SinkFormat::Parquet
         }
         CopyFormat::Binary => bail_unsupported!("FORMAT BINARY"),
