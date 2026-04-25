@@ -38,6 +38,7 @@ use mz_service::secrets::SecretsReaderCliArgs;
 use mz_service::transport;
 use mz_storage::storage_state::StorageInstanceContext;
 use mz_storage_types::connections::ConnectionContext;
+use mz_timely_util::capture::arc_event_link;
 use mz_txn_wal::operator::TxnsContext;
 use tokio::runtime::Handle;
 use tower::Service;
@@ -166,6 +167,11 @@ struct Args {
     /// affinity might degrade dataflow performance rather than improving it.
     #[clap(long)]
     worker_core_affinity: bool,
+
+    /// Forward storage's timely logging events to compute so storage operators appear in
+    /// `mz_introspection.mz_dataflow_*` tables.
+    #[clap(long)]
+    enable_storage_introspection_logs: bool,
 }
 
 pub fn main() {
@@ -377,6 +383,21 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     let mut compute_timely_config = args.compute_timely_config;
     compute_timely_config.process = args.process;
 
+    // We assume each storage worker has a corresponding compute worker that can process its logs.
+    assert_eq!(
+        storage_timely_config.workers, compute_timely_config.workers,
+        "storage and compute must have equal workers-per-process",
+    );
+
+    // Create per-worker bridges for forwarding storage timely logging events to compute.
+    let (storage_log_writers, storage_log_readers) = if args.enable_storage_introspection_logs {
+        (0..storage_timely_config.workers)
+            .map(|_| arc_event_link())
+            .unzip()
+    } else {
+        (Vec::new(), Vec::new())
+    };
+
     // Start storage server.
     let storage_client_builder = mz_storage::serve(
         storage_timely_config,
@@ -387,6 +408,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         SYSTEM_TIME.clone(),
         connection_context.clone(),
         StorageInstanceContext::new(args.scratch_directory.clone(), args.announce_memory_limit)?,
+        storage_log_writers,
     )
     .await?;
     info!(
@@ -418,6 +440,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             worker_core_affinity: args.worker_core_affinity,
             connection_context,
         },
+        storage_log_readers,
     )
     .await?;
     info!(

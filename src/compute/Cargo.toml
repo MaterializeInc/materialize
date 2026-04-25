@@ -31,6 +31,7 @@ mz-dyncfgs = { path = "../dyncfgs" }
 mz-expr = { path = "../expr" }
 mz-metrics = { path = "../metrics" }
 mz-ore = { path = "../ore", features = ["async", "process", "tracing", "columnar", "differential-dataflow", "region"] }
+mz-proto = { path = "../proto" }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
 mz-repr = { path = "../repr" }
@@ -39,6 +40,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
 prometheus.workspace = true
+prost.workspace = true
 scopeguard.workspace = true
 serde.workspace = true
 smallvec = { workspace = true, features = ["serde", "union"] }
@@ -49,6 +51,9 @@ uuid = { workspace = true, features = ["serde", "v4"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 core_affinity = "0.8.3"
+
+[dev-dependencies]
+proptest.workspace = true
 
 [features]
 default = []

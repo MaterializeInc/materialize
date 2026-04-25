@@ -1,6 +1,6 @@
 ---
 title: "SHOW CREATE TYPE"
-description: "`SHOW CREATE TYPE` returns the DDL statement used to custom create the type."
+description: "`SHOW CREATE TYPE` returns the DDL statement used to create the custom type."
 menu:
   main:
     parent: commands
@@ -16,7 +16,7 @@ SHOW [REDACTED] CREATE TYPE <type_name>;
 
 {{< yaml-table data="show_create_redacted_option" >}}
 
-For available type names names, see [`SHOW TYPES`](/sql/show-types).
+For available type names, see [`SHOW TYPES`](/sql/show-types).
 
 ## Examples
 
@@ -26,9 +26,9 @@ SHOW CREATE TYPE point;
 ```
 
 ```nofmt
-    name          |    create_sql
-------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- point            | CREATE TYPE materialize.public.point AS (x pg_catalog.int4, y pg_catalog.int4);
+    name                    |    create_sql
+----------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ materialize.public.point   | CREATE TYPE materialize.public.point AS (x pg_catalog.int4, y pg_catalog.int4);
 ```
 
 ## Privileges

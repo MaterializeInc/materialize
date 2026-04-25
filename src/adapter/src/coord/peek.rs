@@ -830,22 +830,6 @@ impl crate::coord::Coordinator {
             uuid = Uuid::new_v4();
         }
 
-        // The peek is ready to go for both cases, fast and non-fast.
-        // Stash the response mechanism, and broadcast dataflow construction.
-        self.pending_peeks.insert(
-            uuid,
-            PendingPeek {
-                conn_id: conn_id.clone(),
-                cluster_id: compute_instance,
-                depends_on: source_ids,
-                ctx_extra: std::mem::take(ctx_extra),
-                is_fast_path,
-            },
-        );
-        self.client_pending_peeks
-            .entry(conn_id)
-            .or_default()
-            .insert(uuid, compute_instance);
         let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
         // At this stage we don't know column names for the result because we
@@ -870,6 +854,24 @@ impl crate::coord::Coordinator {
                 rows_tx,
             )
             .map_err(AdapterError::concurrent_dependency_drop_from_peek_error)?;
+
+        // Register the pending peek only after compute.peek() succeeds. If it
+        // fails (e.g. concurrent replica/cluster drop), inserting first would
+        // leak entries in these maps and misattribute statement execution reasons.
+        self.pending_peeks.insert(
+            uuid,
+            PendingPeek {
+                conn_id: conn_id.clone(),
+                cluster_id: compute_instance,
+                depends_on: source_ids,
+                ctx_extra: std::mem::take(ctx_extra),
+                is_fast_path,
+            },
+        );
+        self.client_pending_peeks
+            .entry(conn_id)
+            .or_default()
+            .insert(uuid, compute_instance);
 
         let duration_histogram = self.metrics.row_set_finishing_seconds();
 

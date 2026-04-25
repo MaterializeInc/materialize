@@ -20,7 +20,6 @@ use mz_compute_types::dyncfgs::{
 use mz_compute_types::sinks::{ComputeSinkDesc, CopyToS3OneshotSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::consolidate_pact;
 use mz_timely_util::probe::{Handle, ProbeNotify};
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
@@ -28,6 +27,7 @@ use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
 
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::typedefs::KeyBatcher;
 
@@ -40,7 +40,7 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
         _as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
         sinked_collection: VecCollection<'scope, Timestamp, Row, Diff>,
-        err_collection: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+        err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
         _ct_times: Option<VecCollection<'scope, Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
@@ -72,7 +72,7 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
         // We need to consolidate the error collection to ensure we don't act on retracted errors.
         let error = consolidate_pact::<KeyBatcher<_, _, _>, _>(
             err_collection.map(move |err| (err, ())).inner,
-            Exchange::new(move |((err, _), _, _): &((DataflowError, _), _, _)| {
+            Exchange::new(move |((err, _), _, _): &((DataflowErrorSer, _), _, _)| {
                 err.hashed() % batch_count
             }),
             "Consolidated COPY TO S3 errors",
@@ -111,6 +111,11 @@ impl<'scope> SinkRender<'scope> for CopyToS3OneshotSinkConnection {
             s3_multipart_part_size_bytes: COPY_TO_S3_MULTIPART_PART_SIZE_BYTES
                 .get(&compute_state.worker_config),
         };
+
+        // Deserialize DataflowErrorSer back to DataflowError at the boundary
+        // with storage-operators, which expects DataflowError.
+        use timely::dataflow::operators::vec::Map;
+        let error_stream = error_stream.map(|(err, time, diff)| (err.deserialize(), time, diff));
 
         let token = mz_storage_operators::s3_oneshot_sink::copy_to(
             input,

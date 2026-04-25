@@ -163,8 +163,20 @@ pub trait StorageCollections: Debug + Sync {
         as_of: Timestamp,
     ) -> BoxFuture<'static, Result<Vec<(Row, StorageDiff)>, StorageError>>;
 
-    /// Returns a snapshot of the contents of collection `id` at the largest
-    /// readable `as_of`.
+    /// Returns a snapshot of the contents of collection `id` at the largest readable `as_of`.
+    /// The collection must consolidate to a set, i.e., the multiplicity of every row must be 1!
+    ///
+    /// # Errors
+    ///
+    /// - Returns `StorageError::InvalidUsage` if the collection is closed.
+    /// - Propagates the error if the underlying `snapshot` call errors.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the collection does not consolidate to a set at that `as_of`
+    /// (i.e., if any row survives with a multiplicity other than `+1`). Only
+    /// safe to call on collections whose producer guarantees set semantics;
+    /// not safe on arbitrary user collections.
     async fn snapshot_latest(&self, id: GlobalId) -> Result<Vec<Row>, StorageError>;
 
     /// Returns a snapshot of the contents of collection `id` at `as_of`.
@@ -1490,12 +1502,14 @@ impl StorageCollections for StorageCollectionsImpl {
         let upper = self.recent_upper(id).await?;
         let res = match upper.as_option() {
             Some(f) if f > &Timestamp::MIN => {
-                let as_of = f.step_back().unwrap();
+                let as_of = f.step_back().expect("checked that f > &Timestamp::MIN");
 
-                let snapshot = self.snapshot(id, as_of, &self.txns_read).await.unwrap();
+                let snapshot = self.snapshot(id, as_of, &self.txns_read).await?;
                 snapshot
                     .into_iter()
                     .map(|(row, diff)| {
+                        // See the trait doc: `snapshot_latest` is only meant for collections that
+                        // consolidate to a set.
                         assert_eq!(diff, 1, "snapshot doesn't accumulate to set");
                         row
                     })

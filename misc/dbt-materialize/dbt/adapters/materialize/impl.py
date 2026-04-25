@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
 import dbt_common.exceptions
+import psycopg2
 from dbt_common.contracts.constraints import (
     ColumnLevelConstraint,
     ConstraintType,
@@ -34,6 +35,7 @@ from dbt.adapters.capability import (
     CapabilitySupport,
     Support,
 )
+from dbt.adapters.events.logging import AdapterLogger
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.exceptions import (
     RefreshIntervalConfigError,
@@ -43,6 +45,8 @@ from dbt.adapters.materialize.relation import MaterializeRelation
 from dbt.adapters.postgres.column import PostgresColumn
 from dbt.adapters.postgres.impl import PostgresAdapter, SQLAdapter
 from dbt.adapters.sql.impl import LIST_RELATIONS_MACRO_NAME
+
+logger = AdapterLogger("Materialize")
 
 
 # types in ./misc/dbt-materialize need to import generic types from typing
@@ -337,6 +341,50 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
         self.connections.execute(f"drop view {view_name}")
 
         return columns
+
+    # SQLSTATE raised by Materialize when a DDL transaction is aborted because
+    # another session modified the catalog concurrently. See
+    # `AdapterError::DDLTransactionRace` in `src/adapter/src/error.rs`.
+    _DDL_CONFLICT_SQLSTATE = "40001"
+
+    @available
+    def try_atomic_swap(self, swap_sql: str) -> bool:
+        """Execute a multi-statement atomic swap as a single transaction.
+
+        Returns True on success. Returns False if the transaction failed due
+        to a concurrent-DDL conflict (SQLSTATE 40001), which callers may
+        retry. Any other error, including permission, syntax, or missing
+        object errors, is raised immediately so it is surfaced to the user
+        without retry noise.
+
+        This reaches down to the raw psycopg2 connection rather than going
+        through dbt's `add_query`/`run_query` because we need the original
+        `pgcode` to classify the failure: dbt's wrapper converts psycopg2
+        errors into `DbtDatabaseError` and drops the SQLSTATE, leaving no
+        reliable way to tell a retryable DDL conflict apart from a
+        permissions or syntax error.
+        """
+        connection = self.connections.get_thread_connection()
+        handle = connection.handle
+        try:
+            with handle.cursor() as cursor:
+                cursor.execute(swap_sql)
+            return True
+        except psycopg2.Error as e:
+            # The server has already aborted the transaction on error, but
+            # send a ROLLBACK to explicitly exit the transaction block.
+            try:
+                with handle.cursor() as cursor:
+                    cursor.execute("ROLLBACK")
+            except psycopg2.Error as rollback_err:
+                logger.debug(
+                    f"ROLLBACK after aborted swap failed (connection may be "
+                    f"broken): {rollback_err}"
+                )
+            if getattr(e, "pgcode", None) == self._DDL_CONFLICT_SQLSTATE:
+                logger.info(f"Atomic swap aborted by concurrent DDL: {e}")
+                return False
+            raise
 
     @available
     def generate_final_cluster_name(

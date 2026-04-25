@@ -100,8 +100,7 @@ impl AwsSdkCredentialLoader {
 impl AwsCredentialLoad for AwsSdkCredentialLoader {
     async fn load_credential(
         &self,
-        // reqsign 0.16 trait signature; see `reqwest_0_12` in workspace Cargo.toml.
-        _client: reqwest_0_12::Client,
+        _client: reqwest::Client,
     ) -> anyhow::Result<Option<AwsCredential>> {
         let creds = self
             .provider

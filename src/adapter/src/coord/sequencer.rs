@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
@@ -1078,7 +1079,11 @@ pub(crate) async fn explain_pushdown_future_inner<
     mz_now: ResultSpec<'static>,
     imports: I,
 ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> + use<I> {
-    let explain_timeout = *session.vars().statement_timeout();
+    let mut explain_timeout = *session.vars().statement_timeout();
+    // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
+    if explain_timeout == Duration::ZERO {
+        explain_timeout = Duration::MAX;
+    }
     let mut futures = FuturesOrdered::new();
     for (id, mfp) in imports {
         let catalog_entry = catalog.get_entry_by_global_id(&id);

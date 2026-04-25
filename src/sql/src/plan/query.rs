@@ -52,8 +52,8 @@ use mz_expr::func::variadic::{
 };
 use mz_expr::virtual_syntax::AlgExcept;
 use mz_expr::{
-    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, RowSetFinishing, TableFunc,
-    func as expr_func,
+    Id, LetRecLimit, LocalId, MapFilterProject, MirScalarExpr, REPEAT_ROW_NAME, RowSetFinishing,
+    TableFunc, func as expr_func,
 };
 use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
@@ -66,6 +66,7 @@ use mz_repr::adt::char::CharLength;
 use mz_repr::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, NumericMaxScale};
 use mz_repr::adt::timestamp::TimestampPrecision;
 use mz_repr::adt::varchar::VarCharMaxLength;
+use mz_repr::namespaces::MZ_CATALOG_SCHEMA;
 use mz_repr::{
     CatalogItemId, ColumnIndex, ColumnName, Datum, RelationDesc, RelationVersionSelector,
     ReprColumnType, Row, RowArena, SqlColumnType, SqlRelationType, SqlScalarType,
@@ -2826,6 +2827,14 @@ fn plan_scalar_table_funcs(
         }
         return Ok((expr, scope));
     }
+    if table_funcs.keys().any(is_repeat_row) {
+        // Note: Would be also caught by WITH ORDINALITY checking for `repeat_row`, but then the
+        // error message would be misleading, because it would refer to WITH ORDINALITY.
+        bail_unsupported!(format!(
+            "{} in a SELECT clause with multiple table functions",
+            REPEAT_ROW_NAME
+        ));
+    }
     // Otherwise, plan as usual, emulating the ROWS FROM behavior
     let (expr, mut scope, num_cols) =
         plan_rows_from_internal(&rows_from_qcx, table_funcs.keys(), None)?;
@@ -3111,6 +3120,14 @@ fn plan_rows_from(
     alias: Option<&TableAlias>,
     with_ordinality: bool,
 ) -> Result<(HirRelationExpr, Scope), PlanError> {
+    // The `repeat_row` function is not supported in ROWS FROM.
+    if functions.iter().any(is_repeat_row) {
+        // Note: Would be also caught by WITH ORDINALITY checking for `repeat_row`, but then the
+        // error message would be misleading, because it would refer to WITH ORDINALITY instead of
+        // ROWS FROM.
+        bail_unsupported!(format!("{} in ROWS FROM", REPEAT_ROW_NAME));
+    }
+
     // If there's only a single table function, planning proceeds as if `ROWS
     // FROM` hadn't been written at all.
     if let [function] = functions {
@@ -3153,6 +3170,10 @@ fn plan_rows_from(
 
     let scope = plan_table_alias(scope, alias)?;
     Ok((expr, scope))
+}
+
+fn is_repeat_row(f: &Function<Aug>) -> bool {
+    f.name.full_name_str().as_str() == format!("{}.{}", MZ_CATALOG_SCHEMA, REPEAT_ROW_NAME)
 }
 
 /// Plans an expression coalescing multiple table functions. Each table

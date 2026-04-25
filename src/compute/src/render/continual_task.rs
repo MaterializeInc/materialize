@@ -168,7 +168,6 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
-use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_timely_util::builder_async::{Button, Event, OperatorBuilder as AsyncOperatorBuilder};
 use mz_timely_util::operator::CollectionExt;
@@ -188,6 +187,7 @@ use tracing::debug;
 
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
+use crate::render::errors::DataflowErrorSer;
 use crate::render::sinks::SinkRender;
 use crate::sink::ConsolidatingVec;
 
@@ -270,10 +270,10 @@ impl ContinualTaskSourceTransformer {
     pub fn transform<'s>(
         &self,
         oks: VecCollection<'s, Timestamp, Row, Diff>,
-        errs: VecCollection<'s, Timestamp, DataflowError, Diff>,
+        errs: VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
     ) -> (
         VecCollection<'s, Timestamp, Row, Diff>,
-        VecCollection<'s, Timestamp, DataflowError, Diff>,
+        VecCollection<'s, Timestamp, DataflowErrorSer, Diff>,
         VecCollection<'s, Timestamp, (), Diff>,
     ) {
         use ContinualTaskSourceTransformer::*;
@@ -433,7 +433,7 @@ impl<'scope> SinkRender<'scope> for ContinualTaskConnection<CollectionMetadata> 
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
         oks: VecCollection<'scope, Timestamp, Row, Diff>,
-        errs: VecCollection<'scope, Timestamp, DataflowError, Diff>,
+        errs: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
         append_times: Option<VecCollection<'scope, Timestamp, (), Diff>>,
         flow_control_probe: &probe::Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
@@ -441,7 +441,7 @@ impl<'scope> SinkRender<'scope> for ContinualTaskConnection<CollectionMetadata> 
 
         let to_append = oks
             .map(|x| SourceData(Ok(x)))
-            .concat(errs.map(|x| SourceData(Err(x))));
+            .concat(errs.map(|x| SourceData(Err(x.deserialize()))));
         let append_times = append_times.expect("should be provided by ContinualTaskCtx");
 
         let write_handle = {

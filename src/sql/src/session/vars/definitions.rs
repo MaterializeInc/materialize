@@ -1881,6 +1881,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_repeat_row_non_negative,
+        desc: "the repeat_row_non_negative function",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_replica_targeted_materialized_views,
         desc: "replica-targeted materialized views",
         default: false,
@@ -2070,6 +2076,12 @@ feature_flags!(
     {
         name: enable_worker_core_affinity,
         desc: "set core affinity for replica worker threads",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_storage_introspection_logs,
+        desc: "forward storage timely logging events into compute's introspection dataflow",
         default: false,
         enable_for_item_parsing: false,
     },

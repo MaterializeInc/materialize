@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::ENABLE_FRONTEND_SUBSCRIBES;
@@ -1140,7 +1141,11 @@ impl PeekClient {
             }
         };
 
-        let optimization_timeout = *session.vars().statement_timeout();
+        let mut optimization_timeout = *session.vars().statement_timeout();
+        // Timeout of 0 is equivalent to "off", meaning we will wait "forever."
+        if optimization_timeout == Duration::ZERO {
+            optimization_timeout = Duration::MAX;
+        }
         let optimization_result =
             // Note: spawn_blocking tasks cannot be cancelled, so on timeout we stop waiting but the
             // optimization task continues running in the background until completion. See

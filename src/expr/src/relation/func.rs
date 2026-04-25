@@ -3280,12 +3280,28 @@ pub fn csv_extract(a: Datum<'_>, n_cols: usize) -> impl Iterator<Item = (Row, Di
     })
 }
 
-pub fn repeat(a: Datum) -> Option<(Row, Diff)> {
+pub fn repeat_row(a: Datum) -> Option<(Row, Diff)> {
     let n = a.unwrap_int64();
     if n != 0 {
         Some((Row::default(), n.into()))
     } else {
         None
+    }
+}
+
+pub fn repeat_row_non_negative<'a>(
+    a: Datum,
+) -> Result<Box<dyn Iterator<Item = (Row, Diff)> + 'a>, EvalError> {
+    let n = a.unwrap_int64();
+    if n < 0 {
+        Err(EvalError::InvalidParameterValue(
+            format!("repeat_row_non_negative got {}", n).into(),
+        ))
+    } else if n == 0 {
+        Ok(Box::new(iter::empty()))
+    } else {
+        // iterator with 1 element; n goes into the diff
+        Ok(Box::new(iter::once((Row::default(), n.into()))))
     }
 }
 
@@ -3396,7 +3412,16 @@ pub enum TableFunc {
     GuardSubquerySize {
         column_type: SqlScalarType,
     },
-    Repeat,
+    /// Repeats the input row the given number of times. Can even repeat a negative number of times,
+    /// which has some important consequences:
+    /// - can lead to negative accumulations downstream;
+    /// - can't be used in `WITH ORDINALITY` and other constructs that are implemented by
+    ///   `TableFunc::WithOrdinality`, e.g., `ROWS FROM`;
+    /// - output is non-monotonic.
+    RepeatRow,
+    /// Same as `RepeatRow`, but errors on a negative count, and thereby avoids the above
+    /// peculiarities.
+    RepeatRowNonNegative,
     UnnestArray {
         el_typ: SqlScalarType,
     },
@@ -3471,7 +3496,7 @@ impl TableFunc {
             | TableFunc::GenerateSeriesTimestamp
             | TableFunc::GenerateSeriesTimestampTz
             | TableFunc::GuardSubquerySize { .. }
-            | TableFunc::Repeat
+            | TableFunc::RepeatRowNonNegative
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
@@ -3481,9 +3506,13 @@ impl TableFunc {
             | TableFunc::RegexpMatches => Some(TableFunc::WithOrdinality(WithOrdinality {
                 inner: Box::new(inner),
             })),
-            // IMPORTANT: Before adding a new table function here, consider negative diffs:
+            // IMPORTANT: Before adding a new table function above, consider negative diffs:
             // `WithOrdinality::eval` will panic if the inner table function emits a negative diff.
-            TableFunc::WithOrdinality(_) => None,
+            // (Note that negative diffs in the table function's _input_ don't matter. The table
+            // function implementation doesn't see the input diffs, so the thing that matters here
+            // is whether the table function itself can emit a negative diff.)
+            TableFunc::RepeatRow // can produce negative diffs
+            | TableFunc::WithOrdinality(_) => None, // no nesting of `WITH ORDINALITY` allowed
         }
     }
 }
@@ -3575,7 +3604,8 @@ impl TableFunc {
                     ))
                 }
             }
-            TableFunc::Repeat => Ok(Box::new(repeat(datums[0]).into_iter())),
+            TableFunc::RepeatRow => Ok(Box::new(repeat_row(datums[0]).into_iter())),
+            TableFunc::RepeatRowNonNegative => repeat_row_non_negative(datums[0]),
             TableFunc::UnnestArray { .. } => Ok(Box::new(unnest_array(datums[0]))),
             TableFunc::UnnestList { .. } => Ok(Box::new(unnest_list(datums[0]))),
             TableFunc::UnnestMap { .. } => Ok(Box::new(unnest_map(datums[0]))),
@@ -3691,7 +3721,7 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::Repeat => {
+            TableFunc::RepeatRow | TableFunc::RepeatRowNonNegative => {
                 let column_types = vec![];
                 let keys = vec![];
                 (column_types, keys)
@@ -3772,7 +3802,8 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestampTz => 1,
             TableFunc::GenerateSubscriptsArray => 1,
             TableFunc::GuardSubquerySize { .. } => 1,
-            TableFunc::Repeat => 0,
+            TableFunc::RepeatRow => 0,
+            TableFunc::RepeatRowNonNegative => 0,
             TableFunc::UnnestArray { .. } => 1,
             TableFunc::UnnestList { .. } => 1,
             TableFunc::UnnestMap { .. } => 2,
@@ -3799,7 +3830,8 @@ impl TableFunc {
             | TableFunc::GenerateSubscriptsArray
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
-            | TableFunc::Repeat
+            | TableFunc::RepeatRow
+            | TableFunc::RepeatRowNonNegative
             | TableFunc::UnnestArray { .. }
             | TableFunc::UnnestList { .. }
             | TableFunc::UnnestMap { .. }
@@ -3830,7 +3862,8 @@ impl TableFunc {
             TableFunc::GenerateSeriesTimestamp => true,
             TableFunc::GenerateSeriesTimestampTz => true,
             TableFunc::GenerateSubscriptsArray => true,
-            TableFunc::Repeat => false,
+            TableFunc::RepeatRow => false,
+            TableFunc::RepeatRowNonNegative => true,
             TableFunc::UnnestArray { .. } => true,
             TableFunc::UnnestList { .. } => true,
             TableFunc::UnnestMap { .. } => true,
@@ -3861,7 +3894,8 @@ impl fmt::Display for TableFunc {
             TableFunc::GenerateSeriesTimestampTz => f.write_str("generate_series"),
             TableFunc::GenerateSubscriptsArray => f.write_str("generate_subscripts"),
             TableFunc::GuardSubquerySize { .. } => f.write_str("guard_subquery_size"),
-            TableFunc::Repeat => f.write_str("repeat_row"),
+            TableFunc::RepeatRow => f.write_str(REPEAT_ROW_NAME),
+            TableFunc::RepeatRowNonNegative => f.write_str("repeat_row_non_negative"),
             TableFunc::UnnestArray { .. } => f.write_str("unnest_array"),
             TableFunc::UnnestList { .. } => f.write_str("unnest_list"),
             TableFunc::UnnestMap { .. } => f.write_str("unnest_map"),
@@ -3895,12 +3929,13 @@ impl WithOrdinality {
             .eval(datums, temp_storage)?
             .flat_map(move |(mut row, diff)| {
                 let diff = diff.into_inner();
-                // WITH ORDINALITY is not well-defined for negative diffs. This is ok, since the
-                // only table function that can emit negative diffs is `repeat_row`, which is in
-                // `mz_unsafe`, so users can never call it.
+                // WITH ORDINALITY is not well-defined for negative diffs. This is ok, and
+                // `TableFunc::with_ordinality` refuses to wrap such table functions in
+                // `WithOrdinality` that can emit negative diffs, e.g., `repeat_row`.
                 //
-                // (We also don't need to worry about negative diffs in FlatMap's input, because
-                // the diff of the input of the FlatMap is factored in after we return from here.)
+                // (Note that we don't need to worry about negative diffs in FlatMap's input,
+                // because the diff of the input of the FlatMap is factored in after we return from
+                // here.)
                 assert!(diff >= 0);
                 // The ordinals that will be associated with this row.
                 let mut ordinals = next_ordinal..(next_ordinal + diff);
@@ -3925,3 +3960,5 @@ impl WithOrdinality {
         Ok(Box::new(it))
     }
 }
+
+pub const REPEAT_ROW_NAME: &str = "repeat_row";

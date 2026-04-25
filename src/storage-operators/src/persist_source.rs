@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use differential_dataflow::lattice::Lattice;
 use futures::{StreamExt, future::Either};
-use mz_expr::{ColumnSpecs, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
+use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_persist_client::cache::PersistClientCache;
@@ -157,7 +157,7 @@ impl Subtime {
 /// using [`timely::dataflow::operators::generic::operator::empty`].
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
-pub fn persist_source<'scope>(
+pub fn persist_source<'scope, E>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
@@ -173,9 +173,12 @@ pub fn persist_source<'scope>(
     error_handler: ErrorHandler,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, (Row, Timestamp, Diff)>,
-    StreamVec<'scope, mz_repr::Timestamp, (DataflowError, Timestamp, Diff)>,
+    StreamVec<'scope, mz_repr::Timestamp, (E, Timestamp, Diff)>,
     Vec<PressOnDropButton>,
-) {
+)
+where
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+{
     let shard_metrics = persist_clients.shard_metrics(&metadata.data_shard, &source_id.to_string());
 
     let mut tokens = vec![];
@@ -291,7 +294,7 @@ type RefinedScope<'scope, T> = Scope<'scope, (T, Subtime)>;
 ///
 /// [advanced by]: differential_dataflow::lattice::Lattice::advance_by
 #[allow(clippy::needless_borrow)]
-pub fn persist_source_core<'g, 'outer>(
+pub fn persist_source_core<'g, 'outer, E>(
     outer: Scope<'outer, mz_repr::Timestamp>,
     scope: RefinedScope<'g, mz_repr::Timestamp>,
     source_id: GlobalId,
@@ -311,14 +314,13 @@ pub fn persist_source_core<'g, 'outer>(
     Stream<
         'g,
         (mz_repr::Timestamp, Subtime),
-        Vec<(
-            Result<Row, DataflowError>,
-            (mz_repr::Timestamp, Subtime),
-            Diff,
-        )>,
+        Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>,
     >,
     Vec<PressOnDropButton>,
-) {
+)
+where
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+{
     let cfg = persist_clients.cfg().clone();
     let name = source_id.to_string();
     let filter_plan = map_filter_project.as_ref().map(|p| (*p).clone());
@@ -445,7 +447,7 @@ fn filter_result(
     }
 }
 
-pub fn decode_and_mfp<'scope>(
+pub fn decode_and_mfp<'scope, E>(
     cfg: PersistConfig,
     fetched: StreamVec<
         'scope,
@@ -458,12 +460,11 @@ pub fn decode_and_mfp<'scope>(
 ) -> StreamVec<
     'scope,
     (mz_repr::Timestamp, Subtime),
-    (
-        Result<Row, DataflowError>,
-        (mz_repr::Timestamp, Subtime),
-        Diff,
-    ),
-> {
+    (Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff),
+>
+where
+    E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
+{
     let scope = fetched.scope();
     let mut builder = OperatorBuilder::new(
         format!("persist_source::decode_and_mfp({})", name),
@@ -575,7 +576,7 @@ impl PendingPart {
 impl PendingWork {
     /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
     /// `yield_fn` whether more fuel is available.
-    fn do_work<YFn>(
+    fn do_work<YFn, E>(
         &mut self,
         work: &mut usize,
         name: &str,
@@ -589,16 +590,13 @@ impl PendingWork {
             '_,
             (mz_repr::Timestamp, Subtime),
             ConsolidatingContainerBuilder<
-                Vec<(
-                    Result<Row, DataflowError>,
-                    (mz_repr::Timestamp, Subtime),
-                    Diff,
-                )>,
+                Vec<(Result<Row, E>, (mz_repr::Timestamp, Subtime), Diff)>,
             >,
         >,
     ) -> bool
     where
         YFn: Fn(Instant, usize) -> bool,
+        E: timely::ExchangeData + Ord + Clone + Debug + From<DataflowError> + From<EvalError>,
     {
         let mut session = output.session_with_builder(&self.capability);
         let fetched_part = self.part.part_mut();
@@ -697,7 +695,7 @@ impl PendingWork {
                 (SourceData(Err(err)), ()) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
-                    session.give((Err(err), emit_time, diff.into()));
+                    session.give((Err(E::from(err)), emit_time, diff.into()));
                     *work += 1;
                 }
             }

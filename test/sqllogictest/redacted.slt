@@ -223,5 +223,5 @@ SHOW REDACTED CREATE VIEW mv1;
 query TT
 SHOW REDACTED CREATE TYPE ty;
 ----
-ty
+materialize.public.ty
 CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = pg_catalog.bool);
