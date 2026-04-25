@@ -268,15 +268,12 @@ pub fn plan_show_create_type(
 
     let type_item = scx.get_item(&id);
 
-    // check if a builtin type is being accessed
     if id.is_system() {
-        // builtin types do not have a create sql
         sql_bail!("cannot show create for system type {full_name}");
     }
 
-    let name = type_item.name().item.as_ref();
+    let name = full_name.to_string();
 
-    // if custom type we make the sql human readable
     let create_sql = humanize_sql_for_show_create(
         scx.catalog,
         type_item.id(),
@@ -286,7 +283,7 @@ pub fn plan_show_create_type(
 
     Ok(ShowCreatePlan {
         id: ObjectId::Item(id),
-        row: Row::pack_slice(&[Datum::String(name), Datum::String(&create_sql)]),
+        row: Row::pack_slice(&[Datum::String(&name), Datum::String(&create_sql)]),
     })
 }
 
