@@ -118,7 +118,7 @@ use mz_controller::clusters::{
 use mz_controller::{ControllerConfig, Readiness};
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
-use mz_license_keys::ValidatedLicenseKey;
+use mz_license_keys::{ExpirationBehavior, ValidatedLicenseKey};
 use mz_orchestrator::OfflineReason;
 use mz_ore::cast::{CastFrom, CastInto, CastLossy};
 use mz_ore::channel::trigger::Trigger;
@@ -2058,17 +2058,28 @@ impl Coordinator {
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
 
-        self.validate_resource_limit_numeric(
-            Numeric::zero(),
-            self.current_credit_consumption_rate(),
-            |system_vars| {
-                self.license_key
-                    .max_credit_consumption_rate()
-                    .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
-            },
-            "cluster replica",
-            MAX_CREDIT_CONSUMPTION_RATE.name(),
-        )?;
+        // Skip the credit consumption check at bootstrap when the license is expired
+        // with DisableClusterCreation behavior. That mode is a soft-fail: it warns and
+        // prevents *new* cluster creation, but must not block startup with existing replicas.
+        // The Disable case is already handled by a bail! in main.rs before we reach here.
+        let enforce_credit_limit_at_bootstrap = !(self.license_key.expired
+            && matches!(
+                self.license_key.expiration_behavior,
+                ExpirationBehavior::DisableClusterCreation,
+            ));
+        if enforce_credit_limit_at_bootstrap {
+            self.validate_resource_limit_numeric(
+                Numeric::zero(),
+                self.current_credit_consumption_rate(),
+                |system_vars| {
+                    self.license_key
+                        .max_credit_consumption_rate()
+                        .map_or_else(|| system_vars.max_credit_consumption_rate(), Numeric::from)
+                },
+                "cluster replica",
+                MAX_CREDIT_CONSUMPTION_RATE.name(),
+            )?;
+        }
 
         let mut policies_to_set: BTreeMap<CompactionWindow, CollectionIdBundle> =
             Default::default();
