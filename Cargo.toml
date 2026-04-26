@@ -494,7 +494,7 @@ tikv-jemallocator = { version = "0.6", features = ["background_threads", "profil
 time = "0.3.17"
 timely = "0.29.0"
 tokio = { version = "1.49.0", features = ["full", "test-util"] }
-tokio-metrics = "0.4.9"
+tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
 tokio-openssl = "0.6.5"
 tokio-postgres = "0.7.15"
