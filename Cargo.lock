@@ -1281,7 +1281,7 @@ dependencies = [
  "pin-project",
  "quick-xml 0.31.0",
  "rand 0.8.5",
- "reqwest",
+ "reqwest 0.12.28",
  "rustc_version",
  "serde",
  "serde_json",
@@ -4340,7 +4340,7 @@ dependencies = [
  "parquet",
  "rand 0.8.5",
  "reqsign",
- "reqwest",
+ "reqwest 0.12.28",
  "roaring",
  "rust_decimal",
  "serde",
@@ -4370,7 +4370,7 @@ dependencies = [
  "http 1.4.0",
  "iceberg",
  "itertools 0.13.0",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_derive",
  "serde_json",
@@ -5086,7 +5086,7 @@ version = "1.4.3"
 source = "git+https://github.com/MaterializeInc/duckdb-rs.git?rev=752c7efe2582#752c7efe25820590f590fb0a112443b9ddd396e7"
 dependencies = [
  "flate2",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tar",
@@ -5513,7 +5513,7 @@ dependencies = [
  "mz-sql-parser",
  "open",
  "openssl-probe",
- "reqwest",
+ "reqwest 0.12.28",
  "rpassword",
  "security-framework",
  "semver",
@@ -5718,7 +5718,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-ore",
  "mz-pgwire-common",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio-postgres",
@@ -5829,7 +5829,7 @@ dependencies = [
  "postgres",
  "prometheus",
  "proxy-header",
- "reqwest",
+ "reqwest 0.12.28",
  "semver",
  "tempfile",
  "tokio",
@@ -5993,7 +5993,7 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "prost-build",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
@@ -6010,7 +6010,7 @@ dependencies = [
  "chrono",
  "mz-frontegg-auth",
  "mz-frontegg-client",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -6284,7 +6284,7 @@ dependencies = [
  "mz-tls-util",
  "postgres-openssl",
  "regex",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_yaml",
  "tokio",
@@ -6473,10 +6473,10 @@ dependencies = [
  "rdkafka",
  "rdkafka-sys",
  "regex",
- "reqwest",
+ "reqwest 0.12.28",
  "rlimit",
  "semver",
- "sentry-tracing",
+ "sentry-tracing 0.46.1",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -6637,7 +6637,7 @@ dependencies = [
  "prost",
  "prost-build",
  "prost-types",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
@@ -6681,7 +6681,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "prometheus",
- "reqwest",
+ "reqwest 0.12.28",
  "reqwest-middleware",
  "reqwest-retry",
  "serde",
@@ -6699,7 +6699,7 @@ dependencies = [
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -6723,7 +6723,7 @@ dependencies = [
  "mz-frontegg-auth",
  "mz-ore",
  "openssl",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
@@ -6894,7 +6894,7 @@ dependencies = [
 name = "mz-metabase"
 version = "0.0.0"
 dependencies = [
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
 ]
 
@@ -6971,7 +6971,7 @@ dependencies = [
  "flate2",
  "hex",
  "hex-literal",
- "reqwest",
+ "reqwest 0.12.28",
  "sha2",
  "tar",
  "walkdir",
@@ -6987,7 +6987,7 @@ dependencies = [
  "jsonwebtoken",
  "mz-ore",
  "openssl",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
@@ -7027,7 +7027,7 @@ dependencies = [
  "mz-ore",
  "mz-repr",
  "mz-secrets",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
@@ -7080,7 +7080,7 @@ dependencies = [
  "mz-tracing",
  "opentelemetry",
  "opentelemetry_sdk",
- "sentry-tracing",
+ "sentry-tracing 0.46.1",
  "tracing",
  "tracing-capture",
  "tracing-subscriber",
@@ -7113,7 +7113,7 @@ dependencies = [
  "mz-server-core",
  "prometheus",
  "rand 0.9.4",
- "reqwest",
+ "reqwest 0.12.28",
  "semver",
  "serde",
  "serde_json",
@@ -7173,7 +7173,7 @@ dependencies = [
  "scopeguard",
  "sentry",
  "sentry-panic",
- "sentry-tracing",
+ "sentry-tracing 0.46.1",
  "serde",
  "serde_json",
  "smallvec",
@@ -7252,7 +7252,7 @@ dependencies = [
  "prost",
  "prost-build",
  "rand 0.9.4",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
@@ -7786,7 +7786,7 @@ dependencies = [
  "prometheus",
  "rand 0.9.4",
  "semver",
- "sentry-tracing",
+ "sentry-tracing 0.46.1",
  "serde",
  "sysinfo",
  "tokio",
@@ -7863,7 +7863,7 @@ dependencies = [
  "protobuf-native",
  "rdkafka",
  "regex",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "static_assertions",
@@ -8003,7 +8003,7 @@ dependencies = [
  "mz-tracing",
  "postgres-protocol",
  "regex",
- "reqwest",
+ "reqwest 0.12.28",
  "serde_json",
  "shell-words",
  "tempfile",
@@ -8242,7 +8242,7 @@ dependencies = [
  "prometheus",
  "proptest",
  "prost",
- "reqwest",
+ "reqwest 0.12.28",
  "sentry",
  "serde",
  "smallvec",
@@ -8315,7 +8315,7 @@ dependencies = [
  "rand 0.9.4",
  "rdkafka",
  "regex",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -8401,7 +8401,7 @@ dependencies = [
  "rand 0.9.4",
  "rdkafka",
  "regex",
- "reqwest",
+ "reqwest 0.12.28",
  "semver",
  "serde",
  "serde_json",
@@ -8910,7 +8910,7 @@ dependencies = [
  "percent-encoding",
  "quick-xml 0.38.4",
  "reqsign",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
@@ -9039,7 +9039,7 @@ dependencies = [
  "bytes",
  "http 1.4.0",
  "opentelemetry",
- "reqwest",
+ "reqwest 0.12.28",
 ]
 
 [[package]]
@@ -9054,7 +9054,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
- "reqwest",
+ "reqwest 0.12.28",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
@@ -10520,7 +10520,7 @@ dependencies = [
  "percent-encoding",
  "quick-xml 0.37.5",
  "rand 0.8.5",
- "reqwest",
+ "reqwest 0.12.28",
  "rust-ini",
  "serde",
  "serde_json",
@@ -10576,6 +10576,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "reqwest"
+version = "0.13.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab3f43e3283ab1488b624b44b0e988d0acea0b3214e694730a055cb6b2efa801"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-channel",
+ "futures-core",
+ "futures-util",
+ "h2 0.4.12",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "hyper 1.9.0",
+ "hyper-rustls",
+ "hyper-tls 0.6.0",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "native-tls",
+ "percent-encoding",
+ "pin-project-lite",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "sync_wrapper",
+ "tokio",
+ "tokio-native-tls",
+ "tower 0.5.3",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
 name = "reqwest-middleware"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10584,7 +10623,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "http 1.4.0",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "thiserror 1.0.69",
  "tower-service",
@@ -10602,7 +10641,7 @@ dependencies = [
  "getrandom 0.2.16",
  "http 1.4.0",
  "hyper 1.9.0",
- "reqwest",
+ "reqwest 0.12.28",
  "reqwest-middleware",
  "retry-policies",
  "thiserror 2.0.18",
@@ -11015,7 +11054,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "971369158e31ad10bd73b558625f99de39554a2f00c2ff886a6796d950e69664"
 dependencies = [
  "async-trait",
- "reqwest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -11044,18 +11083,19 @@ dependencies = [
 
 [[package]]
 name = "sentry"
-version = "0.46.1"
+version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f925d575b468e88b079faf590a8dd0c9c99e2ec29e9bab663ceb8b45056312f"
+checksum = "eb25f439f97d26fea01d717fa626167ceffcd981addaa670001e70505b72acbb"
 dependencies = [
+ "cfg_aliases",
  "httpdate",
  "native-tls",
- "reqwest",
- "sentry-backtrace",
+ "reqwest 0.13.2",
+ "sentry-backtrace 0.47.0",
  "sentry-contexts",
- "sentry-core",
+ "sentry-core 0.47.0",
  "sentry-debug-images",
- "sentry-tracing",
+ "sentry-tracing 0.47.0",
  "tokio",
  "ureq",
 ]
@@ -11068,20 +11108,31 @@ checksum = "6cb1ef7534f583af20452b1b1bf610a60ed9c8dd2d8485e7bd064efc556a78fb"
 dependencies = [
  "backtrace",
  "regex",
- "sentry-core",
+ "sentry-core 0.46.1",
+]
+
+[[package]]
+name = "sentry-backtrace"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46a8c2c1bd5c1f735e84f28b48e7d72efcaafc362b7541bc8253e60e8fcdffc6"
+dependencies = [
+ "backtrace",
+ "regex",
+ "sentry-core 0.47.0",
 ]
 
 [[package]]
 name = "sentry-contexts"
-version = "0.46.1"
+version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebd6be899d9938390b6d1ec71e2f53bd9e57b6a9d8b1d5b049e5c364e7da9078"
+checksum = "9b88a90baa654d7f0e1f4b667f6b434293d9f72c71bef16b197c76af5b7d5803"
 dependencies = [
  "hostname",
  "libc",
  "os_info",
  "rustc_version",
- "sentry-core",
+ "sentry-core 0.47.0",
  "uname",
 ]
 
@@ -11092,7 +11143,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26ab054c34b87f96c3e4701bea1888317cde30cc7e4a6136d2c48454ab96661c"
 dependencies = [
  "rand 0.9.4",
- "sentry-types",
+ "sentry-types 0.46.1",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "sentry-core"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ac170a5bba8bec6e3339c90432569d89641fa7a3d3e4f44987d24f0762e6adf"
+dependencies = [
+ "rand 0.9.4",
+ "sentry-types 0.47.0",
  "serde",
  "serde_json",
  "url",
@@ -11100,12 +11164,12 @@ dependencies = [
 
 [[package]]
 name = "sentry-debug-images"
-version = "0.46.1"
+version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5637ec550dc6f8c49a711537950722d3fc4baa6fd433c371912104eaff31e2a5"
+checksum = "dd9646a972b57896d4a92ed200cf76139f8e30b3cfd03b6662ae59926d26633c"
 dependencies = [
  "findshlibs",
- "sentry-core",
+ "sentry-core 0.47.0",
 ]
 
 [[package]]
@@ -11114,8 +11178,8 @@ version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f02c7162f7b69b8de872b439d4696dc1d65f80b13ddd3c3831723def4756b63"
 dependencies = [
- "sentry-backtrace",
- "sentry-core",
+ "sentry-backtrace 0.46.1",
+ "sentry-core 0.46.1",
 ]
 
 [[package]]
@@ -11125,8 +11189,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1dd47df349a80025819f3d25c3d2f751df705d49c65a4cdc0f130f700972a48"
 dependencies = [
  "bitflags 2.11.0",
- "sentry-backtrace",
- "sentry-core",
+ "sentry-core 0.46.1",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "sentry-tracing"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27701acc51e68db5281802b709010395bfcbcb128b1d0a4e5873680d3b47ff0c"
+dependencies = [
+ "bitflags 2.11.0",
+ "sentry-backtrace 0.47.0",
+ "sentry-core 0.47.0",
  "tracing-core",
  "tracing-subscriber",
 ]
@@ -11136,6 +11212,23 @@ name = "sentry-types"
 version = "0.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eecbd63e9d15a26a40675ed180d376fcb434635d2e33de1c24003f61e3e2230d"
+dependencies = [
+ "debugid",
+ "hex",
+ "rand 0.9.4",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "time",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "sentry-types"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56780cb5597d676bf22e6c11d1f062eb4def46390ea3bfb047bcbcf7dfd19bdb"
 dependencies = [
  "debugid",
  "hex",
