@@ -252,15 +252,18 @@ fn create_mz_connection_url(
     local_port: i32,
     credentials: Option<PasswordAuthCredentials>,
 ) -> String {
-    let password_auth_segment = if let Some(credentials) = credentials {
-        format!("{}:{}@", credentials.username, credentials.password)
-    } else {
-        "".to_string()
-    };
-    format!(
-        "postgres://{}{}:{}?sslmode=prefer",
-        password_auth_segment, local_address, local_port
-    )
+    let mut url = url::Url::parse(&format!(
+        "postgres://{}:{}?sslmode=prefer",
+        local_address, local_port
+    ))
+    .expect("static prefix is a valid URL");
+    if let Some(creds) = credentials {
+        url.set_username(&creds.username)
+            .expect("postgres scheme allows userinfo");
+        url.set_password(Some(&creds.password))
+            .expect("postgres scheme allows userinfo");
+    }
+    url.into()
 }
 
 async fn initialize_context(
