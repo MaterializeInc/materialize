@@ -66,7 +66,7 @@ use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
-use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
 use crate::statistics::SourceStatistics;
 
@@ -719,7 +719,7 @@ fn render_reader<'scope>(
                             outputs.iter().map(|o| o.output_index).repeat_clone(error)
                         {
                             let update = ((output, error), time, Diff::ONE);
-                            let size = std::mem::size_of_val(&update);
+                            let size = update.fuel_size();
                             data_output
                                 .give_fueled(&data_cap, update, size)
                                 .await;
@@ -789,16 +789,10 @@ fn render_reader<'scope>(
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
-                                    let size = match &msg {
-                                        Ok(msg) => msg.byte_len(),
-                                        Err(_) => 0,
-                                    };
+                                    let update = ((output_index, msg), time, diff);
+                                    let size = update.fuel_size();
                                     data_output
-                                        .give_fueled(
-                                            part_cap,
-                                            ((output_index, msg), time, diff),
-                                            size,
-                                        )
+                                        .give_fueled(part_cap, update, size)
                                         .await;
                                 }
                             }
@@ -843,16 +837,11 @@ fn render_reader<'scope>(
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
-                                    let size = match &msg {
-                                        Ok(msg) => msg.byte_len(),
-                                        Err(_) => 0,
-                                    };
+                                    let update =
+                                        ((output.output_index, msg), time, diff);
+                                    let size = update.fuel_size();
                                     data_output
-                                        .give_fueled(
-                                            part_cap,
-                                            ((output.output_index, msg), time, diff),
-                                            size,
-                                        )
+                                        .give_fueled(part_cap, update, size)
                                         .await;
                                 }
                                 // The message was from an offset we've already seen.

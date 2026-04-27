@@ -17,7 +17,7 @@ use mz_storage_types::sources::mysql::GtidPartition;
 use timely::progress::Timestamp;
 use tracing::trace;
 
-use crate::source::types::SourceMessage;
+use crate::source::types::{FuelSize, SourceMessage};
 
 use super::super::schemas::verify_schemas;
 use super::super::{DefiniteError, MySqlTableName, TransientError};
@@ -102,7 +102,7 @@ pub(super) async fn handle_query_event(
                         new_gtid.clone(),
                         Diff::ONE,
                     );
-                    let size = std::mem::size_of_val(&update);
+                    let size = update.fuel_size();
                     ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                     ctx.errored_outputs.insert(err_output.output_index);
                 }
@@ -176,7 +176,7 @@ pub(super) async fn handle_query_event(
                             new_gtid.clone(),
                             Diff::ONE,
                         );
-                        let size = std::mem::size_of_val(&update);
+                        let size = update.fuel_size();
                         ctx.data_output.give_fueled(&gtid_cap, update, size).await;
                         ctx.errored_outputs.insert(output.output_index);
                     }
@@ -320,13 +320,9 @@ pub(super) async fn handle_rows_event(
                 } else {
                     retractions += 1;
                 }
-                let size = match &data.1 {
-                    Ok(msg) => msg.byte_len(),
-                    Err(_) => 0,
-                };
-                ctx.data_output
-                    .give_fueled(&gtid_cap, (data, new_gtid.clone(), diff), size)
-                    .await;
+                let update = (data, new_gtid.clone(), diff);
+                let size = update.fuel_size();
+                ctx.data_output.give_fueled(&gtid_cap, update, size).await;
             }
         }
     }
@@ -340,10 +336,7 @@ pub(super) async fn handle_rows_event(
     if !event_buffer.is_empty() {
         for d in event_buffer.drain(..) {
             let (rewind_data_cap, _) = ctx.rewinds.get(&d.0.0).unwrap();
-            let size = match &d.0.1 {
-                Ok(msg) => msg.byte_len(),
-                Err(_) => 0,
-            };
+            let size = d.fuel_size();
             ctx.data_output.give_fueled(rewind_data_cap, d, size).await;
         }
     }

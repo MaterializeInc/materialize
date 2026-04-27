@@ -32,7 +32,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::info;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{SignaledFuture, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 pub fn render<'scope>(
@@ -203,10 +203,7 @@ pub fn render<'scope>(
                     for sp in local_partitions.iter_mut() {
                         let mut emitted_all_exports = 0;
                         for u in sp.produce_batch(&mut value_buffer, &output_indexes) {
-                            let size = match &u.0.1 {
-                                Ok(msg) => msg.byte_len(),
-                                Err(_) => 0,
-                            };
+                            let size = u.fuel_size();
                             data_output.give_fueled(&cap, u, size).await;
                             emitted_all_exports += 1;
                         }
@@ -254,10 +251,7 @@ pub fn render<'scope>(
                             up.produce_batch(&mut value_buffer, &output_indexes);
                         upper_offset = new_upper;
                         for u in iter {
-                            let size = match &u.0.1 {
-                                Ok(msg) => msg.byte_len(),
-                                Err(_) => 0,
-                            };
+                            let size = u.fuel_size();
                             data_output.give_fueled(&cap, u, size).await;
                         }
                     }

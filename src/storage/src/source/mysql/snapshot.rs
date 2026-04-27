@@ -116,7 +116,7 @@ use tracing::{error, trace};
 
 use crate::metrics::source::mysql::MySqlSnapshotMetrics;
 use crate::source::RawSourceCreationConfig;
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 use super::schemas::verify_schemas;
@@ -372,7 +372,7 @@ pub(crate) fn render<'scope>(
                         GtidPartition::minimum(),
                         Diff::ONE,
                     );
-                    let size = std::mem::size_of_val(&update);
+                    let size = update.fuel_size();
                     raw_handle.give_fueled(&data_cap_set[0], update, size).await;
                     tracing::warn!(%id, "timely-{worker_id} stopping snapshot of output {output:?} \
                                 due to schema mismatch");
@@ -432,15 +432,12 @@ pub(crate) fn render<'scope>(
                                 }
                                 Err(err) => Err(err)?,
                             };
-                            let size = match &event {
-                                Ok(msg) => msg.byte_len(),
-                                Err(_) => 0,
-                            };
                             let update = (
                                 (output.output_index, event),
                                 GtidPartition::minimum(),
                                 Diff::ONE,
                             );
+                            let size = update.fuel_size();
                             raw_handle.give_fueled(&data_cap_set[0], update, size).await;
                         }
                         // This overcounting maintains existing behavior but will be removed one readers no longer rely on the value.

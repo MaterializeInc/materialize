@@ -46,7 +46,7 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
 };
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
 
 /// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
@@ -319,16 +319,11 @@ pub(crate) fn render<'scope>(
                                 &arena,
                                 None,
                             );
-                            let size = match &message {
-                                Ok(msg) => msg.byte_len(),
-                                Err(_) => 0,
-                            };
+                            let update =
+                                ((*partition_idx, message), Lsn::minimum(), Diff::ONE);
+                            let size = update.fuel_size();
                             data_output
-                                .give_fueled(
-                                    &data_cap_set[0],
-                                    ((*partition_idx, message), Lsn::minimum(), Diff::ONE),
-                                    size,
-                                )
+                                .give_fueled(&data_cap_set[0], update, size)
                                 .await;
                         }
                         snapshot_staged += 1;
@@ -593,7 +588,7 @@ pub(crate) fn render<'scope>(
                                     ddl_event.lsn,
                                     Diff::ONE,
                                 );
-                                let size = std::mem::size_of_val(&update);
+                                let size = update.fuel_size();
                                 data_output
                                     .give_fueled(&data_cap_set[0], update, size)
                                     .await;
@@ -696,29 +691,21 @@ async fn handle_data_event(
                 };
 
                 let update_old = decode(decoder, old_row, &mut mz_row, &arena, Some(new_row));
-                let update_old_size = match &update_old {
-                    Ok(msg) => msg.byte_len(),
-                    Err(_) => 0,
-                };
                 if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
+                    let update = (
+                        (*partition_idx, update_old.clone()),
+                        Lsn::minimum(),
+                        Diff::ONE,
+                    );
+                    let size = update.fuel_size();
                     data_output
-                        .give_fueled(
-                            &data_cap_set[0],
-                            (
-                                (*partition_idx, update_old.clone()),
-                                Lsn::minimum(),
-                                Diff::ONE,
-                            ),
-                            update_old_size,
-                        )
+                        .give_fueled(&data_cap_set[0], update, size)
                         .await;
                 }
+                let update = ((*partition_idx, update_old), commit_lsn, Diff::MINUS_ONE);
+                let size = update.fuel_size();
                 data_output
-                    .give_fueled(
-                        &data_cap_set[0],
-                        ((*partition_idx, update_old), commit_lsn, Diff::MINUS_ONE),
-                        update_old_size,
-                    )
+                    .give_fueled(&data_cap_set[0], update, size)
                     .await;
 
                 (
@@ -732,25 +719,17 @@ async fn handle_data_event(
                 )
             };
             assert_ne!(Diff::ZERO, diff);
-            let message_size = match &message {
-                Ok(msg) => msg.byte_len(),
-                Err(_) => 0,
-            };
             if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
+                let update = ((*partition_idx, message.clone()), Lsn::minimum(), -diff);
+                let size = update.fuel_size();
                 data_output
-                    .give_fueled(
-                        &data_cap_set[0],
-                        ((*partition_idx, message.clone()), Lsn::minimum(), -diff),
-                        message_size,
-                    )
+                    .give_fueled(&data_cap_set[0], update, size)
                     .await;
             }
+            let update = ((*partition_idx, message), commit_lsn, diff);
+            let size = update.fuel_size();
             data_output
-                .give_fueled(
-                    &data_cap_set[0],
-                    ((*partition_idx, message), commit_lsn, diff),
-                    message_size,
-                )
+                .give_fueled(&data_cap_set[0], update, size)
                 .await;
         }
     }
@@ -809,7 +788,7 @@ async fn return_definite_error(
             },
             Diff::ONE,
         );
-        let size = std::mem::size_of_val(&update);
+        let size = update.fuel_size();
         data_handle.give_fueled(&data_capset[0], update, size).await;
     }
     errs_handle.give(

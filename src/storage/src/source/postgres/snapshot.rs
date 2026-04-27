@@ -203,7 +203,7 @@ use crate::source::postgres::replication::RewindRequest;
 use crate::source::postgres::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError, verify_schema,
 };
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
 use crate::statistics::SourceStatistics;
 
 /// Information broadcasted from the snapshot leader to all workers.
@@ -545,7 +545,7 @@ pub(crate) fn render<'scope>(
                                             MzOffset::from(u64::MAX),
                                             Diff::ONE,
                                         );
-                                        let size = std::mem::size_of_val(&update);
+                                        let size = update.fuel_size();
                                         raw_handle
                                             .give_fueled(&data_cap_set[0], update, size)
                                             .await;
@@ -633,7 +633,7 @@ pub(crate) fn render<'scope>(
                             MzOffset::minimum(),
                             Diff::ONE,
                         );
-                        let size = std::mem::size_of_val(&update);
+                        let size = update.fuel_size();
                         raw_handle
                             .give_fueled(&data_cap_set[0], update, size)
                             .await;
@@ -693,12 +693,12 @@ pub(crate) fn render<'scope>(
 
                     let mut snapshot_staged = 0;
                     while let Some(bytes) = stream.try_next().await? {
-                        let size = bytes.len();
                         let update = (
                             (oid, output_index, Ok(bytes.to_vec())),
                             MzOffset::minimum(),
                             Diff::ONE,
                         );
+                        let size = update.fuel_size();
                         raw_handle
                             .give_fueled(&data_cap_set[0], update, size)
                             .await;

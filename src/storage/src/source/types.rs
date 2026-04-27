@@ -118,6 +118,87 @@ impl SourceMessage {
     }
 }
 
+/// Heap-size estimate used to drive `give_fueled` yielding in source operators.
+///
+/// Implementations should approximate the bytes the value would occupy when
+/// serialized. Stack-only values may report `size_of_val(self)`; values with
+/// heap-allocated payloads (rows, byte buffers) should include that payload.
+pub trait FuelSize {
+    fn fuel_size(&self) -> usize;
+}
+
+impl FuelSize for SourceMessage {
+    fn fuel_size(&self) -> usize {
+        self.byte_len()
+    }
+}
+
+impl FuelSize for Row {
+    fn fuel_size(&self) -> usize {
+        self.byte_len()
+    }
+}
+
+impl FuelSize for Vec<u8> {
+    fn fuel_size(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<T: FuelSize, E> FuelSize for Result<T, E> {
+    fn fuel_size(&self) -> usize {
+        match self {
+            Ok(t) => t.fuel_size(),
+            Err(e) => std::mem::size_of_val(e),
+        }
+    }
+}
+
+/// Tuples sum the fuel size of their elements. Trivial coordinate fields
+/// (output indices, timestamps, diffs) implement `FuelSize` to return their
+/// stack size, so an `update.fuel_size()` call charges only the heap-allocated
+/// payload like rows or byte buffers.
+impl<A: FuelSize, B: FuelSize> FuelSize for (A, B) {
+    fn fuel_size(&self) -> usize {
+        self.0.fuel_size() + self.1.fuel_size()
+    }
+}
+
+impl<A: FuelSize, B: FuelSize, C: FuelSize> FuelSize for (A, B, C) {
+    fn fuel_size(&self) -> usize {
+        self.0.fuel_size() + self.1.fuel_size() + self.2.fuel_size()
+    }
+}
+
+/// Convenience macro for declaring `FuelSize` on a stack-only type.
+macro_rules! impl_fuel_size_stack {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl FuelSize for $t {
+                fn fuel_size(&self) -> usize {
+                    std::mem::size_of_val(self)
+                }
+            }
+        )*
+    };
+}
+
+impl_fuel_size_stack!(
+    usize,
+    u32,
+    u64,
+    Diff,
+    mz_repr::Timestamp,
+    mz_storage_types::sources::MzOffset,
+    mz_sql_server_util::cdc::Lsn,
+);
+
+impl<P, T> FuelSize for mz_timely_util::order::Partitioned<P, T> {
+    fn fuel_size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
+}
+
 /// The result of probing an upstream system for its write frontier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Probe<T> {

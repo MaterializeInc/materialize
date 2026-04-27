@@ -38,7 +38,7 @@ use timely::progress::{Antichain, Timestamp};
 use tokio::time::{Instant, interval_at};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod auction;
@@ -389,13 +389,9 @@ fn render_simple_generator<'scope>(
                         // Since those are not required downstream we eagerly ignore them here.
                         if resume_offset <= offset {
                             for (&output, message) in outputs.iter().repeat_clone(message) {
-                                let size = match &message {
-                                    Ok(msg) => msg.byte_len(),
-                                    Err(_) => 0,
-                                };
-                                data_output
-                                    .give_fueled(&cap, ((output, message), offset, diff), size)
-                                    .await;
+                                let update = ((output, message), offset, diff);
+                                let size = update.fuel_size();
+                                data_output.give_fueled(&cap, update, size).await;
                             }
                         }
                     }

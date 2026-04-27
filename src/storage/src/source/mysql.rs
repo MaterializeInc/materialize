@@ -86,7 +86,7 @@ use mz_timely_util::order::Extrema;
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::source::types::Probe;
-use crate::source::types::{SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage};
 
 mod replication;
@@ -404,10 +404,9 @@ async fn return_definite_error(
             GtidPartition::new_range(Uuid::minimum(), Uuid::maximum(), GtidState::MAX),
             Diff::ONE,
         );
-        // Definite errors are rare and small; account only for the tuple stack size.
-        let update_size = std::mem::size_of_val(&update);
+        let size = update.fuel_size();
         data_handle
-            .give_fueled(&data_cap_set[0], update, update_size)
+            .give_fueled(&data_cap_set[0], update, size)
             .await;
     }
     definite_error_handle.give(
