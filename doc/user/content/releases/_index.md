@@ -26,16 +26,17 @@ improvements, and bug fixes.
 
 {{< public-preview />}}
 
-Materialize environments now include a built-in [Model Context Protocol
-(MCP)](https://modelcontextprotocol.io/) Developer endpoint
-(`/api/mcp/developer`). Connecting an MCP-compatible coding
-agent (such as Claude Code, Claude Desktop, or Cursor) to this endpoint lets
-you ask natural language questions about your environment.
+Materialize environments now include a built-in Model Context Protocol (MCP)
+[Developer endpoint
+(`/api/mcp/developer`)](/integrations/mcp-server/mcp-developer/). Connecting an
+MCP-compatible coding agent (such as Claude Code, Claude Desktop, or Cursor) to
+this endpoint lets you ask natural language questions about your environment.
 
-For example, you could ask *why is my materialized view stale?* or *how much memory is my cluster using?*. You'll receive a diagnosis, and recommendations on how to fix isssues.
+For example, you could ask *why is my materialized view stale?* or *how much memory is my cluster using?*. You'll receive a diagnosis and recommendations on how to fix isssues.
 
 For more information, refer to:
-- [Integrations: MCP Server for Developers](/integrations/mcp-server/mcp-developer/)
+- [Integrations: MCP Server for
+  Developers](/integrations/mcp-server/mcp-developer/)
 
 ### Improvements {#v26-20-improvements}
 - **Better Console schema navigation**: The schema dropdown in the SQL Shell now
