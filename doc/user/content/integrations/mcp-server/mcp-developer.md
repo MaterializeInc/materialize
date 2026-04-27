@@ -130,29 +130,16 @@ http://localhost:6876/api/mcp/developer
 
 ### Step 2. Configure your MCP client
 
-{{< tip >}}
-
-For Cloud, you can copy the `.json` content from the **MCP Server** tab in the
-Console's **Connect** modal.
-| Placeholder      | Cloud                                                             | Self-managed                              | Emulator                 |
-| ---------------- | ----------------------------------------------------------------- | ----------------------------------------- | ------------------------ |
-| `<baseURL>`      | Already populated if copied from the Console. | `http://<host>:6876` (from previous step) | `http://localhost:6876/` |
-| `<base64-token>` | Replace with your value                                           | Replace with your value                   | Can leave as-is. |
-
-{{< /tip >}}
-
 {{< warning >}}
-
 When saving your credentials or other sensitive information in a config file, do
 **not** commit these files to version control or share them publicly.
-
 {{< /warning >}}
 
 {{< tabs >}}
 
 {{< tab "Claude Code" >}}
 
-1. Create a `.mcp.json` file in your project directory:
+1. Create a `.mcp.json` file with the following content:
 
    ```json
    {
@@ -167,6 +154,8 @@ When saving your credentials or other sensitive information in a config file, do
      }
    }
    ```
+
+   {{% include-headless "/headless/mcp-dev-endpoint-config-replacements" %}}
 
 1. Restart Claude Code to pick up the new setting.
 
@@ -189,6 +178,8 @@ When saving your credentials or other sensitive information in a config file, do
    }
    ```
 
+   {{% include-headless "/headless/mcp-dev-endpoint-config-replacements" %}}
+
 1. Restart Claude Desktop to pick up the new setting.
 
 {{< /tab >}}
@@ -207,8 +198,9 @@ When saving your credentials or other sensitive information in a config file, do
         }
       }
     }
-
    ```
+
+   {{% include-headless "/headless/mcp-dev-endpoint-config-replacements" %}}
 
 1. Restart Cursor to pick up the new setting.
 
