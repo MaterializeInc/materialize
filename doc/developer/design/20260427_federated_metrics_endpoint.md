@@ -365,30 +365,20 @@ if not already present.
 
 ## Minimal Viable Prototype
 
-End-to-end demo on `mzcompose`:
+Every `materialized` (and `environmentd`) starts with a default
+`quickstart` cluster + one replica. That's enough to exercise the full
+end-to-end path with no setup beyond starting the binary.
 
-1. Bring up env + 2 clusterd replicas of the same cluster. The scrape
-   loop must attach distinct `replica_id` / `replica_name` labels per
-   replica, otherwise their series collide.
-2. `CREATE SOURCE events_raw FROM KAFKA ...` so a real `source_id` flows
-   through the pipeline.
-3. `register_rules` is called in compute and storage with the appropriate
-   `Rule::ObjectNameLookup`, `Rule::ClusterNameLookup`,
-   `Rule::ReplicaNameLookup` variants for the ID labels each crate emits.
-4. `curl http://clusterd:port/metrics` — confirm body is text and
-   `X-Mz-Enrich-Rules` header lists the registered rules as JSON.
-5. `curl -H "Accept: application/vnd.google.protobuf; ..."
-   http://clusterd:port/metrics | protoc --decode=io.prometheus.client.MetricFamily`
-   — confirm protobuf body decodes and same rules header is present.
-6. `curl http://env:port/metrics/federated` — confirm
-   `mz_source_messages_received` carries `source_name="events_raw"`,
-   `cluster_name`, `replica_name`, distinct series per replica.
-7. Run a real Prometheus container against clusterd's `/metrics` — confirm
-   it ingests cleanly with no warnings about the extra header (Prometheus
-   ignores unknown response headers) and no extra time-series rows in the
-   body. This is the regression we most need to avoid.
+1. Start `materialized` with default config.
+2. `curl http://localhost:6878/metrics/federated` — confirm metrics
+   emitted on behalf of the quickstart cluster carry `cluster_id`,
+   `cluster_name="quickstart"`, `replica_id`, and a real `replica_name`
+   (the default replica is named `r1`).
 
-If steps 1–7 pass, the prototype is validated.
+If step 2 succeeds, the prototype is validated. Multi-replica testing
+(distinct series across replicas) and source-name enrichment
+(`source_id` → `object_name`) are still worth covering before merge but
+belong in the integration test suite, not the MVP.
 
 ## Alternatives
 
