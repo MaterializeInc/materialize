@@ -270,11 +270,11 @@ arrayvec = "0.7.6"
 arrow = { version = "57", default-features = false }
 arrow-ipc = "57"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
-assert_cmd = "2.2.0"
+assert_cmd = "2.2.1"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
 async-stream = "0.3.6"
 async-trait = "0.1.89"
-aws-config = { version = "1.8.15", default-features = false, features = ["sso"] }
+aws-config = { version = "1.8.16", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.10", features = ["hardcoded-credentials"] }
 aws-lc-rs = "1"
 aws-sdk-kms = { version = "1.104.0", default-features = false, features = ["rt-tokio"] }
@@ -306,7 +306,7 @@ cc = "1.2.59"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
 chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
-clap = { version = "4.5.60", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 columnar = "0.12.1"
 columnation = "0.1.2"
 compact_bytes = "0.2.1"
@@ -380,7 +380,7 @@ kube = { version = "3.1.0", default-features = false, features = ["client", "der
 launchdarkly-server-sdk = { version = "3.0.1", default-features = false, features = ["native-tls", "crypto-openssl"] }
 launchdarkly-sdk-transport = "0.1"
 lgalloc = "0.6.0"
-libc = "0.2.184"
+libc = "0.2.186"
 lru = "0.16.3"
 maplit = "1.0.2"
 mappings = "0.7.2"
