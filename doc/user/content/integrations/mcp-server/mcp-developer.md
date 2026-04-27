@@ -208,7 +208,7 @@ When saving your credentials or other sensitive information in a config file, do
 
 {{< tab "Generic HTTP" >}}
 
-Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests:
+Any MCP-compatible client can connect by sending JSON-RPC 2.0 requests; update the `<baseURL>` and `<base64-token>` placeholders with your values:
 
 ```bash
 curl -X POST <baseURL>/api/mcp/developer \
