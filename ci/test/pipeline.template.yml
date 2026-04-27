@@ -645,6 +645,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: http-auth
+    label: HTTP auth
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/http-auth]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: http-auth
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: copy
     label: Copy
     depends_on: build-aarch64
