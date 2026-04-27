@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use version_compare;
 
 use mysql_async::prelude::Queryable;
 use mz_mysql_util::{MySqlError, SchemaRequest, schema_info};
@@ -46,22 +45,6 @@ where
     })
     .collect();
 
-    let full_metadata = version_compare::compare_to(
-        conn.query_first::<String, String>("SELECT VERSION()".to_string())
-            .await?
-            .unwrap()
-            .to_uppercase(),
-        "8.0.1",
-        version_compare::Cmp::Ge,
-    )
-    .expect("failed to parse version string from mysql")
-        && conn
-            .query_first::<String, String>("SELECT @@binlog_row_metadata".to_string())
-            .await?
-            .unwrap()
-            .to_uppercase()
-            == "FULL";
-
     Ok(expected
         .into_iter()
         .flat_map(|(table, outputs)| {
@@ -82,7 +65,10 @@ where
                         );
                         match new_desc {
                             Ok(desc) => {
-                                match output.desc.determine_compatibility(&desc, full_metadata) {
+                                match output
+                                    .desc
+                                    .determine_compatibility(&desc, output.binlog_full_metadata)
+                                {
                                     Ok(()) => None,
                                     Err(err) => Some((
                                         output,

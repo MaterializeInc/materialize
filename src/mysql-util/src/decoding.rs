@@ -10,7 +10,6 @@
 use std::fmt::Write;
 use std::str::FromStr;
 
-use mysql_async::binlog;
 use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
