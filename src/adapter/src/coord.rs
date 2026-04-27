@@ -217,6 +217,7 @@ pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
 pub(crate) mod read_policy;
+pub(crate) mod read_then_write;
 pub(crate) mod sequencer;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
