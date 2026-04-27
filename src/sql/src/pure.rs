@@ -1105,10 +1105,13 @@ async fn purify_create_source(
             let binlog_full_metadata = version_compare::compare_to(
                 mz_mysql_util::query_sys_var(&mut conn, "version").await?,
                 "8.0.1",
-                version_compare::Cmp::Lt,
+                version_compare::Cmp::Ge,
             )
-            .expect("failed to parse version string from mysql")
-                && mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata").await? == "FULL";
+            .is_ok_and(|is_ge| is_ge)
+                && mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata")
+                    .await?
+                    .to_uppercase()
+                    == "FULL";
 
             let reference_client = SourceReferenceClient::MySql {
                 conn: &mut conn,
@@ -1539,10 +1542,13 @@ async fn purify_alter_source_add_subsources(
             let binlog_full_metadata = version_compare::compare_to(
                 mz_mysql_util::query_sys_var(&mut conn, "version").await?,
                 "8.0.1",
-                version_compare::Cmp::Lt,
+                version_compare::Cmp::Ge,
             )
-            .expect("failed to parse version string from mysql")
-                && mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata").await? == "FULL";
+            .is_ok_and(|is_ge| is_ge)
+                && mz_mysql_util::query_sys_var(&mut conn, "binlog_row_metadata")
+                    .await?
+                    .to_uppercase()
+                    == "FULL";
 
             let requested_references = Some(ExternalReferences::SubsetTables(external_references));
 
@@ -1906,7 +1912,7 @@ async fn purify_create_table_from_source(
                 "8.0.1",
                 version_compare::Cmp::Lt,
             )
-            .expect("failed to parse version string from mysql")
+            .is_ok_and(|is_lt| is_lt)
             {
                 Err(
                     MySqlSourcePurificationError::UnsupportedBinlogMetadataSetting {

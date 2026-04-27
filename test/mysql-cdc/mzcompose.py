@@ -33,21 +33,33 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
 
 
-def create_mysql(mysql_version: str) -> MySql:
-    return MySql(version=mysql_version)
+def create_mysql(mysql_version: str, binlog_full_metadata: bool = True) -> MySql:
+    additional_args = []
+    if binlog_full_metadata:
+        additional_args.extend(
+            [
+                "--binlog-row-metadata=FULL",
+                "--gtid_mode=ON",
+                "--enforce_gtid_consistency=ON",
+            ]
+        )
+    return MySql(version=mysql_version, additional_args=additional_args)
 
 
-def create_mysql_replica(mysql_version: str) -> MySql:
-    return MySql(
-        name="mysql-replica",
-        version=mysql_version,
-        use_seeded_image=False,
-        additional_args=[
+def create_mysql_replica(mysql_version: str, binlog_full_metadata: bool = True) -> MySql:
+    additional_args = [
             "--gtid_mode=ON",
             "--enforce_gtid_consistency=ON",
             "--skip-replica-start",
             "--server-id=2",
-        ],
+        ]
+    if binlog_full_metadata:
+        additional_args.append("--binlog-row-metadata=FULL")
+    return MySql(
+        name="mysql-replica",
+        version=mysql_version,
+        use_seeded_image=False,
+        additional_args=additional_args
     )
 
 
