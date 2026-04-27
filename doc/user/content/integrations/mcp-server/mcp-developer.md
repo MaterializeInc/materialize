@@ -115,12 +115,12 @@ tab")
 
 {{< tab "Emulator" >}}
 
-1. You do not need a Base64-encoded token for the Emulator.
+To connect to the MCP server for your Emulator, use the following endpoint
+(based on your deployment's base URL of `http://localhost:6876`):
 
-1. Your MCP endpoint URL is:
-   ```
-   http://localhost:6876/api/mcp/developer
-   ```
+```
+http://localhost:6876/api/mcp/developer
+```
 
 {{< /tab >}}
 
