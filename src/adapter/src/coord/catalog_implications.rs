@@ -66,6 +66,7 @@ use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
 use crate::coord::timeline::TimelineState;
+use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 
@@ -368,7 +369,63 @@ impl Coordinator {
                     dropped_item_names.insert(sink.global_id(), full_name);
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Added(index)) => {
-                    tracing::debug!(?index, "not handling AddIndex in here yet");
+                    let item_id = catalog_id;
+                    let global_id = index.global_id;
+                    let cluster_id = index.cluster_id;
+                    let compaction_window = index.custom_logical_compaction_window;
+
+                    // The plans on the catalog item are populated by
+                    // `parse_item` during `apply_updates`, which reads them
+                    // from the durable expression cache (populated by the
+                    // sequencer's awaited `cache_expressions` call before
+                    // the catalog transaction). Note that `index.optimized_plan`
+                    // is also populated, but `AddIndex` itself doesn't need
+                    // it — it lives on the catalog item for
+                    // `EXPLAIN OPTIMIZED PLAN FOR INDEX`.
+                    let physical_plan = index.physical_plan.as_ref().expect(
+                        "physical_plan populated on newly created index via \
+                         parse_item hydration from the expression cache",
+                    );
+                    let mut df_desc = (**physical_plan).clone();
+                    let df_meta = index.dataflow_metainfo.clone().expect(
+                        "dataflow_metainfo populated on newly created index \
+                         via parse_item hydration from the expression cache",
+                    );
+
+                    let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
+
+                    let notice_builtin_updates_fut =
+                        self.persist_dataflow_metainfo(df_meta, global_id).await;
+
+                    // We're putting in place read holds, such that
+                    // `ship_dataflow` (which calls `update_read_capabilities`)
+                    // can successfully do so. Otherwise, the `since` of
+                    // dependencies might move along concurrently, pulling the
+                    // rug from under us.
+                    let read_holds = self.acquire_read_holds(&id_bundle);
+                    let since = read_holds.least_valid_read();
+                    df_desc.set_as_of(since);
+
+                    self.ship_dataflow_and_notice_builtin_table_updates(
+                        df_desc,
+                        cluster_id,
+                        notice_builtin_updates_fut,
+                        None,
+                    )
+                    .await;
+                    // No `allow_writes` here because indexes do not modify
+                    // external state.
+
+                    // Drop read holds after the dataflow has been shipped, at
+                    // which point compute will have put in its own read
+                    // holds.
+                    drop(read_holds);
+
+                    self.update_compute_read_policy(
+                        cluster_id,
+                        item_id,
+                        compaction_window.unwrap_or_default().into(),
+                    );
                 }
                 CatalogImplication::Index(CatalogImplicationKind::Altered {
                     prev: prev_index,

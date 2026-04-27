@@ -22,6 +22,7 @@ use mz_sql::names::ResolvedIds;
 use mz_sql::plan;
 use tracing::Span;
 
+use crate::catalog::CatalogState;
 use crate::command::ExecuteResponse;
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{
@@ -31,7 +32,6 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::optimizer_trace::OptimizerTrace;
-use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::{AdapterNotice, ExecuteContext, catalog};
@@ -440,7 +440,9 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
-        let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
+
+        let on_entry = self.catalog().get_entry_by_global_id(&on);
+        let owner_id = *on_entry.owner_id();
 
         let ops = vec![catalog::Op::CreateItem {
             id: item_id,
@@ -459,7 +461,7 @@ impl Coordinator {
                 physical_plan: None,
                 dataflow_metainfo: None,
             }),
-            owner_id: *self.catalog().get_entry_by_global_id(&on).owner_id(),
+            owner_id,
         }];
 
         // Pre-allocate a vector of transient GlobalIds for each notice.
@@ -468,63 +470,77 @@ impl Coordinator {
             .take(global_lir_plan.df_meta().optimizer_notices.len())
             .collect::<Vec<_>>();
 
+        // Render optimizer notices before the catalog transaction, using an
+        // `ExprHumanizerExt` that knows about the to-be-created index. This
+        // way the notice text produced here (and persisted in
+        // `mz_optimizer_notices`) resolves the new index's own `global_id` to
+        // its intended human-readable name, rather than to the bare transient
+        // id that `for_system_session()` would produce on its own.
+        //
+        // We keep `raw_df_meta` live so that on success we can emit its raw
+        // notices to the user session (rendered against the user's
+        // session-aware humanizer). We deliberately do NOT emit to the user
+        // here, so that if the catalog transaction below fails the user
+        // isn't shown confusing notices about an item that wasn't actually
+        // created.
+        let (df_desc, raw_df_meta) = global_lir_plan.unapply();
+        let df_meta = {
+            let system_catalog = self.catalog().for_system_session();
+            let full_name = self.catalog().resolve_full_name(&name, None);
+            let on_desc = on_entry
+                .relation_desc()
+                .expect("can only create indexes on items with a valid description");
+            let transient_items = btreemap! {
+                global_id => TransientItem::new(
+                    Some(full_name.into_parts()),
+                    Some(on_desc.iter_names().map(|c| c.to_string()).collect()),
+                )
+            };
+            let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
+            CatalogState::render_notices_core(
+                &humanizer,
+                (self.catalog().config().now)(),
+                &raw_df_meta,
+                notice_ids,
+                Some(global_id),
+            )
+        };
+
+        // Populate the durable expression cache before the catalog
+        // transaction and await the write. This way any other envd (or a
+        // subsequent bootstrap here) will observe the cached plans +
+        // rendered notices as soon as the item becomes visible.
+        //
+        // The subsequent `catalog_transact_with_context` call will apply the
+        // `AddIndex` implication, which reads the plans + rendered notices
+        // off the newly-parsed `Index` catalog item (hydrated by
+        // `parse_item` from this very cache entry) and does the remaining
+        // work (persisting notices, acquiring read holds, shipping the
+        // dataflow, installing the read policy).
+        self.catalog()
+            .cache_expressions(
+                global_id,
+                None,
+                global_mir_plan.df_desc().clone(),
+                df_desc,
+                df_meta,
+                optimizer_features,
+            )
+            .await;
+
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
-                Box::pin(async move {
-                    let (mut df_desc, df_meta) = global_lir_plan.unapply();
-
-                    // Save plan structures.
-                    coord
-                        .catalog_mut()
-                        .set_optimized_plan(global_id, global_mir_plan.df_desc().clone());
-                    coord
-                        .catalog_mut()
-                        .set_physical_plan(global_id, df_desc.clone());
-
-                    let notice_builtin_updates_fut = coord
-                        .process_dataflow_metainfo(df_meta, global_id, ctx, notice_ids)
-                        .await;
-
-                    coord
-                        .catalog()
-                        .cache_expressions(global_id, None, optimizer_features);
-
-                    // We're putting in place read holds, such that ship_dataflow,
-                    // below, which calls update_read_capabilities, can successfully
-                    // do so. Otherwise, the since of dependencies might move along
-                    // concurrently, pulling the rug from under us!
-                    //
-                    // TODO: Maybe in the future, pass those holds on to compute, to
-                    // hold on to them and downgrade when possible?
-                    let read_holds = coord.acquire_read_holds(&id_bundle);
-                    let since = read_holds.least_valid_read();
-                    df_desc.set_as_of(since);
-
-                    coord
-                        .ship_dataflow_and_notice_builtin_table_updates(
-                            df_desc,
-                            cluster_id,
-                            notice_builtin_updates_fut,
-                            None,
-                        )
-                        .await;
-                    // No `allow_writes` here because indexes do not modify external state.
-
-                    // Drop read holds after the dataflow has been shipped, at which
-                    // point compute will have put in its own read holds.
-                    drop(read_holds);
-
-                    coord.update_compute_read_policy(
-                        cluster_id,
-                        item_id,
-                        compaction_window.unwrap_or_default().into(),
-                    );
-                })
-            })
+            .catalog_transact_with_context(None, Some(ctx), ops)
             .await;
 
         match transact_result {
-            Ok(_) => Ok(StageResult::Response(ExecuteResponse::CreatedIndex)),
+            Ok(_) => {
+                // Only emit optimizer notices to the user now that the
+                // catalog transaction has succeeded. If the transaction had
+                // failed, emitting notices would confuse the user with
+                // information about an item that wasn't actually created.
+                self.emit_raw_optimizer_notices_to_user(ctx, &raw_df_meta.optimizer_notices);
+                Ok(StageResult::Response(ExecuteResponse::CreatedIndex))
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
             })) if if_not_exists => {

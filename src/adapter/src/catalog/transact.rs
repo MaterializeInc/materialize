@@ -28,7 +28,7 @@ use mz_audit_log::{
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::BuiltinLog;
 use mz_catalog::durable::{NetworkPolicy, Snapshot, Transaction};
-use mz_catalog::expr_cache::LocalExpressions;
+use mz_catalog::expr_cache::{ExpressionCacheHandle, GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, DataSourceDesc, DefaultPrivileges, SourceReferences,
@@ -67,7 +67,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
 
 use crate::AdapterError;
-use crate::catalog::state::LocalExpressionCache;
+use crate::catalog::state::InMemoryExpressionCache;
 use crate::catalog::{
     BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
     catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
@@ -469,6 +469,18 @@ impl Catalog {
             .await
             .unwrap_or_terminate("starting catalog transaction");
 
+        // Pre-fetch global expressions (optimized plan, physical plan,
+        // rendered notices) from the expression cache for any plan-bearing
+        // items (Index / MaterializedView / ContinualTask) being created by
+        // this transaction. The sequencer `_finish` methods are expected to
+        // have `.await`ed `cache_expressions` before calling `transact`, so
+        // entries are guaranteed to be present in the cache's in-memory
+        // mirror by the time we read them here. The map is then threaded
+        // through `transact_inner` into `parse_item`, which uses it to stamp
+        // plan fields onto the freshly-built `CatalogItem`s.
+        let cached_global_exprs =
+            Self::prefetch_global_expressions(self.expr_cache_handle.as_ref(), &ops).await;
+
         let new_state = Self::transact_inner(
             TransactInnerMode::Commit,
             storage_collections,
@@ -481,6 +493,7 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             &self.state,
+            cached_global_exprs,
         )
         .await?;
 
@@ -553,6 +566,11 @@ impl Catalog {
         };
 
         // Process only the new ops against the accumulated state in dry-run mode.
+        // `transact_incremental_dry_run` (ALTER SINK 2-phase) does not produce
+        // `Op::CreateItem` for plan-bearing Index/MV/CT items, so there is
+        // nothing useful for `prefetch_global_expressions` to look up — pass
+        // an empty map. (Distinct from the preliminary-state apply inside
+        // `transact_inner`, which does pass the real `cached_global_exprs`.)
         let new_state = Self::transact_inner(
             TransactInnerMode::DryRun,
             None,
@@ -565,6 +583,7 @@ impl Catalog {
             &mut audit_events,
             &mut tx,
             base_state,
+            BTreeMap::new(),
         )
         .await?;
 
@@ -580,8 +599,60 @@ impl Catalog {
         Ok((state, new_snapshot))
     }
 
+    /// Pre-fetches global expressions (optimized plan, physical plan,
+    /// rendered metainfo) from the expression cache for every plan-bearing
+    /// item (Index / MaterializedView / ContinualTask) being freshly created
+    /// by the given `ops`. Returns an empty map when the expression cache is
+    /// not configured or none of the ops create plan-bearing items.
+    ///
+    /// The returned map is consumed by `parse_item` (via `InMemoryExpressionCache`)
+    /// to hydrate `optimized_plan` / `physical_plan` / `dataflow_metainfo` on
+    /// the resulting catalog items.
+    ///
+    /// Correctness relies on the invariant that the sequencer `_finish`
+    /// methods have `.await`ed `cache_expressions` before reaching
+    /// `transact`, so the entry for each id is guaranteed to be visible in
+    /// the cache's in-memory mirror.
+    async fn prefetch_global_expressions(
+        expr_cache_handle: Option<&ExpressionCacheHandle>,
+        ops: &[Op],
+    ) -> BTreeMap<GlobalId, GlobalExpressions> {
+        let Some(handle) = expr_cache_handle else {
+            return BTreeMap::new();
+        };
+        let mut ids: BTreeSet<GlobalId> = BTreeSet::new();
+        for op in ops {
+            if let Op::CreateItem { item, .. } = op {
+                match item {
+                    CatalogItem::Index(index) => {
+                        ids.insert(index.global_id);
+                    }
+                    CatalogItem::MaterializedView(mv) => {
+                        ids.insert(mv.global_id_writes());
+                    }
+                    CatalogItem::ContinualTask(ct) => {
+                        ids.insert(ct.global_id());
+                    }
+                    CatalogItem::Table(_)
+                    | CatalogItem::Source(_)
+                    | CatalogItem::Log(_)
+                    | CatalogItem::View(_)
+                    | CatalogItem::Sink(_)
+                    | CatalogItem::Type(_)
+                    | CatalogItem::Func(_)
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::Connection(_) => {}
+                }
+            }
+        }
+        if ids.is_empty() {
+            return BTreeMap::new();
+        }
+        handle.get_global_expressions(ids).await
+    }
+
     /// Extracts optimized expressions from `Op::CreateItem` operations for views
-    /// and materialized views. These can be used to populate a `LocalExpressionCache`
+    /// and materialized views. These can be used to populate an `InMemoryExpressionCache`
     /// to avoid re-optimization during `apply_updates`.
     fn extract_expressions_from_ops(
         ops: &[Op],
@@ -647,6 +718,12 @@ impl Catalog {
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
+        // Pre-fetched global expressions for plan-bearing items (Index / MV /
+        // ContinualTask) being created by the ops. Populated by the caller
+        // from the expression cache. Consumed by `parse_item` to hydrate
+        // `optimized_plan` / `physical_plan` / `dataflow_metainfo` on the
+        // resulting catalog items.
+        cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
     ) -> Result<Option<CatalogState>, AdapterError> {
         // We come up with new catalog state, builtin state updates, and parsed
         // catalog updates (for deriving catalog implications) in two phases:
@@ -740,7 +817,10 @@ impl Catalog {
             if !op_updates.is_empty() {
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
-                let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+                let mut local_expr_cache = InMemoryExpressionCache::new_with_globals(
+                    cached_exprs.clone(),
+                    cached_global_exprs.clone(),
+                );
                 let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
                     .to_mut()
                     .apply_updates(op_updates.clone(), &mut local_expr_cache)
@@ -750,7 +830,10 @@ impl Catalog {
         }
 
         if !updates.is_empty() {
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+            let mut local_expr_cache = InMemoryExpressionCache::new_with_globals(
+                cached_exprs.clone(),
+                cached_global_exprs,
+            );
             let (op_builtin_table_updates, op_catalog_updates) = state
                 .to_mut()
                 .apply_updates(updates.clone(), &mut local_expr_cache)
@@ -785,7 +868,10 @@ impl Catalog {
 
         let updates = tx.get_and_commit_op_updates();
         if !updates.is_empty() {
-            let mut local_expr_cache = LocalExpressionCache::new(cached_exprs.clone());
+            // No `cached_global_exprs` here: any plan-bearing items in the
+            // transaction were already hydrated by the earlier apply above,
+            // which consumed the pre-fetched globals.
+            let mut local_expr_cache = InMemoryExpressionCache::new(cached_exprs.clone());
             let (op_builtin_table_updates, op_catalog_updates) = state
                 .to_mut()
                 .apply_updates(updates.clone(), &mut local_expr_cache)

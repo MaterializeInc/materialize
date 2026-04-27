@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::catalog::open::into_consolidatable_updates_startup;
-use crate::catalog::state::LocalExpressionCache;
+use crate::catalog::state::InMemoryExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 
@@ -129,7 +129,7 @@ pub(crate) struct MigrateResult {
 pub(crate) async fn migrate(
     state: &mut CatalogState,
     tx: &mut Transaction<'_>,
-    local_expr_cache: &mut LocalExpressionCache,
+    local_expr_cache: &mut InMemoryExpressionCache,
     item_updates: Vec<StateUpdate>,
     _now: NowFn,
     _boot_ts: Timestamp,

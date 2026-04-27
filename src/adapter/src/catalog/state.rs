@@ -27,7 +27,7 @@ use mz_catalog::builtin::{
     BUILTINS, Builtin, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable, BuiltinType,
 };
 use mz_catalog::config::{AwsPrincipalContext, ClusterReplicaSizeMap};
-use mz_catalog::expr_cache::LocalExpressions;
+use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
@@ -185,30 +185,62 @@ pub struct CatalogState {
 /// statements when going back and forth between durable catalog operations and in-memory catalog
 /// operations.
 #[derive(Debug, Clone, Serialize)]
-pub(crate) enum LocalExpressionCache {
+pub(crate) enum InMemoryExpressionCache {
     /// The cache is being used.
     Open {
         /// The local expressions that were cached in the expression cache.
         cached_exprs: BTreeMap<GlobalId, LocalExpressions>,
         /// The local expressions that were NOT cached in the expression cache.
         uncached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+        /// The global expressions pre-fetched from the expression cache for
+        /// items that are being created by the current catalog transaction.
+        /// Used by `parse_item_inner` to hydrate `optimized_plan`,
+        /// `physical_plan`, and `dataflow_metainfo` on newly-added Index /
+        /// MaterializedView / ContinualTask items without having to go back
+        /// through the optimizer.
+        cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
     },
     /// The cache is not being used.
     Closed,
 }
 
-impl LocalExpressionCache {
+impl InMemoryExpressionCache {
     pub(super) fn new(cached_exprs: BTreeMap<GlobalId, LocalExpressions>) -> Self {
+        Self::new_with_globals(cached_exprs, BTreeMap::new())
+    }
+
+    pub(super) fn new_with_globals(
+        cached_exprs: BTreeMap<GlobalId, LocalExpressions>,
+        cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
+    ) -> Self {
         Self::Open {
             cached_exprs,
             uncached_exprs: BTreeMap::new(),
+            cached_global_exprs,
         }
     }
 
     pub(super) fn remove_cached_expression(&mut self, id: &GlobalId) -> Option<LocalExpressions> {
         match self {
-            LocalExpressionCache::Open { cached_exprs, .. } => cached_exprs.remove(id),
-            LocalExpressionCache::Closed => None,
+            InMemoryExpressionCache::Open { cached_exprs, .. } => cached_exprs.remove(id),
+            InMemoryExpressionCache::Closed => None,
+        }
+    }
+
+    /// Consumes and returns the pre-fetched global expression entry for `id`,
+    /// if any. Returns `None` if the cache is closed or the entry is absent
+    /// (expected cases: bootstrap with empty cache, cache miss, or non-plan-
+    /// bearing item kinds).
+    pub(super) fn remove_cached_global_expression(
+        &mut self,
+        id: &GlobalId,
+    ) -> Option<GlobalExpressions> {
+        match self {
+            InMemoryExpressionCache::Open {
+                cached_global_exprs,
+                ..
+            } => cached_global_exprs.remove(id),
+            InMemoryExpressionCache::Closed => None,
         }
     }
 
@@ -220,10 +252,10 @@ impl LocalExpressionCache {
         local_expressions: LocalExpressions,
     ) {
         match self {
-            LocalExpressionCache::Open { cached_exprs, .. } => {
+            InMemoryExpressionCache::Open { cached_exprs, .. } => {
                 cached_exprs.insert(id, local_expressions);
             }
-            LocalExpressionCache::Closed => {}
+            InMemoryExpressionCache::Closed => {}
         }
     }
 
@@ -236,7 +268,7 @@ impl LocalExpressionCache {
         optimizer_features: OptimizerFeatures,
     ) {
         match self {
-            LocalExpressionCache::Open { uncached_exprs, .. } => {
+            InMemoryExpressionCache::Open { uncached_exprs, .. } => {
                 let local_expr = LocalExpressions {
                     local_mir,
                     optimizer_features,
@@ -258,14 +290,14 @@ impl LocalExpressionCache {
                     Some(_) => {}
                 }
             }
-            LocalExpressionCache::Closed => {}
+            InMemoryExpressionCache::Closed => {}
         }
     }
 
     pub(super) fn into_uncached_exprs(self) -> BTreeMap<GlobalId, LocalExpressions> {
         match self {
-            LocalExpressionCache::Open { uncached_exprs, .. } => uncached_exprs,
-            LocalExpressionCache::Closed => BTreeMap::new(),
+            InMemoryExpressionCache::Open { uncached_exprs, .. } => uncached_exprs,
+            InMemoryExpressionCache::Closed => BTreeMap::new(),
         }
     }
 }
@@ -1030,7 +1062,7 @@ impl CatalogState {
         global_id: GlobalId,
         create_sql: &str,
         extra_versions: &BTreeMap<RelationVersion, GlobalId>,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
         previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, AdapterError> {
         self.parse_item(
@@ -1040,7 +1072,7 @@ impl CatalogState {
             None,
             false,
             None,
-            local_expression_cache,
+            in_memory_expression_cache,
             previous_item,
         )
     }
@@ -1055,10 +1087,12 @@ impl CatalogState {
         pcx: Option<&PlanContext>,
         is_retained_metrics_object: bool,
         custom_logical_compaction_window: Option<CompactionWindow>,
-        local_expression_cache: &mut LocalExpressionCache,
+        in_memory_expression_cache: &mut InMemoryExpressionCache,
         previous_item: Option<CatalogItem>,
     ) -> Result<CatalogItem, AdapterError> {
-        let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
+        let cached_expr = in_memory_expression_cache.remove_cached_expression(&global_id);
+        let cached_global_expr =
+            in_memory_expression_cache.remove_cached_global_expression(&global_id);
         match self.parse_item_inner(
             global_id,
             create_sql,
@@ -1069,19 +1103,48 @@ impl CatalogState {
             cached_expr,
             previous_item,
         ) {
-            Ok((item, uncached_expr)) => {
+            Ok((mut item, uncached_expr)) => {
                 if let Some((uncached_expr, optimizer_features)) = uncached_expr {
-                    local_expression_cache.insert_uncached_expression(
+                    in_memory_expression_cache.insert_uncached_expression(
                         global_id,
                         uncached_expr,
                         optimizer_features,
                     );
                 }
+                // If the global expression cache had a hit for this id
+                // (populated pre-transaction by `cache_expressions` in the
+                // sequencer `_finish` paths, or loaded at bootstrap), stamp
+                // the resulting optimized / physical / metainfo plans onto
+                // the freshly-built item. Using the durable cache as the
+                // source of truth for these plans lets the creation work
+                // that consumes them run in a different envd process than
+                // the one that ran the optimizer, which we will need for
+                // 0-downtime upgrades and multi-envd.
+                if let Some(global_expr) = cached_global_expr {
+                    let GlobalExpressions {
+                        global_mir,
+                        physical_plan,
+                        dataflow_metainfos,
+                        optimizer_features: _,
+                    } = global_expr;
+                    if let Some((optimized_plan, phys_plan, metainfo)) = item.plan_fields_mut() {
+                        *optimized_plan = Some(Arc::new(global_mir));
+                        *phys_plan = Some(Arc::new(physical_plan));
+                        *metainfo = Some(dataflow_metainfos);
+                    } else {
+                        // Other item kinds don't have plan fields; the
+                        // caller should not have put them in the map.
+                        mz_ore::soft_panic_or_log!(
+                            "unexpected cached global expression for non-plan-bearing \
+                             item {global_id}"
+                        );
+                    }
+                }
                 Ok(item)
             }
             Err((err, cached_expr)) => {
                 if let Some(local_expr) = cached_expr {
-                    local_expression_cache.insert_cached_expression(global_id, local_expr);
+                    in_memory_expression_cache.insert_cached_expression(global_id, local_expr);
                 }
                 Err(err)
             }
