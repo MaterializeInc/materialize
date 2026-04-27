@@ -332,7 +332,7 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
             // i.e. The DeltaWriter assumes that rows outside the "seen" cache come from prior snapshots.
             //
             // If we insert a row a=foo during this snapshot and then evict it from the "seen" cache,
-            // a subsequent update a=bar will lead to:
+            // a subsequent update a=bar (also during this snapshot) will lead to:
             //   1. Equality delete for a=foo (does nothing because a=foo is from this snapshot, not a prior snapshot)
             //   2. Insert a=bar
             // Because the deletion does nothing, we have a=foo and a=bar in the same snapshot.
