@@ -177,6 +177,9 @@ async fn report_loop(
                         PeekResponseUnary::Rows(rows) => row_iters.push(rows),
                         PeekResponseUnary::Canceled => bail!("query canceled"),
                         PeekResponseUnary::Error(e) => bail!(e),
+                        PeekResponseUnary::DependencyDropped(dep) => {
+                            bail!("{}", dep.query_terminated_error())
+                        }
                     }
                 }
 

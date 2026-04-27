@@ -2528,7 +2528,7 @@ fn test_subscribe_on_dropped_source() {
         assert!(
             res.unwrap_db_error()
                 .message()
-                .contains("subscribe has been terminated because underlying relation")
+                .contains("query could not complete because relation")
         );
     }
 
@@ -2584,7 +2584,7 @@ fn test_dont_drop_sinks_twice() {
     let err = out.read_to_end(&mut vec![]).unwrap_err();
     assert!(
         err.to_string_with_causes()
-            .contains("subscribe has been terminated")
+            .contains("query could not complete")
     );
 
     drop(out);

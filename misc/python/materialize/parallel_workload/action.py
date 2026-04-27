@@ -362,8 +362,8 @@ class FetchAction(Action):
             result.extend(
                 [
                     "does not exist",
-                    "subscribe has been terminated because underlying relation",
-                    "subscribe has been terminated because underlying cluster",
+                    "query could not complete because relation",
+                    "query could not complete because cluster",
                 ]
             )
         return result
