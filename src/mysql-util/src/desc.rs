@@ -103,6 +103,11 @@ impl MySqlTableDesc {
         let mut other_columns = other.columns.iter();
         for self_column in self.columns.iter() {
             let other_column = if full_metadata {
+                if self_column.column_type.is_none() {
+                    // This is an excluded column and can be ignored, as it may not have a
+                    // corresponding column in `other.columns` if the column was dropped upstream.
+                    continue;
+                }
                 other
                     .columns
                     .iter()
