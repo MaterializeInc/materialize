@@ -1,6 +1,6 @@
 ---
 source: src/arrow-util/src/builder.rs
-revision: 015ebef3c1
+revision: 31d0e95bbb
 ---
 
 # builder

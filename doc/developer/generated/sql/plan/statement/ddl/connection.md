@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl/connection.rs
-revision: b1b4d77888
+revision: 627776ad0b
 ---
 
 # mz-sql::plan::statement::ddl::connection

@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/upgrade.rs
-revision: aa7a1afd31
+revision: 31ebed7760
 ---
 
 # catalog::durable::upgrade

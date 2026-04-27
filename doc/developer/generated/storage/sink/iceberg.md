@@ -1,11 +1,11 @@
 ---
 source: src/storage/src/sink/iceberg.rs
-revision: 015ebef3c1
+revision: 85fe1c5a51
 ---
 
 # mz-storage::sink::iceberg
 
-Renders an Iceberg sink dataflow comprising three operators: `mint_batch_descriptions` (single worker, determines time-based batch boundaries and loads/creates the Iceberg table), `write_data_files` (all workers, writes Parquet data files to object storage), and `commit_to_iceberg` (single worker, commits file metadata as Iceberg snapshots).
+Renders an Iceberg sink dataflow comprising four operators: `walk_sink_arrangement` (all workers, walks the input `SinkBatchStream` via `for_each_diff_pair` and emits individual `(key, DiffPair)` records), `mint_batch_descriptions` (single worker, determines time-based batch boundaries and loads/creates the Iceberg table), `write_data_files` (all workers, writes Parquet data files to object storage), and `commit_to_iceberg` (single worker, commits file metadata as Iceberg snapshots).
 Implements the `SinkRender` trait for `IcebergSinkConnection`.
 The batch minting operator maintains a sliding window of future batch descriptions (controlled by `INITIAL_DESCRIPTIONS_TO_MINT`) so writers can start streaming data before earlier batches complete.
 Data file writing is envelope-specific, dispatched through the `EnvelopeHandler` trait with two implementations:
