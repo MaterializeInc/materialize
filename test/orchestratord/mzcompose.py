@@ -1538,6 +1538,217 @@ class ConsoleResources(Modification):
         retry(check_pods, 360)
 
 
+class PodLabels(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            None,
+            {"test-label": "value1"},
+            {"test-label": "value2", "another-label": "foo"},
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["podLabels"] = self.value
+        elif "podLabels" in definition["materialize"]["spec"]:
+            del definition["materialize"]["spec"]["podLabels"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        expected_labels = self.value or {}
+
+        def check_environmentd() -> None:
+            environmentd = get_environmentd_data()["items"][0]
+            pod_labels = environmentd["metadata"]["labels"]
+            for key, value in expected_labels.items():
+                assert pod_labels.get(key) == value, (
+                    f"Expected environmentd pod label {key}={value}, "
+                    f"but got {pod_labels}"
+                )
+            args = environmentd["spec"]["containers"][0]["args"]
+            for key, value in expected_labels.items():
+                expected_arg = f"--orchestrator-kubernetes-service-label={key}={value}"
+                assert (
+                    expected_arg in args
+                ), f"Expected {expected_arg} in environmentd args"
+
+        retry(check_environmentd, 120)
+
+        if expected_labels:
+
+            def check_clusterd_statefulsets() -> None:
+                sts_data = json.loads(
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "statefulset",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "json",
+                        ]
+                    )
+                )
+                clusterd_sts = [
+                    sts
+                    for sts in sts_data["items"]
+                    if sts["spec"]["template"]["metadata"]
+                    .get("labels", {})
+                    .get("environmentd.materialize.cloud/namespace")
+                    == "cluster"
+                ]
+                assert clusterd_sts, "No clusterd StatefulSets found"
+                for sts in clusterd_sts:
+                    name = sts["metadata"]["name"]
+                    tmpl_labels = sts["spec"]["template"]["metadata"].get("labels", {})
+                    for key, value in expected_labels.items():
+                        assert tmpl_labels.get(key) == value, (
+                            f"Expected label {key}={value} on {name}, "
+                            f"got {tmpl_labels.get(key)}"
+                        )
+                    match_labels = sts["spec"]["selector"]["matchLabels"]
+                    for key in expected_labels:
+                        assert key not in match_labels, (
+                            f"Label {key} must not be in matchLabels "
+                            f"on {name}: {match_labels}"
+                        )
+
+            retry(check_clusterd_statefulsets, 120)
+
+
+class PodAnnotations(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            None,
+            {"test-annotation": "value1"},
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["podAnnotations"] = self.value
+        elif "podAnnotations" in definition["materialize"]["spec"]:
+            del definition["materialize"]["spec"]["podAnnotations"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        expected_annotations = self.value or {}
+
+        def check_environmentd() -> None:
+            environmentd = get_environmentd_data()["items"][0]
+            pod_annotations = environmentd["metadata"].get("annotations", {})
+            for key, value in expected_annotations.items():
+                assert key in pod_annotations and pod_annotations[key] == value, (
+                    f"Expected environmentd pod annotation {key}={value}, "
+                    f"but got {pod_annotations}"
+                )
+
+        retry(check_environmentd, 120)
+
+
+class ServiceAccountLabels(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            None,
+            {"sa-label": "value1"},
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["serviceAccountLabels"] = self.value
+        elif "serviceAccountLabels" in definition["materialize"]["spec"]:
+            del definition["materialize"]["spec"]["serviceAccountLabels"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        expected_labels = self.value or {}
+
+        def check_service_account() -> None:
+            sa_data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "serviceaccount",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            for sa in sa_data["items"]:
+                if sa["metadata"]["name"] == "default":
+                    continue
+                sa_labels = sa["metadata"].get("labels", {})
+                for key, value in expected_labels.items():
+                    assert key in sa_labels and sa_labels[key] == value, (
+                        f"Expected service account label {key}={value}, "
+                        f"but got {sa_labels}"
+                    )
+
+        retry(check_service_account, 120)
+
+
+class ServiceAccountAnnotations(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            None,
+            {"sa-annotation": "value1"},
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            definition["materialize"]["spec"]["serviceAccountAnnotations"] = self.value
+        elif "serviceAccountAnnotations" in definition["materialize"]["spec"]:
+            del definition["materialize"]["spec"]["serviceAccountAnnotations"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        expected_annotations = self.value or {}
+
+        def check_service_account() -> None:
+            sa_data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "serviceaccount",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ]
+                )
+            )
+            for sa in sa_data["items"]:
+                if sa["metadata"]["name"] == "default":
+                    continue
+                sa_annotations = sa["metadata"].get("annotations", {})
+                for key, value in expected_annotations.items():
+                    assert key in sa_annotations and sa_annotations[key] == value, (
+                        f"Expected service account annotation {key}={value}, "
+                        f"but got {sa_annotations}"
+                    )
+
+        retry(check_service_account, 120)
+
+
 class AuthenticatorKind(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
