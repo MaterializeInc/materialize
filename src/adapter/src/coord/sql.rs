@@ -259,29 +259,24 @@ impl Coordinator {
             .drop_sinks
             .insert(id);
 
-        let ret_fut = match &active_sink {
+        let ret_fut: BuiltinTableAppendNotify = match &active_sink {
+            // Internal subscribes skip the builtin table update.
+            ActiveComputeSink::Subscribe(active_subscribe) if active_subscribe.internal => {
+                Box::pin(std::future::ready(()))
+            }
             ActiveComputeSink::Subscribe(active_subscribe) => {
-                // Skip builtin table update for internal subscribes
-                if active_subscribe.internal {
-                    #[allow(clippy::as_conversions)]
-                    {
-                        Box::pin(std::future::ready(())) as BuiltinTableAppendNotify
-                    }
-                } else {
-                    let update = self.catalog().state().pack_subscribe_update(
-                        id,
-                        active_subscribe,
-                        Diff::ONE,
-                    );
-                    let update = self.catalog().state().resolve_builtin_table_update(update);
+                let update =
+                    self.catalog()
+                        .state()
+                        .pack_subscribe_update(id, active_subscribe, Diff::ONE);
+                let update = self.catalog().state().resolve_builtin_table_update(update);
 
-                    self.metrics
-                        .active_subscribes
-                        .with_label_values(&[session_type])
-                        .inc();
+                self.metrics
+                    .active_subscribes
+                    .with_label_values(&[session_type])
+                    .inc();
 
-                    self.builtin_table_update().execute(vec![update]).await.0
-                }
+                self.builtin_table_update().execute(vec![update]).await.0
             }
             ActiveComputeSink::CopyTo(_) => {
                 self.metrics
