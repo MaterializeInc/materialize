@@ -694,7 +694,7 @@ pub(crate) fn render<'scope>(
                     let mut snapshot_staged = 0;
                     while let Some(bytes) = stream.try_next().await? {
                         let update = (
-                            (oid, output_index, Ok(bytes.to_vec())),
+                            (oid, output_index, Ok(bytes)),
                             MzOffset::minimum(),
                             Diff::ONE,
                         );

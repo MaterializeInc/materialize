@@ -145,11 +145,17 @@ impl FuelSize for Vec<u8> {
     }
 }
 
-impl<T: FuelSize, E> FuelSize for Result<T, E> {
+impl FuelSize for bytes::Bytes {
+    fn fuel_size(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<T: FuelSize, E: FuelSize> FuelSize for Result<T, E> {
     fn fuel_size(&self) -> usize {
         match self {
             Ok(t) => t.fuel_size(),
-            Err(e) => std::mem::size_of_val(e),
+            Err(e) => e.fuel_size(),
         }
     }
 }
@@ -191,6 +197,7 @@ impl_fuel_size_stack!(
     mz_repr::Timestamp,
     mz_storage_types::sources::MzOffset,
     mz_sql_server_util::cdc::Lsn,
+    DataflowError,
 );
 
 impl<P, T> FuelSize for mz_timely_util::order::Partitioned<P, T> {
