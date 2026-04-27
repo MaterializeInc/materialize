@@ -265,6 +265,8 @@ pub enum AdapterError {
     ImpossibleTimestampConstraints {
         constraints: String,
     },
+    /// OIDC group-to-role sync failed and strict mode is enabled.
+    OidcGroupSyncFailed(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -725,6 +727,7 @@ impl AdapterError {
             }
             // similar to AbsurdSubscribeBounds
             AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::OidcGroupSyncFailed(_) => SqlState::INTERNAL_ERROR,
         }
     }
 
@@ -1121,6 +1124,9 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ImpossibleTimestampConstraints { .. } => {
                 write!(f, "could not find a valid timestamp for the query")
+            }
+            AdapterError::OidcGroupSyncFailed(msg) => {
+                write!(f, "OIDC group-to-role sync failed: {msg}")
             }
         }
     }

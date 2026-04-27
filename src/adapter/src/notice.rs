@@ -136,6 +136,18 @@ pub enum AdapterNotice {
     PlanInsights(String),
     IntrospectionClusterUsage,
     AutoRouteIntrospectionQueriesUsage,
+    /// An OIDC group has no matching Materialize role.
+    OidcGroupSyncUnmatchedGroup {
+        group: String,
+    },
+    /// An OIDC group maps to a reserved role name (mz_/pg_ prefix).
+    OidcGroupSyncReservedRole {
+        group: String,
+    },
+    /// OIDC group sync encountered an error (fail-open mode).
+    OidcGroupSyncError {
+        message: String,
+    },
 }
 
 impl AdapterNotice {
@@ -203,6 +215,9 @@ impl AdapterNotice {
             AdapterNotice::PlanInsights(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
+            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => Severity::Notice,
+            AdapterNotice::OidcGroupSyncReservedRole { .. } => Severity::Warning,
+            AdapterNotice::OidcGroupSyncError { .. } => Severity::Warning,
         }
     }
 
@@ -312,6 +327,9 @@ impl AdapterNotice {
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
+            AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => SqlState::SUCCESSFUL_COMPLETION,
+            AdapterNotice::OidcGroupSyncReservedRole { .. } => SqlState::WARNING,
+            AdapterNotice::OidcGroupSyncError { .. } => SqlState::WARNING,
         }
     }
 }
@@ -500,6 +518,23 @@ impl fmt::Display for AdapterNotice {
                 f,
                 "The auto_route_introspection_queries variable has been renamed to auto_route_catalog_queries."
             ),
+            AdapterNotice::OidcGroupSyncUnmatchedGroup { group } => {
+                write!(
+                    f,
+                    "OIDC group \"{}\" has no matching Materialize role, skipping",
+                    group
+                )
+            }
+            AdapterNotice::OidcGroupSyncReservedRole { group } => {
+                write!(
+                    f,
+                    "OIDC group \"{}\" maps to a reserved role name, skipping",
+                    group
+                )
+            }
+            AdapterNotice::OidcGroupSyncError { message } => {
+                write!(f, "OIDC group-to-role sync failed: {}", message)
+            }
         }
     }
 }
