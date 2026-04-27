@@ -424,7 +424,7 @@ predicates = "3.1.4"
 pretty = "0.12.5"
 prettyplease = "0.2"
 proc-macro2 = { version = "1.0.106", features = ["span-locations"] }
-prometheus = { version = "0.14.0", default-features = false }
+prometheus = { version = "0.14.0", default-features = false, features = ["protobuf"] }
 proptest = { version = "1.11.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.8.0", features = ["boxed_union"] }
 prost = { version = "0.14.3", features = ["no-recursion-limit"] }
