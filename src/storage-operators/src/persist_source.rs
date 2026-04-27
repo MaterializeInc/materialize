@@ -22,6 +22,7 @@ use futures::{StreamExt, future::Either};
 use mz_expr::{ColumnSpecs, EvalError, Interpreter, MfpPlan, ResultSpec, UnmaterializableFunc};
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::str::redact;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::{PersistConfig, RetryParameters};
 use mz_persist_client::fetch::{ExchangeableBatchPart, ShardSourcePart};
@@ -644,8 +645,8 @@ impl PendingWork {
                                         error!(
                                             ?stats,
                                             name,
-                                            ?mfp,
-                                            ?result,
+                                            mfp = ?redact(&mfp),
+                                            result = ?redact(&result),
                                             "persist filter pushdown correctness violation!"
                                         );
                                         if self.panic_on_audit_failure {

@@ -277,9 +277,6 @@ def get_variable_system_parameters(
             ["100ms", "1s", "10s"],
         ),
         VariableSystemParameter(
-            "persist_encoding_enable_dictionary", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
             "persist_stats_audit_percent",
             "100",
             [

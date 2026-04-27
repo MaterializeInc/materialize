@@ -38,6 +38,7 @@ use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
 
+use crate::explain::{HumanizedExplain, HumanizerMode};
 use crate::scalar::func::format::DateTimeFormat;
 use crate::scalar::func::variadic::{
     And, Coalesce, ListCreate, ListIndex, Or, RegexpMatch, RegexpReplace, RegexpSplitToArray,
@@ -641,21 +642,24 @@ impl MirScalarExpr {
             if expr2.contains_temporal()
                 || **expr1 != MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow)
             {
+                let mode = HumanizedExplain::new(false); // no redaction
+                let bad_expr = MirScalarExpr::CallBinary {
+                    func: func.clone(),
+                    expr1: expr1.clone(),
+                    expr2: expr2.clone(),
+                };
                 return Err(format!(
                     "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a mz_timestamp-castable expression. Expression found: {}",
-                    MirScalarExpr::CallBinary {
-                        func: func.clone(),
-                        expr1: expr1.clone(),
-                        expr2: expr2.clone()
-                    },
+                    mode.expr(&bad_expr, None),
                 ));
             }
 
             Ok((&*func, expr2))
         } else {
+            let mode = HumanizedExplain::new(false); // no redaction
             Err(format!(
                 "Unsupported temporal predicate. Note: `mz_now()` must be directly compared to a non-temporal expression of mz_timestamp-castable type. Expression found: {}",
-                self,
+                mode.expr(self, None),
             ))
         }
     }
