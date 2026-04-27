@@ -66,7 +66,7 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
 use crate::catalog::migrate::{self, get_migration_version, set_migration_version};
-use crate::catalog::state::LocalExpressionCache;
+use crate::catalog::state::InMemoryExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Config, is_reserved_name};
 
 pub struct InitializeStateResult {
@@ -318,7 +318,7 @@ impl Catalog {
         }
 
         let (builtin_table_update, _catalog_updates) = state
-            .apply_updates(pre_item_updates, &mut LocalExpressionCache::Closed)
+            .apply_updates(pre_item_updates, &mut InMemoryExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
@@ -408,7 +408,7 @@ impl Catalog {
         } else {
             (None, BTreeMap::new(), BTreeMap::new())
         };
-        let mut local_expr_cache = LocalExpressionCache::new(cached_local_exprs);
+        let mut local_expr_cache = InMemoryExpressionCache::new(cached_local_exprs);
         info!(
             "startup: coordinator init: catalog open: expr cache open complete in {:?}",
             expr_cache_start.elapsed()
@@ -671,7 +671,7 @@ impl Catalog {
 
         let updates = txn.get_and_commit_op_updates();
         let (builtin_updates, catalog_updates) = state
-            .apply_updates(updates, &mut LocalExpressionCache::Closed)
+            .apply_updates(updates, &mut InMemoryExpressionCache::Closed)
             .await;
         assert!(
             builtin_updates.is_empty(),
