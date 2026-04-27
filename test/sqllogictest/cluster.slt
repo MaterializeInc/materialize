@@ -19,7 +19,7 @@ ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = on;
 ----
 COMPLETE 0
 
-statement error Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or WORKLOAD, found EOF
+statement error Expected one of AVAILABILITY or DISK or INTROSPECTION or MANAGED or REPLICAS or REPLICATION or SIZE or SCHEDULE or UPSERT or WORKLOAD, found EOF
 CREATE CLUSTER foo
 
 statement ok

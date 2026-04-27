@@ -75,6 +75,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                enable_upsert_v2,
             }) => proto::ClusterVariant::Managed(proto::ManagedCluster {
                 size: size.to_string(),
                 availability_zones: availability_zones.clone(),
@@ -82,6 +83,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor: *replication_factor,
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
                 schedule: schedule.into_proto(),
+                enable_upsert_v2: *enable_upsert_v2,
             }),
             ClusterVariant::Unmanaged => proto::ClusterVariant::Unmanaged,
         }
@@ -97,6 +99,7 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 replication_factor: managed.replication_factor,
                 optimizer_feature_overrides: managed.optimizer_feature_overrides.into_rust()?,
                 schedule: managed.schedule.into_rust()?,
+                enable_upsert_v2: managed.enable_upsert_v2,
             })),
         }
     }

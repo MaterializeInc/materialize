@@ -333,33 +333,35 @@ where
                         metrics: base_source_config.metrics.clone(),
                         source_statistics: export_statistics,
                     };
-                    let (upsert, health_update, snapshot_progress, upsert_token) =
-                        if dyncfgs::ENABLE_UPSERT_V2
+                    let use_upsert_v2 = description.enable_upsert_v2.unwrap_or_else(|| {
+                        dyncfgs::ENABLE_UPSERT_V2
                             .get(storage_state.storage_configuration.config_set())
-                        {
-                            crate::upsert::upsert_v2(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous,
-                                previous_token,
-                                export_config,
-                                backpressure_metrics,
-                            )
-                        } else {
-                            crate::upsert::upsert(
-                                upsert_input.enter(scope),
-                                upsert_envelope.clone(),
-                                refine_antichain(&resume_upper),
-                                previous,
-                                previous_token,
-                                export_config,
-                                &storage_state.instance_context,
-                                &storage_state.storage_configuration,
-                                &storage_state.dataflow_parameters,
-                                backpressure_metrics,
-                            )
-                        };
+                    });
+                    let (upsert, health_update, snapshot_progress, upsert_token) = if use_upsert_v2
+                    {
+                        crate::upsert::upsert_v2(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous,
+                            previous_token,
+                            export_config,
+                            backpressure_metrics,
+                        )
+                    } else {
+                        crate::upsert::upsert(
+                            upsert_input.enter(scope),
+                            upsert_envelope.clone(),
+                            refine_antichain(&resume_upper),
+                            previous,
+                            previous_token,
+                            export_config,
+                            &storage_state.instance_context,
+                            &storage_state.storage_configuration,
+                            &storage_state.dataflow_parameters,
+                            backpressure_metrics,
+                        )
+                    };
 
                     // Even though we register the `persist_sink` token at a top-level,
                     // which will stop any data from being committed, we also register

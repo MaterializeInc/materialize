@@ -413,6 +413,7 @@ impl Cluster {
                 replication_factor,
                 optimizer_feature_overrides,
                 schedule,
+                enable_upsert_v2,
             }) => {
                 let introspection = match logging {
                     ReplicaLogging {
@@ -435,6 +436,7 @@ impl Cluster {
                     compute,
                     optimizer_feature_overrides: optimizer_feature_overrides.clone(),
                     schedule: schedule.clone(),
+                    enable_upsert_v2: *enable_upsert_v2,
                 })
             }
             ClusterVariant::Unmanaged => {
@@ -3388,6 +3390,7 @@ pub struct ClusterVariantManaged {
     pub replication_factor: u32,
     pub optimizer_feature_overrides: OptimizerFeatureOverrides,
     pub schedule: ClusterSchedule,
+    pub enable_upsert_v2: Option<bool>,
 }
 
 impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
@@ -3399,6 +3402,7 @@ impl From<ClusterVariantManaged> for durable::ClusterVariantManaged {
             replication_factor: managed.replication_factor,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
+            enable_upsert_v2: managed.enable_upsert_v2,
         }
     }
 }
@@ -3412,6 +3416,7 @@ impl From<durable::ClusterVariantManaged> for ClusterVariantManaged {
             replication_factor: managed.replication_factor,
             optimizer_feature_overrides: managed.optimizer_feature_overrides.into(),
             schedule: managed.schedule,
+            enable_upsert_v2: managed.enable_upsert_v2,
         }
     }
 }

@@ -100,6 +100,10 @@ pub struct IngestionDescription<S: 'static = (), C: ConnectionAccess = InlinedCo
     pub remap_collection_id: GlobalId,
     /// The storage metadata for the remap/progress collection
     pub remap_metadata: S,
+    /// Whether to use the v2 upsert operator. If `None`, the global dyncfg
+    /// `enable_upsert_v2` is used as a fallback.
+    #[serde(default)]
+    pub enable_upsert_v2: Option<bool>,
 }
 
 impl IngestionDescription {
@@ -114,6 +118,7 @@ impl IngestionDescription {
             source_exports: BTreeMap::new(),
             instance_id,
             remap_collection_id,
+            enable_upsert_v2: None,
         }
     }
 }
@@ -132,6 +137,7 @@ impl<S> IngestionDescription<S> {
             source_exports,
             instance_id: _,
             remap_collection_id,
+            enable_upsert_v2: _,
         } = &self;
 
         source_exports
@@ -156,6 +162,7 @@ impl<S: Debug + Eq + PartialEq + AlterCompatible> AlterCompatible for IngestionD
             source_exports,
             instance_id,
             remap_collection_id,
+            enable_upsert_v2: _,
         } = self;
 
         let compatibility_checks = [
@@ -226,6 +233,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            enable_upsert_v2,
         } = self;
 
         IngestionDescription {
@@ -234,6 +242,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IngestionDescription, R>
             source_exports,
             instance_id,
             remap_collection_id,
+            enable_upsert_v2,
         }
     }
 }

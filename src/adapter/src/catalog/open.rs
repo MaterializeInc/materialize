@@ -1001,6 +1001,7 @@ fn add_new_remove_old_builtin_clusters_migration(
                         logging: default_logging_config(),
                         optimizer_feature_overrides: Default::default(),
                         schedule: Default::default(),
+                        enable_upsert_v2: None,
                     }),
                     workload_class: None,
                 },

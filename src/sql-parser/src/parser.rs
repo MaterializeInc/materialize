@@ -4603,6 +4603,7 @@ impl<'a> Parser<'a> {
             REPLICATION,
             SIZE,
             SCHEDULE,
+            UPSERT,
             WORKLOAD,
         ])?;
         let name = match option {
@@ -4624,6 +4625,10 @@ impl<'a> Parser<'a> {
             }
             SIZE => ClusterOptionName::Size,
             SCHEDULE => ClusterOptionName::Schedule,
+            UPSERT => {
+                self.expect_keyword(V2)?;
+                ClusterOptionName::UpsertV2
+            }
             WORKLOAD => {
                 self.expect_keyword(CLASS)?;
                 ClusterOptionName::WorkloadClass

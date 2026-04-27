@@ -4883,6 +4883,7 @@ generate_extracted_config!(
     (ReplicationFactor, u32),
     (Size, String),
     (Schedule, ClusterScheduleOptionValue),
+    (UpsertV2, bool),
     (WorkloadClass, OptionalString)
 );
 
@@ -4980,6 +4981,7 @@ pub fn plan_create_cluster_inner(
         size,
         disk,
         schedule,
+        upsert_v2,
         workload_class,
     }: ClusterOptionExtracted = options.try_into()?;
 
@@ -5081,6 +5083,7 @@ pub fn plan_create_cluster_inner(
                 compute,
                 optimizer_feature_overrides,
                 schedule,
+                enable_upsert_v2: upsert_v2,
             }),
             workload_class,
         })
@@ -5105,6 +5108,9 @@ pub fn plan_create_cluster_inner(
         }
         if disk.is_some() {
             sql_bail!("DISK not supported for unmanaged clusters");
+        }
+        if upsert_v2.is_some() {
+            sql_bail!("UPSERT V2 not supported for unmanaged clusters");
         }
         if !features.is_empty() {
             sql_bail!("FEATURES not supported for unmanaged clusters");
@@ -5147,6 +5153,7 @@ pub fn unplan_create_cluster(
             compute,
             optimizer_feature_overrides,
             schedule,
+            enable_upsert_v2: _,
         }) => {
             let schedule = unplan_cluster_schedule(schedule);
             let OptimizerFeatureOverrides {
@@ -5217,6 +5224,7 @@ pub fn unplan_create_cluster(
                 size: Some(size),
                 schedule: Some(schedule),
                 workload_class,
+                upsert_v2: None,
             };
             let options = options_extracted.into_values(scx.catalog);
             let name = Ident::new_unchecked(name);
@@ -6386,6 +6394,7 @@ pub fn plan_alter_cluster(
                 size,
                 disk,
                 schedule,
+                upsert_v2,
                 workload_class,
             }: ClusterOptionExtracted = set_options.try_into()?;
 
@@ -6558,6 +6567,9 @@ pub fn plan_alter_cluster(
             if let Some(schedule) = schedule {
                 options.schedule = AlterOptionParameter::Set(plan_cluster_schedule(schedule)?);
             }
+            if let Some(upsert_v2) = upsert_v2 {
+                options.enable_upsert_v2 = AlterOptionParameter::Set(upsert_v2);
+            }
             if let Some(workload_class) = workload_class {
                 options.workload_class = AlterOptionParameter::Set(workload_class.0);
             }
@@ -6585,6 +6597,7 @@ pub fn plan_alter_cluster(
                     ReplicationFactor => options.replication_factor = Reset,
                     Size => options.size = Reset,
                     Schedule => options.schedule = Reset,
+                    UpsertV2 => options.enable_upsert_v2 = Reset,
                     WorkloadClass => options.workload_class = Reset,
                 }
             }

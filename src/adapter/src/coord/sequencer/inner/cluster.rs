@@ -181,6 +181,7 @@ impl Coordinator {
                     replication_factor: 1,
                     optimizer_feature_overrides: Default::default(),
                     schedule: Default::default(),
+                    enable_upsert_v2: None,
                 });
             }
         }
@@ -193,6 +194,7 @@ impl Coordinator {
                 replication_factor,
                 optimizer_feature_overrides: _,
                 schedule,
+                enable_upsert_v2,
             }) => {
                 match &options.size {
                     Set(s) => size.clone_from(s),
@@ -231,6 +233,11 @@ impl Coordinator {
                     Reset => *schedule = Default::default(),
                     Unchanged => {}
                 }
+                match &options.enable_upsert_v2 {
+                    Set(v) => *enable_upsert_v2 = Some(*v),
+                    Reset => *enable_upsert_v2 = None,
+                    Unchanged => {}
+                }
                 if !matches!(options.replicas, Unchanged) {
                     coord_bail!("Cannot change REPLICAS of managed clusters");
                 }
@@ -250,6 +257,9 @@ impl Coordinator {
                 }
                 if !matches!(options.replication_factor, Unchanged) {
                     coord_bail!("Cannot change REPLICATION FACTOR of unmanaged clusters");
+                }
+                if !matches!(options.enable_upsert_v2, Unchanged) {
+                    coord_bail!("Cannot change UPSERT V2 of unmanaged clusters");
                 }
             }
         }
@@ -617,6 +627,7 @@ impl Coordinator {
                     replication_factor: plan.replication_factor,
                     optimizer_feature_overrides: plan.optimizer_feature_overrides.clone(),
                     schedule: plan.schedule.clone(),
+                    enable_upsert_v2: plan.enable_upsert_v2,
                 })
             }
             CreateClusterVariant::Unmanaged(_) => ClusterVariant::Unmanaged,
@@ -656,6 +667,7 @@ impl Coordinator {
             size,
             optimizer_feature_overrides: _,
             schedule: _,
+            enable_upsert_v2: _,
         }: CreateClusterManagedPlan,
         cluster_id: ClusterId,
         mut ops: Vec<catalog::Op>,
@@ -1026,6 +1038,7 @@ impl Coordinator {
             replication_factor,
             optimizer_feature_overrides: _,
             schedule: _,
+            enable_upsert_v2: _,
         }) = &cluster.config.variant
         else {
             panic!("expected existing managed cluster config");
@@ -1037,6 +1050,7 @@ impl Coordinator {
             logging: new_logging,
             optimizer_feature_overrides: _,
             schedule: _,
+            enable_upsert_v2: _,
         }) = &new_config.variant
         else {
             panic!("expected new managed cluster config");
@@ -1203,6 +1217,7 @@ impl Coordinator {
             logging: _,
             optimizer_feature_overrides: _,
             schedule: _,
+            enable_upsert_v2: _,
         }) = &mut new_config.variant
         else {
             panic!("expected new managed cluster config");
