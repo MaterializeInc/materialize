@@ -38,6 +38,7 @@ impl SystemParameterBackend {
                 external_metadata_rx: None,
                 helm_chart_version: None,
                 authenticator_kind: AuthenticatorKind::None,
+                groups: None,
             },
             Authenticated,
         );

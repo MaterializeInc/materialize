@@ -234,6 +234,7 @@ where
                             external_metadata_rx: Some(auth_session.external_metadata_rx()),
                             helm_chart_version,
                             authenticator_kind,
+                            groups: None,
                         },
                         authenticated,
                     );
@@ -263,6 +264,7 @@ where
             let auth_response = oidc.authenticate(&jwt, Some(&user)).await;
             match auth_response {
                 Ok((mut claims, authenticated)) => {
+                    let groups = claims.groups.take();
                     let session = adapter_client.new_session(
                         SessionConfig {
                             conn_id: conn.conn_id().clone(),
@@ -272,6 +274,7 @@ where
                             external_metadata_rx: None,
                             helm_chart_version,
                             authenticator_kind,
+                            groups,
                         },
                         authenticated,
                     );
@@ -482,6 +485,7 @@ where
                     external_metadata_rx: None,
                     helm_chart_version,
                     authenticator_kind,
+                    groups: None,
                 },
                 authenticated,
             );
@@ -500,6 +504,7 @@ where
                     external_metadata_rx: None,
                     helm_chart_version,
                     authenticator_kind,
+                    groups: None,
                 },
                 Authenticated,
             );
@@ -798,6 +803,7 @@ where
             external_metadata_rx: None,
             helm_chart_version,
             authenticator_kind,
+            groups: None,
         },
         authenticated,
     );

@@ -226,6 +226,7 @@ pub mod catalog_implications;
 mod caught_up;
 mod command_handler;
 mod ddl;
+pub(crate) mod group_sync;
 mod indexes;
 mod introspection;
 mod message_handler;

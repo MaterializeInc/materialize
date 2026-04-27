@@ -18,7 +18,9 @@ use std::time::Duration;
 
 use jsonwebtoken::jwk::JwkSet;
 use mz_adapter::{AdapterError, AuthenticationError, Client as AdapterClient};
-use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_ISSUER};
+use mz_adapter_types::dyncfgs::{
+    OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_GROUP_CLAIM, OIDC_ISSUER,
+};
 use mz_auth::Authenticated;
 use mz_ore::secure::{Zeroize, ZeroizeOnDrop};
 use mz_ore::soft_panic_or_log;
@@ -293,6 +295,9 @@ impl OidcClaims {
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ValidatedClaims {
     pub user: String,
+    /// Groups extracted from the JWT group claim. None if claim absent.
+    #[zeroize(skip)]
+    pub groups: Option<Vec<String>>,
     // Prevent construction outside of `GenericOidcAuthenticator::validate_token`.
     _private: (),
 }
@@ -568,8 +573,13 @@ impl GenericOidcAuthenticatorInner {
             }
         }
 
+        // Extract groups from the configured claim name for group-to-role sync.
+        let group_claim = OIDC_GROUP_CLAIM.get(system_vars.dyncfgs());
+        let groups = token_data.claims.groups(&group_claim);
+
         Ok(ValidatedClaims {
             user: user.to_string(),
+            groups,
             _private: (),
         })
     }
@@ -673,6 +683,7 @@ mod tests {
         use mz_ore::secure::Zeroize;
         let mut claims = ValidatedClaims {
             user: "alice@example.com".to_string(),
+            groups: Some(vec!["eng".to_string()]),
             _private: (),
         };
         claims.zeroize();

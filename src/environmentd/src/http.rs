@@ -689,6 +689,7 @@ async fn x_materialize_user_header_auth(
             external_metadata_rx: None,
             authenticated: Authenticated,
             authenticator_kind: mz_auth::AuthenticatorKind::None,
+            groups: None,
         });
     }
     Ok(next.run(req).await)
@@ -708,6 +709,8 @@ pub struct AuthedUser {
     external_metadata_rx: Option<watch::Receiver<ExternalUserMetadata>>,
     authenticated: Authenticated,
     authenticator_kind: mz_auth::AuthenticatorKind,
+    /// Groups from JWT claims for OIDC group-to-role sync.
+    groups: Option<Vec<String>>,
 }
 
 pub struct AuthedClient {
@@ -739,6 +742,7 @@ impl AuthedClient {
                 external_metadata_rx: user.external_metadata_rx,
                 helm_chart_version,
                 authenticator_kind: user.authenticator_kind,
+                groups: user.groups,
             },
             user.authenticated,
         );
@@ -1226,6 +1230,7 @@ pub(crate) async fn ensure_session_unexpired(
         external_metadata_rx: None,
         authenticated: session_data.authenticated,
         authenticator_kind: session_data.authenticator_kind,
+        groups: None,
     })
 }
 
@@ -1235,14 +1240,14 @@ async fn auth(
     allowed_roles: AllowedRoles,
     include_www_authenticate_header: bool,
 ) -> Result<AuthedUser, AuthError> {
-    let (name, external_metadata_rx, authenticated) = match authenticator {
+    let (name, external_metadata_rx, authenticated, groups) = match authenticator {
         Authenticator::Frontegg(frontegg) => match creds {
             Some(Credentials::Password { username, password }) => {
                 let (auth_session, authenticated) =
                     frontegg.authenticate(&username, password.as_str()).await?;
                 let name = auth_session.user().into();
                 let external_metadata_rx = Some(auth_session.external_metadata_rx());
-                (name, external_metadata_rx, authenticated)
+                (name, external_metadata_rx, authenticated, None)
             }
             Some(Credentials::Token { token }) => {
                 let (claims, authenticated) = frontegg.validate_access_token(&token, None)?;
@@ -1250,7 +1255,7 @@ async fn auth(
                     user_id: claims.user_id,
                     admin: claims.is_admin,
                 });
-                (claims.user, Some(external_metadata_rx), authenticated)
+                (claims.user, Some(external_metadata_rx), authenticated, None)
             }
             None => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1264,7 +1269,7 @@ async fn auth(
                     .authenticate(&username, &password)
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
-                (username, None, authenticated)
+                (username, None, authenticated, None)
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1288,7 +1293,8 @@ async fn auth(
                     .await
                     .map_err(|_| AuthError::InvalidCredentials)?;
                 let name = std::mem::take(&mut claims.user);
-                (name, None, authenticated)
+                let groups = claims.groups.take();
+                (name, None, authenticated, groups)
             }
             _ => {
                 return Err(AuthError::MissingHttpAuthentication {
@@ -1304,7 +1310,7 @@ async fn auth(
                 Some(Credentials::Password { username, .. }) => username,
                 _ => HTTP_DEFAULT_USER.name.to_owned(),
             };
-            (name, None, Authenticated)
+            (name, None, Authenticated, None)
         }
     };
 
@@ -1315,6 +1321,7 @@ async fn auth(
         external_metadata_rx,
         authenticated,
         authenticator_kind: authenticator.kind(),
+        groups,
     })
 }
 
