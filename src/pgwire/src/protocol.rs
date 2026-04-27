@@ -2427,6 +2427,9 @@ where
                         None => FetchResult::Rows(None),
                         Some(PeekResponseUnary::Rows(rows)) => FetchResult::Rows(Some(rows)),
                         Some(PeekResponseUnary::Error(err)) => FetchResult::Error(err),
+                        Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                            FetchResult::Error(dep.query_terminated_error())
+                        }
                         Some(PeekResponseUnary::Canceled) => FetchResult::Canceled,
                     },
                     notice = notice_fut => {
@@ -2653,6 +2656,15 @@ where
                 batch = stream.recv() => match batch {
                     None => break,
                     Some(PeekResponseUnary::Error(text)) => {
+                        let err =
+                            ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
+                        return self
+                            .send_error_and_get_state(err)
+                            .await
+                            .map(|state| (state, SendRowsEndedReason::Errored { error: text }));
+                    }
+                    Some(PeekResponseUnary::DependencyDropped(dep)) => {
+                        let text = dep.copy_terminated_error();
                         let err =
                             ErrorResponse::error(SqlState::INTERNAL_ERROR, text.clone());
                         return self
