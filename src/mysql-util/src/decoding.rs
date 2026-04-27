@@ -10,6 +10,7 @@
 use std::fmt::Write;
 use std::str::FromStr;
 
+use mysql_async::binlog;
 use mysql_common::value::convert::from_value_opt;
 use mysql_common::{Row as MySqlRow, Value};
 
@@ -29,6 +30,7 @@ pub fn pack_mysql_row(
     row: MySqlRow,
     table_desc: &MySqlTableDesc,
     gtid_set: Option<&str>,
+    binlog_full_metadata: bool,
 ) -> Result<Row, MySqlError> {
     let mut packer = row_container.packer();
 
@@ -43,13 +45,22 @@ pub fn pack_mysql_row(
         .first()
         .is_some_and(|col| col.name_ref().starts_with(b"@"));
 
+    if binlog_full_metadata && fallback_names {
+        // This should never happen, but if it does, it's a sign that something is very wrong with the MySQL server's binlog configuration. We want to error rather than silently producing incorrect results.
+        return Err(MySqlError::ValueDecodeError {
+            column_name: "<unknown>".to_string(),
+            qualified_table_name: format!("{}.{}", table_desc.schema_name, table_desc.name),
+            error: "Table was created with binlog_row_metadata=FULL but binlog_row_metadata has since been set to a different value, meaning we cannot reliably decode the columns".to_string(),
+        });
+    }
+
     // For each column in `table_desc` (in descriptor order), resolve its wire
     // index. Non-fallback rows are matched by name so a reordered upstream
     // still decodes correctly; fallback rows have no names and are matched
     // positionally. A `None` here means the upstream row is missing this
     // column and is only tolerated for ignored columns.
     for (i, col_desc) in table_desc.columns.iter().enumerate() {
-        let wire_idx = if fallback_names {
+        let wire_idx = if !binlog_full_metadata {
             (i < row.len()).then_some(i)
         } else {
             row.columns_ref()
