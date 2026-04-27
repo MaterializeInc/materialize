@@ -101,7 +101,7 @@ impl MySqlTableDesc {
         // If we do have full metadata, then we can match columns by name and just check that all
         // columns in `self.columns` are present and compatible with columns in `other.columns`.
         let mut other_columns = other.columns.iter();
-        for self_column in self.columns.iter().filter(|col| col.column_type.is_some()) {
+        for self_column in self.columns.iter() {
             let other_column = if full_metadata {
                 other
                     .columns
@@ -123,6 +123,10 @@ impl MySqlTableDesc {
                     )
                 })?
             };
+            if self_column.column_type.is_none() {
+                // This is an excluded column and can be ignored.
+                continue;
+            }
             if !self_column.is_compatible(other_column) {
                 bail!(
                     "column {} in table {} has been altered",
