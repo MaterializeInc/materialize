@@ -216,10 +216,28 @@ pub async fn handle_federated_metrics(State(s): State<FederatedState>) -> impl I
     let mut families = s.registry.gather();
     let mut all_rules = s.registry.rules_snapshot();
 
-    // 3. Scrape every clusterd in parallel. For each batch, env knows the
+    // 3. Enumerate replica targets from the catalog snapshot.
+    //    `Catalog::clusters()` (src/adapter/src/catalog.rs:1125) covers system
+    //    + user clusters; `Cluster::replicas()` (src/catalog/src/memory/objects.rs:384)
+    //    iterates each cluster's replicas. `ReplicaHttpLocator::get_http_addr`
+    //    (src/controller/src/replica_http_locator.rs:34) is the existing per-process
+    //    accessor — probe by incrementing process_idx until it returns None, so we
+    //    don't need to know each replica's scale up front.
+    let mut targets: Vec<(ClusterId, ReplicaId, String)> = Vec::new();
+    for cluster in catalog.clusters() {
+        for replica in cluster.replicas() {
+            let mut process_idx = 0;
+            while let Some(addr) = s.locator.get_http_addr(cluster.id, replica.replica_id, process_idx) {
+                targets.push((cluster.id, replica.replica_id, addr));
+                process_idx += 1;
+            }
+        }
+    }
+
+    // 4. Scrape every clusterd in parallel. For each batch, env knows the
     //    (cluster_id, replica_id) it dispatched to — call the same helper
     //    `enrich` would call when a rule matches.
-    let scraped = scrape_all(&s.client, s.locator.all_replicas(), s.timeout).await;
+    let scraped = scrape_all(&s.client, targets, s.timeout).await;
     for mut replica in scraped {
         for family in &mut replica.families {
             for metric in family.mut_metric() {
@@ -329,9 +347,10 @@ if not already present.
   `scrape_one`, `scrape_all`, `attach_cluster_name`,
   `attach_cluster_replica_metadata`, `enrich`, `encode_response`.
 - **New** `src/environmentd/src/metrics/mod.rs` — module wiring.
-- **Modify** `src/controller/src/replica_http_locator.rs` — add
-  `pub fn all_replicas(&self) -> Vec<(ClusterId, ReplicaId, Vec<String>)>`
-  (snapshot the BTreeMap under read lock).
+- **Unchanged** `src/controller/src/replica_http_locator.rs` — the
+  existing `get_http_addr` accessor is sufficient. The federated handler
+  enumerates `(cluster_id, replica_id)` pairs from `Catalog::clusters()`
+  and probes process indices upward.
 - **Modify** `src/environmentd/src/http.rs` — register `/metrics/federated`;
   thread `AdapterClient` (for `catalog_snapshot`), `MetricsRegistry`,
   `ReplicaHttpLocator`, and a shared `reqwest::Client` into the federated
