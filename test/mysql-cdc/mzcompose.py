@@ -46,20 +46,22 @@ def create_mysql(mysql_version: str, binlog_full_metadata: bool = True) -> MySql
     return MySql(version=mysql_version, additional_args=additional_args)
 
 
-def create_mysql_replica(mysql_version: str, binlog_full_metadata: bool = True) -> MySql:
+def create_mysql_replica(
+    mysql_version: str, binlog_full_metadata: bool = True
+) -> MySql:
     additional_args = [
-            "--gtid_mode=ON",
-            "--enforce_gtid_consistency=ON",
-            "--skip-replica-start",
-            "--server-id=2",
-        ]
+        "--gtid_mode=ON",
+        "--enforce_gtid_consistency=ON",
+        "--skip-replica-start",
+        "--server-id=2",
+    ]
     if binlog_full_metadata:
         additional_args.append("--binlog-row-metadata=FULL")
     return MySql(
         name="mysql-replica",
         version=mysql_version,
         use_seeded_image=False,
-        additional_args=additional_args
+        additional_args=additional_args,
     )
 
 
