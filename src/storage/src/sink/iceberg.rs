@@ -321,16 +321,21 @@ impl EnvelopeHandler for UpsertEnvelopeHandler {
             self.equality_ids.clone(),
         );
 
-        // Snapshot batches only produce inserts, so disable seen_rows tracking
-        // to save memory. For incremental batches, disable eviction: the
-        // DeltaWriter falls back to equality deletes when a seen row is
-        // evicted, but equality deletes only apply to prior snapshots (lower
-        // sequence number). Evicting a row inserted in this same session would
-        // silently drop the delete and leave both old and new values in the
-        // committed snapshot.
         builder = if is_snapshot {
+            // Snapshot batches only produce inserts, so disable seen_rows tracking to save memory.
             builder.with_max_seen_rows(0)
         } else {
+            // For incremental batches, keep all "seen" rows. Do not evict any rows.
+            // The DeltaWriter issues an equality delete if we update (or delete) a row outside the "seen" cache.
+            // But equality deletes only apply to prior snapshots (lower sequence number).
+            //
+            // i.e. The DeltaWriter assumes that rows outside the "seen" cache come from prior snapshots.
+            //
+            // If we insert a row a=foo during this snapshot and then evict it from the "seen" cache,
+            // a subsequent update a=bar (also during this snapshot) will lead to:
+            //   1. Equality delete for a=foo (does nothing because a=foo is from this snapshot, not a prior snapshot)
+            //   2. Insert a=bar
+            // Because the deletion does nothing, we have a=foo and a=bar in the same snapshot.
             builder.with_max_seen_rows(usize::MAX)
         };
 
