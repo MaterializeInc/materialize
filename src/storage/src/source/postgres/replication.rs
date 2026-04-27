@@ -118,7 +118,7 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::postgres::verify_schema;
 use crate::source::postgres::{DefiniteError, ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::probe;
-use crate::source::types::{Probe, SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceMessage, StackedCollection};
 
 /// A logical replication message from the server.
 type LogicalReplMsg = ReplicationMessage<LogicalReplicationMessage>;
@@ -353,7 +353,10 @@ pub(crate) fn render<'scope>(
                                         MzOffset::from(u64::MAX),
                                         Diff::ONE,
                                     );
-                                    data_output.give_fueled(&data_cap_set[0], update).await;
+                                    let size = update.fuel_size();
+                                    data_output
+                                        .give_fueled(&data_cap_set[0], update, size)
+                                        .await;
                                 }
                             }
                             definite_error_handle.give(
@@ -398,7 +401,10 @@ pub(crate) fn render<'scope>(
                                 MzOffset::from(u64::MAX),
                                 Diff::ONE,
                             );
-                            data_output.give_fueled(&data_cap_set[0], update).await;
+                            let size = update.fuel_size();
+                            data_output
+                                .give_fueled(&data_cap_set[0], update, size)
+                                .await;
                         }
                     }
 
@@ -429,8 +435,6 @@ pub(crate) fn render<'scope>(
             // creating excessive progress tracking traffic when there are multiple small
             // transactions ready to go.
             let mut data_upper = resume_lsn;
-            // A stash of reusable vectors to convert from bytes::Bytes based data, which is not
-            // compatible with `columnation`, to Vec<u8> data that is.
             while let Some(event) = stream.as_mut().next().await {
                 use LogicalReplicationMessage::*;
                 use ReplicationMessage::*;
@@ -461,16 +465,21 @@ pub(crate) fn render<'scope>(
                             while let Some((oid, output_index, event, diff)) = tx.try_next().await?
                             {
                                 let event = event.map_err(Into::into);
-                                let mut data = (oid, output_index, event);
+                                let data = (oid, output_index, event);
                                 if let Some(req) = rewinds.get(&output_index) {
                                     if commit_lsn <= req.snapshot_lsn {
-                                        let update = (data, MzOffset::from(0), -diff);
-                                        data_output.give_fueled(&data_cap_set[0], &update).await;
-                                        data = update.0;
+                                        let update = (data.clone(), MzOffset::from(0), -diff);
+                                        let size = update.fuel_size();
+                                        data_output
+                                            .give_fueled(&data_cap_set[0], update, size)
+                                            .await;
                                     }
                                 }
                                 let update = (data, commit_lsn, diff);
-                                data_output.give_fueled(&data_cap_set[0], &update).await;
+                                let size = update.fuel_size();
+                                data_output
+                                    .give_fueled(&data_cap_set[0], update, size)
+                                    .await;
                             }
                         }
                         _ => return Err(TransientError::BareTransactionEvent),
@@ -498,7 +507,10 @@ pub(crate) fn render<'scope>(
                                                 data_cap_set[0].time().clone(),
                                                 Diff::ONE,
                                             );
-                                            data_output.give_fueled(&data_cap_set[0], update).await;
+                                            let size = update.fuel_size();
+                                            data_output
+                                                .give_fueled(&data_cap_set[0], update, size)
+                                                .await;
                                         }
                                     }
                                     definite_error_handle.give(
@@ -523,7 +535,10 @@ pub(crate) fn render<'scope>(
                                         data_cap_set[0].time().clone(),
                                         Diff::ONE,
                                     );
-                                    data_output.give_fueled(&data_cap_set[0], update).await;
+                                    let size = update.fuel_size();
+                                    data_output
+                                        .give_fueled(&data_cap_set[0], update, size)
+                                        .await;
                                 }
                             }
                         }
@@ -559,7 +574,6 @@ pub(crate) fn render<'scope>(
         .cycle();
     let round_robin = Exchange::new(move |_| next_worker.next().unwrap());
     let replication_updates = data_stream
-        .map::<Vec<_>, _, _>(Clone::clone)
         .unary(round_robin, "PgCastReplicationRows", |_, _| {
             move |input, output| {
                 input.for_each_time(|time, data| {

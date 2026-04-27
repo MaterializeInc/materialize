@@ -237,14 +237,14 @@ where
                 .map(move |(result, from_time, diff)| {
                     let result = match result {
                         Ok(msg) => Ok(SourceOutput {
-                            key: msg.key.clone(),
-                            value: msg.value.clone(),
-                            metadata: msg.metadata.clone(),
+                            key: msg.key,
+                            value: msg.value,
+                            metadata: msg.metadata,
                             from_time: from_time.clone(),
                         }),
-                        Err(err) => Err(err.clone()),
+                        Err(err) => Err(err),
                     };
-                    (result, from_time.clone(), *diff)
+                    (result, from_time, diff)
                 })
                 .capture_into(PusherCapture(reclock_pusher));
             reclocked_exports2.insert(id, reclocked);

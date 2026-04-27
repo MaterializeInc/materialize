@@ -34,8 +34,7 @@ use mz_storage_types::sources::sql_server::{MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPO
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::columnation::ColumnationStack;
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
@@ -47,7 +46,7 @@ use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
 };
-use crate::source::types::{SignaledFuture, SourceMessage, StackedCollection};
+use crate::source::types::{FuelSize, SignaledFuture, SourceMessage, StackedCollection};
 
 /// Used as a partition ID to determine the worker that is responsible for
 /// reading data from SQL Server.
@@ -70,7 +69,7 @@ pub(crate) fn render<'scope>(
     let op_name = format!("SqlServerReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -320,11 +319,11 @@ pub(crate) fn render<'scope>(
                                 &arena,
                                 None,
                             );
+                            let update =
+                                ((*partition_idx, message), Lsn::minimum(), Diff::ONE);
+                            let size = update.fuel_size();
                             data_output
-                                .give_fueled(
-                                    &data_cap_set[0],
-                                    ((*partition_idx, message), Lsn::minimum(), Diff::ONE),
-                                )
+                                .give_fueled(&data_cap_set[0], update, size)
                                 .await;
                         }
                         snapshot_staged += 1;
@@ -584,11 +583,14 @@ pub(crate) fn render<'scope>(
                                 let msg = Err(
                                     error.clone().into(),
                                 );
+                                let update = (
+                                    (*partition_idx, msg),
+                                    ddl_event.lsn,
+                                    Diff::ONE,
+                                );
+                                let size = update.fuel_size();
                                 data_output
-                                    .give_fueled(
-                                        &data_cap_set[0],
-                                        ((*partition_idx, msg), ddl_event.lsn, Diff::ONE),
-                                    )
+                                    .give_fueled(&data_cap_set[0], update, size)
                                     .await;
                                 errored_partitions.insert(*partition_idx);
                             }
@@ -690,22 +692,20 @@ async fn handle_data_event(
 
                 let update_old = decode(decoder, old_row, &mut mz_row, &arena, Some(new_row));
                 if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
+                    let update = (
+                        (*partition_idx, update_old.clone()),
+                        Lsn::minimum(),
+                        Diff::ONE,
+                    );
+                    let size = update.fuel_size();
                     data_output
-                        .give_fueled(
-                            &data_cap_set[0],
-                            (
-                                (*partition_idx, update_old.clone()),
-                                Lsn::minimum(),
-                                Diff::ONE,
-                            ),
-                        )
+                        .give_fueled(&data_cap_set[0], update, size)
                         .await;
                 }
+                let update = ((*partition_idx, update_old), commit_lsn, Diff::MINUS_ONE);
+                let size = update.fuel_size();
                 data_output
-                    .give_fueled(
-                        &data_cap_set[0],
-                        ((*partition_idx, update_old), commit_lsn, Diff::MINUS_ONE),
-                    )
+                    .give_fueled(&data_cap_set[0], update, size)
                     .await;
 
                 (
@@ -720,28 +720,24 @@ async fn handle_data_event(
             };
             assert_ne!(Diff::ZERO, diff);
             if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
+                let update = ((*partition_idx, message.clone()), Lsn::minimum(), -diff);
+                let size = update.fuel_size();
                 data_output
-                    .give_fueled(
-                        &data_cap_set[0],
-                        ((*partition_idx, message.clone()), Lsn::minimum(), -diff),
-                    )
+                    .give_fueled(&data_cap_set[0], update, size)
                     .await;
             }
+            let update = ((*partition_idx, message), commit_lsn, diff);
+            let size = update.fuel_size();
             data_output
-                .give_fueled(
-                    &data_cap_set[0],
-                    ((*partition_idx, message), commit_lsn, diff),
-                )
+                .give_fueled(&data_cap_set[0], update, size)
                 .await;
         }
     }
     Ok(())
 }
 
-type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
-    T,
-    AccountedStackBuilder<CapacityContainerBuilder<ColumnationStack<(D, T, Diff)>>>,
->;
+type StackedAsyncOutputHandle<T, D> =
+    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
 
 /// Helper method to decode a row from a [`tiberius::Row`] (or 2 of them in the case of update)
 /// to a [`Row`]. This centralizes the decode and mapping to result.
@@ -792,7 +788,8 @@ async fn return_definite_error(
             },
             Diff::ONE,
         );
-        data_handle.give_fueled(&data_capset[0], update).await;
+        let size = update.fuel_size();
+        data_handle.give_fueled(&data_capset[0], update, size).await;
     }
     errs_handle.give(
         &errs_capset[0],

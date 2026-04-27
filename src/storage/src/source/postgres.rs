@@ -205,13 +205,13 @@ impl SourceRender for PostgresSourceConnection {
             .inner
             .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
-                |((output, data), time, diff): &(
+                |((output, data), time, diff): (
                     (usize, Result<SourceMessage, DataflowError>),
                     MzOffset,
                     Diff,
                 )| {
-                    let output = u64::cast_from(*output);
-                    (output, (data.clone(), time.clone(), diff.clone()))
+                    let output = u64::cast_from(output);
+                    (output, (data, time, diff))
                 },
             );
         let mut data_collections = BTreeMap::new();

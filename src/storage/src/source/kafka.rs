@@ -42,7 +42,7 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use mz_timely_util::order::Partitioned;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -66,7 +66,7 @@ use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
-use crate::source::types::{Probe, SignaledFuture, SourceRender, StackedCollection};
+use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
 use crate::statistics::SourceStatistics;
 
@@ -205,8 +205,8 @@ impl SourceRender for KafkaSourceConnection {
         let data_streams: Vec<_> = data.inner.partition::<CapacityContainerBuilder<_>, _, _>(
             partition_count,
             |((output, data), time, diff)| {
-                let output = u64::cast_from(*output);
-                (output, (data.clone(), time.clone(), diff.clone()))
+                let output = u64::cast_from(output);
+                (output, (data, time, diff))
             },
         );
         let mut data_collections = BTreeMap::new();
@@ -242,7 +242,7 @@ fn render_reader<'scope>(
     let name = format!("KafkaReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<FueledBuilder<_>>();
     let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut metadata_input = builder.new_disconnected_input(metadata_stream.broadcast(), Pipeline);
@@ -718,8 +718,10 @@ fn render_reader<'scope>(
                         for (output, error) in
                             outputs.iter().map(|o| o.output_index).repeat_clone(error)
                         {
+                            let update = ((output, error), time, Diff::ONE);
+                            let size = update.fuel_size();
                             data_output
-                                .give_fueled(&data_cap, ((output, error), time, Diff::ONE))
+                                .give_fueled(&data_cap, update, size)
                                 .await;
                         }
 
@@ -787,8 +789,10 @@ fn render_reader<'scope>(
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
+                                    let update = ((output_index, msg), time, diff);
+                                    let size = update.fuel_size();
                                     data_output
-                                        .give_fueled(part_cap, ((output_index, msg), time, diff))
+                                        .give_fueled(part_cap, update, size)
                                         .await;
                                 }
                             }
@@ -833,11 +837,11 @@ fn render_reader<'scope>(
                                             error: SourceErrorDetails::Other(e.to_string().into()),
                                         }))
                                     });
+                                    let update =
+                                        ((output.output_index, msg), time, diff);
+                                    let size = update.fuel_size();
                                     data_output
-                                        .give_fueled(
-                                            part_cap,
-                                            ((output.output_index, msg), time, diff),
-                                        )
+                                        .give_fueled(part_cap, update, size)
                                         .await;
                                 }
                                 // The message was from an offset we've already seen.

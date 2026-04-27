@@ -182,11 +182,11 @@ impl SourceRender for SqlServerSourceConnection {
             .inner
             .partition::<CapacityContainerBuilder<_>, _, _>(
                 partition_count,
-                move |((partition_idx, data), time, diff): &(
+                move |((partition_idx, data), time, diff): (
                     (u64, Result<SourceMessage, DataflowError>),
                     Lsn,
                     Diff,
-                )| { (*partition_idx, (data.clone(), time.clone(), diff.clone())) },
+                )| { (partition_idx, (data, time, diff)) },
             );
         let mut data_collections = BTreeMap::new();
         for (id, data_stream) in config.source_exports.keys().zip_eq(data_streams) {

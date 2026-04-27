@@ -24,7 +24,6 @@ use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
 use mz_timely_util::builder_async::PressOnDropButton;
-use mz_timely_util::columnation::ColumnationStack;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
 use timely::dataflow::{Scope, StreamVec};
@@ -53,7 +52,7 @@ pub enum ProgressStatisticsUpdate {
     },
 }
 
-pub type StackedCollection<'scope, T, D> = Collection<'scope, T, ColumnationStack<(D, T, Diff)>>;
+pub type StackedCollection<'scope, T, D> = Collection<'scope, T, Vec<(D, T, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
@@ -112,6 +111,100 @@ pub struct SourceMessage {
     pub metadata: Row,
 }
 
+impl SourceMessage {
+    /// Heap-size estimate used to drive fuel accounting in source operators.
+    pub fn byte_len(&self) -> usize {
+        self.key.byte_len() + self.value.byte_len() + self.metadata.byte_len()
+    }
+}
+
+/// Heap-size estimate used by source operators to drive `give_fueled` yielding.
+///
+/// Stack-only values may report `size_of_val(self)`; values with heap-allocated
+/// payloads (rows, byte buffers) should include that payload.
+pub trait FuelSize {
+    fn fuel_size(&self) -> usize;
+}
+
+impl FuelSize for SourceMessage {
+    fn fuel_size(&self) -> usize {
+        self.byte_len()
+    }
+}
+
+impl FuelSize for Row {
+    fn fuel_size(&self) -> usize {
+        self.byte_len()
+    }
+}
+
+impl FuelSize for Vec<u8> {
+    fn fuel_size(&self) -> usize {
+        self.len()
+    }
+}
+
+impl FuelSize for bytes::Bytes {
+    fn fuel_size(&self) -> usize {
+        self.len()
+    }
+}
+
+impl<T: FuelSize, E: FuelSize> FuelSize for Result<T, E> {
+    fn fuel_size(&self) -> usize {
+        match self {
+            Ok(t) => t.fuel_size(),
+            Err(e) => e.fuel_size(),
+        }
+    }
+}
+
+/// Tuples sum the fuel size of their elements. Trivial coordinate fields
+/// (output indices, timestamps, diffs) implement `FuelSize` to return their
+/// stack size, so an `update.fuel_size()` call charges only the heap-allocated
+/// payload like rows or byte buffers.
+impl<A: FuelSize, B: FuelSize> FuelSize for (A, B) {
+    fn fuel_size(&self) -> usize {
+        self.0.fuel_size() + self.1.fuel_size()
+    }
+}
+
+impl<A: FuelSize, B: FuelSize, C: FuelSize> FuelSize for (A, B, C) {
+    fn fuel_size(&self) -> usize {
+        self.0.fuel_size() + self.1.fuel_size() + self.2.fuel_size()
+    }
+}
+
+/// Convenience macro for declaring `FuelSize` on a stack-only type.
+macro_rules! impl_fuel_size_stack {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl FuelSize for $t {
+                fn fuel_size(&self) -> usize {
+                    std::mem::size_of_val(self)
+                }
+            }
+        )*
+    };
+}
+
+impl_fuel_size_stack!(
+    usize,
+    u32,
+    u64,
+    Diff,
+    mz_repr::Timestamp,
+    mz_storage_types::sources::MzOffset,
+    mz_sql_server_util::cdc::Lsn,
+    DataflowError,
+);
+
+impl<P, T> FuelSize for mz_timely_util::order::Partitioned<P, T> {
+    fn fuel_size(&self) -> usize {
+        std::mem::size_of_val(self)
+    }
+}
+
 /// The result of probing an upstream system for its write frontier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Probe<T> {
@@ -119,62 +212,6 @@ pub struct Probe<T> {
     pub probe_ts: mz_repr::Timestamp,
     /// The frontier obtain from the upstream system.
     pub upstream_frontier: Antichain<T>,
-}
-
-mod columnation {
-    use columnation::{Columnation, Region};
-    use mz_repr::Row;
-
-    use super::SourceMessage;
-
-    impl Columnation for SourceMessage {
-        type InnerRegion = SourceMessageRegion;
-    }
-
-    #[derive(Default)]
-    pub struct SourceMessageRegion {
-        inner: <Row as Columnation>::InnerRegion,
-    }
-
-    impl Region for SourceMessageRegion {
-        type Item = SourceMessage;
-
-        unsafe fn copy(&mut self, item: &Self::Item) -> Self::Item {
-            SourceMessage {
-                key: unsafe { self.inner.copy(&item.key) },
-                value: unsafe { self.inner.copy(&item.value) },
-                metadata: unsafe { self.inner.copy(&item.metadata) },
-            }
-        }
-
-        fn clear(&mut self) {
-            self.inner.clear()
-        }
-
-        fn reserve_items<'a, I>(&mut self, items: I)
-        where
-            Self: 'a,
-            I: Iterator<Item = &'a Self::Item> + Clone,
-        {
-            self.inner.reserve_items(
-                items
-                    .map(|item| [&item.key, &item.value, &item.metadata])
-                    .flatten(),
-            )
-        }
-
-        fn reserve_regions<'a, I>(&mut self, regions: I)
-        where
-            Self: 'a,
-            I: Iterator<Item = &'a Self> + Clone,
-        {
-            self.inner.reserve_regions(regions.map(|r| &r.inner))
-        }
-
-        fn heap_size(&self, callback: impl FnMut(usize, usize)) {
-            self.inner.heap_size(callback)
-        }
-    }
 }
 
 /// A record produced by a source

@@ -24,7 +24,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker, ready};
 
-use columnation::Columnation;
 use futures_util::Stream;
 use futures_util::task::ArcWake;
 use timely::communication::{Pull, Push};
@@ -40,8 +39,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
-use crate::columnation::ColumnationStack;
-use crate::containers::stack::AccountedStackBuilder;
+use crate::containers::stack::FueledBuilder;
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<'scope, T: Timestamp> {
@@ -315,26 +313,29 @@ where
     }
 }
 
-impl<T, D>
-    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<ColumnationStack<D>>>>
+impl<T, D> AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<D>>>>
 where
-    D: Clone + 'static + Columnation,
+    D: Clone + 'static,
     T: Timestamp,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
 
-    /// Provides one record at the time specified by the capability. This method will automatically
-    /// yield back to timely after [Self::MAX_OUTSTANDING_BYTES] have been produced.
-    pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2)
+    /// Provides one record at the time specified by the capability and
+    /// charges `size_bytes` against the builder's fuel counter. Once at least
+    /// [`Self::MAX_OUTSTANDING_BYTES`] have been emitted since the last yield
+    /// this method yields back to timely and resets the counter.
+    pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2, size_bytes: usize)
     where
-        ColumnationStack<D>: PushInto<D2>,
+        FueledBuilder<CapacityContainerBuilder<Vec<D>>>: PushInto<D2>,
     {
         let should_yield = {
             let mut handle = self.inner.borrow_mut();
             handle.give(cap, data);
-            let should_yield = handle.builder.bytes.get() > Self::MAX_OUTSTANDING_BYTES;
+            let bytes = &handle.builder.bytes;
+            bytes.set(bytes.get() + size_bytes);
+            let should_yield = bytes.get() > Self::MAX_OUTSTANDING_BYTES;
             if should_yield {
-                handle.builder.bytes.set(0);
+                bytes.set(0);
             }
             should_yield
         };

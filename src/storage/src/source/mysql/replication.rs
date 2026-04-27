@@ -51,7 +51,7 @@ use mysql_async::prelude::Queryable;
 use mysql_async::{BinlogStream, BinlogStreamRequest, GnoInterval, Sid};
 use mz_ore::future::InTask;
 use mz_ssh_util::tunnel_manager::ManagedSshTunnelHandle;
-use mz_timely_util::containers::stack::AccountedStackBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Exchange;
@@ -115,7 +115,7 @@ pub(crate) fn render<'scope>(
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
     let repl_reader_id = u64::cast_from(config.responsible_worker(REPL_READER));
-    let (mut data_output, data_stream) = builder.new_output::<AccountedStackBuilder<_>>();
+    let (mut data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
         builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
