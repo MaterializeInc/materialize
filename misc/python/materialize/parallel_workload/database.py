@@ -44,7 +44,6 @@ from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.sql_server import SqlServer
-from materialize.parallel_workload.settings import Scenario
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
@@ -252,9 +251,7 @@ class View(DBObject):
         # negative at runtime). The two modes are mutually exclusive. The
         # matching ignore list for negative-accumulation errors is wired
         # through `Action.errors_to_ignore`.
-        self.repeat_row_const = (
-            scenario == Scenario.RepeatRow and rng.random() < 0.05
-        )
+        self.repeat_row_const = scenario == Scenario.RepeatRow and rng.random() < 0.05
         self.repeat_row_table = (
             scenario == Scenario.RepeatRow
             and not self.repeat_row_const
