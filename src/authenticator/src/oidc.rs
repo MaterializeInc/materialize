@@ -12,13 +12,15 @@
 //! This module provides JWT-based authentication using OpenID Connect (OIDC).
 //! JWTs are validated locally using JWKS fetched from the configured provider.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use jsonwebtoken::jwk::JwkSet;
 use mz_adapter::{AdapterError, AuthenticationError, Client as AdapterClient};
-use mz_adapter_types::dyncfgs::{OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_ISSUER};
+use mz_adapter_types::dyncfgs::{
+    OIDC_AUDIENCE, OIDC_AUTHENTICATION_CLAIM, OIDC_GROUP_CLAIM, OIDC_ISSUER,
+};
 use mz_auth::Authenticated;
 use mz_ore::secure::{Zeroize, ZeroizeOnDrop};
 use mz_ore::soft_panic_or_log;
@@ -244,11 +246,67 @@ impl OidcClaims {
             .get(authentication_claim)
             .and_then(|value| value.as_str())
     }
+
+    /// Extracts group names from the specified JWT claim for group-to-role sync.
+    ///
+    /// Returns `None` if the claim is absent (skip sync, preserve current state),
+    /// `Some(vec![])` if the claim is present but empty (revoke all sync-granted
+    /// roles), or `Some(vec![...])` with normalized (lowercased, deduplicated,
+    /// sorted) group names.
+    ///
+    /// Accepts arrays of strings, single strings, or mixed arrays (non-string
+    /// elements are filtered out). Other JSON types are treated as absent.
+    pub fn groups(&self, claim_name: &str) -> Option<Vec<String>> {
+        let value = self.unknown_claims.get(claim_name)?;
+
+        let raw_groups: Vec<String> = match value {
+            // Most IdPs send groups as a JSON array of strings.
+            // Non-string elements (e.g., numbers injected by misconfigured
+            // claim mappings) are silently dropped rather than failing the
+            // entire sync.
+            serde_json::Value::Array(arr) => arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect(),
+            // Some IdPs represent a single group membership as a plain string
+            // rather than a one-element array. An empty string means
+            // "no groups" (equivalent to an empty array).
+            serde_json::Value::String(s) => {
+                if s.is_empty() {
+                    vec![]
+                } else {
+                    vec![s.clone()]
+                }
+            }
+            // Any other JSON type can't represent group names — treat as
+            // if the claim were absent so we don't accidentally revoke all
+            // roles based on garbage data.
+            _ => return None,
+        };
+
+        // Normalize: lowercase for case-insensitive role matching,
+        // filter out empty strings (not valid role names), deduplicate
+        // via BTreeSet (which also sorts), then collect into a Vec for
+        // the caller. Sorted order makes downstream diff computation
+        // deterministic.
+        let normalized: Vec<String> = raw_groups
+            .into_iter()
+            .map(|g| g.to_lowercase())
+            .filter(|g| !g.is_empty())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        Some(normalized)
+    }
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct ValidatedClaims {
     pub user: String,
+    /// Groups extracted from the JWT group claim. None if claim absent.
+    #[zeroize(skip)]
+    pub groups: Option<Vec<String>>,
     // Prevent construction outside of `GenericOidcAuthenticator::validate_token`.
     _private: (),
 }
@@ -524,8 +582,13 @@ impl GenericOidcAuthenticatorInner {
             }
         }
 
+        // Extract groups from the configured claim name for group-to-role sync.
+        let group_claim = OIDC_GROUP_CLAIM.get(system_vars.dyncfgs());
+        let groups = token_data.claims.groups(&group_claim);
+
         Ok(ValidatedClaims {
             user: user.to_string(),
+            groups,
             _private: (),
         })
     }
@@ -629,6 +692,7 @@ mod tests {
         use mz_ore::secure::Zeroize;
         let mut claims = ValidatedClaims {
             user: "alice@example.com".to_string(),
+            groups: Some(vec!["eng".to_string()]),
             _private: (),
         };
         claims.zeroize();
@@ -661,5 +725,259 @@ mod tests {
         assert!(claims.iat.is_none());
         assert!(claims.aud.is_empty());
         assert!(claims.unknown_claims.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_groups_array() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["analytics","platform_eng"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["analytics".to_string(), "platform_eng".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_single_string() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":"analytics"}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["analytics".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_missing() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app"}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_empty_array() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":[]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), Some(vec![]));
+    }
+
+    #[mz_ore::test]
+    fn test_groups_mixed_case() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["Analytics","PLATFORM_ENG","analytics"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["analytics".to_string(), "platform_eng".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_duplicates() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["a","b","a","c","b"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["a".to_string(), "b".to_string(), "c".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_custom_claim_name() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","roles":["admin","viewer"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("roles"),
+            Some(vec!["admin".to_string(), "viewer".to_string()])
+        );
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_non_string_values_in_array() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["valid",123,true,"also_valid"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["also_valid".to_string(), "valid".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_non_array_non_string() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":42}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_empty_string() {
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":""}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), Some(vec![]));
+    }
+
+    #[mz_ore::test]
+    fn test_groups_null_claim() {
+        // Explicit null → treated as absent (not a valid group representation)
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":null}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_boolean_claim() {
+        // Boolean value → not array or string, treated as absent
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":true}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_object_claim() {
+        // JSON object → not array or string, treated as absent
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":{"team":"eng"}}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_array_all_non_strings() {
+        // Array with zero valid string elements → Some(vec![]), not None
+        // (the claim *is* present, it just has no usable group names)
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":[1,2,true,null]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), Some(vec![]));
+    }
+
+    #[mz_ore::test]
+    fn test_groups_array_with_nested_arrays() {
+        // Nested arrays are not strings, so they're filtered out
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":[["nested"],"valid"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["valid".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_array_with_empty_strings() {
+        // Empty strings are not valid role names and are filtered out,
+        // consistent with the single-string case where "" → Some(vec![]).
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["","eng",""]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["eng".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_whitespace_names() {
+        // Whitespace is preserved (not trimmed) — role names with spaces
+        // would need to be quoted in SQL. Lowercasing doesn't affect spaces.
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["  spaces  ","eng"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["  spaces  ".to_string(), "eng".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_unicode_names() {
+        // Unicode group names should be lowercased correctly
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["Développeurs","INGÉNIEURS"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["développeurs".to_string(), "ingénieurs".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_special_characters() {
+        // Group names with special characters (hyphens, underscores, dots)
+        // are common in enterprise IdPs like Azure AD / Okta
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["team-platform.eng","org_data-science","role/admin"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec![
+                "org_data-science".to_string(),
+                "role/admin".to_string(),
+                "team-platform.eng".to_string(),
+            ])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_case_insensitive_dedup() {
+        // "Eng" and "eng" and "ENG" should all collapse to one "eng"
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["Eng","eng","ENG","eNg"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), Some(vec!["eng".to_string()]));
+    }
+
+    #[mz_ore::test]
+    fn test_groups_large_array() {
+        // Verify we handle a reasonably large group list without issues
+        let groups: Vec<String> = (0..100).map(|i| format!("\"group_{}\"", i)).collect();
+        let json = format!(
+            r#"{{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":[{}]}}"#,
+            groups.join(",")
+        );
+        let claims: OidcClaims = serde_json::from_str(&json).unwrap();
+        let result = claims.groups("groups").unwrap();
+        assert_eq!(result.len(), 100);
+        // BTreeSet ensures sorted order
+        assert_eq!(result[0], "group_0");
+        assert_eq!(result[99], "group_99");
+    }
+
+    #[mz_ore::test]
+    fn test_groups_float_claim() {
+        // Float value → not array or string, treated as absent
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":3.14}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.groups("groups"), None);
+    }
+
+    #[mz_ore::test]
+    fn test_groups_array_with_null_elements() {
+        // Null elements in array are not strings, filtered out
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["eng",null,"ops",null]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["eng".to_string(), "ops".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_array_with_object_elements() {
+        // Object elements in array are not strings, filtered out
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["eng",{"name":"ops"},"analytics"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec!["analytics".to_string(), "eng".to_string()])
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_groups_sorted_output() {
+        // Verify output is sorted alphabetically regardless of input order
+        let json = r#"{"sub":"user","iss":"issuer","exp":1234,"aud":"app","groups":["zebra","alpha","mango","beta"]}"#;
+        let claims: OidcClaims = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            claims.groups("groups"),
+            Some(vec![
+                "alpha".to_string(),
+                "beta".to_string(),
+                "mango".to_string(),
+                "zebra".to_string(),
+            ])
+        );
     }
 }

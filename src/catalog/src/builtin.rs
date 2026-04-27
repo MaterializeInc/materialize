@@ -48,8 +48,9 @@ use mz_sql::catalog::{
 };
 use mz_sql::rbac;
 use mz_sql::session::user::{
-    ANALYTICS_USER_NAME, MZ_ANALYTICS_ROLE_ID, MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID,
-    MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER_NAME, SYSTEM_USER_NAME,
+    ANALYTICS_USER_NAME, JWT_SYNC_USER_NAME, MZ_ANALYTICS_ROLE_ID, MZ_JWT_SYNC_ROLE_ID,
+    MZ_MONITOR_REDACTED_ROLE_ID, MZ_MONITOR_ROLE_ID, MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID,
+    SUPPORT_USER_NAME, SYSTEM_USER_NAME,
 };
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_client::healthcheck::WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RAW_DESC;
@@ -14134,6 +14135,15 @@ pub const MZ_MONITOR_REDACTED: BuiltinRole = BuiltinRole {
     attributes: RoleAttributesRaw::new(),
 };
 
+/// Sentinel role used as the grantor for JWT group-sync-managed
+/// role memberships. Never logged into directly.
+pub const MZ_JWT_SYNC_ROLE: BuiltinRole = BuiltinRole {
+    id: MZ_JWT_SYNC_ROLE_ID,
+    name: JWT_SYNC_USER_NAME,
+    oid: oid::ROLE_MZ_JWT_SYNC_OID,
+    attributes: RoleAttributesRaw::new(),
+};
+
 pub const MZ_SYSTEM_CLUSTER: BuiltinCluster = BuiltinCluster {
     name: SYSTEM_USER_NAME,
     owner_id: &MZ_SYSTEM_ROLE_ID,
@@ -14738,6 +14748,7 @@ pub const BUILTIN_ROLES: &[&BuiltinRole] = &[
     &MZ_ANALYTICS_ROLE,
     &MZ_MONITOR_ROLE,
     &MZ_MONITOR_REDACTED,
+    &MZ_JWT_SYNC_ROLE,
 ];
 pub const BUILTIN_CLUSTERS: &[&BuiltinCluster] = &[
     &MZ_SYSTEM_CLUSTER,

@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/debug.rs
+assertion_line: 235
 expression: test_trace
 ---
 Trace {
@@ -995,6 +996,35 @@ Trace {
                             entries: [],
                         },
                         oid: 16984,
+                    },
+                ),
+                2,
+                Overflowing(
+                    1,
+                ),
+            ),
+            (
+                (
+                    RoleKey {
+                        id: System(
+                            4,
+                        ),
+                    },
+                    RoleValue {
+                        name: "mz_jwt_sync",
+                        attributes: RoleAttributes {
+                            inherit: true,
+                            superuser: None,
+                            login: None,
+                            auto_provision_source: None,
+                        },
+                        membership: RoleMembership {
+                            map: [],
+                        },
+                        vars: RoleVars {
+                            entries: [],
+                        },
+                        oid: 17075,
                     },
                 ),
                 2,
