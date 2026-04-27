@@ -118,11 +118,10 @@ impl SourceMessage {
     }
 }
 
-/// Heap-size estimate used to drive `give_fueled` yielding in source operators.
+/// Heap-size estimate used by source operators to drive `give_fueled` yielding.
 ///
-/// Implementations should approximate the bytes the value would occupy when
-/// serialized. Stack-only values may report `size_of_val(self)`; values with
-/// heap-allocated payloads (rows, byte buffers) should include that payload.
+/// Stack-only values may report `size_of_val(self)`; values with heap-allocated
+/// payloads (rows, byte buffers) should include that payload.
 pub trait FuelSize {
     fn fuel_size(&self) -> usize;
 }

@@ -42,7 +42,7 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{
     Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::AccountedBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use mz_timely_util::order::Partitioned;
 use rdkafka::consumer::base_consumer::PartitionQueue;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext};
@@ -242,7 +242,7 @@ fn render_reader<'scope>(
     let name = format!("KafkaReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedBuilder<_>>();
+    let (data_output, stream) = builder.new_output::<FueledBuilder<_>>();
     let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
 
     let mut metadata_input = builder.new_disconnected_input(metadata_stream.broadcast(), Pipeline);

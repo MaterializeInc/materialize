@@ -39,7 +39,7 @@ use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
 use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
-use crate::containers::stack::AccountedBuilder;
+use crate::containers::stack::FueledBuilder;
 
 /// Builds async operators with generic shape.
 pub struct OperatorBuilder<'scope, T: Timestamp> {
@@ -313,17 +313,21 @@ where
     }
 }
 
-impl<T, D> AsyncOutputHandle<T, AccountedBuilder<CapacityContainerBuilder<Vec<D>>>>
+impl<T, D> AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<D>>>>
 where
     D: Clone + 'static,
     T: Timestamp,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
 
-    /// Provides one record at the time specified by the capability, accounting
-    /// `size_bytes` toward the fuel budget. Yields back to timely once at least
-    /// [`Self::MAX_OUTSTANDING_BYTES`] have been emitted since the last yield.
-    pub async fn give_fueled(&self, cap: &Capability<T>, data: D, size_bytes: usize) {
+    /// Provides one record at the time specified by the capability and
+    /// charges `size_bytes` against the builder's fuel counter. Once at least
+    /// [`Self::MAX_OUTSTANDING_BYTES`] have been emitted since the last yield
+    /// this method yields back to timely and resets the counter.
+    pub async fn give_fueled<D2>(&self, cap: &Capability<T>, data: D2, size_bytes: usize)
+    where
+        FueledBuilder<CapacityContainerBuilder<Vec<D>>>: PushInto<D2>,
+    {
         let should_yield = {
             let mut handle = self.inner.borrow_mut();
             handle.give(cap, data);

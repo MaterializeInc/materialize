@@ -21,7 +21,7 @@ use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use rand_8::rngs::StdRng;
 use rand_8::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
@@ -55,7 +55,7 @@ pub fn render<'scope>(
 
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedBuilder<
+    let (data_output, stream) = builder.new_output::<FueledBuilder<
         CapacityContainerBuilder<
             Vec<(
                 (usize, Result<SourceMessage, DataflowError>),

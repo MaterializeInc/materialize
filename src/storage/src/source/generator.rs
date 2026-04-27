@@ -29,7 +29,7 @@ use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::AccountedBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::Partition;
@@ -258,7 +258,7 @@ fn render_simple_generator<'scope>(
 ) {
     let mut builder = AsyncOperatorBuilder::new(config.name.clone(), scope.clone());
 
-    let (data_output, stream) = builder.new_output::<AccountedBuilder<
+    let (data_output, stream) = builder.new_output::<FueledBuilder<
         CapacityContainerBuilder<
             Vec<(
                 (usize, Result<SourceMessage, DataflowError>),

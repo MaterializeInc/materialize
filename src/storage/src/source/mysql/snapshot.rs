@@ -106,7 +106,7 @@ use mz_storage_types::sources::MySqlSourceConnection;
 use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
-use mz_timely_util::containers::stack::AccountedBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
@@ -141,7 +141,7 @@ pub(crate) fn render<'scope>(
     let mut builder =
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
-    let (raw_handle, raw_data) = builder.new_output::<AccountedBuilder<_>>();
+    let (raw_handle, raw_data) = builder.new_output::<FueledBuilder<_>>();
     let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<Vec<_>>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =

@@ -34,7 +34,7 @@ use mz_storage_types::sources::sql_server::{MAX_LSN_WAIT, SNAPSHOT_PROGRESS_REPO
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
-use mz_timely_util::containers::stack::AccountedBuilder;
+use mz_timely_util::containers::stack::FueledBuilder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
@@ -69,7 +69,7 @@ pub(crate) fn render<'scope>(
     let op_name = format!("SqlServerReplicationReader({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (data_output, data_stream) = builder.new_output::<AccountedBuilder<_>>();
+    let (data_output, data_stream) = builder.new_output::<FueledBuilder<_>>();
 
     // Captures DefiniteErrors that affect the entire source, including all outputs
     let (definite_error_handle, definite_errors) =
@@ -737,7 +737,7 @@ async fn handle_data_event(
 }
 
 type StackedAsyncOutputHandle<T, D> =
-    AsyncOutputHandle<T, AccountedBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
+    AsyncOutputHandle<T, FueledBuilder<CapacityContainerBuilder<Vec<(D, T, Diff)>>>>;
 
 /// Helper method to decode a row from a [`tiberius::Row`] (or 2 of them in the case of update)
 /// to a [`Row`]. This centralizes the decode and mapping to result.

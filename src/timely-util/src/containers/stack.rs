@@ -13,28 +13,27 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Container builder wrapper that records bytes emitted for fuel-based yielding.
+//! Container builder wrapper that carries a byte counter for fuel-based yielding.
 
 use std::cell::Cell;
 
 use timely::container::{ContainerBuilder, PushInto};
 
-/// A [`ContainerBuilder`] wrapper that carries a byte counter.
-///
-/// The wrapper forwards all container-builder operations verbatim; bytes are
-/// accumulated externally through [`AsyncOutputHandle::give_fueled`][gf] so
-/// the caller can use whatever size estimate is cheapest for their data
-/// (e.g. `Row::byte_len`) without having to materialize the data into a
-/// columnated region.
+/// A [`ContainerBuilder`] wrapper carrying a byte counter that
+/// [`AsyncOutputHandle::give_fueled`][gf] increments when emitting items. The
+/// wrapper itself does no accounting; it exists so `give_fueled` can find a
+/// counter associated with the output handle. The caller supplies the size of
+/// each pushed item, which lets the source choose whatever estimate is
+/// cheapest for its data without needing the container to introspect items.
 ///
 /// [gf]: crate::builder_async::AsyncOutputHandle::give_fueled
 #[derive(Default)]
-pub struct AccountedBuilder<CB> {
+pub struct FueledBuilder<CB> {
     pub bytes: Cell<usize>,
     pub builder: CB,
 }
 
-impl<CB: ContainerBuilder> ContainerBuilder for AccountedBuilder<CB> {
+impl<CB: ContainerBuilder> ContainerBuilder for FueledBuilder<CB> {
     type Container = CB::Container;
 
     fn extract(&mut self) -> Option<&mut Self::Container> {
@@ -46,7 +45,7 @@ impl<CB: ContainerBuilder> ContainerBuilder for AccountedBuilder<CB> {
     }
 }
 
-impl<T, CB: PushInto<T>> PushInto<T> for AccountedBuilder<CB> {
+impl<T, CB: PushInto<T>> PushInto<T> for FueledBuilder<CB> {
     #[inline]
     fn push_into(&mut self, item: T) {
         self.builder.push_into(item);
