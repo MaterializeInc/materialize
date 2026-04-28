@@ -18,7 +18,7 @@ use std::iter;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use itertools::{Either, Itertools};
+use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
 use mz_arrow_util::builder::ArrowBuilder;
@@ -7090,11 +7090,13 @@ pub fn plan_alter_connection(
     let specified_options: BTreeSet<_> = actions
         .iter()
         .map(|action: &AlterConnectionAction<Aug>| match action {
-            AlterConnectionAction::SetOption(option) => option.name.clone(),
-            AlterConnectionAction::DropOption(name) => name.clone(),
-            AlterConnectionAction::RotateKeys => unreachable!("RotateKeys is handled separately"),
+            AlterConnectionAction::SetOption(option) => Ok(option.name.clone()),
+            AlterConnectionAction::DropOption(name) => Ok(name.clone()),
+            AlterConnectionAction::RotateKeys => {
+                Err(internal_err!("RotateKeys is handled separately above"))
+            }
         })
-        .collect();
+        .collect::<Result<_, PlanError>>()?;
 
     for invalid in INALTERABLE_OPTIONS {
         if specified_options.contains(invalid) {
@@ -7104,13 +7106,20 @@ pub fn plan_alter_connection(
 
     connection::validate_options_per_connection_type(connection_type, specified_options)?;
 
-    // Partition operations into set and drop
-    let (set_options_vec, mut drop_options): (Vec<_>, BTreeSet<_>) =
-        actions.into_iter().partition_map(|action| match action {
-            AlterConnectionAction::SetOption(option) => Either::Left(option),
-            AlterConnectionAction::DropOption(name) => Either::Right(name),
-            AlterConnectionAction::RotateKeys => unreachable!("RotateKeys is handled separately"),
-        });
+    // Partition operations into set and drop.
+    let mut set_options_vec: Vec<_> = Vec::new();
+    let mut drop_options: BTreeSet<_> = BTreeSet::new();
+    for action in actions {
+        match action {
+            AlterConnectionAction::SetOption(option) => set_options_vec.push(option),
+            AlterConnectionAction::DropOption(name) => {
+                drop_options.insert(name);
+            }
+            AlterConnectionAction::RotateKeys => {
+                bail_internal!("RotateKeys is handled separately above")
+            }
+        }
+    }
 
     let set_options: BTreeMap<_, _> = set_options_vec
         .clone()
