@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/postgres.rs
-revision: f1e12c2e99
+revision: 5427dc5764
 ---
 
 # mz-storage::source::postgres

@@ -1,9 +1,9 @@
 ---
 source: src/timely-util/src/containers/stack.rs
-revision: f498b6e141
+revision: 5427dc5764
 ---
 
 # timely-util::containers::stack
 
-Defines `AccountedStackBuilder<CB>`, a `ContainerBuilder` wrapper that tracks the cumulative byte size of produced `ColumnationStack<T>` containers.
-The `bytes` counter is exposed as a public `Cell<usize>` field and is used by `AsyncOutputHandle::give_fueled` to yield back to timely after a configurable memory ceiling (`MAX_OUTSTANDING_BYTES`, 128 MiB) is reached, preventing unbounded memory accumulation in async operators.
+Defines `FueledBuilder<CB>`, a `ContainerBuilder` wrapper that carries a byte counter for fuel-based yielding.
+The `bytes` counter is exposed as a public `Cell<usize>` field and is incremented by `AsyncOutputHandle::give_fueled`, which receives the byte size of each pushed item from the caller rather than having the container introspect items. Once at least `MAX_OUTSTANDING_BYTES` (128 MiB) have been charged, `give_fueled` yields back to timely and resets the counter, preventing unbounded memory accumulation in async operators. `FueledBuilder` works with any `ContainerBuilder` and delegates `extract()` and `finish()` directly to the inner builder.

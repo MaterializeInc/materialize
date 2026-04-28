@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement.rs
-revision: 3af9082af6
+revision: 44d6b9ac6a
 ---
 
 # mz-sql::plan::statement
