@@ -5149,6 +5149,16 @@ fn plan_function_order_by(
     Ok((order_by_exprs, col_orders))
 }
 
+/// Returns a human-readable rendering of `name`, falling back to a debug
+/// dump of the `ResolvedItemName` if humanization fails. Used to construct
+/// user-facing error messages on already-failing paths, where we'd rather
+/// surface the raw resolved name than emit a useless `<unknown>` placeholder.
+fn humanize_or_debug(scx: &StatementContext, name: &ResolvedItemName) -> String {
+    scx.humanize_resolved_name(name)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|_| format!("<error when trying to humanize `{name:?}`>"))
+}
+
 /// Common part of the planning of windowed and non-windowed aggregation functions.
 fn plan_aggregate_common(
     ecx: &ExprContext,
@@ -5193,11 +5203,7 @@ fn plan_aggregate_common(
             if args.is_empty() {
                 sql_bail!(
                     "{}(*) must be used to call a parameterless aggregate function",
-                    ecx.qcx
-                        .scx
-                        .humanize_resolved_name(name)
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|_| "<unknown>".into())
+                    humanize_or_debug(ecx.qcx.scx, name)
                 );
             }
             let args = plan_exprs(ecx, args)?;
@@ -5555,21 +5561,13 @@ fn plan_function<'a>(
     if *distinct {
         sql_bail!(
             "DISTINCT specified, but {} is not an aggregate function",
-            ecx.qcx
-                .scx
-                .humanize_resolved_name(name)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|_| "<unknown>".into())
+            humanize_or_debug(ecx.qcx.scx, name)
         );
     }
     if filter.is_some() {
         sql_bail!(
             "FILTER specified, but {} is not an aggregate function",
-            ecx.qcx
-                .scx
-                .humanize_resolved_name(name)
-                .map(|n| n.to_string())
-                .unwrap_or_else(|_| "<unknown>".into())
+            humanize_or_debug(ecx.qcx.scx, name)
         );
     }
 
@@ -5577,22 +5575,14 @@ fn plan_function<'a>(
         FunctionArgs::Star => {
             sql_bail!(
                 "* argument is invalid with non-aggregate function {}",
-                ecx.qcx
-                    .scx
-                    .humanize_resolved_name(name)
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|_| "<unknown>".into())
+                humanize_or_debug(ecx.qcx.scx, name)
             )
         }
         FunctionArgs::Args { args, order_by } => {
             if !order_by.is_empty() {
                 sql_bail!(
                     "ORDER BY specified, but {} is not an aggregate function",
-                    ecx.qcx
-                        .scx
-                        .humanize_resolved_name(name)
-                        .map(|n| n.to_string())
-                        .unwrap_or_else(|_| "<unknown>".into())
+                    humanize_or_debug(ecx.qcx.scx, name)
                 );
             }
             plan_exprs(ecx, args)?
