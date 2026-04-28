@@ -431,7 +431,6 @@ prost = { version = "0.14.3", features = ["no-recursion-limit"] }
 prost-build = "0.14.3"
 prost-reflect = { version = "0.16.3", features = ["serde"] }
 prost-types = "0.14.3"
-protobuf = "3.7.2"
 protobuf-native = "0.3.3"
 protobuf-src = "2.1.1"
 proxy-header = "0.1.2"

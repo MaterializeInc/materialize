@@ -88,7 +88,7 @@ pin-project.workspace = true
 postgres = { workspace = true, optional = true }
 postgres-openssl = { workspace = true, optional = true }
 prometheus.workspace = true
-protobuf.workspace = true
+prost.workspace = true
 rdkafka-sys.workspace = true
 rand.workspace = true
 regex = { workspace = true, optional = true }
@@ -151,7 +151,9 @@ tokio-postgres = { workspace = true, features = ["with-chrono-0_4", "with-serde_
 [build-dependencies]
 anyhow.workspace = true
 cc.workspace = true
+mz-build-tools = { path = "../build-tools", default-features = false }
 mz-npm = { path = "../npm" }
+prost-build.workspace = true
 
 [features]
 default = ["tokio-console", "mz-alloc-default"]

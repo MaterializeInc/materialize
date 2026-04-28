@@ -24,6 +24,7 @@ use std::time::Duration;
 use axum::Extension;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
+use bytes::Buf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use mz_adapter::catalog::Catalog;
@@ -34,10 +35,23 @@ use mz_ore::metrics::{MetricsRegistry, Rule};
 use mz_repr::{CatalogItemId, GlobalId};
 use prometheus::Encoder;
 use prometheus::proto::{LabelPair, Metric, MetricFamily};
-use protobuf::{CodedInputStream, Message};
+use prost::Message as _;
 use tracing::{debug, warn};
 
 use crate::http::AuthedClient;
+
+/// Prost-generated types for `io.prometheus.client.proto` (the same schema
+/// used by the upstream `prometheus` crate, but compiled against prost
+/// rather than rust-protobuf to keep a single protobuf runtime in
+/// Materialize source code).
+///
+/// We decode the delimited-protobuf wire bytes into these types and then
+/// translate to `prometheus::proto::*` so the rest of the pipeline
+/// (provenance attachment, `enrich`, `TextEncoder`) stays unchanged.
+#[allow(non_snake_case, clippy::all)]
+mod prom_pb {
+    include!(concat!(env!("OUT_DIR"), "/io.prometheus.client.rs"));
+}
 
 /// Per-replica scrape timeout. Matches the cluster proxy's overall request
 /// timeout in `http/cluster.rs`.
@@ -173,28 +187,16 @@ async fn scrape_one(
         .await
         .map_err(|e| (cluster_id, replica_id, e.to_string()))?;
 
+    // Each MetricFamily is varint-length-prefixed in the response body
+    // (see `prometheus::ProtobufEncoder` / `Message::write_length_delimited_to_writer`).
+    // Decode them in order with prost, then translate to the rust-protobuf
+    // type used by the rest of the pipeline.
+    let mut buf = bytes;
     let mut families: Vec<MetricFamily> = Vec::new();
-    let mut input = CodedInputStream::from_bytes(&bytes);
-    loop {
-        let eof = input
-            .eof()
-            .map_err(|e| (cluster_id, replica_id, format!("eof check: {e}")))?;
-        if eof {
-            break;
-        }
-        let len = input
-            .read_raw_varint32()
-            .map_err(|e| (cluster_id, replica_id, format!("varint: {e}")))?
-            as u64;
-        let old_limit = input
-            .push_limit(len)
-            .map_err(|e| (cluster_id, replica_id, format!("push_limit: {e}")))?;
-        let mut family = MetricFamily::new();
-        family
-            .merge_from(&mut input)
-            .map_err(|e| (cluster_id, replica_id, format!("merge_from: {e}")))?;
-        input.pop_limit(old_limit);
-        families.push(family);
+    while buf.has_remaining() {
+        let pb = prom_pb::MetricFamily::decode_length_delimited(&mut buf)
+            .map_err(|e| (cluster_id, replica_id, format!("prost decode: {e}")))?;
+        families.push(convert_family(pb));
     }
 
     Ok(ScrapedReplica {
@@ -203,6 +205,118 @@ async fn scrape_one(
         families,
         rules,
     })
+}
+
+/// Translates a `prom_pb::MetricFamily` (decoded by prost) into the
+/// `prometheus::proto::MetricFamily` (rust-protobuf) used by
+/// `prometheus::TextEncoder` and the rest of the federated pipeline.
+fn convert_family(src: prom_pb::MetricFamily) -> MetricFamily {
+    let mut dst = MetricFamily::new();
+    if let Some(name) = src.name {
+        dst.set_name(name);
+    }
+    if let Some(help) = src.help {
+        dst.set_help(help);
+    }
+    if let Some(t) = src.r#type {
+        dst.set_field_type(prom_metric_type_from_int(t));
+    }
+    for m in src.metric {
+        dst.metric.push(convert_metric(m));
+    }
+    dst
+}
+
+fn prom_metric_type_from_int(t: i32) -> prometheus::proto::MetricType {
+    use prometheus::proto::MetricType;
+    // Matches the enum values in client_model.proto exactly.
+    match t {
+        0 => MetricType::COUNTER,
+        1 => MetricType::GAUGE,
+        2 => MetricType::SUMMARY,
+        3 => MetricType::UNTYPED,
+        4 => MetricType::HISTOGRAM,
+        _ => MetricType::UNTYPED,
+    }
+}
+
+fn convert_metric(src: prom_pb::Metric) -> Metric {
+    let mut dst = Metric::new();
+    for lp in src.label {
+        let mut p = LabelPair::new();
+        if let Some(n) = lp.name {
+            p.set_name(n);
+        }
+        if let Some(v) = lp.value {
+            p.set_value(v);
+        }
+        dst.label.push(p);
+    }
+    if let Some(g) = src.gauge {
+        let mut x = prometheus::proto::Gauge::new();
+        if let Some(v) = g.value {
+            x.set_value(v);
+        }
+        dst.set_gauge(x);
+    }
+    if let Some(c) = src.counter {
+        let mut x = prometheus::proto::Counter::new();
+        if let Some(v) = c.value {
+            x.set_value(v);
+        }
+        dst.set_counter(x);
+    }
+    if let Some(s) = src.summary {
+        let mut x = prometheus::proto::Summary::new();
+        if let Some(v) = s.sample_count {
+            x.set_sample_count(v);
+        }
+        if let Some(v) = s.sample_sum {
+            x.set_sample_sum(v);
+        }
+        for q in s.quantile {
+            let mut p = prometheus::proto::Quantile::new();
+            if let Some(v) = q.quantile {
+                p.set_quantile(v);
+            }
+            if let Some(v) = q.value {
+                p.set_value(v);
+            }
+            x.quantile.push(p);
+        }
+        dst.set_summary(x);
+    }
+    if src.untyped.is_some() {
+        // The prometheus crate's codegen doesn't generate `set_untyped` (only
+        // gauge/counter/summary/histogram have shim setters via proto_ext).
+        // Untyped metrics are not used in Materialize today, so we drop them
+        // here rather than reaching for `protobuf::MessageField` directly.
+        debug!("dropping untyped metric in federated translation");
+    }
+    if let Some(h) = src.histogram {
+        let mut x = prometheus::proto::Histogram::new();
+        if let Some(v) = h.sample_count {
+            x.set_sample_count(v);
+        }
+        if let Some(v) = h.sample_sum {
+            x.set_sample_sum(v);
+        }
+        for b in h.bucket {
+            let mut p = prometheus::proto::Bucket::new();
+            if let Some(v) = b.cumulative_count {
+                p.set_cumulative_count(v);
+            }
+            if let Some(v) = b.upper_bound {
+                p.set_upper_bound(v);
+            }
+            x.bucket.push(p);
+        }
+        dst.set_histogram(x);
+    }
+    if let Some(ts) = src.timestamp_ms {
+        dst.set_timestamp_ms(ts);
+    }
+    dst
 }
 
 /// Catalog lookup for cluster name. Pushes `cluster_id` and `cluster_name`
