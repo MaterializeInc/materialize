@@ -779,6 +779,8 @@ mz_network_policies
 mz_network_policy_rules
 mz_notices
 mz_notices_redacted
+mz_object_arrangement_size_history
+mz_object_arrangement_sizes
 mz_object_dependencies
 mz_object_fully_qualified_names
 mz_object_global_ids

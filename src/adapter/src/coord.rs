@@ -4159,7 +4159,7 @@ impl Coordinator {
     }
 
     /// Retracts `mz_object_arrangement_size_history` rows older than the
-    /// `arrangement_size_retention_period` dyncfg.
+    /// `arrangement_size_history_retention_period` dyncfg.
     ///
     /// Must only run at startup: it reads at the oracle read timestamp and
     /// writes retractions at the current write timestamp, which is only safe
@@ -4172,7 +4172,7 @@ impl Coordinator {
             return;
         }
 
-        let retention_period = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_RETENTION_PERIOD
+        let retention_period = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD
             .get(self.catalog().system_config().dyncfgs());
         let item_id = self
             .catalog()

@@ -281,7 +281,7 @@ class ArrangementSizesHistory(Generator):
         # Tighten the collection cadence so the test doesn't wait an hour
         # for the default 1h interval.
         print("$ postgres-execute connection=mz_system")
-        print("ALTER SYSTEM SET arrangement_size_collection_interval = '5s';")
+        print("ALTER SYSTEM SET arrangement_size_history_collection_interval = '5s';")
 
         # 30K rows × ~1 KiB → ~30 MiB arrangement per object, comfortably
         # above the 10 MiB floor in `mz_object_arrangement_sizes`.

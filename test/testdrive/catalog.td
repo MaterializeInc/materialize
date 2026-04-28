@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or CONTINUAL or NETWORK, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -585,6 +585,7 @@ mz_compute_hydration_times                   source  <null>     ""
 mz_compute_operator_hydration_statuses       source  <null>     ""
 mz_frontiers                                 source  <null>     ""
 mz_materialized_view_refreshes               source  <null>     ""
+mz_object_arrangement_sizes                  source  <null>     ""
 mz_prepared_statement_history                source  <null>     ""
 mz_session_history                           source  <null>     ""
 mz_sink_statistics_raw                       source  <null>     ""
@@ -605,11 +606,13 @@ mz_aggregates                            ""
 mz_aws_connections                       ""
 mz_cluster_schedules                     ""
 mz_comments                              ""
+mz_continual_tasks                       ""
 mz_history_retention_strategies          ""
 mz_kafka_source_tables                   ""
 mz_license_keys                          ""
 mz_materialized_view_refresh_strategies  ""
 mz_mysql_source_tables                   ""
+mz_object_arrangement_size_history       ""
 mz_object_dependencies                   ""
 mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
@@ -638,6 +641,7 @@ mz_cluster_replica_utilization           ""
 mz_cluster_replica_utilization_history   ""
 mz_compute_hydration_statuses            ""
 mz_console_cluster_utilization_overview  ""
+mz_show_continual_tasks                  ""
 mz_global_frontiers                      ""
 mz_hydration_statuses                    ""
 mz_index_advice                          ""
@@ -819,11 +823,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-53
+55
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-264
+268
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

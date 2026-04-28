@@ -362,8 +362,9 @@ impl Coordinator {
     pub async fn schedule_arrangement_sizes_collection(&self) {
         const MAX_SLEEP: Duration = Duration::from_secs(60);
 
-        let interval_duration = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_COLLECTION_INTERVAL
-            .get(self.catalog().system_config().dyncfgs());
+        let interval_duration =
+            mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL
+                .get(self.catalog().system_config().dyncfgs());
 
         // `0s` disables collection. Keep polling so re-enabling takes effect
         // within `MAX_SLEEP` rather than requiring an envd restart.
@@ -392,7 +393,7 @@ impl Coordinator {
             seed[i] = *byte;
         }
         let interval_ms: EpochMillis = EpochMillis::try_from(interval_duration.as_millis())
-            .expect("arrangement_size_collection_interval must fit into u64");
+            .expect("arrangement_size_history_collection_interval must fit into u64");
         // `rand::random_range` panics on an empty range.
         let interval_ms = interval_ms.max(1);
         let offset = rngs::SmallRng::from_seed(seed).random_range(0..interval_ms);

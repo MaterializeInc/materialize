@@ -1010,7 +1010,7 @@ def workflow_arrangement_sizes_hydration_gate(c: Composition) -> None:
     with c.override(
         Materialized(
             additional_system_parameter_defaults={
-                "arrangement_size_collection_interval": "500ms",
+                "arrangement_size_history_collection_interval": "500ms",
             },
             sanity_restart=False,
         )

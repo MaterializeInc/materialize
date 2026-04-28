@@ -135,13 +135,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     else:
         dependencies += ["zookeeper", "kafka", "schema-registry"]
 
-    additional_system_parameter_defaults = {
-        "default_cluster_replication_factor": "1",
-        # Shorten arrangement-sizes cadence so `arrangement-sizes.td` can
-        # verify snapshots land within the testdrive timeout rather than
-        # the 1h default. Harmless for every other testdrive file.
-        "arrangement_size_collection_interval": "2s",
-    }
+    additional_system_parameter_defaults = {"default_cluster_replication_factor": "1"}
     for val in args.system_param or []:
         x = val[0].split("=", maxsplit=1)
         assert len(x) == 2, f"--system-param '{val}' should be the format <key>=<val>"
