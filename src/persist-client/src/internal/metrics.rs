@@ -140,12 +140,7 @@ impl Metrics {
             move || start.elapsed().as_secs_f64(),
         );
         let s3_blob = S3BlobMetrics::new(registry);
-        let columnar = ColumnarMetrics::new(
-            registry,
-            &s3_blob.lgbytes,
-            Arc::clone(&cfg.configs),
-            cfg.is_cc_active,
-        );
+        let columnar = ColumnarMetrics::new(registry);
         Metrics {
             blob: vecs.blob_metrics(),
             consensus: vecs.consensus_metrics(),
