@@ -21,6 +21,7 @@ use std::time::Duration;
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
+use mz_arrow_util::builder::ArrowBuilder;
 use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
@@ -87,7 +88,7 @@ use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnecti
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
     IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
-    SinkEnvelope, StorageSinkConnection,
+    SinkEnvelope, StorageSinkConnection, iceberg_type_overrides,
 };
 use mz_storage_types::sources::encoding::{
     AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
@@ -3470,6 +3471,7 @@ fn plan_sink(
             relation_key_indices,
             key_desc_and_indices,
             commit_interval,
+            &desc,
         )?,
     };
 
@@ -3640,8 +3642,15 @@ fn iceberg_sink_builder(
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     commit_interval: Option<Duration>,
+    desc: &RelationDesc,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_ICEBERG_SINK)?;
+
+    // Reject types that arrow-rs's parquet writer cannot handle, before
+    // sink creation. Pass the iceberg overrides so types iceberg remaps
+    // (e.g. interval -> string) don't trip the check.
+    ArrowBuilder::validate_desc_for_parquet(desc, iceberg_type_overrides)
+        .map_err(|e| sql_err!("{}", e))?;
     let catalog_connection_item = scx.get_item_by_resolved_name(&catalog_connection)?;
     let catalog_connection_id = catalog_connection_item.id();
     let aws_connection_item = scx.get_item_by_resolved_name(&aws_connection)?;
