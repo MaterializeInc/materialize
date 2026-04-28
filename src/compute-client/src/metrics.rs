@@ -21,7 +21,7 @@ use mz_ore::metric;
 use mz_ore::metrics::raw::UIntGaugeVec;
 use mz_ore::metrics::{
     CounterVec, DeleteOnDropCounter, DeleteOnDropGauge, DeleteOnDropHistogram, HistogramVec,
-    IntCounterVec, MetricVecExt, MetricsRegistry,
+    IntCounterVec, MetricVecExt, MetricsRegistry, Rule,
 };
 use mz_ore::stats::histogram_seconds_buckets;
 use mz_repr::GlobalId;
@@ -77,7 +77,7 @@ pub struct ComputeControllerMetrics {
 impl ComputeControllerMetrics {
     /// Create a metrics instance registered into the given registry.
     pub fn new(metrics_registry: &MetricsRegistry, shared: ControllerMetrics) -> Self {
-        ComputeControllerMetrics {
+        let metrics = ComputeControllerMetrics {
             commands_total: metrics_registry.register(metric!(
                 name: "mz_compute_commands_total",
                 help: "The total number of compute commands sent.",
@@ -186,7 +186,21 @@ impl ComputeControllerMetrics {
             )),
 
             shared,
-        }
+        };
+
+        // Declare enrichment rules. These describe how /metrics/federated
+        // resolves the `instance_id` and `replica_id` labels above into
+        // human-readable `cluster_name` / `replica_name` labels at scrape
+        // time. See doc/developer/design/20260427_federated_metrics_endpoint.md.
+        metrics_registry.register_rule(Rule::ClusterNameLookup {
+            cluster_id_label: "instance_id".into(),
+        });
+        metrics_registry.register_rule(Rule::ReplicaNameLookup {
+            cluster_id_label: "instance_id".into(),
+            replica_id_label: "replica_id".into(),
+        });
+
+        metrics
     }
 
     /// Return an object suitable for tracking metrics for the given compute instance.
