@@ -82,9 +82,8 @@ For a new setup you can run:
     parser_environment.add_argument("--authenticator-kind", required=False)
     parser_environment.add_argument(
         "--enable-rbac",
-        type=bool,
+        action=argparse.BooleanOptionalAction,
         default=False,
-        required=False,
     )
     parser_environment.set_defaults(func=environment)
 
