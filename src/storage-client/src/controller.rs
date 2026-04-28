@@ -263,6 +263,15 @@ pub trait StorageTxn {
     /// unfinalized shard collection.
     fn mark_shards_as_finalized(&mut self, shards: BTreeSet<ShardId>);
 
+    /// Retrieve all pre-allocated (pre-opened) shard IDs tracked in the catalog.
+    fn get_pre_allocated_shards(&self) -> BTreeSet<ShardId>;
+
+    /// Insert the specified shard IDs as pre-allocated shards.
+    fn insert_pre_allocated_shards(&mut self, s: BTreeSet<ShardId>) -> Result<(), StorageError>;
+
+    /// Remove the specified shard IDs from the pre-allocated shards collection.
+    fn remove_pre_allocated_shards(&mut self, shards: BTreeSet<ShardId>);
+
     /// Get the txn WAL shard for this environment if it exists.
     fn get_txn_wal_shard(&self) -> Option<ShardId>;
 

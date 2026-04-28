@@ -16,10 +16,21 @@
 //!
 //! The write handle still needs `RelationDesc` (the table schema), so it
 //! cannot be pre-opened and stays on the critical path.
+//!
+//! ## Crash Recovery
+//!
+//! Pre-opened shard IDs are tracked in a `pre_allocated_shards` catalog
+//! collection (same pattern as `unfinalized_shards`). On restart,
+//! `initialize_state` moves any unclaimed pre-allocated shards to
+//! `unfinalized_shards` for GC by `finalize_shards_task`. This prevents
+//! shard leaks when shards are pre-opened but the process crashes before
+//! they are claimed by a DDL operation.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::num::NonZeroI64;
 use std::sync::{Arc, Mutex};
+
+use tokio::sync::Notify;
 
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
@@ -43,23 +54,26 @@ use crate::storage_collections::metrics::ShardPoolMetrics;
 
 /// A pre-opened shard with its critical since handle already epoch-fenced.
 #[derive(Debug)]
-pub struct PreOpenedShard<T>
+pub(crate) struct PreOpenedShard<T>
 where
     T: TimelyTimestamp + Lattice + Codec64,
 {
     /// The shard ID that was pre-allocated.
-    pub shard_id: ShardId,
+    pub(crate) shard_id: ShardId,
     /// The critical since handle, already epoch-fenced with `envd_epoch`.
-    pub since_handle: SinceHandle<SourceData, (), T, StorageDiff>,
+    pub(crate) since_handle: SinceHandle<SourceData, (), T, StorageDiff>,
 }
 
 /// A thread-safe pool of pre-opened shards.
 #[derive(Debug)]
-pub struct ShardPool<T>
+pub(crate) struct ShardPool<T>
 where
     T: TimelyTimestamp + Lattice + Codec64,
 {
     inner: Mutex<VecDeque<PreOpenedShard<T>>>,
+    /// Shard IDs that have been put into the pool but not yet persisted
+    /// to the catalog. Drained during `prepare_state` to batch catalog writes.
+    pending_catalog_inserts: Mutex<BTreeSet<ShardId>>,
     metrics: ShardPoolMetrics,
 }
 
@@ -68,16 +82,17 @@ where
     T: TimelyTimestamp + Lattice + Codec64,
 {
     /// Creates a new pool with the given metrics.
-    pub fn new(metrics: ShardPoolMetrics) -> Self {
+    pub(crate) fn new(metrics: ShardPoolMetrics) -> Self {
         ShardPool {
             inner: Mutex::new(VecDeque::new()),
+            pending_catalog_inserts: Mutex::new(BTreeSet::new()),
             metrics,
         }
     }
 
     /// Takes a pre-opened shard from the pool, if one is available.
     /// Updates hit/miss metrics accordingly.
-    pub fn take(&self) -> Option<PreOpenedShard<T>> {
+    pub(crate) fn take(&self) -> Option<PreOpenedShard<T>> {
         let mut inner = self.inner.lock().expect("lock poisoned");
         let result = inner.pop_front();
         if result.is_some() {
@@ -90,14 +105,40 @@ where
     }
 
     /// Returns a pre-opened shard to the pool.
-    pub fn put(&self, shard: PreOpenedShard<T>) {
+    ///
+    /// The two mutex acquisitions are intentionally separate: `pending_catalog_inserts`
+    /// is locked first so the shard ID is visible to `drain_pending_inserts` promptly,
+    /// then `inner` is locked to make the shard available for `take`. The brief window
+    /// where the ID appears in `pending_catalog_inserts` but not in `inner` is harmless:
+    /// `prepare_state` would persist the ID to the catalog and then fail to claim it
+    /// immediately (miss), leaving it in the catalog for the next DDL.
+    pub(crate) fn put(&self, shard: PreOpenedShard<T>) {
+        self.pending_catalog_inserts
+            .lock()
+            .expect("lock poisoned")
+            .insert(shard.shard_id);
         let mut inner = self.inner.lock().expect("lock poisoned");
         inner.push_back(shard);
         self.metrics.pool_size.set(u64::cast_from(inner.len()));
     }
 
+    /// Drains shard IDs that have been added to the pool but not yet persisted
+    /// to the catalog. Called during `prepare_state` to batch catalog writes.
+    ///
+    /// # Atomicity
+    ///
+    /// The caller must ensure the returned shard IDs are persisted within the
+    /// same catalog transaction that claims or drops them. If the catalog
+    /// transaction fails, the in-memory pool state becomes stale, but that
+    /// is acceptable because a failed catalog transaction will halt the
+    /// process, and on restart `initialize_state` will move any unclaimed
+    /// pre-allocated shards to `unfinalized_shards` for GC.
+    pub(crate) fn drain_pending_inserts(&self) -> BTreeSet<ShardId> {
+        std::mem::take(&mut *self.pending_catalog_inserts.lock().expect("lock poisoned"))
+    }
+
     /// Returns the current number of shards in the pool.
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.inner.lock().expect("lock poisoned").len()
     }
 }
@@ -107,13 +148,15 @@ where
 ///
 /// This mirrors the logic in `open_data_handles` (upgrade_version) and
 /// `open_critical_handle` (epoch fencing CAS loop).
-pub async fn pre_open_shard<T>(
+pub(crate) async fn pre_open_shard<T>(
     persist_client: &PersistClient,
     envd_epoch: NonZeroI64,
 ) -> Result<PreOpenedShard<T>, anyhow::Error>
 where
     T: TimelyTimestamp + Lattice + TotalOrder + Codec64 + Sync,
 {
+    use anyhow::Context;
+
     let shard_id = ShardId::new();
 
     let diagnostics = Diagnostics {
@@ -125,7 +168,7 @@ where
     persist_client
         .upgrade_version::<SourceData, (), T, StorageDiff>(shard_id, diagnostics.clone())
         .await
-        .map_err(|e| anyhow::anyhow!("upgrade_version failed: {e:?}"))?;
+        .context("upgrade_version failed")?;
 
     // Step 2: open_critical_since with epoch fencing CAS loop
     // (same as open_critical_handle)
@@ -137,7 +180,7 @@ where
             diagnostics,
         )
         .await
-        .map_err(|e| anyhow::anyhow!("open_critical_since failed: {e:?}"))?;
+        .context("open_critical_since failed")?;
 
     let since = Antichain::from_elem(T::minimum());
 
@@ -168,15 +211,19 @@ where
 }
 
 /// Configuration for the shard pool replenishment background task.
-pub struct ShardPoolReplenishConfig<T>
+pub(crate) struct ShardPoolReplenishConfig<T>
 where
     T: TimelyTimestamp + Lattice + Codec64,
 {
-    pub envd_epoch: NonZeroI64,
-    pub config: Arc<Mutex<StorageConfiguration>>,
-    pub persist_location: PersistLocation,
-    pub persist: Arc<PersistClientCache>,
-    pub pool: Arc<ShardPool<T>>,
+    pub(crate) envd_epoch: NonZeroI64,
+    pub(crate) config: Arc<Mutex<StorageConfiguration>>,
+    pub(crate) persist_location: PersistLocation,
+    pub(crate) persist: Arc<PersistClientCache>,
+    pub(crate) pool: Arc<ShardPool<T>>,
+    /// Fires when `initialize_state` has completed its GC pass. The pool task
+    /// must not write shards to `pending_catalog_inserts` until this fires,
+    /// otherwise `initialize_state` could GC current-epoch pool shards.
+    pub(crate) init_notify: Arc<Notify>,
 }
 
 /// Background task that keeps the shard pool filled to the target size.
@@ -186,17 +233,24 @@ where
 /// not atomic; concurrent `take()` calls may cause the pool to briefly
 /// exceed the target. This is benign: excess shards are used by subsequent
 /// DDLs or GC'd on restart via `pre_allocated_shards` catalog tracking.
-pub async fn shard_pool_replenish_task<T>(
+pub(crate) async fn shard_pool_replenish_task<T>(
     ShardPoolReplenishConfig {
         envd_epoch,
         config,
         persist_location,
         persist,
         pool,
+        init_notify,
     }: ShardPoolReplenishConfig<T>,
 ) where
     T: TimelyTimestamp + Lattice + TotalOrder + Codec64 + Sync,
 {
+    // Wait until `initialize_state` has completed its GC pass before allowing
+    // shards to be written to `pending_catalog_inserts`. If we wrote catalog
+    // entries before GC ran, `initialize_state` would see them as previous-epoch
+    // leftovers and finalize them while they're still in use.
+    init_notify.notified().await;
+
     loop {
         let (enabled, target_size, replenish_interval) = {
             let config = config.lock().expect("lock poisoned");
@@ -208,6 +262,10 @@ pub async fn shard_pool_replenish_task<T>(
             )
         };
 
+        // Sleep first so that we don't hammer persist on startup before any DDL
+        // has arrived. The first fill happens after one full interval, which is
+        // acceptable: a pool miss falls back to opening a fresh shard on the
+        // critical path (same cost as today, no regression).
         tokio::time::sleep(replenish_interval).await;
 
         if !enabled {
@@ -251,12 +309,13 @@ pub async fn shard_pool_replenish_task<T>(
 /// Spawns the shard pool replenishment task and returns its handle.
 ///
 /// The task is only spawned when not in read-only mode.
-pub fn spawn_shard_pool_task<T>(
+pub(crate) fn spawn_shard_pool_task<T>(
     envd_epoch: NonZeroI64,
     config: Arc<Mutex<StorageConfiguration>>,
     persist_location: PersistLocation,
     persist: Arc<PersistClientCache>,
     pool: Arc<ShardPool<T>>,
+    init_notify: Arc<Notify>,
     read_only: bool,
 ) -> Option<Arc<AbortOnDropHandle<()>>>
 where
@@ -275,6 +334,7 @@ where
             persist_location,
             persist,
             pool,
+            init_notify,
         }),
     );
 
@@ -455,5 +515,120 @@ mod tests {
 
         pool.take();
         assert_eq!(pool.metrics.pool_size.get(), 0);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_drain_pending_inserts() {
+        let (_cache, client) = test_persist_client().await;
+        let epoch = NonZeroI64::new(1).unwrap();
+        let pool = ShardPool::<mz_repr::Timestamp>::new(test_metrics());
+
+        // Empty pool has no pending inserts.
+        assert!(pool.drain_pending_inserts().is_empty());
+
+        // Put two shards, both should appear in pending inserts.
+        let shard_a = pre_open_shard::<mz_repr::Timestamp>(&client, epoch)
+            .await
+            .expect("pre_open_shard");
+        let shard_b = pre_open_shard::<mz_repr::Timestamp>(&client, epoch)
+            .await
+            .expect("pre_open_shard");
+        let id_a = shard_a.shard_id;
+        let id_b = shard_b.shard_id;
+        pool.put(shard_a);
+        pool.put(shard_b);
+
+        let pending = pool.drain_pending_inserts();
+        assert_eq!(pending.len(), 2);
+        assert!(pending.contains(&id_a));
+        assert!(pending.contains(&id_b));
+
+        // Drain is idempotent; second call returns empty.
+        assert!(pool.drain_pending_inserts().is_empty());
+
+        // Pool still has the shards.
+        assert_eq!(pool.len(), 2);
+    }
+
+    /// Verifies that the replenishment task is gated on `init_notify` and does
+    /// not write shards to `pending_catalog_inserts` before it fires. This is
+    /// the regression test for the race where `initialize_state`'s GC pass
+    /// could finalize current-epoch pool shards if the task ran concurrently.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)]
+    async fn test_init_notify_gates_pool_replenishment() {
+        use std::time::Duration;
+
+        use mz_dyncfg::{ConfigSet, ConfigUpdates};
+        use mz_secrets::InMemorySecretsController;
+        use mz_storage_types::configuration::StorageConfiguration;
+        use mz_storage_types::connections::ConnectionContext;
+        use mz_storage_types::dyncfgs::{
+            SHARD_POOL_REPLENISH_INTERVAL, SHARD_POOL_TARGET_SIZE, all_dyncfgs,
+        };
+
+        let (cache, _client) = test_persist_client().await;
+        let epoch = NonZeroI64::new(1).unwrap();
+        let pool = Arc::new(ShardPool::<mz_repr::Timestamp>::new(test_metrics()));
+        let init_notify = Arc::new(tokio::sync::Notify::new());
+
+        let connection_context =
+            ConnectionContext::for_tests(Arc::new(InMemorySecretsController::new()));
+        let config_set = all_dyncfgs(ConfigSet::default());
+
+        // Short replenish interval so the task would fill the pool quickly if it
+        // were not blocked on init_notify.
+        let mut updates = ConfigUpdates::default();
+        updates.add(&SHARD_POOL_REPLENISH_INTERVAL, Duration::from_millis(10));
+        updates.add(&SHARD_POOL_TARGET_SIZE, 2_usize);
+        updates.apply(&config_set);
+
+        let config = Arc::new(std::sync::Mutex::new(StorageConfiguration::new(
+            connection_context,
+            config_set,
+        )));
+
+        let _task_handle = spawn_shard_pool_task(
+            epoch,
+            Arc::clone(&config),
+            test_persist_location(),
+            Arc::clone(&cache),
+            Arc::clone(&pool),
+            Arc::clone(&init_notify),
+            false,
+        );
+
+        // Wait much longer than the replenish interval. If the task were not
+        // gated on init_notify it would have filled the pool by now.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert_eq!(pool.len(), 0, "pool must be empty before init_notify fires");
+        assert!(
+            pool.drain_pending_inserts().is_empty(),
+            "no catalog inserts before init_notify fires"
+        );
+
+        // Signal that initialize_state has completed its GC pass.
+        init_notify.notify_waiters();
+
+        // The task wakes up, sleeps one interval (~10ms), then fills the pool.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if pool.len() > 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pool did not fill within 5s after init_notify fired"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let pending = pool.drain_pending_inserts();
+        assert!(
+            !pending.is_empty(),
+            "shards must be queued for catalog insertion after pool fills"
+        );
     }
 }

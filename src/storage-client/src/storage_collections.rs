@@ -56,7 +56,7 @@ use mz_txn_wal::txns::TxnsHandle;
 use timely::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
@@ -67,7 +67,7 @@ use crate::controller::{
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
 mod metrics;
-pub mod shard_pool;
+pub(crate) mod shard_pool;
 
 /// An abstraction for keeping track of storage collections and managing access
 /// to them.
@@ -412,12 +412,16 @@ pub struct StorageCollectionsImpl {
     holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
 
     /// Pool of pre-opened shards for reducing DDL latency.
-    shard_pool: Arc<shard_pool::ShardPool<T>>,
+    shard_pool: Arc<shard_pool::ShardPool<Timestamp>>,
 
     /// Staging area for pre-opened shards between `prepare_state` and
     /// `create_collections_for_bootstrap`. Maps ShardId to the PreOpenedShard
     /// that was used to generate it.
-    pending_pre_opened: Arc<Mutex<BTreeMap<ShardId, shard_pool::PreOpenedShard<T>>>>,
+    pending_pre_opened: Arc<Mutex<BTreeMap<ShardId, shard_pool::PreOpenedShard<Timestamp>>>>,
+
+    /// Notified when `initialize_state` completes; gates the shard pool task
+    /// from writing to the catalog before initialization GC has run.
+    init_notify: Arc<Notify>,
 
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
@@ -547,12 +551,14 @@ impl StorageCollectionsImpl {
                 read_only,
             }),
         );
+        let init_notify = Arc::new(Notify::new());
         let shard_pool_task = shard_pool::spawn_shard_pool_task(
             envd_epoch,
             Arc::clone(&config),
             persist_location.clone(),
             Arc::clone(&persist_clients),
             Arc::clone(&shard_pool),
+            Arc::clone(&init_notify),
             read_only,
         );
 
@@ -571,6 +577,7 @@ impl StorageCollectionsImpl {
             holds_tx,
             shard_pool,
             pending_pre_opened: Arc::new(Mutex::new(BTreeMap::new())),
+            init_notify,
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
             _shard_pool_task: shard_pool_task,
@@ -666,6 +673,34 @@ impl StorageCollectionsImpl {
         write
     }
 
+    /// CAS-downgrades `handle`'s since to `since`, stamping our epoch as the
+    /// opaque. Retries on benign CAS races (concurrent writers); halts if a
+    /// higher epoch is observed (we've been fenced out).
+    async fn downgrade_since_to(
+        &self,
+        handle: &mut SinceHandle<SourceData, (), Timestamp, StorageDiff>,
+        since: &Antichain<Timestamp>,
+    ) {
+        let our_epoch = self.envd_epoch;
+        loop {
+            let current_epoch: PersistEpoch = handle.opaque().decode();
+            if current_epoch.0.map(|e| e <= our_epoch).unwrap_or(true) {
+                let ok = handle
+                    .compare_and_downgrade_since(
+                        &Opaque::encode(&current_epoch),
+                        (&Opaque::encode(&PersistEpoch::from(our_epoch)), since),
+                    )
+                    .await
+                    .is_ok();
+                if ok {
+                    break;
+                }
+            } else {
+                mz_ore::halt!("fenced by envd @ {current_epoch:?}. ours = {our_epoch}");
+            }
+        }
+    }
+
     /// Opens a critical since handle for the given `shard`.
     ///
     /// `since` is an optional since that the read handle will be forwarded to
@@ -692,58 +727,28 @@ impl StorageCollectionsImpl {
             handle_purpose: format!("controller data for {}", id),
         };
 
-        // Construct the handle in a separate block to ensure all error paths
-        // are diverging
-        let since_handle = {
-            // This block's aim is to ensure the handle is in terms of our epoch
-            // by the time we return it.
-            let mut handle = persist_client
-                .open_critical_since(
-                    shard,
-                    PersistClient::CONTROLLER_CRITICAL_SINCE,
-                    Opaque::encode(&PersistEpoch::default()),
-                    diagnostics.clone(),
-                )
-                .await
-                .expect("invalid persist usage");
+        let mut handle = persist_client
+            .open_critical_since(
+                shard,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&PersistEpoch::default()),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
 
-            // Take the join of the handle's since and the provided `since`;
-            // this lets materialized views express the since at which their
-            // read handles "start."
-            let provided_since = match since {
-                Some(since) => since,
-                None => &Antichain::from_elem(Timestamp::MIN),
-            };
-            let since = handle.since().join(provided_since);
-
-            let our_epoch = self.envd_epoch;
-
-            loop {
-                let current_epoch: PersistEpoch = handle.opaque().decode();
-
-                // Ensure the current epoch is <= our epoch.
-                let unchecked_success = current_epoch.0.map(|e| e <= our_epoch).unwrap_or(true);
-
-                if unchecked_success {
-                    // Update the handle's state so that it is in terms of our
-                    // epoch.
-                    let checked_success = handle
-                        .compare_and_downgrade_since(
-                            &Opaque::encode(&current_epoch),
-                            (&Opaque::encode(&PersistEpoch::from(our_epoch)), &since),
-                        )
-                        .await
-                        .is_ok();
-                    if checked_success {
-                        break handle;
-                    }
-                } else {
-                    mz_ore::halt!("fenced by envd @ {current_epoch:?}. ours = {our_epoch}");
-                }
-            }
+        // Take the join of the handle's since and the provided `since`;
+        // this lets materialized views express the since at which their
+        // read handles "start."
+        let provided_since = match since {
+            Some(since) => since,
+            None => &Antichain::from_elem(Timestamp::MIN),
         };
+        let since = handle.since().join(provided_since);
 
-        since_handle
+        self.downgrade_since_to(&mut handle, &since).await;
+
+        handle
     }
 
     /// Opens a leased [ReadHandle], for the purpose of holding back a since,
@@ -1343,6 +1348,20 @@ impl StorageCollections for StorageCollectionsImpl {
         )
         .await?;
 
+        // Crash recovery: pre-allocated shards were pre-opened by the shard pool
+        // in a previous epoch but never claimed by a DDL operation (e.g., the
+        // process crashed between pre-opening and use). Move them to
+        // unfinalized_shards so finalize_shards_task will GC them.
+        let pre_allocated = txn.get_pre_allocated_shards();
+        if !pre_allocated.is_empty() {
+            info!(
+                ?pre_allocated,
+                "moving unclaimed pre-allocated shards to unfinalized for GC"
+            );
+            txn.insert_unfinalized_shards(pre_allocated.clone())?;
+            txn.remove_pre_allocated_shards(pre_allocated.clone());
+        }
+
         // All shards that belong to collections dropped in the last epoch are
         // eligible for finalization.
         //
@@ -1355,6 +1374,11 @@ impl StorageCollections for StorageCollectionsImpl {
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
         self.finalizable_shards.lock().extend(unfinalized_shards);
+
+        // Unblock the shard pool replenishment task. It waits for this signal
+        // before writing any shards to the catalog, ensuring that the GC step
+        // above never sees current-epoch pool shards.
+        self.init_notify.notify_waiters();
 
         Ok(())
     }
@@ -1677,6 +1701,17 @@ impl StorageCollections for StorageCollectionsImpl {
             SHARD_POOL_ENABLED.get(config.config_set())
         };
 
+        // Flush newly pre-opened shards to the catalog for crash recovery tracking.
+        let pending_inserts = self.shard_pool.drain_pending_inserts();
+        if !pending_inserts.is_empty() {
+            debug!(
+                count = pending_inserts.len(),
+                "persisting pre-allocated shards to catalog"
+            );
+            txn.insert_pre_allocated_shards(pending_inserts)?;
+        }
+
+        let mut claimed_shards = BTreeSet::new();
         let mut pending = self.pending_pre_opened.lock().expect("lock poisoned");
         let new_mappings: BTreeMap<_, _> = ids_to_add
             .into_iter()
@@ -1685,6 +1720,7 @@ impl StorageCollections for StorageCollectionsImpl {
                     if let Some(pre_opened) = self.shard_pool.take() {
                         let shard_id = pre_opened.shard_id;
                         debug!(%id, %shard_id, "using pre-opened shard from pool");
+                        claimed_shards.insert(shard_id);
                         pending.insert(shard_id, pre_opened);
                         return (id, shard_id);
                     }
@@ -1693,6 +1729,11 @@ impl StorageCollections for StorageCollectionsImpl {
             })
             .collect();
         drop(pending);
+
+        // Remove claimed shards from the pre-allocated catalog collection.
+        if !claimed_shards.is_empty() {
+            txn.remove_pre_allocated_shards(claimed_shards);
+        }
 
         txn.insert_collection_metadata(new_mappings)?;
         txn.insert_collection_metadata(ids_to_register)?;
@@ -1845,16 +1886,7 @@ impl StorageCollections for StorageCollectionsImpl {
                         let mut handle = pre_opened.since_handle;
                         if let Some(since) = since {
                             let joined = handle.since().join(since);
-                            let current_epoch: PersistEpoch = handle.opaque().decode();
-                            // CAS failure here means another environmentd instance
-                            // advanced the epoch; we'll halt shortly via the normal
-                            // epoch fencing path elsewhere. Safe to ignore.
-                            let _ = handle
-                                .compare_and_downgrade_since(
-                                    &Opaque::encode(&current_epoch),
-                                    (&Opaque::encode(&current_epoch), &joined),
-                                )
-                                .await;
+                            this.downgrade_since_to(&mut handle, &joined).await;
                         }
 
                         let mut write_handle = this
@@ -2441,6 +2473,7 @@ impl StorageCollections for StorageCollectionsImpl {
             holds_tx: _,
             shard_pool: _,
             pending_pre_opened: _,
+            init_notify: _,
             _background_task: _,
             _finalize_shards_task: _,
             _shard_pool_task: _,
