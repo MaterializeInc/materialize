@@ -37,7 +37,8 @@ use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
-    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
+    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -419,7 +420,18 @@ impl Migration {
 
         self.validate_migration_steps(steps);
 
-        let (force, plan) = match self.config.force_migration.as_deref() {
+        // Version-based migration filter fails for dev versions, see for example
+        // https://github.com/MaterializeInc/database-issues/issues/11335
+        let force_migration = if self.source_version != self.target_version
+            && self.source_version.pre.as_str().starts_with("dev")
+            && self.config.force_migration.is_none()
+        {
+            Some("evolution".to_string())
+        } else {
+            self.config.force_migration.clone()
+        };
+
+        let (force, plan) = match force_migration.as_deref() {
             None => (false, self.plan_migration(steps)),
             Some("evolution") => (true, self.plan_forced_migration(Mechanism::Evolution)),
             Some("replacement") => (true, self.plan_forced_migration(Mechanism::Replacement)),
@@ -547,7 +559,10 @@ impl Migration {
             .filter(|(_, info)| {
                 use Builtin::*;
                 match info.builtin {
-                    Table(..) | MaterializedView(..) => true,
+                    // Filter out the 'mz_storage_usage_by_shard' table since we need to retain
+                    // that info for billing purposes.
+                    Table(table) => **table != *MZ_STORAGE_USAGE_BY_SHARD,
+                    MaterializedView(..) => true,
                     Source(source) => **source != *MZ_CATALOG_RAW,
                     Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
                 }
