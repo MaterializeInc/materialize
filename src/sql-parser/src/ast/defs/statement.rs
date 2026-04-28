@@ -3982,6 +3982,7 @@ pub enum ExplainPlanOptionName {
     NoFastPath,
     NoNotices,
     NodeIdentifiers,
+    ProjectionPushdown,
     RawPlans,
     RawSyntax,
     Raw, // Listed after the `Raw~` variants to keep the parser happy!
@@ -4019,6 +4020,7 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::NoFastPath
             | Self::NoNotices
             | Self::NodeIdentifiers
+            | Self::ProjectionPushdown
             | Self::RawPlans
             | Self::RawSyntax
             | Self::Raw
