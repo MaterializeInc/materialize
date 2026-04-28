@@ -314,6 +314,10 @@ pub enum MySqlSourcePurificationError {
         "The MySQL system variable 'binlog_row_metadata' is set to an unsupported value: {setting}. Materialize requires this variable to be set to 'FULL' to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
     )]
     UnsupportedBinlogMetadataSetting { setting: String },
+    #[error(
+        "The MySQL version is unsupported for this operation. Materialize requires MySQL 8.0.1 or later to use the \"CREATE TABLE FROM SOURCE\" syntax for MySQL sources."
+    )]
+    UnsupportedMySqlVersion,
 }
 
 impl MySqlSourcePurificationError {

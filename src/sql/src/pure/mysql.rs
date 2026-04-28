@@ -515,3 +515,32 @@ pub(super) fn references_system_schemas(requested_references: &Option<ExternalRe
         None => false,
     }
 }
+
+pub async fn ensure_binlog_full_metadata(
+    conn: &mut mz_mysql_util::MySqlConn,
+) -> Result<(), MySqlSourcePurificationError> {
+    if version_compare::compare_to(
+        mz_mysql_util::query_sys_var(conn, "version")
+            .await
+            .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?,
+        "8.0.1",
+        version_compare::Cmp::Lt,
+    )
+    .is_ok_and(|is_lt| is_lt)
+    {
+        Err(MySqlSourcePurificationError::UnsupportedMySqlVersion)?;
+    }
+    let binlog_metadata_setting = mz_mysql_util::query_sys_var(conn, "binlog_row_metadata")
+        .await
+        .map_err(|err| MySqlSourcePurificationError::InvalidConnection(err.into()))?;
+    let binlog_full_metadata = binlog_metadata_setting.eq_ignore_ascii_case("FULL");
+    if !binlog_full_metadata {
+        Err(
+            MySqlSourcePurificationError::UnsupportedBinlogMetadataSetting {
+                setting: binlog_metadata_setting,
+            },
+        )
+    } else {
+        Ok(())
+    }
+}
