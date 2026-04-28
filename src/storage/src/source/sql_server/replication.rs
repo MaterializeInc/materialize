@@ -249,7 +249,6 @@ pub(crate) fn render<'scope>(
                     SNAPSHOT_PROGRESS_REPORT_INTERVAL.handle(config.config.config_set());
                 let mut last_report = Instant::now();
                 let mut snapshot_lsns = BTreeMap::new();
-                let arena = RowArena::default();
 
                 for table in snapshot_tables {
                     // TODO(sql_server3): filter columns to only select columns required for Source.
@@ -306,6 +305,7 @@ pub(crate) fn render<'scope>(
                         for (partition_idx, _) in partition_indexes {
                             // Decode the SQL Server row into an MZ one.
                             let mut mz_row = Row::default();
+                            let arena = RowArena::default();
 
                             let decoder = decoder_map
                                 .get(partition_idx)
