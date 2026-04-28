@@ -1187,7 +1187,7 @@ fn plan_postgres_source_connection(
         connection: connection_item.id(),
         connection_id: connection_item.id(),
         // Validated during purification.
-        publication: publication.ok_or_else(|| sql_err!("PUBLICATION option is required"))?,
+        publication: publication.ok_or_else(|| internal_err!("PUBLICATION option is required"))?,
         publication_details,
     })
 }
@@ -1214,7 +1214,7 @@ fn plan_kafka_source_connection(
         seen: _,
     }: KafkaSourceConfigOptionExtracted = options.clone().try_into()?;
     // Validated during purification.
-    let topic = topic.ok_or_else(|| sql_err!("TOPIC option is required"))?;
+    let topic = topic.ok_or_else(|| internal_err!("TOPIC option is required"))?;
     let mut start_offsets = BTreeMap::new();
     if let Some(offsets) = start_offset {
         for (part, offset) in offsets.iter().enumerate() {
@@ -1613,7 +1613,9 @@ pub fn plan_create_subsource(
     // statements, so this would fire in integration testing if we failed to
     // uphold it.
     if !(progress ^ (external_reference.is_some() && of_source.is_some())) {
-        sql_bail!("CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option");
+        bail_internal!(
+            "CREATE SUBSOURCE statement must specify either PROGRESS or REFERENCES option"
+        );
     }
 
     let desc = plan_source_export_desc(scx, name, columns, constraints)?;
@@ -6421,7 +6423,9 @@ pub fn plan_alter_object_rename(
             plan_alter_schema_rename(scx, name, to_item_name, if_exists)
         }
         (object_type, name) => {
-            sql_bail!("invalid object type '{object_type}' for ALTER RENAME with name {name}")
+            // The earlier dispatch + name resolution should make this
+            // combination impossible.
+            bail_internal!("invalid object type '{object_type}' for ALTER RENAME with name {name}")
         }
     }
 }

@@ -311,7 +311,7 @@ pub async fn purify_statement(
             None,
         ),
         o => (
-            Err(sql_err!(
+            Err(internal_err!(
                 "unexpected statement type in purification: {:?}",
                 o
             )),
@@ -1627,7 +1627,9 @@ async fn purify_alter_source_add_subsources(
                     Some(WithOptionValue::Sequence(normalized_excl_columns));
             }
         }
-        _ => sql_bail!("source does not support ALTER SOURCE...ADD SUBSOURCE"),
+        // The source kind was already established earlier in this function;
+        // reaching this catch-all is an internal invariant violation.
+        _ => bail_internal!("source does not support ALTER SOURCE...ADD SUBSOURCE"),
     };
 
     Ok(PurifiedStatement::PurifiedAlterSourceAddSubsources {
@@ -2067,7 +2069,11 @@ async fn purify_create_table_from_source(
             }
             match columns {
                 TableFromSourceColumns::Defined(_) => {
-                    sql_bail!("column definitions cannot be explicitly set for this source type")
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
                 }
                 TableFromSourceColumns::NotSpecified => {
                     *columns = TableFromSourceColumns::Defined(gen_columns);
@@ -2123,7 +2129,11 @@ async fn purify_create_table_from_source(
             }
             match columns {
                 TableFromSourceColumns::Defined(_) => {
-                    sql_bail!("column definitions cannot be explicitly set for this source type")
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
                 }
                 TableFromSourceColumns::NotSpecified => {
                     *columns = TableFromSourceColumns::Defined(gen_columns);
@@ -2187,7 +2197,11 @@ async fn purify_create_table_from_source(
                     sql_bail!("columns cannot be named for SQL Server sources")
                 }
                 TableFromSourceColumns::Defined(_) => {
-                    sql_bail!("column definitions cannot be explicitly set for this source type")
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    bail_internal!(
+                        "column definitions cannot be explicitly set for this source type"
+                    )
                 }
             }
 
@@ -2210,7 +2224,9 @@ async fn purify_create_table_from_source(
             if let Some(desc) = desc {
                 let (gen_columns, gen_constraints) = scx.relation_desc_into_table_defs(&desc)?;
                 match columns {
-                    TableFromSourceColumns::Defined(_) => sql_bail!(
+                    // Purification is what populates the `Defined` variant;
+                    // reaching this is an internal invariant violation.
+                    TableFromSourceColumns::Defined(_) => bail_internal!(
                         "column definitions cannot be explicitly set for this source type"
                     ),
                     TableFromSourceColumns::NotSpecified => {
@@ -2413,7 +2429,7 @@ pub fn generate_subsource_statements(
             // producing data––we'll need to understand the schema
             // of the output here.
             if !subsources.is_empty() {
-                sql_bail!("Kafka sources do not produce data-bearing subsources");
+                bail_internal!("Kafka sources do not produce data-bearing subsources");
             }
             vec![]
         }

@@ -361,6 +361,16 @@ pub fn show_network_policies<'a>(
     )
 }
 
+/// Ensures that the `FROM` clause was not provided for `SHOW` commands that
+/// don't accept it. The parser is supposed to reject such cases, so this is an
+/// internal-only invariant.
+fn ensure_no_from<T>(from: Option<T>) -> Result<(), PlanError> {
+    if from.is_some() {
+        bail_internal!("FROM not supported for this SHOW command");
+    }
+    Ok(())
+}
+
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
@@ -378,21 +388,15 @@ pub fn show_objects<'a>(
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_roles(scx, filter)
         }
         ShowObjectType::Cluster => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_clusters(scx, filter)
         }
         ShowObjectType::ClusterReplica => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_cluster_replicas(scx, filter)
         }
         ShowObjectType::Secret => show_secrets(scx, from, filter),
@@ -405,39 +409,27 @@ pub fn show_objects<'a>(
             on_object,
         } => show_indexes(scx, from, on_object, in_cluster, filter),
         ShowObjectType::Database => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_databases(scx, filter)
         }
         ShowObjectType::Schema { from: db_from } => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_schemas(scx, db_from, filter)
         }
         ShowObjectType::Privileges { object_type, role } => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::DefaultPrivileges { object_type, role } => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_default_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::RoleMembership { role } => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_role_membership(scx, role, filter)
         }
         ShowObjectType::NetworkPolicy => {
-            if from.is_some() {
-                sql_bail!("FROM not supported for this SHOW command");
-            }
+            ensure_no_from(from)?;
             show_network_policies(scx, filter)
         }
     }

@@ -81,7 +81,7 @@ pub fn plan_alter_owner(
         }
         // The parser should have rejected this.
         (ObjectType::Role, UnresolvedObjectName::Role(_)) => {
-            sql_bail!("cannot ALTER OWNER of a role")
+            bail_internal!("cannot ALTER OWNER of a role")
         }
         (
             object_type @ ObjectType::Cluster
@@ -101,7 +101,7 @@ pub fn plan_alter_owner(
             | name @ UnresolvedObjectName::Role(_),
         ) => {
             // The parser should not have produced this combination.
-            sql_bail!("invalid object type '{object_type}' for ALTER OWNER with name {name}")
+            bail_internal!("invalid object type '{object_type}' for ALTER OWNER with name {name}")
         }
         (object_type, UnresolvedObjectName::Item(name)) => {
             plan_alter_item_owner(scx, object_type, if_exists, name, new_owner.id)
@@ -510,7 +510,7 @@ fn plan_update_privilege(
                         ids.push(
                             // Name resolution should have rejected invalid objects.
                             name.try_into()
-                                .map_err(|e| sql_err!("invalid object name: {}", e))?,
+                                .map_err(|e| internal_err!("invalid object name: {}", e))?,
                         );
                     }
                     ids
