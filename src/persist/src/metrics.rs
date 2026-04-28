@@ -190,6 +190,10 @@ pub struct ParquetMetrics {
     pub(crate) k_s_metrics: ParquetColumnMetrics,
     pub(crate) v_s_metrics: ParquetColumnMetrics,
     pub(crate) elided_null_buffers: IntCounter,
+    pub(crate) projection_applied_count: IntCounter,
+    pub(crate) projection_no_op_count: IntCounter,
+    pub(crate) projection_skipped_bytes_uncompressed: IntCounter,
+    pub(crate) projection_skipped_bytes_compressed: IntCounter,
 }
 
 impl ParquetMetrics {
@@ -223,6 +227,22 @@ impl ParquetMetrics {
             elided_null_buffers: registry.register(metric!(
                 name: "mz_persist_parquet_elided_null_buffer_count",
                 help: "times we dropped an unnecessary null buffer returned by parquet decoding",
+            )),
+            projection_applied_count: registry.register(metric!(
+                name: "mz_persist_parquet_projection_applied_count",
+                help: "count of parquet decodes where column-projection pushdown skipped at least one leaf",
+            )),
+            projection_no_op_count: registry.register(metric!(
+                name: "mz_persist_parquet_projection_no_op_count",
+                help: "count of parquet decodes where column demand was provided but every k_s sub-field present in the blob was demanded (or k_s was absent), so no leaves were dropped",
+            )),
+            projection_skipped_bytes_uncompressed: registry.register(metric!(
+                name: "mz_persist_parquet_projection_skipped_bytes_uncompressed",
+                help: "uncompressed bytes of parquet column chunks not arrow-decoded due to projection pushdown",
+            )),
+            projection_skipped_bytes_compressed: registry.register(metric!(
+                name: "mz_persist_parquet_projection_skipped_bytes_compressed",
+                help: "compressed-on-blob bytes of parquet column chunks not decompressed due to projection pushdown (the bytes are still fetched as part of the persist blob; this is decompression CPU avoided, not network bytes)",
             )),
         }
     }

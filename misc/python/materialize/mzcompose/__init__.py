@@ -426,6 +426,9 @@ def get_variable_system_parameters(
             ["10000", "100000", "1000000"],
         ),
         VariableSystemParameter(
+            "storage_source_enable_column_projection", "true", ["true", "false"]
+        ),
+        VariableSystemParameter(
             "storage_statistics_collection_interval",
             "1000",
             ["100", "1000", "10000"],
