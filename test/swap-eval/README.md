@@ -123,8 +123,10 @@ Per-second columns in `<tag>.csv`:
 * `minflt`, `majflt` — `/proc/$pid/stat` deltas (per-process fault counts)
 * `psi_some_avg10`, `psi_full_avg10`, `psi_full_avg60` — `/proc/pressure/memory`
 * `pswpin`, `pswpout`, `pgmajfault` — `/proc/vmstat` deltas (system-wide swap traffic)
-* `pgscan_kswapd`, `pgscan_direct`, `pgsteal_kswapd`, `pgsteal_direct` — direct-vs-background reclaim attribution (the headline ratio)
-* `pgscan_anon`, `pgscan_file` — anon vs file scan split (relevant since lgalloc is off)
+* `pgscan_kswapd`, `pgscan_direct`, `pgsteal_kswapd`, `pgsteal_direct` — direct-vs-background reclaim attribution (the headline ratio; **stays at zero when MGLRU is enabled — see caveat below**)
+* `pgscan_anon`, `pgscan_file`, `pgsteal_anon`, `pgsteal_file` — anon vs file scan/steal split (populated under both traditional LRU and MGLRU)
+* `workingset_refault_anon`, `workingset_refault_file`, `workingset_activate_anon`, `workingset_restore_anon` — refault accounting; `workingset_refault_anon` directly measures pages re-faulted from swap and is the cleanest swap-thrash signal
+* `pgrefill`, `pageoutrun`, `allocstall_normal` — kswapd loop count, direct-reclaim stall count (also zero under MGLRU)
 * `thp_fault_alloc`, `thp_fault_fallback`, `thp_split_page`, `thp_collapse_alloc` — THP activity
 
 Once-per-run snapshot in `<tag>_env.txt`:
@@ -156,9 +158,17 @@ Run each on M.X1-large SF=64 (TPCH harness) and on the local r8gd swap-eval host
 
 Deprioritized (cheap but low expected leverage): `vm.swappiness`, `transparent_hugepage` mode, MGLRU.
 
-### Caveat: kernel mismatch
+### Caveat: kernel mismatch and MGLRU
 
-The local r8gd swap-eval host runs kernel 6.17; production runs 6.12.73. Reclaim and THP behavior may differ. `pgscan_kswapd`/`pgscan_direct` exist on both, but `pgscan_anon`/`pgscan_file` and the `proactive` reclaim variants are richer on 6.17. Cross-check kernel-version parity before drawing strong conclusions.
+The local r8gd swap-eval host runs kernel 6.17; production runs 6.12.73. The 6.17 default has MGLRU enabled (`/sys/kernel/mm/lru_gen/enabled = 0x0003`), and MGLRU bypasses the traditional reclaim counters: `pgscan_kswapd`, `pgscan_direct`, `pgsteal_kswapd`, `pgsteal_direct`, `pgrefill`, `pageoutrun`, and `allocstall_*` all stay at zero, regardless of how hard reclaim is working. The 2026-04-28 instrumented sweep on this host showed `pgscan_anon` climbing to 123 M and `majflt` to 38 M at 1:30, but every kswapd/direct counter at 0 — the headline ratio is unrecoverable from those counters.
+
+Production kernel 6.12.73 ships MGLRU but defaults to **off**, so the kswapd/direct attribution is recoverable in prod. To match prod on this host, disable MGLRU before running the sweep:
+
+```
+sudo sh -c 'echo 0 > /sys/kernel/mm/lru_gen/enabled'
+```
+
+Cross-check the env.txt snapshot to confirm `lru_gen/enabled = 0x0000` before drawing conclusions about direct-vs-background reclaim. The `workingset_refault_anon` and `pgscan_anon`/`pgsteal_anon` counters work under both LRU policies and remain useful even with MGLRU on.
 
 ### What this does not test
 
