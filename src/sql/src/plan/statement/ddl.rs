@@ -69,8 +69,8 @@ use mz_sql_parser::ast::{
     CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
     CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
     DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
-    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
-    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    FormatSpecifier, IcebergPartitionTransform, IcebergSinkConfigOption, Ident, IfExistsBehavior,
+    IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
     LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
     MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
     NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
@@ -87,8 +87,8 @@ use mz_sql_parser::parser::StatementParseResult;
 use mz_storage_types::connections::inline::{ConnectionAccess, ReferencedConnection};
 use mz_storage_types::connections::{Connection, KafkaTopicOptions};
 use mz_storage_types::sinks::{
-    IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection, KafkaSinkFormat, KafkaSinkFormatType,
-    SinkEnvelope, StorageSinkConnection,
+    IcebergPartitionField, IcebergSinkConnection, KafkaIdStyle, KafkaSinkConnection,
+    KafkaSinkFormat, KafkaSinkFormatType, SinkEnvelope, StorageSinkConnection,
 };
 use mz_storage_types::sources::encoding::{
     AvroEncoding, ColumnSpec, CsvEncoding, DataEncoding, ProtobufEncoding, RegexEncoding,
@@ -3771,12 +3771,15 @@ fn plan_sink(
             connection,
             aws_connection,
             options,
+            partition_by,
             ..
         } => iceberg_sink_builder(
             scx,
             connection,
             aws_connection,
             options,
+            partition_by,
+            &desc,
             relation_key_indices,
             key_desc_and_indices,
             commit_interval,
@@ -3947,6 +3950,8 @@ fn iceberg_sink_builder(
     catalog_connection: ResolvedItemName,
     aws_connection: ResolvedItemName,
     options: Vec<IcebergSinkConfigOption<Aug>>,
+    partition_by: Option<Vec<ast::IcebergPartitionField>>,
+    desc: &RelationDesc,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     commit_interval: Option<Duration>,
@@ -3995,6 +4000,12 @@ fn iceberg_sink_builder(
         sql_bail!("Iceberg sink must specify COMMIT INTERVAL");
     }
 
+    let partition_by = partition_by
+        .unwrap_or_default()
+        .into_iter()
+        .map(|field| plan_iceberg_partition_field(desc, field))
+        .collect::<Result<Vec<_>, _>>()?;
+
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
         catalog_connection_id,
         catalog_connection: catalog_connection_id,
@@ -4004,7 +4015,89 @@ fn iceberg_sink_builder(
         namespace,
         relation_key_indices,
         key_desc_and_indices,
+        partition_by,
     }))
+}
+
+fn plan_iceberg_partition_field(
+    description: &RelationDesc,
+    field: ast::IcebergPartitionField,
+) -> Result<IcebergPartitionField, PlanError> {
+    let col_name = normalize::column_name(field.column);
+    let Some((col_idx, col_type)) = description.get_by_name(&col_name) else {
+        sql_bail!(
+            "column referenced in PARTITION BY does not exist: {}",
+            col_name
+        );
+    };
+    if description.get_unambiguous_name(col_idx).is_none() {
+        sql_bail!(
+            "column referenced in PARTITION BY is ambiguous: {}",
+            col_name
+        );
+    }
+    use IcebergPartitionTransform::*;
+    let valid = match field.transform {
+        Identity | Void => true,
+        Year | Month | Day => matches!(
+            col_type.scalar_type,
+            SqlScalarType::Date
+                | SqlScalarType::Timestamp { .. }
+                | SqlScalarType::TimestampTz { .. }
+                | SqlScalarType::MzTimestamp
+        ),
+        Hour => matches!(
+            col_type.scalar_type,
+            SqlScalarType::Timestamp { .. }
+                | SqlScalarType::TimestampTz { .. }
+                | SqlScalarType::MzTimestamp
+        ),
+        Bucket(_) => matches!(
+            col_type.scalar_type,
+            SqlScalarType::Int16
+                | SqlScalarType::Int32
+                | SqlScalarType::Int64
+                | SqlScalarType::UInt16
+                | SqlScalarType::UInt32
+                | SqlScalarType::UInt64
+                | SqlScalarType::Numeric { .. }
+                | SqlScalarType::Date
+                | SqlScalarType::Time
+                | SqlScalarType::Timestamp { .. }
+                | SqlScalarType::TimestampTz { .. }
+                | SqlScalarType::String
+                | SqlScalarType::Char { .. }
+                | SqlScalarType::VarChar { .. }
+                | SqlScalarType::Bytes
+                | SqlScalarType::Uuid
+        ),
+        Truncate(_) => matches!(
+            col_type.scalar_type,
+            SqlScalarType::Int16
+                | SqlScalarType::Int32
+                | SqlScalarType::Int64
+                | SqlScalarType::UInt16
+                | SqlScalarType::UInt32
+                | SqlScalarType::UInt64
+                | SqlScalarType::Numeric { .. }
+                | SqlScalarType::String
+                | SqlScalarType::Char { .. }
+                | SqlScalarType::VarChar { .. }
+                | SqlScalarType::Bytes
+        ),
+    };
+    if !valid {
+        sql_bail!(
+            "PARTITION BY transform {} is not compatible with column {} of type {:?}",
+            field.transform,
+            col_name,
+            col_type.scalar_type,
+        );
+    }
+    Ok(IcebergPartitionField {
+        column_name: col_name.to_string(),
+        transform: field.transform.into(),
+    })
 }
 
 fn kafka_sink_builder(

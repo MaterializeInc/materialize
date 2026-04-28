@@ -644,6 +644,59 @@ pub const ICEBERG_APPEND_DIFF_COLUMN: &str = "_mz_diff";
 /// Column name appended by MODE APPEND Iceberg sinks to record the logical timestamp.
 pub const ICEBERG_APPEND_TIMESTAMP_COLUMN: &str = "_mz_timestamp";
 
+/// An Iceberg partition transform applied to a source column.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum IcebergPartitionTransform {
+    Identity,
+    Year,
+    Month,
+    Day,
+    Hour,
+    Void,
+    Bucket(u32),
+    Truncate(u32),
+}
+
+impl From<mz_sql_parser::ast::IcebergPartitionTransform> for IcebergPartitionTransform {
+    fn from(t: mz_sql_parser::ast::IcebergPartitionTransform) -> Self {
+        use mz_sql_parser::ast::IcebergPartitionTransform as Ast;
+        match t {
+            Ast::Identity => Self::Identity,
+            Ast::Year => Self::Year,
+            Ast::Month => Self::Month,
+            Ast::Day => Self::Day,
+            Ast::Hour => Self::Hour,
+            Ast::Void => Self::Void,
+            Ast::Bucket(n) => Self::Bucket(n),
+            Ast::Truncate(w) => Self::Truncate(w),
+        }
+    }
+}
+
+impl From<&IcebergPartitionTransform> for iceberg::spec::Transform {
+    fn from(t: &IcebergPartitionTransform) -> Self {
+        match t {
+            IcebergPartitionTransform::Identity => Self::Identity,
+            IcebergPartitionTransform::Year => Self::Year,
+            IcebergPartitionTransform::Month => Self::Month,
+            IcebergPartitionTransform::Day => Self::Day,
+            IcebergPartitionTransform::Hour => Self::Hour,
+            IcebergPartitionTransform::Void => Self::Void,
+            IcebergPartitionTransform::Bucket(n) => Self::Bucket(*n),
+            IcebergPartitionTransform::Truncate(w) => Self::Truncate(*w),
+        }
+    }
+}
+
+/// A partition field for an Iceberg sink, referencing a source column.
+#[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IcebergPartitionField {
+    /// Column name, used for generating the Iceberg partition field name.
+    pub column_name: String,
+    /// The partition transform to apply.
+    pub transform: IcebergPartitionTransform,
+}
+
 #[derive(Arbitrary, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub catalog_connection_id: CatalogItemId,
@@ -656,6 +709,9 @@ pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub namespace: String,
     pub table: String,
+    /// Iceberg partition fields. Empty means unpartitioned.
+    #[serde(default)]
+    pub partition_by: Vec<IcebergPartitionField>,
 }
 
 impl<C: ConnectionAccess> IcebergSinkConnection<C> {
@@ -676,6 +732,7 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
             key_desc_and_indices,
             namespace,
             table,
+            partition_by,
         } = self;
 
         let compatibility_checks = [
@@ -709,6 +766,7 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
             ),
             (namespace == &other.namespace, "namespace"),
             (table == &other.table, "table"),
+            (partition_by == &other.partition_by, "partition_by"),
         ];
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -739,6 +797,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             key_desc_and_indices,
             namespace,
             table,
+            partition_by,
         } = self;
         IcebergSinkConnection {
             catalog_connection_id,
@@ -751,6 +810,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             key_desc_and_indices,
             namespace,
             table,
+            partition_by,
         }
     }
 }

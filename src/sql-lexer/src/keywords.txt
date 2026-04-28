@@ -70,6 +70,7 @@ Bpchar
 Broken
 Broker
 Brokers
+Bucket
 By
 Bytes
 Capture
@@ -493,6 +494,7 @@ Transactional
 Transform
 Trim
 True
+Truncate
 Tunnel
 Type
 Types
@@ -522,6 +524,7 @@ Verbose
 Version
 View
 Views
+Void
 Wait
 Warehouse
 Warning
