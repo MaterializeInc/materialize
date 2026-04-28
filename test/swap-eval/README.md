@@ -102,6 +102,60 @@ Takeaways:
 * Tail latency grows with ratio: p95 climbs 5–11x, p99 explodes at 1:30 (993 ms).
 * Baseline p99 of 89 ms is already elevated vs p95 of 6.75 ms; some outliers exist independent of swap and deserve separate investigation.
 
+## Results 2026-04-28: instrumented sweep, MGLRU on vs off
+
+Two back-to-back 5-size sweeps on the same r8gd.16xlarge host with the new instrumentation. The first was run with MGLRU at the kernel default (`lru_gen/enabled=0x0003`); the second after `echo 0 > /sys/kernel/mm/lru_gen/enabled` (`lru_gen/enabled=0x0000`). All other settings unchanged: scale=4, 200 queries per size, default `MALLOC_CONF`, kernel 6.17.0-1010-aws, 3.5 TiB NVMe swap split across both NVMes at priority 10.
+
+### Hydration and direct-reclaim pressure
+
+| size      | hydration (MGLRU on) | hydration (MGLRU off) | psi_full_avg10 (on) | psi_full_avg10 (off) |
+|-----------|----------------------|------------------------|----------------------|------------------------|
+| baseline  | 80s                  | 78s                    | 0.00                 | 0.00                   |
+| swap_1-2  | 89s                  | 91s                    | 0.38                 | 13.90                  |
+| swap_1-5  | 176s                 | 178s                   | 7.53                 | 15.54                  |
+| swap_1-12 | 345s                 | 442s                   | 5.82                 | 10.80                  |
+| swap_1-30 | 569s                 | 910s                   | 7.01                 | 10.05                  |
+
+PSI `full_avg10` measures the share of the sampling window in which **all** runnable tasks were stalled on memory — by construction, kswapd does not block userspace, so any non-zero value is direct-reclaim or swap-IO wait on a user thread. With MGLRU on, swap_1-2 stalls 0.38% of the time; with MGLRU off, the same configuration stalls 13.9%. Hydration time at 1:30 grows from 569s → 910s when MGLRU is disabled, a 60% slowdown. This is the local reproduction of the production r8gd profile signature, which itself ran on a 6.12.73 kernel where MGLRU is shipped but defaults to off.
+
+### Steady-state point queries
+
+| size      | p50 (on) | p95 (on) | p99 (on) | p50 (off) | p95 (off) | p99 (off) |
+|-----------|----------|----------|----------|-----------|-----------|-----------|
+| baseline  | 6.09     | 7.71     | 145      | 6.03      | 6.94      | 140       |
+| swap_1-2  | 6.09     | 7.70     | 125      | 6.12      | 7.52      | 152       |
+| swap_1-5  | 6.92     | 43.89    | 199      | 7.05      | 55.53     | 305       |
+| swap_1-12 | 8.23     | 99.08    | 592      | 8.03      | 98.17     | 133       |
+| swap_1-30 | 12.08    | 103.69   | 913      | 11.63     | 98.97     | 962       |
+
+p50 and p95 are stable across LRU policies; p99 is dominated by single outliers and varies between runs even at the same configuration.
+
+### Memory traffic
+
+| size      | peak RSS | peak swap (on) | peak swap (off) | majflt (on) | majflt (off) | pswpout (on) | pswpout (off) |
+|-----------|----------|-----------------|------------------|-------------|--------------|---------------|----------------|
+| baseline  | 15 GiB   | 0               | 0                | 0           | 0            | 0             | 0              |
+| swap_1-2  | 11 GiB   | 2.7 GiB         | 3.3 GiB          | 0.7 M       | 0.8 M        | 1.2 M         | 1.4 M          |
+| swap_1-5  | 5.1 GiB  | 9.8 GiB         | 9.3 GiB          | 6.3 M       | 6.7 M        | 9.8 M         | 10.1 M         |
+| swap_1-12 | 2.6 GiB  | 12.6 GiB        | 3.3 GiB          | 20.0 M      | 1.8 M        | 27.3 M        | 30.9 M         |
+| swap_1-30 | 1.1 GiB  | 12.1 GiB        | 5.1 GiB          | 37.8 M      | 5.6 M        | 47.8 M        | 69.3 M         |
+
+The MGLRU-off run at 1:12 and 1:30 has significantly **lower** peak `vmswap_kb` despite higher `pswpout` totals — under traditional LRU the kernel evicts and re-faults the same pages more aggressively, so the same swap region churns without growing. The MGLRU-on run resident swap footprint stays larger because evicted pages are kept around longer.
+
+### Takeaways
+
+* PSI `full_avg10` is the direct-reclaim proxy on this host. The kswapd-vs-direct vmstat buckets (`pgscan_kswapd`, `pgscan_direct`, `pgsteal_kswapd`, `pgsteal_direct`, `pgrefill`, `pageoutrun`, `allocstall_normal`) stay at zero on kernel 6.17.0-1010-aws regardless of `lru_gen/enabled`. The toggle changes runtime behavior but not the attribution counters in this kernel build. Use PSI `full_avg10` plus `workingset_refault_anon` plus `pswpin/pswpout` instead.
+* MGLRU is a real mitigation for the r8gd direct-reclaim chain. Switching from MGLRU to traditional LRU on this host raises `psi_full_avg10` 2-3× and adds 60% to hydration at 1:30. Production kernel 6.12.73 ships MGLRU off by default, which is the regime where the original r8gd profile was collected.
+* Even with MGLRU on, the workload pays substantial PSI under swap: baseline 0% → 1:5 7.5% → 1:30 7.0% (saturating). The remaining stall budget is the swap-IO wait, not reclaim — addressing this needs a faster swap device, lower allocation rate (knob 5), or the userspace soft-throttle (knob 4) so allocations slow before hitting the hard ceiling.
+* `workingset_refault_anon` only populates with MGLRU off (1.4 M at 1:2 → 75 M at 1:30). Treat it as a swap-thrash counter for traditional-LRU runs; for MGLRU runs use `pswpin` as the substitute.
+
+### Caveats specific to this measurement
+
+* Single sample per cell. Hydration time variance between back-to-back baseline runs was 80s → 78s (≈3%); other cells likely similar but not bounded.
+* AuctionScenario hydration includes a `mz_now()`-keyed time window, so `arr_records` varies between runs (45 M to 108 M). Ratios are computed on relative metrics only.
+* Monitor stop time (`hydration_wait + 30 = 930s`) was reached just before swap_1-30 finished hydration in the MGLRU-off run (910s hydration). Per-second samples for the last ~20s of that run may be truncated.
+* MGLRU global toggle does not retroactively re-charge already-allocated memcgs, so the second sweep's clusterd processes (newly forked after the toggle) do see traditional LRU, but the rest of the system may carry MGLRU state from before. The `lg` cluster is dropped and recreated each iteration, so each clusterd is a fresh memcg.
+
 ## Experiment: r8gd vs r6gd hydration anomaly
 
 Polar Signals on-CPU profiles (24h ending 2026-04-27, namespace `environment-a858fdc6-92f2-40d7-a30e-a231810f9c2a-0`, comm `clusterd`) show:
