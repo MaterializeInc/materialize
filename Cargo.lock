@@ -6457,6 +6457,7 @@ dependencies = [
  "predicates 3.1.4",
  "prometheus",
  "proptest",
+ "protobuf",
  "rand 0.9.4",
  "rdkafka",
  "rdkafka-sys",

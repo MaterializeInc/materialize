@@ -88,6 +88,7 @@ pin-project.workspace = true
 postgres = { workspace = true, optional = true }
 postgres-openssl = { workspace = true, optional = true }
 prometheus.workspace = true
+protobuf.workspace = true
 rdkafka-sys.workspace = true
 rand.workspace = true
 regex = { workspace = true, optional = true }
