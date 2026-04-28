@@ -1970,6 +1970,18 @@ steps:
               composition: parallel-workload
               args: [--runtime=1200, --scenario=rename, --threads=8]
 
+      - id: parallel-workload-repeat-row
+        label: "Parallel Workload (repeat_row)"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-12cpu-24gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1200, --scenario=repeat-row, --threads=8]
+
       - id: parallel-workload-cancel
         label: "Parallel Workload (cancel)"
         depends_on: build-x86_64

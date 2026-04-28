@@ -26,6 +26,7 @@ from materialize.data_ingest.data_type import (
     Bytea,
     DataType,
     Jsonb,
+    Long,
     Text,
     TextTextMap,
 )
@@ -236,11 +237,26 @@ class View(DBObject):
         base_object: DBObject,
         base_object2: DBObject | None,
         schema: Schema,
+        scenario: Scenario = Scenario.Regression,
         temp: bool = False,
     ):
         super().__init__()
         self.rename = 0
         self.view_id = view_id
+        # In the `RepeatRow` scenario, ~5% of views wrap their body with a
+        # `repeat_row(-1)` cross join (constant-folded into a `Constant` MIR
+        # node with negative diffs), and another ~5% are entirely replaced by
+        # a hardcoded body that drives `repeat_row` from a column of the
+        # `repeat_row_source` table (so the count is non-constant and can be
+        # negative at runtime). The two modes are mutually exclusive. The
+        # matching ignore list for negative-accumulation errors is wired
+        # through `Action.errors_to_ignore`.
+        self.repeat_row_const = scenario == Scenario.RepeatRow and rng.random() < 0.05
+        self.repeat_row_table = (
+            scenario == Scenario.RepeatRow
+            and not self.repeat_row_const
+            and rng.random() < 0.05
+        )
         self.base_object = base_object
         self.base_object2 = base_object2
         self.schema = schema
@@ -289,6 +305,16 @@ class View(DBObject):
                 for data_type in self.data_types
             ]
 
+        if self.repeat_row_table:
+            # Replace the randomly generated shape with a hardcoded single
+            # `bigint` column matching the body emitted by `get_select`. The
+            # body reads `diff` from `repeat_row_source` and feeds it as the
+            # `repeat_row` count, so the view's accumulation depends on the
+            # current contents of that table.
+            self.data_types = [Long]
+            self.columns = [Column(rng, 0, Long, self)]
+            self.union = False
+
     def name(self) -> str:
         if self.rename:
             return naughtify(f"v-{self.view_id}-{self.rename}")
@@ -298,10 +324,25 @@ class View(DBObject):
         return f"{self.schema}.{identifier(self.name())}"
 
     def get_select(self) -> str:
+        if self.repeat_row_table:
+            # Hardcoded body that drives `repeat_row` from a column whose
+            # value is determined at runtime, so the count can be negative
+            # depending on the current contents of `repeat_row_source`.
+            col = self.columns[0].name(True)
+            return (
+                f"SELECT r.diff::bigint AS {col} "
+                "FROM repeat_row_source r, repeat_row(r.diff)"
+            )
+
         def select_str(exprs: str) -> str:
             select = f"SELECT {exprs} FROM {self.base_object}"
             if self.base_object2:
                 select += f" JOIN {self.base_object2} ON {self.on_expr}"
+            if self.repeat_row_const:
+                # `repeat_row(-1)` retracts each input row exactly once,
+                # producing a collection with a net-negative accumulation.
+                # Hardcoded to `-1` to avoid blowing up the data size.
+                select = f"SELECT * FROM ({select}) AS rr_inner, repeat_row(-1)"
             return select
 
         expressions_str = ", ".join(
@@ -1013,7 +1054,14 @@ class Database:
             base_object2: Table | None = rng.choice(self.tables)
             if rng.choice([True, False]) or base_object2 == base_object:
                 base_object2 = None
-            view = View(rng, i, base_object, base_object2, rng.choice(self.schemas))
+            view = View(
+                rng,
+                i,
+                base_object,
+                base_object2,
+                rng.choice(self.schemas),
+                scenario=scenario,
+            )
             self.views.append(view)
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
@@ -1159,6 +1207,17 @@ class Database:
 
         for relation in self:
             relation.create(exe)
+
+        if self.scenario == Scenario.RepeatRow:
+            # Hardcoded helper table for the table-driven `repeat_row(diff)`
+            # mode in `View`. The mix of small positives, zeros, and `-1`s
+            # ensures the function sees both insertion and retraction counts
+            # at runtime, exercising negative-multiplicity code paths.
+            exe.execute("DROP TABLE IF EXISTS repeat_row_source CASCADE")
+            exe.execute("CREATE TABLE repeat_row_source (diff bigint NOT NULL)")
+            exe.execute(
+                "INSERT INTO repeat_row_source VALUES (1), (1), (-1), (-1), (0)"
+            )
 
         # Questionable use
         # result = composition.run(

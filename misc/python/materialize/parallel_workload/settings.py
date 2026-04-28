@@ -30,6 +30,7 @@ class Scenario(Enum):
     Rename = "rename"
     BackupRestore = "backup-restore"
     ZeroDowntimeDeploy = "0dt-deploy"
+    RepeatRow = "repeat-row"
 
     @classmethod
     def _missing_(cls, value):
@@ -44,4 +45,8 @@ ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "persist_stats_filter_enabled": "false",
     # See https://materializeinc.slack.com/archives/CTESPM7FU/p1758195280629909, should reenable when it performs better
     "enable_compute_logical_backpressure": "false",
+    # Allows the `Scenario.RepeatRow` scenario to call `repeat_row`. Having
+    # it on outside that scenario is harmless: no Parallel Workload codegen
+    # emits `repeat_row` unless the scenario is active.
+    "enable_repeat_row": "true",
 }
