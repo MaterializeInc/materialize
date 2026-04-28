@@ -3493,7 +3493,7 @@ fn invent_column_name(
     ecx: &ExprContext,
     expr: &Expr<Aug>,
     table_func_names: &BTreeMap<String, Ident>,
-) -> Option<ColumnName> {
+) -> Result<Option<ColumnName>, PlanError> {
     // We follow PostgreSQL exactly here, which has some complicated rules
     // around "high" and "low" quality names. Low quality names override other
     // low quality names but not high quality names.
@@ -3510,15 +3510,15 @@ fn invent_column_name(
         ecx: &ExprContext,
         expr: &Expr<Aug>,
         table_func_names: &BTreeMap<String, Ident>,
-    ) -> Option<(ColumnName, NameQuality)> {
-        match expr {
+    ) -> Result<Option<(ColumnName, NameQuality)>, PlanError> {
+        Ok(match expr {
             Expr::Identifier(names) => {
                 if let [name] = names.as_slice() {
                     if let Some(table_func_name) = table_func_names.get(name.as_str()) {
-                        return Some((
+                        return Ok(Some((
                             normalize::column_name(table_func_name.clone()),
                             NameQuality::High,
-                        ));
+                        )));
                     }
                 }
                 names
@@ -3539,7 +3539,11 @@ fn invent_column_name(
                         full_name,
                         ..
                     } => (&qualifiers.schema_spec, full_name.item.clone()),
-                    _ => return None,
+                    // Name resolution should have rejected anything other than
+                    // `Item` for a function call.
+                    _ => {
+                        bail_internal!("function name did not resolve to an item: {:?}", func.name)
+                    }
                 };
 
                 if schema == &SchemaSpecifier::from(ecx.qcx.scx.catalog.get_mz_internal_schema_id())
@@ -3559,15 +3563,16 @@ fn invent_column_name(
             Expr::Array { .. } => Some(("array".into(), NameQuality::High)),
             Expr::List { .. } => Some(("list".into(), NameQuality::High)),
             Expr::Map { .. } | Expr::MapSubquery(_) => Some(("map".into(), NameQuality::High)),
-            Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names) {
+            Expr::Cast { expr, data_type } => match invent(ecx, expr, table_func_names)? {
                 Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                 _ => Some((data_type.unqualified_item_name().into(), NameQuality::Low)),
             },
             Expr::Case { else_result, .. } => {
-                match else_result
-                    .as_ref()
-                    .and_then(|else_result| invent(ecx, else_result, table_func_names))
-                {
+                let inner = match else_result.as_ref() {
+                    Some(else_result) => invent(ecx, else_result, table_func_names)?,
+                    None => None,
+                };
+                match inner {
                     Some((name, NameQuality::High)) => Some((name, NameQuality::High)),
                     _ => Some(("case".into(), NameQuality::Low)),
                 }
@@ -3576,13 +3581,19 @@ fn invent_column_name(
                 Some((normalize::column_name(field.clone()), NameQuality::High))
             }
             Expr::Exists { .. } => Some(("exists".into(), NameQuality::High)),
-            Expr::Subscript { expr, .. } => invent(ecx, expr, table_func_names),
+            Expr::Subscript { expr, .. } => invent(ecx, expr, table_func_names)?,
             Expr::Subquery(query) | Expr::ListSubquery(query) | Expr::ArraySubquery(query) => {
                 // A bit silly to have to plan the query here just to get its column
                 // name, since we throw away the planned expression, but fixing this
                 // requires a separate semantic analysis phase.
-                let (_expr, scope) =
-                    plan_nested_query(&mut ecx.derived_query_context(), query).ok()?;
+                //
+                // We deliberately swallow planning errors here: if the subquery
+                // doesn't plan, we just don't invent a name for it; the real
+                // planning attempt elsewhere will surface the error.
+                let Ok((_expr, scope)) = plan_nested_query(&mut ecx.derived_query_context(), query)
+                else {
+                    return Ok(None);
+                };
                 scope
                     .items
                     .first()
@@ -3590,10 +3601,10 @@ fn invent_column_name(
             }
             Expr::Row { .. } => Some(("row".into(), NameQuality::High)),
             _ => None,
-        }
+        })
     }
 
-    invent(ecx, expr, table_func_names).map(|(name, _quality)| name)
+    Ok(invent(ecx, expr, table_func_names)?.map(|(name, _quality)| name))
 }
 
 #[derive(Debug)]
@@ -3712,11 +3723,11 @@ fn expand_select_item<'a>(
             Ok(items)
         }
         SelectItem::Expr { expr, alias } => {
-            let name = alias
-                .clone()
-                .map(normalize::column_name)
-                .or_else(|| invent_column_name(ecx, expr, table_func_names))
-                .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into());
+            let name = match alias.clone().map(normalize::column_name) {
+                Some(name) => name,
+                None => invent_column_name(ecx, expr, table_func_names)?
+                    .unwrap_or_else(|| UNKNOWN_COLUMN_NAME.into()),
+            };
             Ok(vec![(ExpandedSelectItem::Expr(Cow::Borrowed(expr)), name)])
         }
     }
