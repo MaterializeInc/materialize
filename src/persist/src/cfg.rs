@@ -36,8 +36,6 @@ pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_CC_SIZES)
         .add(&crate::indexed::columnar::arrow::ENABLE_ARROW_LGALLOC_NONCC_SIZES)
-        .add(&crate::s3::ENABLE_S3_LGALLOC_CC_SIZES)
-        .add(&crate::s3::ENABLE_S3_LGALLOC_NONCC_SIZES)
         .add(&crate::postgres::USE_POSTGRES_TUNED_QUERIES)
 }
 
@@ -139,7 +137,6 @@ impl BlobConfig {
                     credentials,
                     knobs,
                     metrics,
-                    cfg,
                 )
                 .await?;
 

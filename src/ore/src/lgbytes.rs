@@ -92,8 +92,6 @@ impl<T: Copy> AsRef<[T]> for MetricsRegion<T> {
 /// Metrics for lgalloc'd bytes..
 #[derive(Debug, Clone)]
 pub struct LgBytesMetrics {
-    /// Metrics for the "persist_s3" usage of lgalloc bytes.
-    pub persist_s3: LgBytesOpMetrics,
     /// Metrics for the "persist_azure" usage of lgalloc bytes.
     pub persist_azure: LgBytesOpMetrics,
     /// Metrics for the "persist_arrow" usage of lgalloc bytes.
@@ -188,7 +186,6 @@ impl LgBytesMetrics {
             len_sizes: len_sizes.clone(),
         };
         LgBytesMetrics {
-            persist_s3: op("persist_s3"),
             persist_azure: op("persist_azure"),
             persist_arrow: op("persist_arrow"),
         }
