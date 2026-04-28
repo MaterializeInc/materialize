@@ -1596,10 +1596,6 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["enable_adapter_frontend_occ_read_then_write"] = (
-            BOOLEAN_FLAG_VALUES
-        )
-
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
         # linter. parallel-workload randomly flips the flags in
@@ -1607,6 +1603,11 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            # Read once at environmentd startup; runtime ALTER SYSTEM SET is
+            # rejected (see sequence_alter_system_set). Flipping it here would
+            # be a no-op at best and confusing if any future code path forgot
+            # to consult the cached value.
+            "enable_adapter_frontend_occ_read_then_write",
             "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
