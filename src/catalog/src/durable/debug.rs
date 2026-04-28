@@ -74,6 +74,7 @@ pub enum CollectionType {
     SystemPrivileges,
     StorageCollectionMetadata,
     UnfinalizedShard,
+    PreAllocatedShard,
     TxnWalShard,
 }
 
@@ -290,6 +291,14 @@ collection_impl!({
     update: StateUpdateKind::UnfinalizedShard,
 });
 collection_impl!({
+    name: PreAllocatedShardsCollection,
+    key: proto::PreAllocatedShardKey,
+    value: (),
+    collection_type: CollectionType::PreAllocatedShard,
+    trace_field: pre_allocated_shards,
+    update: StateUpdateKind::PreAllocatedShard,
+});
+collection_impl!({
     name: TxnWalShardCollection,
     key: (),
     value: proto::TxnWalShardValue,
@@ -349,6 +358,7 @@ pub struct Trace {
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
     pub unfinalized_shards: CollectionTrace<UnfinalizedShardsCollection>,
+    pub pre_allocated_shards: CollectionTrace<PreAllocatedShardsCollection>,
     pub txn_wal_shard: CollectionTrace<TxnWalShardCollection>,
 }
 
@@ -376,6 +386,7 @@ impl Trace {
             system_privileges: CollectionTrace::new(),
             storage_collection_metadata: CollectionTrace::new(),
             unfinalized_shards: CollectionTrace::new(),
+            pre_allocated_shards: CollectionTrace::new(),
             txn_wal_shard: CollectionTrace::new(),
         }
     }
@@ -403,6 +414,7 @@ impl Trace {
             system_privileges,
             storage_collection_metadata,
             unfinalized_shards,
+            pre_allocated_shards,
             txn_wal_shard,
         } = self;
         audit_log.sort();
@@ -426,6 +438,7 @@ impl Trace {
         system_privileges.sort();
         storage_collection_metadata.sort();
         unfinalized_shards.sort();
+        pre_allocated_shards.sort();
         txn_wal_shard.sort();
     }
 }

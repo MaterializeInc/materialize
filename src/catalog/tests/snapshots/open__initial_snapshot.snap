@@ -831,4 +831,5 @@ Snapshot {
     storage_collection_metadata: {},
     unfinalized_shards: {},
     txn_wal_shard: {},
+    pre_allocated_shards: {},
 }

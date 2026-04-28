@@ -1129,6 +1129,28 @@ impl DurableType for UnfinalizedShard {
     }
 }
 
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
+pub struct PreAllocatedShard {
+    pub shard: ShardId,
+}
+
+impl DurableType for PreAllocatedShard {
+    type Key = PreAllocatedShardKey;
+    type Value = ();
+
+    fn into_key_value(self) -> (Self::Key, Self::Value) {
+        (PreAllocatedShardKey { shard: self.shard }, ())
+    }
+
+    fn from_key_value(key: Self::Key, _value: Self::Value) -> Self {
+        Self { shard: key.shard }
+    }
+
+    fn key(&self) -> Self::Key {
+        PreAllocatedShardKey { shard: self.shard }
+    }
+}
+
 // Structs used internally to represent on-disk state.
 
 /// A snapshot of the current on-disk state.
@@ -1159,6 +1181,7 @@ pub struct Snapshot {
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
+    pub pre_allocated_shards: BTreeMap<proto::PreAllocatedShardKey, ()>,
     pub txn_wal_shard: BTreeMap<(), proto::TxnWalShardValue>,
 }
 
@@ -1427,6 +1450,13 @@ pub struct StorageCollectionMetadataValue {
 /// manipulated by the storage controller.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
 pub struct UnfinalizedShardKey {
+    pub(crate) shard: ShardId,
+}
+
+/// This value is stored transparently, however, it should only ever be
+/// manipulated by the storage controller.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
+pub struct PreAllocatedShardKey {
     pub(crate) shard: ShardId,
 }
 

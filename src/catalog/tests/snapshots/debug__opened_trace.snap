@@ -1593,4 +1593,7 @@ Trace {
     txn_wal_shard: CollectionTrace {
         values: [],
     },
+    pre_allocated_shards: CollectionTrace {
+        values: [],
+    },
 }

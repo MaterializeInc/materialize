@@ -34,9 +34,9 @@ use mz_catalog::durable::debug::{
     AuditLogCollection, ClusterCollection, ClusterIntrospectionSourceIndexCollection,
     ClusterReplicaCollection, Collection, CollectionTrace, CollectionType, CommentCollection,
     ConfigCollection, DatabaseCollection, DebugCatalogState, DefaultPrivilegeCollection,
-    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, RoleAuthCollection,
-    RoleCollection, SchemaCollection, SettingCollection, SourceReferencesCollection,
-    StorageCollectionMetadataCollection, SystemConfigurationCollection,
+    IdAllocatorCollection, ItemCollection, NetworkPolicyCollection, PreAllocatedShardsCollection,
+    RoleAuthCollection, RoleCollection, SchemaCollection, SettingCollection,
+    SourceReferencesCollection, StorageCollectionMetadataCollection, SystemConfigurationCollection,
     SystemItemMappingCollection, SystemPrivilegeCollection, Trace, TxnWalShardCollection,
     UnfinalizedShardsCollection,
 };
@@ -322,6 +322,9 @@ macro_rules! for_collection {
                 $fn::<UnfinalizedShardsCollection>($($arg),*).await?
             }
             CollectionType::TxnWalShard => $fn::<TxnWalShardCollection>($($arg),*).await?,
+            CollectionType::PreAllocatedShard => {
+                $fn::<PreAllocatedShardsCollection>($($arg),*).await?
+            }
         }
     };
 }
@@ -468,6 +471,7 @@ async fn dump(
         storage_collection_metadata,
         unfinalized_shards,
         txn_wal_shard,
+        pre_allocated_shards,
     } = if consolidate {
         openable_state.trace_consolidated().await?
     } else {
@@ -558,6 +562,13 @@ async fn dump(
         consolidate,
     );
     dump_col(&mut data, txn_wal_shard, &ignore, stats_only, consolidate);
+    dump_col(
+        &mut data,
+        pre_allocated_shards,
+        &ignore,
+        stats_only,
+        consolidate,
+    );
 
     writeln!(&mut target, "{data:#?}")?;
     Ok(())

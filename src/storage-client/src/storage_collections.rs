@@ -43,7 +43,7 @@ use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
-use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
+use mz_storage_types::dyncfgs::{SHARD_POOL_ENABLED, STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION};
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
@@ -56,7 +56,7 @@ use mz_txn_wal::txns::TxnsHandle;
 use timely::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
 use tracing::{debug, info, trace, warn};
 
@@ -67,6 +67,7 @@ use crate::controller::{
 use crate::storage_collections::metrics::{ShardIdSet, StorageCollectionsMetrics};
 
 mod metrics;
+pub(crate) mod shard_pool;
 
 /// An abstraction for keeping track of storage collections and managing access
 /// to them.
@@ -410,9 +411,22 @@ pub struct StorageCollectionsImpl {
     /// For sending updates about read holds to our internal task.
     holds_tx: mpsc::UnboundedSender<(GlobalId, ChangeBatch<Timestamp>)>,
 
+    /// Pool of pre-opened shards for reducing DDL latency.
+    shard_pool: Arc<shard_pool::ShardPool<Timestamp>>,
+
+    /// Staging area for pre-opened shards between `prepare_state` and
+    /// `create_collections_for_bootstrap`. Maps ShardId to the PreOpenedShard
+    /// that was used to generate it.
+    pending_pre_opened: Arc<Mutex<BTreeMap<ShardId, shard_pool::PreOpenedShard<Timestamp>>>>,
+
+    /// Notified when `initialize_state` completes; gates the shard pool task
+    /// from writing to the catalog before initialization GC has run.
+    init_notify: Arc<Notify>,
+
     /// Handles to tasks we own, making sure they're dropped when we are.
     _background_task: Arc<AbortOnDropHandle<()>>,
     _finalize_shards_task: Arc<AbortOnDropHandle<()>>,
+    _shard_pool_task: Option<Arc<AbortOnDropHandle<()>>>,
 }
 
 // Supporting methods for implementing [StorageCollections].
@@ -522,6 +536,8 @@ impl StorageCollectionsImpl {
                 background_task.run().await
             });
 
+        let shard_pool = Arc::new(shard_pool::ShardPool::new(metrics.shard_pool.clone()));
+
         let finalize_shards_task = mz_ore::task::spawn(
             || "storage_collections::finalize_shards_task",
             finalize_shards_task(FinalizeShardsTaskConfig {
@@ -534,6 +550,16 @@ impl StorageCollectionsImpl {
                 persist: Arc::clone(&persist_clients),
                 read_only,
             }),
+        );
+        let init_notify = Arc::new(Notify::new());
+        let shard_pool_task = shard_pool::spawn_shard_pool_task(
+            envd_epoch,
+            Arc::clone(&config),
+            persist_location.clone(),
+            Arc::clone(&persist_clients),
+            Arc::clone(&shard_pool),
+            Arc::clone(&init_notify),
+            read_only,
         );
 
         Self {
@@ -549,8 +575,12 @@ impl StorageCollectionsImpl {
             persist: persist_clients,
             cmd_tx,
             holds_tx,
+            shard_pool,
+            pending_pre_opened: Arc::new(Mutex::new(BTreeMap::new())),
+            init_notify,
             _background_task: Arc::new(background_task.abort_on_drop()),
             _finalize_shards_task: Arc::new(finalize_shards_task.abort_on_drop()),
+            _shard_pool_task: shard_pool_task,
         }
     }
 
@@ -643,6 +673,34 @@ impl StorageCollectionsImpl {
         write
     }
 
+    /// CAS-downgrades `handle`'s since to `since`, stamping our epoch as the
+    /// opaque. Retries on benign CAS races (concurrent writers); halts if a
+    /// higher epoch is observed (we've been fenced out).
+    async fn downgrade_since_to(
+        &self,
+        handle: &mut SinceHandle<SourceData, (), Timestamp, StorageDiff>,
+        since: &Antichain<Timestamp>,
+    ) {
+        let our_epoch = self.envd_epoch;
+        loop {
+            let current_epoch: PersistEpoch = handle.opaque().decode();
+            if current_epoch.0.map(|e| e <= our_epoch).unwrap_or(true) {
+                let ok = handle
+                    .compare_and_downgrade_since(
+                        &Opaque::encode(&current_epoch),
+                        (&Opaque::encode(&PersistEpoch::from(our_epoch)), since),
+                    )
+                    .await
+                    .is_ok();
+                if ok {
+                    break;
+                }
+            } else {
+                mz_ore::halt!("fenced by envd @ {current_epoch:?}. ours = {our_epoch}");
+            }
+        }
+    }
+
     /// Opens a critical since handle for the given `shard`.
     ///
     /// `since` is an optional since that the read handle will be forwarded to
@@ -669,58 +727,28 @@ impl StorageCollectionsImpl {
             handle_purpose: format!("controller data for {}", id),
         };
 
-        // Construct the handle in a separate block to ensure all error paths
-        // are diverging
-        let since_handle = {
-            // This block's aim is to ensure the handle is in terms of our epoch
-            // by the time we return it.
-            let mut handle = persist_client
-                .open_critical_since(
-                    shard,
-                    PersistClient::CONTROLLER_CRITICAL_SINCE,
-                    Opaque::encode(&PersistEpoch::default()),
-                    diagnostics.clone(),
-                )
-                .await
-                .expect("invalid persist usage");
+        let mut handle = persist_client
+            .open_critical_since(
+                shard,
+                PersistClient::CONTROLLER_CRITICAL_SINCE,
+                Opaque::encode(&PersistEpoch::default()),
+                diagnostics.clone(),
+            )
+            .await
+            .expect("invalid persist usage");
 
-            // Take the join of the handle's since and the provided `since`;
-            // this lets materialized views express the since at which their
-            // read handles "start."
-            let provided_since = match since {
-                Some(since) => since,
-                None => &Antichain::from_elem(Timestamp::MIN),
-            };
-            let since = handle.since().join(provided_since);
-
-            let our_epoch = self.envd_epoch;
-
-            loop {
-                let current_epoch: PersistEpoch = handle.opaque().decode();
-
-                // Ensure the current epoch is <= our epoch.
-                let unchecked_success = current_epoch.0.map(|e| e <= our_epoch).unwrap_or(true);
-
-                if unchecked_success {
-                    // Update the handle's state so that it is in terms of our
-                    // epoch.
-                    let checked_success = handle
-                        .compare_and_downgrade_since(
-                            &Opaque::encode(&current_epoch),
-                            (&Opaque::encode(&PersistEpoch::from(our_epoch)), &since),
-                        )
-                        .await
-                        .is_ok();
-                    if checked_success {
-                        break handle;
-                    }
-                } else {
-                    mz_ore::halt!("fenced by envd @ {current_epoch:?}. ours = {our_epoch}");
-                }
-            }
+        // Take the join of the handle's since and the provided `since`;
+        // this lets materialized views express the since at which their
+        // read handles "start."
+        let provided_since = match since {
+            Some(since) => since,
+            None => &Antichain::from_elem(Timestamp::MIN),
         };
+        let since = handle.since().join(provided_since);
 
-        since_handle
+        self.downgrade_since_to(&mut handle, &since).await;
+
+        handle
     }
 
     /// Opens a leased [ReadHandle], for the purpose of holding back a since,
@@ -1320,6 +1348,20 @@ impl StorageCollections for StorageCollectionsImpl {
         )
         .await?;
 
+        // Crash recovery: pre-allocated shards were pre-opened by the shard pool
+        // in a previous epoch but never claimed by a DDL operation (e.g., the
+        // process crashed between pre-opening and use). Move them to
+        // unfinalized_shards so finalize_shards_task will GC them.
+        let pre_allocated = txn.get_pre_allocated_shards();
+        if !pre_allocated.is_empty() {
+            info!(
+                ?pre_allocated,
+                "moving unclaimed pre-allocated shards to unfinalized for GC"
+            );
+            txn.insert_unfinalized_shards(pre_allocated.clone())?;
+            txn.remove_pre_allocated_shards(pre_allocated.clone());
+        }
+
         // All shards that belong to collections dropped in the last epoch are
         // eligible for finalization.
         //
@@ -1332,6 +1374,11 @@ impl StorageCollections for StorageCollectionsImpl {
         info!(?unfinalized_shards, "initializing finalizable_shards");
 
         self.finalizable_shards.lock().extend(unfinalized_shards);
+
+        // Unblock the shard pool replenishment task. It waits for this signal
+        // before writing any shards to the catalog, ensuring that the GC step
+        // above never sees current-epoch pool shards.
+        self.init_notify.notify_waiters();
 
         Ok(())
     }
@@ -1640,6 +1687,8 @@ impl StorageCollections for StorageCollectionsImpl {
         }
     }
 
+    // Lock ordering in this method: config -> pending_pre_opened -> shard_pool.inner.
+    // The shard_pool.inner lock is acquired indirectly via `take()`.
     async fn prepare_state(
         &self,
         txn: &mut (dyn StorageTxn + Send),
@@ -1647,12 +1696,46 @@ impl StorageCollections for StorageCollectionsImpl {
         ids_to_drop: BTreeSet<GlobalId>,
         ids_to_register: BTreeMap<GlobalId, ShardId>,
     ) -> Result<(), StorageError> {
-        txn.insert_collection_metadata(
-            ids_to_add
-                .into_iter()
-                .map(|id| (id, ShardId::new()))
-                .collect(),
-        )?;
+        let pool_enabled = {
+            let config = self.config.lock().expect("lock poisoned");
+            SHARD_POOL_ENABLED.get(config.config_set())
+        };
+
+        // Flush newly pre-opened shards to the catalog for crash recovery tracking.
+        let pending_inserts = self.shard_pool.drain_pending_inserts();
+        if !pending_inserts.is_empty() {
+            debug!(
+                count = pending_inserts.len(),
+                "persisting pre-allocated shards to catalog"
+            );
+            txn.insert_pre_allocated_shards(pending_inserts)?;
+        }
+
+        let mut claimed_shards = BTreeSet::new();
+        let mut pending = self.pending_pre_opened.lock().expect("lock poisoned");
+        let new_mappings: BTreeMap<_, _> = ids_to_add
+            .into_iter()
+            .map(|id| {
+                if pool_enabled {
+                    if let Some(pre_opened) = self.shard_pool.take() {
+                        let shard_id = pre_opened.shard_id;
+                        debug!(%id, %shard_id, "using pre-opened shard from pool");
+                        claimed_shards.insert(shard_id);
+                        pending.insert(shard_id, pre_opened);
+                        return (id, shard_id);
+                    }
+                }
+                (id, ShardId::new())
+            })
+            .collect();
+        drop(pending);
+
+        // Remove claimed shards from the pre-allocated catalog collection.
+        if !claimed_shards.is_empty() {
+            txn.remove_pre_allocated_shards(claimed_shards);
+        }
+
+        txn.insert_collection_metadata(new_mappings)?;
         txn.insert_collection_metadata(ids_to_register)?;
 
         // Delete the metadata for any dropped collections.
@@ -1742,10 +1825,32 @@ impl StorageCollections for StorageCollectionsImpl {
         let persist_client = &persist_client;
         // Reborrow the `&mut self` as immutable, as all the concurrent work to
         // be processed in this stream cannot all have exclusive access.
+        // Take all pending pre-opened shards for use in this bootstrap.
+        // We distribute them upfront to avoid needing a shared mutex in the
+        // concurrent stream below.
+        let mut pre_opened_shards = {
+            let mut pending = self.pending_pre_opened.lock().expect("lock poisoned");
+            std::mem::take(&mut *pending)
+        };
+
+        // Pre-distribute: match each collection's data_shard to a pre-opened entry
+        // before entering the concurrent stream, so no shared mutable state is needed.
+        let enriched_with_pre_opened: Vec<_> = enriched_with_metadata
+            .into_iter()
+            .map(|data| {
+                let pre_opened = data
+                    .as_ref()
+                    .ok()
+                    .and_then(|(_, _, metadata)| pre_opened_shards.remove(&metadata.data_shard));
+                (data, pre_opened)
+            })
+            .collect();
+
         use futures::stream::{StreamExt, TryStreamExt};
         let this = &*self;
-        let mut to_register: Vec<_> = futures::stream::iter(enriched_with_metadata)
-            .map(|data: Result<_, StorageError>| {
+        let mut to_register: Vec<_> = futures::stream::iter(enriched_with_pre_opened)
+            .map(|(data, pre_opened): (Result<_, StorageError>, _)| {
+                let register_ts = register_ts.clone();
                 async move {
                     let (id, description, metadata) = data?;
 
@@ -1764,15 +1869,47 @@ impl StorageCollections for StorageCollectionsImpl {
                         description.since.as_ref()
                     };
 
-                    let (write, mut since_handle) = this
-                        .open_data_handles(
+                    // Fast path: if this shard was pre-opened by the pool, reuse its
+                    // since handle and only open the write handle (needs RelationDesc).
+                    // This eliminates the upgrade_version and open_critical_since CRDB
+                    // round-trips that were already done during pool replenishment.
+                    // Slow path: open everything from scratch.
+                    let (write, mut since_handle) = if let Some(pre_opened) = pre_opened {
+                        debug!(
+                            %id,
+                            shard_id = %metadata.data_shard,
+                            "using pre-opened shard from pool, skipping upgrade_version and open_critical_handle"
+                        );
+
+                        // Apply since join for non-table collections with a since argument,
+                        // same logic as open_critical_handle.
+                        let mut handle = pre_opened.since_handle;
+                        if let Some(since) = since {
+                            let joined = handle.since().join(since);
+                            this.downgrade_since_to(&mut handle, &joined).await;
+                        }
+
+                        let mut write_handle = this
+                            .open_write_handle(
+                                &id,
+                                metadata.data_shard,
+                                metadata.relation_desc.clone(),
+                                persist_client,
+                            )
+                            .await;
+                        write_handle.fetch_recent_upper().await;
+
+                        (write_handle, SinceHandleWrapper::Critical(handle))
+                    } else {
+                        this.open_data_handles(
                             &id,
                             metadata.data_shard,
                             since,
                             metadata.relation_desc.clone(),
                             persist_client,
                         )
-                        .await;
+                        .await
+                    };
 
                     // Present tables as springing into existence at the register_ts
                     // by advancing the since. Otherwise, we could end up in a
@@ -2334,8 +2471,12 @@ impl StorageCollections for StorageCollectionsImpl {
             persist: _,
             cmd_tx: _,
             holds_tx: _,
+            shard_pool: _,
+            pending_pre_opened: _,
+            init_notify: _,
             _background_task: _,
             _finalize_shards_task: _,
+            _shard_pool_task: _,
         } = self;
 
         let finalizable_shards: Vec<_> = finalizable_shards
