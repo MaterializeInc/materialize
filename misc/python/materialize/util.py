@@ -16,6 +16,7 @@ import json
 import os
 import pathlib
 import random
+import re
 import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -237,3 +238,16 @@ def filter_cmd(args: list[str]) -> list[str]:
         )
         for arg in args
     ]
+
+
+def redact_secrets(text: str) -> str:
+    text = re.sub(
+        r"-----BEGIN [A-Z ]+-----.*?-----END [A-Z ]+-----",
+        "[REDACTED]",
+        text,
+        flags=re.DOTALL,
+    )
+    for secret in FILTERED_ARGS:
+        if secret in text:
+            text = re.sub(re.escape(secret) + r"\S*", "[REDACTED]", text)
+    return text
