@@ -2,7 +2,6 @@
 title: Agent endpoint configuration
 description: "Configuration for /api/mcp/agent endpoint."
 make_table_row_headers_searchable: true
-draft: true
 menu:
   main:
     parent: "mcp-server-agent"

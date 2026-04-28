@@ -2,7 +2,6 @@
 title: MCP Server for Agents
 description: "Expose real-time data products to AI agents via Materialize's built-in MCP endpoint."
 make_table_row_headers_searchable: true
-draft: true
 menu:
   main:
     parent: "mcp-server"
@@ -12,21 +11,16 @@ menu:
 
 {{< public-preview />}}
 
-Materialize provides a built-in [Model Context Protocol
-(MCP)](https://modelcontextprotocol.io/) endpoint for discovery and querying of
-data products. The MCP interface is served directly by the database; no sidecar
-process or external server is required.
+Materialize provides a built-in Model Context Protocol (MCP) endpoint
+`/api/mcp/agent` (port 6876) for discovery and querying of data products. The
+MCP interface is served directly by the database; no sidecar process or external
+server is required.
 
 ## Overview
 
-**Endpoint**: `/api/mcp/agent`
+The `/api/mcp/agent` endpoint lets AI agents discover and query your real-time
+data products over HTTP.
 
-- Lets AI agents discover and query your real-time data products over HTTP.
-
-- Uses [JSON-RPC 2.0](https://www.jsonrpc.org/specification) over HTTP (default
-port 6876)
-
-- Supports the `initialize`, `tools/list`, and `tools/call` methods.
 
 ## Authentication and access control {#rbac}
 
