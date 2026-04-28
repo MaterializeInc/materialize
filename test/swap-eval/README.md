@@ -102,6 +102,74 @@ Takeaways:
 * Tail latency grows with ratio: p95 climbs 5–11x, p99 explodes at 1:30 (993 ms).
 * Baseline p99 of 89 ms is already elevated vs p95 of 6.75 ms; some outliers exist independent of swap and deserve separate investigation.
 
+## Experiment: r8gd vs r6gd hydration anomaly
+
+Polar Signals on-CPU profiles (24h ending 2026-04-27, namespace `environment-a858fdc6-92f2-40d7-a30e-a231810f9c2a-0`, comm `clusterd`) show:
+
+* **u92** (M.X1-large, r8gd, kernel 6.12.73): ~25.6% CPU in `el0_da` / `do_page_fault` / `handle_mm_fault`, with `do_swap_page` 9.9%, `swapin_readahead` 6.2%, and a direct-reclaim chain `try_charge_memcg` → `try_to_free_mem_cgroup_pages` → `shrink_node` at 10.0%.
+* **u88** (M.1-large, r6gd, same kernel): ~10.8% on faults, no `do_swap_page`, no direct-reclaim chain in the top 80.
+
+Cgroup config is identical (`memory_limit=62100MiB`, `disk_limit=372600MiB`, `swap_enabled=true`, 8 workers). Only the node selector differs. lgalloc is off in production (conflicts with swap). THP is `madvise` and Materialize never calls `MADV_HUGEPAGE`. K8s does not surface `memory.high`, so reclaim hits the hard ceiling and runs synchronously on the user thread.
+
+**Working hypothesis.** r8gd's faster CPU drives a higher anonymous-allocation rate than the swap device can drain asynchronously, so the kernel falls back to direct reclaim on the timely worker thread, eating CPU that would otherwise do compute.
+
+**Success signal for any mitigation.** `pgscan_direct` drops sharply while `pgscan_kswapd` stays flat or rises — i.e. user-thread reclaim converted into background reclaim.
+
+### Diagnostic instrumentation (in `sweep.py` since 2026-04-28)
+
+Per-second columns in `<tag>.csv`:
+
+* `vmrss_kb`, `vmswap_kb` — `/proc/$pid/status`
+* `minflt`, `majflt` — `/proc/$pid/stat` deltas (per-process fault counts)
+* `psi_some_avg10`, `psi_full_avg10`, `psi_full_avg60` — `/proc/pressure/memory`
+* `pswpin`, `pswpout`, `pgmajfault` — `/proc/vmstat` deltas (system-wide swap traffic)
+* `pgscan_kswapd`, `pgscan_direct`, `pgsteal_kswapd`, `pgsteal_direct` — direct-vs-background reclaim attribution (the headline ratio)
+* `pgscan_anon`, `pgscan_file` — anon vs file scan split (relevant since lgalloc is off)
+* `thp_fault_alloc`, `thp_fault_fallback`, `thp_split_page`, `thp_collapse_alloc` — THP activity
+
+Once-per-run snapshot in `<tag>_env.txt`:
+
+* `uname -r`, `/sys/kernel/mm/lru_gen/enabled`, `/sys/kernel/mm/transparent_hugepage/enabled`, `/proc/sys/vm/swappiness`
+* `/proc/swaps`
+* `MALLOC_CONF` from `/proc/$clusterd_pid/environ`
+
+CSV schema changed on 2026-04-28; pre-instrumentation runs (`baseline_s4.csv`, `swap_1-2_s4.csv` from the original snapshot) have only `ts,vmrss_kb,vmswap_kb,pswpin,pswpout`.
+
+### Knobs (ordered by expected leverage)
+
+Run each on M.X1-large SF=64 (TPCH harness) and on the local r8gd swap-eval host with the existing AuctionScenario sweep at scale=4. Record: hydration time, peak `VmRSS`, peak `VmSwap`, `pgscan_direct` integral, `pgscan_kswapd` integral, peak `psi_full_avg10`, `majflt` delta.
+
+1. **`MALLOC_CONF=dirty_decay_ms:-1,muzzy_decay_ms:-1`** — stop jemalloc from `MADV_DONTNEED`-ing idle pages (theory: pages get re-faulted when next allocation reuses the address range, doubling fault work). Fallback: `dirty_decay_ms:60000` if peak RSS overshoots `memory_limit`.
+2. **`MALLOC_CONF=...,narenas:8`** — pin arena count to worker count to reduce cross-thread frees and dirty-page churn. Run knob 1 alone, then 1+2, then 2 alone (knob 1 should dominate).
+3. **Per-family ratio sweep** — re-run the existing 1:2/1:5/1:12/1:30 sweep on r6gd and r8gd separately (not testable on this single-host harness; needs k8s).
+4. **Soft userspace throttle in `src/compute/src/memory_limiter.rs`** — patch in a soft pre-limit at 85% of `heap_limit` that pauses dataflow scheduling and forces compaction. K8s does not surface `memory.high`, so the only path to soft throttle is application-level.
+5. **Allocation-rate reduction at hot sites** — `merge_batcher`, `TimelyStack::merge_from`, `persist_source::PendingWork::do_work`, `mz_join_core::Work::process`, `Vec::spec_extend`/`RawVecInner::finish_grow`. Per-file PRs.
+
+Deprioritized (cheap but low expected leverage): `vm.swappiness`, `transparent_hugepage` mode, MGLRU.
+
+### Caveat: kernel mismatch
+
+The local r8gd swap-eval host runs kernel 6.17; production runs 6.12.73. Reclaim and THP behavior may differ. `pgscan_kswapd`/`pgscan_direct` exist on both, but `pgscan_anon`/`pgscan_file` and the `proactive` reclaim variants are richer on 6.17. Cross-check kernel-version parity before drawing strong conclusions.
+
+### What this does not test
+
+* Off-CPU stalls. Polar Signals on this project exposes only on-CPU profiles, so the actual blocking-on-swap-in time is invisible. Use `bpftrace -e 'kprobe:do_swap_page'` or eBPF off-cpu profiles if needed.
+* Per-operator attribution. Timely interleaves operators on a single thread; flame graphs lose op-level granularity. Try `query_source_report` filtered by `timely_scope=...`.
+
+### Reporting template
+
+Per run record:
+
+* knob set (full env, sysctls, code patches applied)
+* family (r6gd or r8gd), size (M.1-large or M.X1-large), scale factor
+* hydration time, peak `VmRSS`, peak `VmSwap`
+* integral `pgscan_direct`, integral `pgscan_kswapd`, ratio
+* peak `psi_full_avg10`
+* `majflt` delta, `minflt` delta
+* one Polar Signals link with the time range pinned
+
+A successful mitigation shows: lower hydration time, lower `pgscan_direct` integral, higher `pgscan_kswapd:direct` ratio, lower peak PSI.
+
 ## Next steps
 
 Not yet done. Captured here so a follow-up session can pick up.

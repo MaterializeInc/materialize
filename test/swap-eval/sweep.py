@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """Swap eval sweep: run AuctionScenario on one size, measure peak RSS, swap, arrangement size."""
-import argparse, os, subprocess, sys, threading, time, psycopg
+
+import argparse
+import os
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
+
+import psycopg
 
 SETUP_SQL_TEMPLATE = """
 DROP CLUSTER IF EXISTS lg CASCADE;
@@ -97,7 +105,12 @@ def get_clusterd_pid_for_cluster(cur, cluster_name: str) -> int | None:
         return None
     cid = str(row[0])
     try:
-        out = subprocess.check_output(["pgrep", "-f", f"cluster-{cid}-replica-"]).decode().strip().splitlines()
+        out = (
+            subprocess.check_output(["pgrep", "-f", f"cluster-{cid}-replica-"])
+            .decode()
+            .strip()
+            .splitlines()
+        )
     except subprocess.CalledProcessError:
         return None
     return int(out[0]) if out else None
@@ -115,26 +128,133 @@ def read_proc_status(pid: int) -> dict:
     return d
 
 
+VMSTAT_KEYS = [
+    "pswpin",
+    "pswpout",
+    "pgmajfault",
+    "pgscan_kswapd",
+    "pgscan_direct",
+    "pgsteal_kswapd",
+    "pgsteal_direct",
+    "pgscan_anon",
+    "pgscan_file",
+    "thp_fault_alloc",
+    "thp_fault_fallback",
+    "thp_split_page",
+    "thp_collapse_alloc",
+]
+
+
 def read_vmstat() -> dict:
     d = {}
     with open("/proc/vmstat") as f:
         for line in f:
             k, v = line.split()
             d[k] = int(v)
+    for key in VMSTAT_KEYS:
+        if key not in d:
+            d[key] = sum(v for k, v in d.items() if k.startswith(key + "_"))
     return d
+
+
+def read_proc_stat(pid: int) -> tuple[int, int]:
+    """Return (minflt, majflt) cumulative counts from /proc/<pid>/stat."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            line = f.read()
+    except FileNotFoundError:
+        return 0, 0
+    rp = line.rfind(")")
+    fields = line[rp + 2 :].split()
+    return int(fields[7]), int(fields[9])
+
+
+def read_pressure_memory() -> tuple[float, float, float]:
+    """Return (some_avg10, full_avg10, full_avg60) from /proc/pressure/memory."""
+    try:
+        with open("/proc/pressure/memory") as f:
+            txt = f.read()
+    except FileNotFoundError:
+        return float("nan"), float("nan"), float("nan")
+    some_a10 = full_a10 = full_a60 = float("nan")
+    for line in txt.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        kvs = dict(p.split("=") for p in parts[1:] if "=" in p)
+        if parts[0] == "some":
+            some_a10 = float(kvs.get("avg10", "nan"))
+        elif parts[0] == "full":
+            full_a10 = float(kvs.get("avg10", "nan"))
+            full_a60 = float(kvs.get("avg60", "nan"))
+    return some_a10, full_a10, full_a60
+
+
+def write_env_snapshot(out_path: Path, pid: int, size: str, scale: int) -> None:
+    lines = [
+        f"# swap-eval env snapshot: size={size} scale={scale} ts={time.time():.0f}",
+        f"uname: {os.uname().release}",
+    ]
+    for path in [
+        "/sys/kernel/mm/lru_gen/enabled",
+        "/sys/kernel/mm/transparent_hugepage/enabled",
+        "/proc/sys/vm/swappiness",
+    ]:
+        try:
+            lines.append(f"{path}: {Path(path).read_text().strip()}")
+        except OSError as e:
+            lines.append(f"{path}: ERR {e}")
+    try:
+        lines.append("--- /proc/swaps ---")
+        lines.append(Path("/proc/swaps").read_text().rstrip())
+    except OSError as e:
+        lines.append(f"/proc/swaps: ERR {e}")
+    try:
+        environ = Path(f"/proc/{pid}/environ").read_bytes().split(b"\x00")
+        malloc_conf = next(
+            (e.decode() for e in environ if e.startswith(b"MALLOC_CONF=")),
+            "MALLOC_CONF=<unset>",
+        )
+        lines.append(f"clusterd env: {malloc_conf}")
+    except OSError as e:
+        lines.append(f"clusterd env: ERR {e}")
+    out_path.write_text("\n".join(lines) + "\n")
 
 
 def monitor_loop(pid: int, out_path: Path, stop_at: float):
     """Sample /proc stats every 1s until stop_at (unix ts)."""
     with out_path.open("w") as f:
-        f.write("ts,vmrss_kb,vmswap_kb,pswpin,pswpout\n")
+        cols = [
+            "ts",
+            "vmrss_kb",
+            "vmswap_kb",
+            "minflt",
+            "majflt",
+            "psi_some_avg10",
+            "psi_full_avg10",
+            "psi_full_avg60",
+        ] + VMSTAT_KEYS
+        f.write(",".join(cols) + "\n")
         base_vm = read_vmstat()
+        base_minflt, base_majflt = read_proc_stat(pid)
         while time.time() < stop_at:
             st = read_proc_status(pid)
             vm = read_vmstat()
+            minflt, majflt = read_proc_stat(pid)
+            some10, full10, full60 = read_pressure_memory()
             rss = int(st.get("VmRSS", "0 kB").split()[0]) if "VmRSS" in st else 0
             swap = int(st.get("VmSwap", "0 kB").split()[0]) if "VmSwap" in st else 0
-            f.write(f"{time.time():.3f},{rss},{swap},{vm['pswpin']-base_vm['pswpin']},{vm['pswpout']-base_vm['pswpout']}\n")
+            row = [
+                f"{time.time():.3f}",
+                str(rss),
+                str(swap),
+                str(minflt - base_minflt),
+                str(majflt - base_majflt),
+                f"{some10:.2f}",
+                f"{full10:.2f}",
+                f"{full60:.2f}",
+            ] + [str(vm[k] - base_vm[k]) for k in VMSTAT_KEYS]
+            f.write(",".join(row) + "\n")
             f.flush()
             time.sleep(1)
 
@@ -143,8 +263,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--size", required=True)
     ap.add_argument("--scale", type=int, default=1)
-    ap.add_argument("--hydration-wait", type=int, default=120, help="max seconds to wait for index hydration")
-    ap.add_argument("--query-count", type=int, default=200, help="steady-state point queries to run")
+    ap.add_argument(
+        "--hydration-wait",
+        type=int,
+        default=120,
+        help="max seconds to wait for index hydration",
+    )
+    ap.add_argument(
+        "--query-count", type=int, default=200, help="steady-state point queries to run"
+    )
     ap.add_argument("--out-dir", default="/home/ubuntu/swap_results")
     args = ap.parse_args()
 
@@ -155,7 +282,9 @@ def main():
     tag = f"{size}_s{scale}"
     print(f"=== size={size} scale={scale} ===")
 
-    conn = psycopg.connect("postgres://materialize@localhost:6875/materialize", autocommit=True)
+    conn = psycopg.connect(
+        "postgres://materialize@localhost:6875/materialize", autocommit=True
+    )
     cur = conn.cursor()
     cur.execute("SET transaction_isolation = 'serializable'")
 
@@ -178,9 +307,13 @@ def main():
         sys.exit(1)
     print(f"clusterd pid: {clusterd_pid}")
 
+    write_env_snapshot(out_dir / f"{tag}_env.txt", clusterd_pid, size, scale)
+
     stop_at = time.time() + args.hydration_wait + 30
     mon_thread = threading.Thread(
-        target=monitor_loop, args=(clusterd_pid, out_dir / f"{tag}.csv", stop_at), daemon=True
+        target=monitor_loop,
+        args=(clusterd_pid, out_dir / f"{tag}.csv", stop_at),
+        daemon=True,
     )
     mon_thread.start()
 
@@ -208,7 +341,9 @@ def main():
         print(f"arrangement: records={arr_records}, bytes={arr_bytes}")
 
         # Steady-state point query phase: N hits on the index, random ids
-        import random, statistics
+        import random
+        import statistics
+
         rng = random.Random(42)
         lats = []
         for _ in range(args.query_count):
@@ -222,7 +357,9 @@ def main():
         p95 = lats[int(len(lats) * 0.95)]
         p99 = lats[int(len(lats) * 0.99)]
         mean = statistics.mean(lats)
-        print(f"point-query ms: mean={mean:.2f} p50={p50:.2f} p95={p95:.2f} p99={p99:.2f}")
+        print(
+            f"point-query ms: mean={mean:.2f} p50={p50:.2f} p95={p95:.2f} p99={p99:.2f}"
+        )
 
         # Persist raw latencies per size
         (out_dir / f"{tag}_lat.txt").write_text("\n".join(f"{x:.3f}" for x in lats))
@@ -235,8 +372,12 @@ def main():
     write_header = not summary.exists()
     with summary.open("a") as f:
         if write_header:
-            f.write("size,scale,setup_s,hydration_s,arr_records,arr_bytes,q_mean_ms,q_p50_ms,q_p95_ms,q_p99_ms\n")
-        f.write(f"{size},{scale},{setup_t:.1f},{hyd_s:.1f},{arr_records},{arr_bytes},{mean:.2f},{p50:.2f},{p95:.2f},{p99:.2f}\n")
+            f.write(
+                "size,scale,setup_s,hydration_s,arr_records,arr_bytes,q_mean_ms,q_p50_ms,q_p95_ms,q_p99_ms\n"
+            )
+        f.write(
+            f"{size},{scale},{setup_t:.1f},{hyd_s:.1f},{arr_records},{arr_bytes},{mean:.2f},{p50:.2f},{p95:.2f},{p99:.2f}\n"
+        )
     print(f"wrote {summary}")
 
 
