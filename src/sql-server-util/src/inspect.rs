@@ -499,27 +499,25 @@ pub async fn get_constraints_for_tables(
         .map(|idx| format!("@P{}", idx))
         .join(", ");
 
-    // Because we don't have an object idenfifier for the table(s), this query concatenates the
-    // schema and table name to create a single identifier for the query rather than compose a
-    // complex set of OR conditions for each schema + set of tables in the schema.
-    //
-    // This query may perform poorly due to the condition relying on a concatenated value. We may get
-    // better performance by adding a query constraint on the table names, but it isn't clear at
-    // this time if that is needed.
+    // KEY_COLUMN_USAGE (not CONSTRAINT_COLUMN_USAGE) because it exposes
+    // ORDINAL_POSITION, letting us preserve composite-key column order.
     let query = format!(
         "SELECT \
         tc.table_schema, \
         tc.table_name, \
-        ccu.column_name,  \
+        kcu.column_name, \
         tc.constraint_name, \
         tc.constraint_type \
     FROM information_schema.table_constraints tc \
-    JOIN information_schema.constraint_column_usage ccu \
-        ON ccu.constraint_schema = tc.constraint_schema \
-        AND ccu.constraint_name = tc.constraint_name \
+    JOIN information_schema.key_column_usage kcu \
+        ON kcu.constraint_schema = tc.constraint_schema \
+        AND kcu.constraint_name = tc.constraint_name \
+        AND kcu.table_schema = tc.table_schema \
+        AND kcu.table_name = tc.table_name \
     WHERE
         QUOTENAME(tc.table_schema) + '.' + QUOTENAME(tc.table_name) IN ({params})
-        AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')"
+        AND tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+    ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position"
     );
 
     let query_params: Vec<_> = qualified_table_names
