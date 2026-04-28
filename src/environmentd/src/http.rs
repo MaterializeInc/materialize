@@ -423,37 +423,49 @@ impl HttpServer {
             let metrics_router = Router::new()
                 .route(
                     "/metrics",
-                    routing::get(move || async move {
-                        mz_http_util::handle_prometheus(&metrics_registry).await
+                    routing::get(move |headers: axum::http::HeaderMap| async move {
+                        mz_http_util::handle_prometheus(&metrics_registry, headers).await
                     }),
                 )
                 .route(
                     "/metrics/mz_usage",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry =
+                                sql::handle_promsql(client, USAGE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/metrics/mz_frontier",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry =
+                                sql::handle_promsql(client, FRONTIER_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/metrics/mz_compute",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry =
+                                sql::handle_promsql(client, COMPUTE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/metrics/mz_storage",
-                    routing::get(|client: AuthedClient| async move {
-                        let registry = sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
-                        mz_http_util::handle_prometheus(&registry).await
-                    }),
+                    routing::get(
+                        |client: AuthedClient, headers: axum::http::HeaderMap| async move {
+                            let registry =
+                                sql::handle_promsql(client, STORAGE_METRIC_QUERIES).await;
+                            mz_http_util::handle_prometheus(&registry, headers).await
+                        },
+                    ),
                 )
                 .route(
                     "/api/livez",

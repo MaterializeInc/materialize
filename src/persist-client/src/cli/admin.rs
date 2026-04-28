@@ -360,8 +360,8 @@ pub(crate) fn info_log_non_zero_metrics(metric_families: &[MetricFamily]) {
     for mf in metric_families {
         for m in mf.get_metric() {
             let val = match mf.get_field_type() {
-                MetricType::COUNTER => m.get_counter().get_value(),
-                MetricType::GAUGE => m.get_gauge().get_value(),
+                MetricType::COUNTER => m.get_counter().value(),
+                MetricType::GAUGE => m.get_gauge().value(),
                 x => {
                     info!("unhandled {} metric type: {:?}", mf.name(), x);
                     continue;

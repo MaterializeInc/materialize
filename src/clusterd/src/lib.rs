@@ -261,8 +261,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             )
             .route(
                 "/metrics",
-                routing::get(move || async move {
-                    mz_http_util::handle_prometheus(&metrics_registry).await
+                routing::get(move |headers: axum::http::HeaderMap| async move {
+                    mz_http_util::handle_prometheus(&metrics_registry, headers).await
                 }),
             )
             .route("/api/tracing", routing::get(mz_http_util::handle_tracing))
