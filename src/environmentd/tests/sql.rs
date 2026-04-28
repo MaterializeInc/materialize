@@ -2588,7 +2588,7 @@ fn test_dont_drop_sinks_twice() {
     let err = out.read_to_end(&mut vec![]).unwrap_err();
     assert!(
         err.to_string_with_causes()
-            .contains("query could not complete")
+            .contains("copy has been terminated")
     );
 
     drop(out);
