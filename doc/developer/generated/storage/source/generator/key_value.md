@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/generator/key_value.rs
-revision: b0fa98e931
+revision: 5427dc5764
 ---
 
 # mz-storage::source::generator::key_value

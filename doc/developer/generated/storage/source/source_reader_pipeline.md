@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/source_reader_pipeline.rs
-revision: b0fa98e931
+revision: 5427dc5764
 ---
 
 # mz-storage::source::source_reader_pipeline

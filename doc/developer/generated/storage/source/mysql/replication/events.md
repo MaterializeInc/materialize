@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/source/mysql/replication/events.rs
-revision: 9e91428d8a
+revision: 5427dc5764
 ---
 
 # mz-storage::source::mysql::replication::events
