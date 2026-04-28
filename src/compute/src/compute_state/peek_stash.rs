@@ -166,7 +166,7 @@ impl StashingPeek {
 
         let mut num_rows: u64 = 0;
 
-        loop {
+        'outer: loop {
             let row = rows_rx.recv().await;
             match row {
                 Some(Ok(rows)) => {
@@ -180,10 +180,12 @@ impl StashingPeek {
                             .await
                             .expect("invalid usage");
 
-                        // Stop if we have enough rows to satisfy the RowSetFinishing's offset + limit.
                         if let Some(max_rows) = max_rows {
                             if num_rows >= u64::cast_from(max_rows) {
-                                break;
+                                // Drop the receiver so the producer's next
+                                // try_reserve() fails, stopping row production.
+                                drop(rows_rx);
+                                break 'outer;
                             }
                         }
                     }
