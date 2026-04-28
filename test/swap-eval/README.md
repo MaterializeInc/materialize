@@ -135,6 +135,15 @@ Once-per-run snapshot in `<tag>_env.txt`:
 
 CSV schema changed on 2026-04-28; pre-instrumentation runs (`baseline_s4.csv`, `swap_1-2_s4.csv` from the original snapshot) have only `ts,vmrss_kb,vmswap_kb,pswpin,pswpout`.
 
+### Workloads
+
+Run each knob across these scenarios:
+
+* **TPCH hydration** (the colleague's harness): TPCH source cluster, then install indexes on TPCH queries (omit q20), measure time to all-indexes-hydrated. Scale factors 16, 32, 64. Both M.1-large and M.X1-large. SF=16 and SF=32 should not perturb (working set fits) and act as controls. SF=64 is where the regression appears.
+* **PR 36252 sweep** (this directory's `sweep.py`): AuctionScenario hydration plus 200 random point lookups under serializable. Already samples `/proc/$pid/status` (VmRSS, VmSwap) and `/proc/vmstat` (full set since 2026-04-28).
+
+For each (knob × workload × family) cell, capture: total wall time, peak `VmRSS`, peak `VmSwap`, integral of `pgscan_direct`, integral of `pgscan_kswapd`, peak `full avg10` PSI.
+
 ### Knobs (ordered by expected leverage)
 
 Run each on M.X1-large SF=64 (TPCH harness) and on the local r8gd swap-eval host with the existing AuctionScenario sweep at scale=4. Record: hydration time, peak `VmRSS`, peak `VmSwap`, `pgscan_direct` integral, `pgscan_kswapd` integral, peak `psi_full_avg10`, `majflt` delta.
@@ -169,6 +178,16 @@ Per run record:
 * one Polar Signals link with the time range pinned
 
 A successful mitigation shows: lower hydration time, lower `pgscan_direct` integral, higher `pgscan_kswapd:direct` ratio, lower peak PSI.
+
+### References
+
+* Profile data: project `877cb2f3-7413-4755-8414-38231cb06bca` (Materialize/Cloud), `parca_agent:samples:count:cpu:nanoseconds:delta`
+* Sweep harness: `test/swap-eval/sweep.py` (PR 36252)
+* Replica size definitions: `Pulumi.staging.yaml` `M.1-large` and `M.X1-large`
+* k8s memory wiring: `src/orchestrator-kubernetes/src/lib.rs:613-624`
+* Swap heap-limit wiring: `src/controller/src/clusters.rs:661-772`
+* Existing rusage exporter: `src/metrics/src/rusage.rs:113-114`
+* Memory limiter (soft-throttle target): `src/compute/src/memory_limiter.rs`
 
 ## Next steps
 
