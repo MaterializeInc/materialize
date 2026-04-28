@@ -33,7 +33,7 @@ use mz_persist_client::operators::shard_source::{
 use mz_persist_client::stats::STATS_AUDIT_PANIC;
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_persist_types::columnar::{ColumnEncoder, Schema};
+use mz_persist_types::columnar::{ColumnDemand, ColumnEncoder, Schema};
 use mz_repr::{
     Datum, DatumVec, Diff, GlobalId, RelationDesc, ReprRelationType, Row, RowArena, Timestamp,
 };
@@ -371,34 +371,37 @@ where
         desc_transformer,
         Arc::new(read_desc.clone()),
         Arc::new(UnitSchema),
-        move |stats, frontier| {
-            let Some(lower) = frontier.as_option().copied() else {
-                // If the frontier has advanced to the empty antichain,
-                // we'll never emit any rows from any part.
-                return FilterResult::Discard;
-            };
+        {
+            let read_desc = read_desc.clone();
+            move |stats, frontier| {
+                let Some(lower) = frontier.as_option().copied() else {
+                    // If the frontier has advanced to the empty antichain,
+                    // we'll never emit any rows from any part.
+                    return FilterResult::Discard;
+                };
 
-            if lower > upper {
-                // The frontier timestamp is larger than the until of the dataflow:
-                // anything from this part will necessarily be filtered out.
-                return FilterResult::Discard;
-            }
+                if lower > upper {
+                    // The frontier timestamp is larger than the until of the dataflow:
+                    // anything from this part will necessarily be filtered out.
+                    return FilterResult::Discard;
+                }
 
-            let time_range =
-                ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper));
-            if let Some(plan) = &filter_plan {
-                let metrics = &metrics.pushdown.part_stats;
-                let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
-                filter_result(&read_desc, time_range, stats, plan)
-            } else {
-                FilterResult::Keep
+                let time_range =
+                    ResultSpec::value_between(Datum::MzTimestamp(lower), Datum::MzTimestamp(upper));
+                if let Some(plan) = &filter_plan {
+                    let metrics = &metrics.pushdown.part_stats;
+                    let stats = RelationPartStats::new(&filter_name, metrics, &read_desc, stats);
+                    filter_result(&read_desc, time_range, stats, plan)
+                } else {
+                    FilterResult::Keep
+                }
             }
         },
         listen_sleep,
         start_signal,
         error_handler,
     );
-    let rows = decode_and_mfp(cfg, fetched, &name, until, map_filter_project);
+    let rows = decode_and_mfp(cfg, fetched, &name, &read_desc, until, map_filter_project);
     (rows, token)
 }
 
@@ -456,6 +459,7 @@ pub fn decode_and_mfp<'scope, E>(
         FetchedBlob<SourceData, (), Timestamp, StorageDiff>,
     >,
     name: &str,
+    read_desc: &RelationDesc,
     until: Antichain<Timestamp>,
     mut map_filter_project: Option<&mut MfpPlan>,
 ) -> StreamVec<
@@ -484,6 +488,33 @@ where
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
     let map_filter_project = map_filter_project.as_mut().map(|mfp| mfp.take());
 
+    // Compute the set of stable column indices the parquet reader should
+    // materialize, so it can skip decompressing and arrow-decoding column
+    // chunks whose leaves aren't in the read schema. The mask is exactly the
+    // stable indices in `read_desc`, no narrower: the downstream decoder is
+    // configured for `read_desc` and would fail on any column it expects but
+    // doesn't find. Narrowing further than the read schema is a separate
+    // optimization that belongs upstream, where `read_desc` itself gets
+    // narrowed (see `compute_apply_column_demands` in compute/render).
+    //
+    // When the read schema already covers every k_s sub-field present in the
+    // blob, the resulting mask is a no-op and parquet decode behaves as
+    // before. Gated by a dyncfg for safe rollout.
+    //
+    // `RelationDesc::iter_all` walks `metadata` (a `BTreeMap<ColumnIndex, _>`)
+    // in stable-index order, so collecting straight into a `Vec` preserves the
+    // sorted-ascending invariant `ColumnDemand` requires for `binary_search`.
+    let column_demand: Option<ColumnDemand> = if cfg.storage_source_enable_column_projection() {
+        let stable: Vec<usize> = read_desc
+            .iter_all()
+            .map(|(col_idx, _, _)| col_idx.to_raw())
+            .collect();
+        debug_assert!(stable.windows(2).all(|w| w[0] < w[1]));
+        Some(Arc::new(stable))
+    } else {
+        None
+    };
+
     builder.build(move |_caps| {
         let name = name.to_owned();
         // Acquire an activator to reschedule the operator when it has unfinished work.
@@ -500,7 +531,10 @@ where
                     pending_work.push_back(PendingWork {
                         panic_on_audit_failure: panic_on_audit_failure.get(),
                         capability: capability.clone(),
-                        part: PendingPart::Unparsed(fetched_blob),
+                        part: PendingPart::Unparsed {
+                            blob: fetched_blob,
+                            row_demand: column_demand.clone(),
+                        },
                     })
                 }
             });
@@ -549,7 +583,14 @@ struct PendingWork {
 }
 
 enum PendingPart {
-    Unparsed(FetchedBlob<SourceData, (), Timestamp, StorageDiff>),
+    Unparsed {
+        blob: FetchedBlob<SourceData, (), Timestamp, StorageDiff>,
+        /// Column demand to push down into the row decoder. `None` decodes
+        /// the full row. For source/MV shards the row lives on the key side,
+        /// so demand routes to `K`'s decoder; see
+        /// [`FetchedBlob::parse_with_demand`].
+        row_demand: Option<ColumnDemand>,
+    },
     Parsed {
         part: ShardSourcePart<SourceData, (), Timestamp, StorageDiff>,
     },
@@ -564,8 +605,10 @@ impl PendingPart {
     /// is known to contain errors or if it's unknown.
     fn part_mut(&mut self) -> &mut FetchedPart<SourceData, (), Timestamp, StorageDiff> {
         match self {
-            PendingPart::Unparsed(x) => {
-                *self = PendingPart::Parsed { part: x.parse() };
+            PendingPart::Unparsed { blob, row_demand } => {
+                *self = PendingPart::Parsed {
+                    part: blob.parse_with_demand(row_demand.as_ref()),
+                };
                 // Won't recurse any further.
                 self.part_mut()
             }

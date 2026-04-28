@@ -90,6 +90,20 @@ pub mod operators {
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
     );
+
+    /// When enabled, the persist source pushes the MFP's column demand into
+    /// the value decoder so un-demanded columns are not materialized. This
+    /// is a CPU optimization; it does not affect query results, since
+    /// un-demanded columns surface as `Datum::Dummy` (which the MFP cannot
+    /// observe by definition of `demand`).
+    pub(crate) const STORAGE_SOURCE_ENABLE_COLUMN_PROJECTION: Config<bool> = Config::new(
+        "storage_source_enable_column_projection",
+        false,
+        "\
+        Whether the persist source pushes column projection (derived from the \
+        attached MFP) down into the row decoder, skipping decode work for \
+        columns the MFP does not read.",
+    );
 }
 pub mod read;
 pub mod rpc;

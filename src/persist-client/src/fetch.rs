@@ -31,7 +31,7 @@ use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::ArrayOrd;
-use mz_persist_types::columnar::{ColumnDecoder, Schema, data_type};
+use mz_persist_types::columnar::{ColumnDecoder, ColumnDemand, Schema, data_type};
 use mz_persist_types::part::Codec64Mut;
 use mz_persist_types::schema::backward_compatible;
 use mz_persist_types::stats::PartStats;
@@ -408,6 +408,7 @@ pub(crate) fn decode_batch_part_blob<T>(
     registered_desc: Description<T>,
     part: &HollowBatchPart<T>,
     buf: &SegmentedBytes,
+    row_demand: Option<&ColumnDemand>,
 ) -> EncodedPart<T>
 where
     T: Timestamp + Lattice + Codec64,
@@ -416,7 +417,13 @@ where
         let parsed = metrics
             .codecs
             .batch
-            .decode(|| BlobTraceBatchPart::decode(buf, &metrics.columnar))
+            .decode(|| {
+                BlobTraceBatchPart::decode_with_demand(
+                    buf,
+                    &metrics.columnar,
+                    row_demand.map(|d| d.as_slice()),
+                )
+            })
             .map_err(|err| anyhow!("couldn't decode batch at key {}: {}", part.key, err))
             // We received a State that we couldn't decode. This could happen if
             // persist messes up backward/forward compatibility, if the durable
@@ -445,6 +452,8 @@ where
 {
     let buf =
         fetch_batch_part_blob(shard_id, blob, metrics, shard_metrics, read_metrics, part).await?;
+    // The standalone fetch path doesn't currently propagate column demand;
+    // projection pushdown is plumbed through `FetchedBlob::parse_with_demand`.
     let part = decode_batch_part_blob(
         cfg,
         metrics,
@@ -452,6 +461,7 @@ where
         registered_desc.clone(),
         part,
         &buf,
+        None,
     );
     Ok(part)
 }
@@ -726,11 +736,94 @@ where
 impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, T, D> {
     /// Partially decodes this blob into a [FetchedPart].
     pub fn parse(&self) -> ShardSourcePart<K, V, T, D> {
-        self.parse_internal(&self.fetch_config)
+        self.parse_internal(&self.fetch_config, None)
+    }
+
+    /// Partially decodes this blob into a [FetchedPart], requesting that the row
+    /// schema only materialize columns listed in `row_demand`. Schemas that don't
+    /// support projection pushdown ignore the demand and produce a full decoder.
+    ///
+    /// The demand applies to the side of the persist `(K, V)` pair that holds
+    /// the row data — for sources/MVs that's the key (`SourceData`); other
+    /// shards are unaffected because their schemas don't honor demand.
+    pub fn parse_with_demand(
+        &self,
+        row_demand: Option<&ColumnDemand>,
+    ) -> ShardSourcePart<K, V, T, D> {
+        self.parse_internal(&self.fetch_config, row_demand)
     }
 
     /// Partially decodes this blob into a [FetchedPart].
-    pub(crate) fn parse_internal(&self, cfg: &FetchConfig) -> ShardSourcePart<K, V, T, D> {
+    pub(crate) fn parse_internal(
+        &self,
+        cfg: &FetchConfig,
+        row_demand: Option<&ColumnDemand>,
+    ) -> ShardSourcePart<K, V, T, D> {
+        // Parquet column projection drops un-demanded sub-fields of the row
+        // struct (`k_s`) before the parquet reader decompresses or
+        // arrow-decodes them. The demand is expressed in stable column
+        // indices that name the leaves under `k_s/ok` in the blob, which
+        // `apply_demand` preserves on the read schema, so the post-projection
+        // arrays always match the read shape regardless of whether the
+        // underlying part needs schema migration. The codec-only path (no
+        // `k_s`) and the row-validating decode format (which requires every
+        // sub-field present) opt out by passing `None` below.
+        let push_parquet_demand = matches!(self.structured_part_audit, PartDecodeFormat::Arrow);
+        let row_demand_for_arrow = if push_parquet_demand {
+            row_demand
+        } else {
+            None
+        };
+
+        // Decide whether projection pushdown can substitute for the part's
+        // schema migration. The override is sound only when the migration's
+        // sole effect is dropping `k_s/ok` sub-fields — exactly what the
+        // projection mask replicates. If the migration also adds fields,
+        // alters nullability, or recurses into structured types, projection
+        // alone is insufficient: skipping it would corrupt the post-decode
+        // shape. In those cases we fall back to no projection and let the
+        // migration run normally. `SameSchema` parts have no migration to
+        // skip and are always safe to project.
+        let (parquet_demand, migration) = match (&self.migration, row_demand_for_arrow) {
+            (
+                PartMigration::Either {
+                    read,
+                    key_migration,
+                    val_migration,
+                    ..
+                },
+                Some(demand),
+            ) if val_migration.is_no_op()
+                && key_migration.pure_drops_under_source_data_ok().is_some() =>
+            {
+                // The migration's drop set names blob fields not in the read
+                // schema. The demand is the read schema's stable indices.
+                // Projection only replicates the migration when those two
+                // sets are disjoint, which they should be by construction —
+                // assert it under debug builds in case the wiring drifts.
+                debug_assert!(
+                    {
+                        let dropped = key_migration
+                            .pure_drops_under_source_data_ok()
+                            .expect("guard verified Some");
+                        dropped.iter().all(|name| match name.parse::<usize>() {
+                            Ok(idx) => demand.binary_search(&idx).is_err(),
+                            Err(_) => true,
+                        })
+                    },
+                    "migration drop set overlaps projection demand",
+                );
+                (
+                    Some(demand),
+                    PartMigration::SameSchema { both: read.clone() },
+                )
+            }
+            (PartMigration::SameSchema { .. }, Some(demand)) => {
+                (Some(demand), self.migration.clone())
+            }
+            _ => (None, self.migration.clone()),
+        };
+
         let (part, stats) = match &self.buf {
             FetchedBlobBuf::Hollow { buf, part } => {
                 let parsed = decode_batch_part_blob(
@@ -740,6 +833,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
                     self.registered_desc.clone(),
                     part,
                     buf,
+                    parquet_demand,
                 );
                 (parsed, part.stats.as_ref())
             }
@@ -762,7 +856,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
         let part = FetchedPart::new(
             Arc::clone(&self.metrics),
             part,
-            self.migration.clone(),
+            migration,
             self.filter.clone(),
             self.filter_pushdown_audit,
             self.structured_part_audit,
@@ -857,6 +951,7 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
         let downcast_structured = |structured: ColumnarRecordsStructuredExt,
                                    structured_only: bool| {
             let key_size_before = ArrayOrd::new(&structured.key).goodbytes();
+            let val_size_before = ArrayOrd::new(&structured.val).goodbytes();
 
             let structured = match &migration {
                 PartMigration::SameSchema { .. } => structured,
@@ -893,22 +988,28 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedPart<K, V, 
                 }
             };
 
+            // Account for any bytes the schema migration trimmed. With parquet
+            // projection pushdown the migration is overridden to a no-op (the
+            // post-projection arrays already match the read shape), so the
+            // delta here only fires when migration actually re-shaped the data.
+            let key_size_after_migration = ArrayOrd::new(&structured.key).goodbytes();
+            let val_size_after_migration = ArrayOrd::new(&structured.val).goodbytes();
+            let key_migration_diff = key_size_before.saturating_sub(key_size_after_migration);
+            let val_migration_diff = val_size_before.saturating_sub(val_size_after_migration);
+            metrics
+                .pushdown
+                .parts_projection_trimmed_bytes
+                .inc_by(u64::cast_from(key_migration_diff + val_migration_diff));
+
             let read_schema = migration.codec_read();
             let key = K::Schema::decoder_any(&*read_schema.key, &*structured.key);
             let val = V::Schema::decoder_any(&*read_schema.val, &*structured.val);
 
-            match &key {
-                Ok(key_decoder) => {
-                    let key_size_after = key_decoder.goodbytes();
-                    let key_diff = key_size_before.saturating_sub(key_size_after);
-                    metrics
-                        .pushdown
-                        .parts_projection_trimmed_bytes
-                        .inc_by(u64::cast_from(key_diff));
-                }
-                Err(e) => {
-                    soft_panic_or_log!("failed to create decoder: {e:#?}");
-                }
+            if let Err(e) = &key {
+                soft_panic_or_log!("failed to create decoder: {e:#?}");
+            }
+            if let Err(e) = &val {
+                soft_panic_or_log!("failed to create decoder: {e:#?}");
             }
 
             Some((key.ok()?, val.ok()?))

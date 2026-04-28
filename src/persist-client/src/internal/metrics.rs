@@ -2429,7 +2429,7 @@ impl PushdownMetrics {
             )),
             parts_projection_trimmed_bytes: registry.register(metric!(
                 name: "mz_persist_pushdown_parts_projection_trimmed_bytes",
-                help: "total bytes trimmed from columnar data because of projection pushdown",
+                help: "bytes dropped by post-decode schema migration; this counts columns elided after parquet decode and excludes savings from parquet-reader projection pushdown (see mz_persist_parquet_projection_skipped_bytes_*)",
             )),
             part_stats: PartStatsMetrics::new(registry),
         }
