@@ -1,0 +1,50 @@
+{
+  "sql": {
+    "external": {
+      "addr": "0.0.0.0:6875",
+      "authenticator_kind": "Password",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false
+    },
+    "internal": {
+      "addr": "0.0.0.0:6877",
+      "authenticator_kind": "None",
+      "allowed_roles": "Internal",
+      "enable_tls": false
+    }
+  },
+  "http": {
+    "external": {
+      "addr": "0.0.0.0:6876",
+      "authenticator_kind": "Password",
+      "allowed_roles": "Normal",
+      "enable_tls": false,
+      "routes": {
+        "base": true,
+        "webhook": false,
+        "internal": false,
+        "metrics": false,
+        "profiling": false,
+        "mcp_agent": false,
+        "mcp_developer": false,
+        "console_config": false
+      }
+    },
+    "metrics": {
+      "addr": "0.0.0.0:6878",
+      "authenticator_kind": "None",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false,
+      "routes": {
+        "base": false,
+        "webhook": false,
+        "internal": false,
+        "metrics": true,
+        "profiling": false,
+        "mcp_agent": false,
+        "mcp_developer": false,
+        "console_config": false
+      }
+    }
+  }
+}
