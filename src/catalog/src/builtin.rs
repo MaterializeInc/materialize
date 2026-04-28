@@ -10832,6 +10832,7 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED: LazyLock<BuiltinSource> = LazyLo
         ]),
         is_retained_metrics_object: true,
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     }
 });
 
@@ -10868,6 +10869,7 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY: LazyLock<BuiltinTable> = LazyLock
                 "collection_timestamp",
                 SqlScalarType::TimestampTz { precision: None }.nullable(false),
             )
+            .with_column("hydration_complete", SqlScalarType::Bool.nullable(false))
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -10881,17 +10883,25 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY: LazyLock<BuiltinTable> = LazyLock
             (
                 "size",
                 "The total arrangement heap and batcher size in bytes for this object on this replica \
-                 at `collection_timestamp`. Objects smaller than 10 MiB are reported at their exact size; \
-                 objects 10 MiB or larger are rounded to the nearest 10 MiB boundary to reduce per-byte \
-                 churn in the underlying differential collection.",
+                 at `collection_timestamp`. Objects below 10 MiB are dropped from the snapshot; \
+                 objects at or above the floor are rounded to the nearest 10 MiB to reduce \
+                 per-byte churn in the underlying differential collection. May reflect a mid-build \
+                 size if `hydration_complete` is `false`.",
             ),
             (
                 "collection_timestamp",
                 "The timestamp when this snapshot was collected.",
             ),
+            (
+                "hydration_complete",
+                "Whether the arrangement had finished its initial hydration on this replica when \
+                 the snapshot was collected. Filter for `true` to consider only stable, post-build \
+                 sizes.",
+            ),
         ]),
         is_retained_metrics_object: true,
         access: vec![PUBLIC_SELECT],
+        ontology: None,
     }
 });
 

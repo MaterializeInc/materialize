@@ -977,8 +977,8 @@ def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
 
 
 def workflow_arrangement_sizes_hydration_gate(c: Composition) -> None:
-    """Regression test: the snapshot of `mz_object_arrangement_sizes` must
-    never record a size from an in-progress rehydration.
+    """Regression test: every history row tagged `hydration_complete = true`
+    must reflect the fully-built arrangement, never a mid-build size.
 
     After a restart the per-replica introspection-subscribes
     (`mz_compute_hydration_times` and `mz_object_arrangement_sizes`)
@@ -987,16 +987,14 @@ def workflow_arrangement_sizes_hydration_gate(c: Composition) -> None:
     times to keep the test reliable.
 
     The test workload doesn't change, so the steady-state size of each
-    arrangement is constant. Every snapshot of a `(replica, object)` pair
-    that was correctly gated should record that constant size; a snapshot
-    that fired while the arrangement was still loading would record a
-    smaller value. So after the kill/up rounds settle, we compare the
-    current size of each pair to every row in
-    `mz_object_arrangement_size_history` for that pair, and require an
-    exact match. The history table is append-only — wrong rows are never
-    overwritten by later correct ones — so any mismatch we see now is
-    direct evidence of a buggy snapshot at some earlier
-    `collection_timestamp`.
+    arrangement is constant. Mid-build snapshots are recorded with
+    `hydration_complete = false` and may carry any in-flight size — we
+    don't assert against them. But every row marked `true` should match
+    the steady-state size; a `true` row with a different size means the
+    snapshot path mistakenly tagged a mid-build row as complete. The
+    history table is append-only, so any such mismatch persists until
+    the retention pruner removes it and is visible to a scan after
+    settling.
     """
 
     num_replicas = 2
@@ -1074,11 +1072,15 @@ def workflow_arrangement_sizes_hydration_gate(c: Composition) -> None:
             f"{len(expected_size_for)}: {sorted(expected_size_for)}"
         )
 
+        # Only rows tagged `hydration_complete = true` should match the
+        # steady-state size; mid-build rows (`hydration_complete = false`)
+        # are recorded but expected to differ.
         history_rows = c.sql_query(f"""
             SELECT h.collection_timestamp::text, h.replica_id, o.name, h.size
               FROM mz_internal.mz_object_arrangement_size_history h
               JOIN mz_objects o ON o.id = h.object_id
              WHERE o.name IN {name_filter}
+               AND h.hydration_complete
              ORDER BY h.collection_timestamp, h.replica_id, o.name
             """)
         mismatches: list[tuple[str, str, str, int, int]] = []
@@ -1087,10 +1089,10 @@ def workflow_arrangement_sizes_hydration_gate(c: Composition) -> None:
             if size != expected:
                 mismatches.append((ts, replica_id, name, size, expected))
         assert not mismatches, (
-            f"{len(mismatches)} history rows recorded a size different from the "
-            f"steady-state size of the same `(replica_id, object_id)` pair "
-            f"(the snapshot must have written this row while the arrangement "
-            f"was still mid-build); first 10: {mismatches[:10]}"
+            f"{len(mismatches)} history rows tagged `hydration_complete = true` "
+            f"recorded a size different from the steady-state size of the same "
+            f"`(replica_id, object_id)` pair (would indicate a snapshot wrote a "
+            f"mid-build row while marking it complete); first 10: {mismatches[:10]}"
         )
 
 

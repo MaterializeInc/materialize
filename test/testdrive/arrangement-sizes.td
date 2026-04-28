@@ -18,6 +18,8 @@ $ set-arg-default default-replica-size=scale=1,workers=1
 
 # Shorten the snapshot cadence so the first snapshot arrives within
 # this test's timeout rather than at the 1h production default.
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET arrangement_size_history_collection_interval = '2s';
 
@@ -33,6 +35,7 @@ replica_id           text
 object_id            text
 size                 bigint
 collection_timestamp "timestamp with time zone"
+hydration_complete   boolean
 
 # Set up a cluster with two replicas and arrangements large enough to
 # clear the 10 MiB floor that `mz_object_arrangement_sizes` applies.
@@ -46,10 +49,11 @@ collection_timestamp "timestamp with time zone"
 > CREATE INDEX idx_t2 ON t ((a + 1))
 
 # Filter-only materialized view: writes to persist but maintains no
-# in-memory arrangement, so it must never appear in the live source.
+# in-memory arrangement, so it must never appear in
+# `mz_object_arrangement_sizes`.
 > CREATE MATERIALIZED VIEW mv_filter AS SELECT * FROM t WHERE a > 0
 
-# Live source: each indexed object shows up on both replicas with size > 0.
+# Each indexed object shows up on both replicas with size > 0.
 > SELECT o.name, r.name, s.size > 0
   FROM mz_internal.mz_object_arrangement_sizes s
   JOIN mz_objects o ON o.id = s.object_id
@@ -61,25 +65,27 @@ idx_t  r2 true
 idx_t2 r1 true
 idx_t2 r2 true
 
-# Filter-only MV never appears in the live source.
+# Filter-only MV never appears.
 > SELECT count(*)
   FROM mz_internal.mz_object_arrangement_sizes s
   JOIN mz_objects o ON o.id = s.object_id
   WHERE o.name = 'mv_filter'
 0
 
-# History table: at least one snapshot row per (object_id, replica_id) pair.
-> SELECT o.name, r.name, count(*) > 0, bool_and(h.size > 0)
+# History table: at least one snapshot row per (object_id, replica_id)
+# pair, all with size > 0, and at least one row tagged
+# `hydration_complete = true` for each pair once arrangements settle.
+> SELECT o.name, r.name, count(*) > 0, bool_and(h.size > 0), bool_or(h.hydration_complete)
   FROM mz_internal.mz_object_arrangement_size_history h
   JOIN mz_objects o ON o.id = h.object_id
   JOIN mz_cluster_replicas r ON r.id = h.replica_id
   WHERE o.name IN ('idx_t', 'idx_t2')
   GROUP BY o.name, r.name
   ORDER BY o.name, r.name
-idx_t  r1 true true
-idx_t  r2 true true
-idx_t2 r1 true true
-idx_t2 r2 true true
+idx_t  r1 true true true
+idx_t  r2 true true true
+idx_t2 r1 true true true
+idx_t2 r2 true true true
 
 > SELECT bool_and(h.collection_timestamp IS NOT NULL
     AND h.collection_timestamp > now() - INTERVAL '60 seconds')

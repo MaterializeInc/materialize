@@ -433,9 +433,11 @@ impl Coordinator {
     /// appends them to `mz_object_arrangement_size_history`, tagged with a
     /// shared `collection_timestamp`. Reschedules on completion.
     ///
-    /// Filters out `(replica_id, object_id)` pairs that haven't finished
-    /// hydrating, so we never record a half-built arrangement size. A pair
-    /// re-enters the history once hydration completes.
+    /// Each `(replica_id, object_id)` pair is recorded with a
+    /// `hydration_complete` flag derived from `mz_compute_hydration_times`:
+    /// `true` once the pair's initial hydration on that replica is finished,
+    /// `false` while still building. Consumers that want only stable sizes
+    /// should filter `WHERE hydration_complete`.
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_snapshot(&mut self) {
         // The catalog server is not writable in read-only mode.
@@ -495,8 +497,9 @@ impl Coordinator {
         };
         differential_dataflow::consolidation::consolidate(&mut hydration_snapshot);
 
-        // `mz_compute_hydration_times` reports `time_ns IS NULL` for objects
-        // still building, so we collect only the pairs with a non-null time.
+        // Build the set of pairs whose initial hydration has finished
+        // (`time_ns IS NOT NULL`). The set drives the `hydration_complete`
+        // flag for each row we emit below.
         let mut datum_vec = mz_repr::DatumVec::new();
         let mut hydrated: BTreeSet<(String, String)> = BTreeSet::new();
         const HYDRATION_COL_REPLICA_ID: usize = 0;
@@ -542,7 +545,6 @@ impl Coordinator {
 
         let mut skipped_malformed: u64 = 0;
         let mut skipped_null_size: u64 = 0;
-        let mut skipped_unhydrated: u64 = 0;
         let mut updates: Vec<BuiltinTableUpdate> = Vec::with_capacity(consolidated.len());
         for (row, diff) in consolidated.iter() {
             if *diff != 1 {
@@ -564,16 +566,18 @@ impl Coordinator {
                 skipped_null_size += 1;
                 continue;
             }
-            if !hydrated.contains(&(replica_id.to_string(), object_id.to_string())) {
-                skipped_unhydrated += 1;
-                continue;
-            }
             let size = size_datum.unwrap_int64();
+            // Pairs whose hydration hasn't completed yet are still recorded,
+            // tagged with `hydration_complete = false`. Consumers that care
+            // only about stable sizes can filter on `hydration_complete`.
+            let hydration_complete =
+                hydrated.contains(&(replica_id.to_string(), object_id.to_string()));
             let new_row = Row::pack_slice(&[
                 Datum::String(replica_id),
                 Datum::String(object_id),
                 Datum::Int64(size),
                 collection_datum,
+                Datum::from(hydration_complete),
             ]);
             updates.push(BuiltinTableUpdate::row(history_item_id, new_row, Diff::ONE));
         }
@@ -585,12 +589,6 @@ impl Coordinator {
         }
         if skipped_null_size > 0 {
             tracing::debug!("skipped {skipped_null_size} live rows with null size");
-        }
-        if skipped_unhydrated > 0 {
-            tracing::debug!(
-                "skipped {skipped_unhydrated} live rows whose (replica_id, object_id) was \
-                 not yet hydrated"
-            );
         }
 
         let row_count = updates.len();

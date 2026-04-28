@@ -1545,12 +1545,12 @@ class FlipFlagsAction(Action):
             "'1s'",
             "'10s'",
         ]
-        self.flags_with_values["arrangement_size_collection_interval"] = [
+        self.flags_with_values["arrangement_size_history_collection_interval"] = [
             "'1s'",
             "'10s'",
             "'1h'",
         ]
-        self.flags_with_values["arrangement_size_retention_period"] = [
+        self.flags_with_values["arrangement_size_history_retention_period"] = [
             "'1m'",
             "'1h'",
             "'7d'",
