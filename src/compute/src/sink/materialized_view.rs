@@ -168,7 +168,6 @@ impl<'scope> SinkRender<'scope> for MaterializedViewSinkConnection<CollectionMet
         start_signal: StartSignal,
         mut ok_collection: VecCollection<'scope, Timestamp, Row, Diff>,
         mut err_collection: VecCollection<'scope, Timestamp, DataflowErrorSer, Diff>,
-        _ct_times: Option<VecCollection<'scope, Timestamp, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Attach probes reporting the compute frontier.

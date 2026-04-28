@@ -959,7 +959,6 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CreateNetworkPolicy(_)
         | Plan::CreateCluster(_)
         | Plan::CreateClusterReplica(_)
-        | Plan::CreateContinualTask(_)
         | Plan::CreateSource(_)
         | Plan::CreateSources(_)
         | Plan::CreateSecret(_)

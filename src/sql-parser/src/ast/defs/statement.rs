@@ -27,13 +27,13 @@ use smallvec::{SmallVec, smallvec};
 
 use crate::ast::display::{self, AstDisplay, AstFormatter, WithOptionName};
 use crate::ast::{
-    AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, ContinualTaskOption,
-    CreateConnectionOption, CreateConnectionType, CreateSinkConnection, CreateSourceConnection,
-    CreateSourceOption, CreateSourceOptionName, CteMutRecColumnDef, DeferredItemName, Expr, Format,
-    FormatSpecifier, IcebergSinkMode, Ident, IntervalValue, KeyConstraint, MaterializedViewOption,
-    Query, SelectItem, SinkEnvelope, SourceEnvelope, SourceIncludeMetadata, SubscribeOutput,
-    TableAlias, TableConstraint, TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName,
-    UnresolvedObjectName, UnresolvedSchemaName, Value,
+    AstInfo, ColumnDef, ConnectionOption, ConnectionOptionName, CreateConnectionOption,
+    CreateConnectionType, CreateSinkConnection, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, DeferredItemName, Expr, Format, FormatSpecifier, IcebergSinkMode,
+    Ident, IntervalValue, KeyConstraint, MaterializedViewOption, Query, SelectItem, SinkEnvelope,
+    SourceEnvelope, SourceIncludeMetadata, SubscribeOutput, TableAlias, TableConstraint,
+    TableWithJoins, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value,
 };
 
 /// A top-level statement (SELECT, INSERT, CREATE, etc.)
@@ -55,7 +55,6 @@ pub enum Statement<T: AstInfo> {
     CreateSink(CreateSinkStatement<T>),
     CreateView(CreateViewStatement<T>),
     CreateMaterializedView(CreateMaterializedViewStatement<T>),
-    CreateContinualTask(CreateContinualTaskStatement<T>),
     CreateTable(CreateTableStatement<T>),
     CreateTableFromSource(CreateTableFromSourceStatement<T>),
     CreateIndex(CreateIndexStatement<T>),
@@ -134,7 +133,6 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateSink(stmt) => f.write_node(stmt),
             Statement::CreateView(stmt) => f.write_node(stmt),
             Statement::CreateMaterializedView(stmt) => f.write_node(stmt),
-            Statement::CreateContinualTask(stmt) => f.write_node(stmt),
             Statement::CreateTable(stmt) => f.write_node(stmt),
             Statement::CreateTableFromSource(stmt) => f.write_node(stmt),
             Statement::CreateIndex(stmt) => f.write_node(stmt),
@@ -216,7 +214,6 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateSink => "create_sink",
         StatementKind::CreateView => "create_view",
         StatementKind::CreateMaterializedView => "create_materialized_view",
-        StatementKind::CreateContinualTask => "create_continual_task",
         StatementKind::CreateTable => "create_table",
         StatementKind::CreateTableFromSource => "create_table_from_source",
         StatementKind::CreateIndex => "create_index",
@@ -1526,105 +1523,6 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
-
-/// `CREATE CONTINUAL TASK`
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CreateContinualTaskStatement<T: AstInfo> {
-    pub name: T::ItemName,
-    pub columns: Option<Vec<CteMutRecColumnDef<T>>>,
-    pub in_cluster: Option<T::ClusterName>,
-    pub as_of: Option<u64>,
-    pub with_options: Vec<ContinualTaskOption<T>>,
-
-    // The thing we get input diffs from
-    pub input: T::ItemName,
-
-    // The txn to execute on each set of diffs
-    pub stmts: Vec<ContinualTaskStmt<T>>,
-
-    pub sugar: Option<CreateContinualTaskSugar<T>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ContinualTaskStmt<T: AstInfo> {
-    Delete(DeleteStatement<T>),
-    Insert(InsertStatement<T>),
-}
-
-impl<T: AstInfo> AstDisplay for ContinualTaskStmt<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        match self {
-            ContinualTaskStmt::Delete(stmt) => f.write_node(stmt),
-            ContinualTaskStmt::Insert(stmt) => f.write_node(stmt),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum CreateContinualTaskSugar<T: AstInfo> {
-    Transform { transform: Query<T> },
-    Retain { retain: Expr<T> },
-}
-
-impl<T: AstInfo> AstDisplay for CreateContinualTaskStatement<T> {
-    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
-        f.write_str("CREATE CONTINUAL TASK ");
-        f.write_node(&self.name);
-        if let Some(columns) = &self.columns {
-            f.write_str(" (");
-            f.write_node(&display::comma_separated(columns));
-            f.write_str(")");
-        }
-
-        if let Some(cluster) = &self.in_cluster {
-            f.write_str(" IN CLUSTER ");
-            f.write_node(cluster);
-        }
-
-        if !self.with_options.is_empty() {
-            f.write_str(" WITH (");
-            f.write_node(&display::comma_separated(&self.with_options));
-            f.write_str(")");
-        }
-
-        match &self.sugar {
-            Some(CreateContinualTaskSugar::Transform { transform }) => {
-                f.write_str(" FROM TRANSFORM ");
-                f.write_node(&self.input);
-                f.write_str(" USING ");
-                f.write_str("(");
-                f.write_node(transform);
-                f.write_str(")");
-            }
-            Some(CreateContinualTaskSugar::Retain { retain }) => {
-                f.write_str(" FROM RETAIN ");
-                f.write_node(&self.input);
-                f.write_str(" WHILE ");
-                f.write_str("(");
-                f.write_node(retain);
-                f.write_str(")");
-            }
-            None => {
-                f.write_str(" ON INPUT ");
-                f.write_node(&self.input);
-                f.write_str(" AS (");
-                for (idx, stmt) in self.stmts.iter().enumerate() {
-                    if idx > 0 {
-                        f.write_str("; ");
-                    }
-                    f.write_node(stmt);
-                }
-                f.write_str(")");
-            }
-        }
-
-        if let Some(time) = &self.as_of {
-            f.write_str(" AS OF ");
-            f.write_str(time);
-        }
-    }
-}
-impl_display_t!(CreateContinualTaskStatement);
 
 /// `ALTER SET CLUSTER`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -3549,9 +3447,6 @@ pub enum ShowObjectType<T: AstInfo> {
     RoleMembership {
         role: Option<T::RoleName>,
     },
-    ContinualTask {
-        in_cluster: Option<T::ClusterName>,
-    },
     NetworkPolicy,
 }
 /// `SHOW <object>S`
@@ -3594,7 +3489,6 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::Privileges { .. } => "PRIVILEGES",
             ShowObjectType::DefaultPrivileges { .. } => "DEFAULT PRIVILEGES",
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
-            ShowObjectType::ContinualTask { .. } => "CONTINUAL TASKS",
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
         });
 
@@ -3620,8 +3514,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::MaterializedView { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
-            | ShowObjectType::Source { in_cluster }
-            | ShowObjectType::ContinualTask { in_cluster } => {
+            | ShowObjectType::Source { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);
@@ -4348,7 +4241,6 @@ pub enum ObjectType {
     Schema,
     Func,
     Subsource,
-    ContinualTask,
     NetworkPolicy,
 }
 
@@ -4365,8 +4257,7 @@ impl ObjectType {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func
-            | ObjectType::Subsource
-            | ObjectType::ContinualTask => true,
+            | ObjectType::Subsource => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -4396,7 +4287,6 @@ impl AstDisplay for ObjectType {
             ObjectType::Schema => "SCHEMA",
             ObjectType::Func => "FUNCTION",
             ObjectType::Subsource => "SUBSOURCE",
-            ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
         })
     }
@@ -5743,7 +5633,6 @@ pub enum CommentObjectType<T: AstInfo> {
     Schema { name: T::SchemaName },
     Cluster { name: T::ClusterName },
     ClusterReplica { name: QualifiedReplica },
-    ContinualTask { name: T::ItemName },
     NetworkPolicy { name: T::NetworkPolicyName },
 }
 
@@ -5814,10 +5703,6 @@ impl<T: AstInfo> AstDisplay for CommentObjectType<T> {
             }
             ClusterReplica { name } => {
                 f.write_str("CLUSTER REPLICA ");
-                f.write_node(name);
-            }
-            ContinualTask { name } => {
-                f.write_str("CONTINUAL TASK ");
                 f.write_node(name);
             }
             NetworkPolicy { name } => {

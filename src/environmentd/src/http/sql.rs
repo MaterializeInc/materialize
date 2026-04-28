@@ -1490,7 +1490,6 @@ async fn execute_stmt<S: ResultSender>(
         | ExecuteResponse::CreatedView { .. }
         | ExecuteResponse::CreatedViews { .. }
         | ExecuteResponse::CreatedMaterializedView { .. }
-        | ExecuteResponse::CreatedContinualTask { .. }
         | ExecuteResponse::CreatedType
         | ExecuteResponse::CreatedNetworkPolicy
         | ExecuteResponse::Comment

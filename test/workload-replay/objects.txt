@@ -478,8 +478,6 @@ mz_connections
 mz_connections_ind
 mz_console_cluster_utilization_overview
 mz_console_cluster_utilization_overview_ind
-mz_continual_tasks
-mz_continual_tasks_ind
 mz_database_oid
 mz_databases
 mz_databases_ind
@@ -700,7 +698,6 @@ mz_show_columns
 mz_show_columns_ind
 mz_show_connections
 mz_show_connections_ind
-mz_show_continual_tasks
 mz_show_database_privileges
 mz_show_databases
 mz_show_databases_ind

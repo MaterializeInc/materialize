@@ -2001,17 +2001,6 @@ impl<'a> Parser<'a> {
         {
             self.parse_create_materialized_view()
                 .map_parser_err(StatementKind::CreateMaterializedView)
-        } else if self.peek_keywords(&[CONTINUAL, TASK]) {
-            if self.peek_keywords_lookahead(&[FROM, TRANSFORM]) {
-                self.parse_create_continual_task_from_transform()
-                    .map_parser_err(StatementKind::CreateContinualTask)
-            } else if self.peek_keywords_lookahead(&[FROM, RETAIN]) {
-                self.parse_create_continual_task_from_retain()
-                    .map_parser_err(StatementKind::CreateContinualTask)
-            } else {
-                self.parse_create_continual_task()
-                    .map_parser_err(StatementKind::CreateContinualTask)
-            }
         } else if self.peek_keywords(&[USER]) {
             parser_err!(
                 self,
@@ -4011,215 +4000,6 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    fn parse_create_continual_task(&mut self) -> Result<Statement<Raw>, ParserError> {
-        // TODO(ct3): OR REPLACE/IF NOT EXISTS.
-        self.expect_keywords(&[CONTINUAL, TASK])?;
-
-        // TODO(ct3): Multiple outputs.
-        let name = RawItemName::Name(self.parse_item_name()?);
-        let columns = match self.consume_token(&Token::LParen) {
-            true => {
-                let columns = self.parse_comma_separated(|parser| {
-                    Ok(CteMutRecColumnDef {
-                        name: parser.parse_identifier()?,
-                        data_type: parser.parse_data_type()?,
-                    })
-                })?;
-                self.expect_token(&Token::RParen)?;
-                Some(columns)
-            }
-            false => None,
-        };
-        let in_cluster = self.parse_optional_in_cluster()?;
-        let with_options = self.parse_create_continual_task_with_options()?;
-
-        // TODO(ct3): Multiple inputs.
-        self.expect_keywords(&[ON, INPUT])?;
-        let input = self.parse_raw_name()?;
-        // TODO(ct3): Allow renaming the inserts/deletes so that we can use
-        // something as both an "input" and a "reference".
-
-        // Also try to parse WITH options in the old location. We never exposed
-        // this to users, so this can be removed once the CI upgrade tests have
-        // moved past these old versions.
-        let legacy_with_options = self.parse_create_continual_task_with_options()?;
-        let with_options = match (!with_options.is_empty(), !legacy_with_options.is_empty()) {
-            (_, false) => with_options,
-            (false, true) => legacy_with_options,
-            (true, true) => {
-                return parser_err!(
-                    self,
-                    self.peek_prev_pos(),
-                    "CREATE CONTINUAL TASK with options in both new and legacy locations"
-                );
-            }
-        };
-
-        self.expect_keyword(AS)?;
-
-        let mut stmts = Vec::new();
-        let mut expecting_statement_delimiter = false;
-        self.expect_token(&Token::LParen)?;
-        // TODO(ct2): Dedup this with parse_statements?
-        loop {
-            // ignore empty statements (between successive statement delimiters)
-            while self.consume_token(&Token::Semicolon) {
-                expecting_statement_delimiter = false;
-            }
-
-            if self.consume_token(&Token::RParen) {
-                break;
-            } else if expecting_statement_delimiter {
-                self.expected(self.peek_pos(), "end of statement", self.peek_token())?
-            }
-
-            let stmt = self.parse_statement().map_err(|err| err.error)?.ast;
-            match stmt {
-                Statement::Delete(stmt) => stmts.push(ContinualTaskStmt::Delete(stmt)),
-                Statement::Insert(stmt) => stmts.push(ContinualTaskStmt::Insert(stmt)),
-                _ => {
-                    return parser_err!(
-                        self,
-                        self.peek_prev_pos(),
-                        "unsupported query in CREATE CONTINUAL TASK"
-                    );
-                }
-            }
-            expecting_statement_delimiter = true;
-        }
-
-        let as_of = self.parse_optional_internal_as_of()?;
-
-        Ok(Statement::CreateContinualTask(
-            CreateContinualTaskStatement {
-                name,
-                columns,
-                in_cluster,
-                with_options,
-                input,
-                stmts,
-                as_of,
-                sugar: None,
-            },
-        ))
-    }
-
-    fn parse_create_continual_task_from_transform(
-        &mut self,
-    ) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keywords(&[CONTINUAL, TASK])?;
-        let name = RawItemName::Name(self.parse_item_name()?);
-        let in_cluster = self.parse_optional_in_cluster()?;
-        let with_options = self.parse_create_continual_task_with_options()?;
-
-        self.expect_keywords(&[FROM, TRANSFORM])?;
-        let input = self.parse_raw_name()?;
-
-        self.expect_keyword(USING)?;
-        self.expect_token(&Token::LParen)?;
-        let transform = self.parse_query()?;
-        self.expect_token(&Token::RParen)?;
-
-        let as_of = self.parse_optional_internal_as_of()?;
-
-        // `INSERT INTO name SELECT * FROM <transform>`
-        let insert = InsertStatement {
-            table_name: name.clone(),
-            columns: Vec::new(),
-            source: InsertSource::Query(transform.clone()),
-            returning: Vec::new(),
-        };
-
-        // Desugar into a normal CT body.
-        let stmts = vec![ContinualTaskStmt::Insert(insert)];
-
-        Ok(Statement::CreateContinualTask(
-            CreateContinualTaskStatement {
-                name,
-                columns: None,
-                in_cluster,
-                with_options,
-                input,
-                stmts,
-                as_of,
-                sugar: Some(CreateContinualTaskSugar::Transform { transform }),
-            },
-        ))
-    }
-
-    fn parse_create_continual_task_from_retain(&mut self) -> Result<Statement<Raw>, ParserError> {
-        self.expect_keywords(&[CONTINUAL, TASK])?;
-        let name = RawItemName::Name(self.parse_item_name()?);
-        let in_cluster = self.parse_optional_in_cluster()?;
-        let with_options = self.parse_create_continual_task_with_options()?;
-
-        self.expect_keywords(&[FROM, RETAIN])?;
-        let input = self.parse_raw_name()?;
-
-        self.expect_keyword(WHILE)?;
-        self.expect_token(&Token::LParen)?;
-        let retain = self.parse_expr()?;
-        self.expect_token(&Token::RParen)?;
-
-        let as_of = self.parse_optional_internal_as_of()?;
-
-        // `INSERT INTO name SELECT * FROM input WHERE <retain>`
-        let insert = InsertStatement {
-            table_name: name.clone(),
-            columns: Vec::new(),
-            source: InsertSource::Query(Query {
-                ctes: CteBlock::Simple(Vec::new()),
-                body: SetExpr::Select(Box::new(Select {
-                    from: vec![TableWithJoins {
-                        relation: TableFactor::Table {
-                            name: input.clone(),
-                            alias: None,
-                        },
-                        joins: Vec::new(),
-                    }],
-                    selection: Some(retain.clone()),
-                    distinct: None,
-                    projection: vec![SelectItem::Wildcard],
-                    group_by: Vec::new(),
-                    having: None,
-                    qualify: None,
-                    options: Vec::new(),
-                })),
-                order_by: Vec::new(),
-                limit: None,
-                offset: None,
-            }),
-            returning: Vec::new(),
-        };
-
-        // `DELETE FROM name WHERE NOT <retain>`
-        let delete = DeleteStatement {
-            table_name: name.clone(),
-            alias: None,
-            using: Vec::new(),
-            selection: Some(retain.clone().negate()),
-        };
-
-        // Desugar into a normal CT body.
-        let stmts = vec![
-            ContinualTaskStmt::Insert(insert),
-            ContinualTaskStmt::Delete(delete),
-        ];
-
-        Ok(Statement::CreateContinualTask(
-            CreateContinualTaskStatement {
-                name,
-                columns: None,
-                in_cluster,
-                with_options,
-                input,
-                stmts,
-                as_of,
-                sugar: Some(CreateContinualTaskSugar::Retain { retain }),
-            },
-        ))
-    }
-
     fn parse_materialized_view_option_name(
         &mut self,
     ) -> Result<MaterializedViewOptionName, ParserError> {
@@ -4305,34 +4085,6 @@ impl<'a> Parser<'a> {
             }
             _ => unreachable!(),
         }
-    }
-
-    fn parse_create_continual_task_with_options(
-        &mut self,
-    ) -> Result<Vec<ContinualTaskOption<Raw>>, ParserError> {
-        if self.parse_keyword(WITH) {
-            self.expect_token(&Token::LParen)?;
-            let options = self.parse_comma_separated(Parser::parse_continual_task_option)?;
-            self.expect_token(&Token::RParen)?;
-            Ok(options)
-        } else {
-            Ok(vec![])
-        }
-    }
-
-    fn parse_continual_task_option_name(&mut self) -> Result<ContinualTaskOptionName, ParserError> {
-        let option = self.expect_one_of_keywords(&[SNAPSHOT])?;
-        let name = match option {
-            SNAPSHOT => ContinualTaskOptionName::Snapshot,
-            _ => unreachable!(),
-        };
-        Ok(name)
-    }
-
-    fn parse_continual_task_option(&mut self) -> Result<ContinualTaskOption<Raw>, ParserError> {
-        let name = self.parse_continual_task_option_name()?;
-        let value = self.parse_optional_option_value()?;
-        Ok(ContinualTaskOption { name, value })
     }
 
     fn parse_create_index(&mut self) -> Result<Statement<Raw>, ParserError> {
@@ -5012,8 +4764,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Secret
-            | ObjectType::Connection
-            | ObjectType::ContinualTask => {
+            | ObjectType::Connection => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -5733,10 +5484,9 @@ impl<'a> Parser<'a> {
             ObjectType::Index => self.parse_alter_index(),
             ObjectType::Secret => self.parse_alter_secret(),
             ObjectType::Connection => self.parse_alter_connection(),
-            ObjectType::View
-            | ObjectType::MaterializedView
-            | ObjectType::Table
-            | ObjectType::ContinualTask => self.parse_alter_views(object_type),
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Table => {
+                self.parse_alter_views(object_type)
+            }
             ObjectType::Type => {
                 let if_exists = self
                     .parse_if_exists()
@@ -6564,7 +6314,7 @@ impl<'a> Parser<'a> {
         let keywords: &[_] = match object_type {
             ObjectType::Table => &[SET, RENAME, OWNER, RESET, ADD],
             ObjectType::MaterializedView => &[SET, RENAME, OWNER, RESET, APPLY],
-            ObjectType::View | ObjectType::ContinualTask => &[SET, RENAME, OWNER, RESET],
+            ObjectType::View => &[SET, RENAME, OWNER, RESET],
             ObjectType::Source
             | ObjectType::Sink
             | ObjectType::Index
@@ -7417,8 +7167,7 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::Func
-            | ObjectType::ContinualTask => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::Func => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -8216,10 +7965,6 @@ impl<'a> Parser<'a> {
                 ObjectType::MaterializedView => {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::MaterializedView { in_cluster }
-                }
-                ObjectType::ContinualTask => {
-                    let in_cluster = self.parse_optional_in_cluster()?;
-                    ShowObjectType::ContinualTask { in_cluster }
                 }
                 ObjectType::Index => {
                     let on_object = if self.parse_one_of_keywords(&[ON]).is_some() {
@@ -9685,10 +9430,7 @@ impl<'a> Parser<'a> {
         object_type: ObjectType,
     ) -> Result<ObjectType, ParserError> {
         match object_type {
-            ObjectType::View
-            | ObjectType::MaterializedView
-            | ObjectType::Source
-            | ObjectType::ContinualTask => {
+            ObjectType::View | ObjectType::MaterializedView | ObjectType::Source => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),
@@ -9739,7 +9481,6 @@ impl<'a> Parser<'a> {
                 DATABASE,
                 SCHEMA,
                 FUNCTION,
-                CONTINUAL,
                 NETWORK,
             ])? {
                 TABLE => ObjectType::Table,
@@ -9768,13 +9509,6 @@ impl<'a> Parser<'a> {
                 DATABASE => ObjectType::Database,
                 SCHEMA => ObjectType::Schema,
                 FUNCTION => ObjectType::Func,
-                CONTINUAL => {
-                    if let Err(e) = self.expect_keyword(TASK) {
-                        self.prev_token();
-                        return Err(e);
-                    }
-                    ObjectType::ContinualTask
-                }
                 NETWORK => {
                     if let Err(e) = self.expect_keyword(POLICY) {
                         self.prev_token();
@@ -9912,7 +9646,6 @@ impl<'a> Parser<'a> {
                 DATABASES,
                 SCHEMAS,
                 SUBSOURCES,
-                CONTINUAL,
                 NETWORK,
             ])? {
                 TABLES => ObjectType::Table,
@@ -9944,14 +9677,6 @@ impl<'a> Parser<'a> {
                 DATABASES => ObjectType::Database,
                 SCHEMAS => ObjectType::Schema,
                 SUBSOURCES => ObjectType::Subsource,
-                CONTINUAL => {
-                    if self.parse_keyword(TASKS) {
-                        ObjectType::ContinualTask
-                    } else {
-                        self.prev_token();
-                        return None;
-                    }
-                }
                 NETWORK => {
                     if self.parse_keyword(POLICIES) {
                         ObjectType::NetworkPolicy
@@ -10141,7 +9866,6 @@ impl<'a> Parser<'a> {
             DATABASE,
             SCHEMA,
             CLUSTER,
-            CONTINUAL,
             NETWORK,
         ])? {
             TABLE => {
@@ -10209,11 +9933,6 @@ impl<'a> Parser<'a> {
             COLUMN => {
                 let name = self.parse_column_name()?;
                 CommentObjectType::Column { name }
-            }
-            CONTINUAL => {
-                self.expect_keyword(TASK)?;
-                let name = self.parse_raw_name()?;
-                CommentObjectType::ContinualTask { name }
             }
             NETWORK => {
                 self.expect_keyword(POLICY)?;

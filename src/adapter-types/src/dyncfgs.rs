@@ -96,13 +96,6 @@ pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Dura
     "Enable plan insights fast path clusters calculation if the optimize step took less than this duration.",
 );
 
-/// Whether to create system builtin continual tasks on boot.
-pub const ENABLE_CONTINUAL_TASK_BUILTINS: Config<bool> = Config::new(
-    "enable_continual_task_builtins",
-    false,
-    "Create system builtin continual tasks on boot.",
-);
-
 /// Whether to use an expression cache on boot.
 pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "enable_expression_cache",
@@ -229,7 +222,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
         .add(&PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION)
-        .add(&ENABLE_CONTINUAL_TASK_BUILTINS)
         .add(&ENABLE_EXPRESSION_CACHE)
         .add(&ENABLE_MULTI_REPLICA_SOURCES)
         .add(&ENABLE_PASSWORD_AUTH)

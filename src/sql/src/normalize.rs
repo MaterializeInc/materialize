@@ -21,8 +21,7 @@ use mz_repr::{ColumnName, GlobalId};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
-    ContinualTaskStmt, CreateConnectionStatement, CreateContinualTaskStatement,
-    CreateContinualTaskSugar, CreateIndexStatement, CreateMaterializedViewStatement,
+    CreateConnectionStatement, CreateIndexStatement, CreateMaterializedViewStatement,
     CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
     CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
     CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
@@ -419,39 +418,6 @@ pub fn create_statement(
                 }
             }
             *if_exists = IfExistsBehavior::Error;
-        }
-
-        Statement::CreateContinualTask(CreateContinualTaskStatement {
-            name,
-            columns: _,
-            input,
-            with_options: _,
-            stmts,
-            in_cluster: _,
-            as_of: _,
-            sugar,
-        }) => {
-            let mut normalizer = QueryNormalizer::new();
-            normalizer.visit_item_name_mut(name);
-            normalizer.visit_item_name_mut(input);
-            for stmt in stmts {
-                match stmt {
-                    ContinualTaskStmt::Delete(stmt) => normalizer.visit_delete_statement_mut(stmt),
-                    ContinualTaskStmt::Insert(stmt) => normalizer.visit_insert_statement_mut(stmt),
-                }
-            }
-            match sugar {
-                Some(CreateContinualTaskSugar::Transform { transform }) => {
-                    normalizer.visit_query_mut(transform)
-                }
-                Some(CreateContinualTaskSugar::Retain { retain }) => {
-                    normalizer.visit_expr_mut(retain)
-                }
-                None => {}
-            }
-            if let Some(err) = normalizer.err {
-                return Err(err);
-            }
         }
 
         Statement::CreateIndex(CreateIndexStatement {

@@ -63,13 +63,13 @@ use mz_repr::{
 };
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
-use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
 use mz_sql::catalog::{
     CatalogCluster, CatalogClusterReplica, CatalogDatabase, CatalogError as SqlCatalogError,
     CatalogItem as SqlCatalogItem, CatalogItemType, CatalogRecordField, CatalogRole, CatalogSchema,
     CatalogType, CatalogTypeDetails, IdReference, NameReference, SessionCatalog, SystemObjectType,
     TypeReference,
 };
+use mz_sql::catalog::{CatalogConfig, EnvironmentId};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, DependencyIds, FullItemName, FullSchemaName, ObjectId,
     PartialItemName, QualifiedItemName, QualifiedSchemaName, RawDatabaseSpecifier,
@@ -315,9 +315,6 @@ impl CatalogState {
                 connection_context: ConnectionContext::for_tests(Arc::new(
                     InMemorySecretsController::new(),
                 )),
-                builtins_cfg: BuiltinsConfig {
-                    include_continual_tasks: true,
-                },
                 helm_chart_version: None,
             },
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),
@@ -435,8 +432,7 @@ impl CatalogState {
             CatalogItem::Log(_) => out.push(id),
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_)) => {
+            | CatalogItem::Connection(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
                 for item_id in item.references().items() {
                     self.introspection_dependencies_inner(*item_id, out);
@@ -1439,14 +1435,6 @@ impl CatalogState {
                     dataflow_metainfo: None,
                 })
             }
-            Plan::CreateContinualTask(plan) => {
-                let ct =
-                    match crate::continual_task::ct_item_from_plan(plan, global_id, resolved_ids) {
-                        Ok(ct) => ct,
-                        Err(err) => return Err((err, cached_expr)),
-                    };
-                CatalogItem::ContinualTask(ct)
-            }
             Plan::CreateIndex(CreateIndexPlan { index, .. }) => CatalogItem::Index(Index {
                 create_sql: index.create_sql,
                 global_id,
@@ -1881,8 +1869,7 @@ impl CatalogState {
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
             | CatalogItemType::Secret
-            | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => schema.items[builtin.name()],
+            | CatalogItemType::Connection => schema.items[builtin.name()],
         }
     }
 
@@ -2696,8 +2683,7 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => Some(*id),
+            | CommentObjectId::Secret(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2726,8 +2712,7 @@ impl CatalogState {
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
-            | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => {
+            | CommentObjectId::Secret(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()

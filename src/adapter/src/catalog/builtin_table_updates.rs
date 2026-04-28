@@ -17,10 +17,10 @@ use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AUDIT_EVENTS, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZES, MZ_CLUSTER_REPLICAS,
-    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_CONTINUAL_TASKS,
-    MZ_DEFAULT_PRIVILEGES, MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES,
-    MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS,
-    MZ_KAFKA_SOURCE_TABLES, MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
+    MZ_CLUSTER_SCHEDULES, MZ_CLUSTERS, MZ_COLUMNS, MZ_COMMENTS, MZ_DEFAULT_PRIVILEGES,
+    MZ_EGRESS_IPS, MZ_FUNCTIONS, MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS,
+    MZ_INDEX_COLUMNS, MZ_INDEXES, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
+    MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MYSQL_SOURCE_TABLES, MZ_OBJECT_DEPENDENCIES,
     MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
     MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SESSIONS,
@@ -32,8 +32,8 @@ use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func,
-    Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, ClusterVariant, Connection, DataSourceDesc, Func, Index,
+    MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
@@ -54,7 +54,7 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{
     CatalogItemId, Datum, Diff, GlobalId, ReprColumnType, Row, RowPacker, SqlScalarType, Timestamp,
 };
-use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
+use mz_sql::ast::{CreateIndexStatement, Statement, UnresolvedItemName};
 use mz_sql::catalog::{CatalogCluster, CatalogType, DefaultPrivilegeObject, TypeCategory};
 use mz_sql::func::FuncImplCatalogDetails;
 use mz_sql::names::{CommentObjectId, SchemaSpecifier};
@@ -651,9 +651,6 @@ impl CatalogState {
             CatalogItem::Connection(connection) => {
                 self.pack_connection_update(id, connection, diff)
             }
-            CatalogItem::ContinualTask(ct) => self.pack_continual_task_update(
-                id, oid, schema_id, name, owner_id, privileges, ct, diff,
-            ),
         };
 
         if !entry.item().is_temporary() {
@@ -1310,64 +1307,6 @@ impl CatalogState {
         }
 
         updates
-    }
-
-    fn pack_continual_task_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        privileges: Datum,
-        ct: &ContinualTask,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let create_stmt = mz_sql::parse::parse(&ct.create_sql)
-            .unwrap_or_else(|e| {
-                panic!(
-                    "create_sql cannot be invalid: `{}` --- error: `{}`",
-                    ct.create_sql, e
-                )
-            })
-            .into_element()
-            .ast;
-        let query_string = match &create_stmt {
-            Statement::CreateContinualTask(stmt) => {
-                let mut query_string = String::new();
-                for stmt in &stmt.stmts {
-                    let s = match stmt {
-                        ContinualTaskStmt::Insert(stmt) => stmt.to_ast_string_stable(),
-                        ContinualTaskStmt::Delete(stmt) => stmt.to_ast_string_stable(),
-                    };
-                    if query_string.is_empty() {
-                        query_string = s;
-                    } else {
-                        query_string.push_str("; ");
-                        query_string.push_str(&s);
-                    }
-                }
-                query_string
-            }
-            _ => unreachable!(),
-        };
-
-        vec![BuiltinTableUpdate::row(
-            &*MZ_CONTINUAL_TASKS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(&ct.cluster_id.to_string()),
-                Datum::String(&query_string),
-                Datum::String(&owner_id.to_string()),
-                privileges,
-                Datum::String(&ct.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        )]
     }
 
     fn pack_sink_update(
@@ -2031,8 +1970,7 @@ impl CatalogState {
             | CommentObjectId::Func(global_id)
             | CommentObjectId::Connection(global_id)
             | CommentObjectId::Secret(global_id)
-            | CommentObjectId::Type(global_id)
-            | CommentObjectId::ContinualTask(global_id) => global_id.to_string(),
+            | CommentObjectId::Type(global_id) => global_id.to_string(),
             CommentObjectId::Role(role_id) => role_id.to_string(),
             CommentObjectId::Database(database_id) => database_id.to_string(),
             CommentObjectId::Schema((_, schema_id)) => schema_id.to_string(),

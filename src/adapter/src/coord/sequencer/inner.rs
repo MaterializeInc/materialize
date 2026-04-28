@@ -33,7 +33,7 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::future::OreFutureExt;
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_ore::{assert_none, instrument, soft_assert_or_log};
+use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
@@ -122,7 +122,6 @@ type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
 mod cluster;
 mod copy_from;
-mod create_continual_task;
 mod create_index;
 mod create_materialized_view;
 mod create_view;
@@ -2737,7 +2736,7 @@ impl Coordinator {
                         }
                     }
                     match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView | ContinualTask) => {
+                        typ @ (Func | View | MaterializedView) => {
                             ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
@@ -2777,7 +2776,6 @@ impl Coordinator {
                             }
                             View => "system view",
                             MaterializedView => "system materialized view",
-                            ContinualTask => "system task",
                             _ => "invalid dependency",
                         };
                         (object_name, object_type.to_string())
@@ -3130,13 +3128,6 @@ impl Coordinator {
         ctx: &mut ExecuteContext,
         plan: plan::AlterRetainHistoryPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
-        soft_assert_or_log!(
-            !matches!(
-                self.catalog().get_entry(&plan.id).item(),
-                CatalogItem::ContinualTask(_)
-            ),
-            "RETAIN HISTORY is not supported on continual tasks"
-        );
         let ops = vec![catalog::Op::AlterRetainHistory {
             id: plan.id,
             value: plan.value,

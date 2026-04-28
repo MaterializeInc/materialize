@@ -322,7 +322,6 @@ mz_compute_operator_hydration_statuses_per_worker_s2_primary_idx mz_compute_oper
 mz_cluster_prometheus_metrics_s2_primary_idx mz_cluster_prometheus_metrics mz_catalog_server {process_id,metric_name,labels} ""
 mz_connections_ind                                          mz_connections                               mz_catalog_server    {schema_id}                                 ""
 mz_console_cluster_utilization_overview_ind                 mz_console_cluster_utilization_overview      mz_catalog_server    {cluster_id}                                ""
-mz_continual_tasks_ind                                      mz_continual_tasks                           mz_catalog_server    {id}                                        ""
 mz_databases_ind                                            mz_databases                                 mz_catalog_server    {name}                                      ""
 mz_dataflow_addresses_per_worker_s2_primary_idx             mz_dataflow_addresses_per_worker             mz_catalog_server    {id,worker_id}                              ""
 mz_dataflow_channels_per_worker_s2_primary_idx              mz_dataflow_channels_per_worker              mz_catalog_server    {id,worker_id}                              ""

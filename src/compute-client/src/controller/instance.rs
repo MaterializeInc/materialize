@@ -20,7 +20,7 @@ use mz_cluster_client::WallclockLagFn;
 use mz_compute_types::dataflows::{BuildDesc, DataflowDescription};
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_compute_types::sinks::{
-    ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection, MaterializedViewSinkConnection,
+    ComputeSinkConnection, ComputeSinkDesc, MaterializedViewSinkConnection,
 };
 use mz_compute_types::sources::SourceInstanceDesc;
 use mz_controller_types::dyncfgs::{
@@ -1414,18 +1414,6 @@ impl Instance {
                         storage_metadata: metadata,
                     };
                     ComputeSinkConnection::MaterializedView(conn)
-                }
-                ComputeSinkConnection::ContinualTask(conn) => {
-                    let metadata = self
-                        .storage_collections
-                        .collection_metadata(id)
-                        .map_err(|_| DataflowCreationError::CollectionMissing(id))?
-                        .clone();
-                    let conn = ContinualTaskConnection {
-                        input_id: conn.input_id,
-                        storage_metadata: metadata,
-                    };
-                    ComputeSinkConnection::ContinualTask(conn)
                 }
                 ComputeSinkConnection::Subscribe(conn) => ComputeSinkConnection::Subscribe(conn),
                 ComputeSinkConnection::CopyToS3Oneshot(conn) => {

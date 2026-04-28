@@ -1047,19 +1047,6 @@ export interface MzConsoleClusterUtilizationOverview {
   size: string | null;
 }
 
-export interface MzContinualTasks {
-  cluster_id: Generated<string>;
-  create_sql: Generated<string>;
-  definition: Generated<string>;
-  id: Generated<string>;
-  name: Generated<string>;
-  oid: Generated<number>;
-  owner_id: Generated<string>;
-  privileges: Generated<string[]>;
-  redacted_create_sql: Generated<string>;
-  schema_id: Generated<string>;
-}
-
 export interface MzDatabases {
   /**
    * Materialize's unique ID for the database.
@@ -3007,15 +2994,6 @@ export interface MzShowConnections {
   type: string;
 }
 
-export interface MzShowContinualTasks {
-  cluster: string;
-  cluster_id: string;
-  comment: string;
-  id: string;
-  name: string;
-  schema_id: string;
-}
-
 export interface MzShowDatabasePrivileges {
   /**
    * The role that the privilege was granted to.
@@ -4302,7 +4280,6 @@ export interface DB {
   mz_compute_operator_hydration_statuses_per_worker: MzComputeOperatorHydrationStatusesPerWorker;
   mz_connections: MzConnections;
   mz_console_cluster_utilization_overview: MzConsoleClusterUtilizationOverview;
-  mz_continual_tasks: MzContinualTasks;
   mz_databases: MzDatabases;
   mz_dataflow_addresses: MzDataflowAddresses;
   mz_dataflow_addresses_per_worker: MzDataflowAddressesPerWorker;
@@ -4415,7 +4392,6 @@ export interface DB {
   mz_show_clusters: MzShowClusters;
   mz_show_columns: MzShowColumns;
   mz_show_connections: MzShowConnections;
-  mz_show_continual_tasks: MzShowContinualTasks;
   mz_show_database_privileges: MzShowDatabasePrivileges;
   mz_show_databases: MzShowDatabases;
   mz_show_default_privileges: MzShowDefaultPrivileges;

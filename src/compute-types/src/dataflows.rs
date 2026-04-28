@@ -340,7 +340,6 @@ impl<P, S> DataflowDescription<P, S> {
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
                 ComputeSinkConnection::MaterializedView(_) => Some(*id),
-                ComputeSinkConnection::ContinualTask(_) => Some(*id),
                 _ => None,
             })
     }
@@ -351,16 +350,6 @@ impl<P, S> DataflowDescription<P, S> {
             .iter()
             .filter_map(|(id, desc)| match desc.connection {
                 ComputeSinkConnection::Subscribe(_) => Some(*id),
-                _ => None,
-            })
-    }
-
-    /// Identifiers of exported continual tasks.
-    pub fn continual_task_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
-        self.sink_exports
-            .iter()
-            .filter_map(|(id, desc)| match desc.connection {
-                ComputeSinkConnection::ContinualTask(_) => Some(*id),
                 _ => None,
             })
     }

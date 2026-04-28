@@ -34,8 +34,8 @@ use fail::fail_point;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
-    CatalogItem, Cluster, ClusterReplica, Connection, ContinualTask, DataSourceDesc, Index,
-    MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
+    Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
@@ -467,25 +467,6 @@ impl Coordinator {
                     view_gids_to_drop.push(view.global_id());
                     dropped_item_names.insert(view.global_id(), full_name);
                 }
-                CatalogImplication::ContinualTask(CatalogImplicationKind::Added(ct)) => {
-                    tracing::debug!(?ct, "not handling AddContinualTask in here yet");
-                }
-                CatalogImplication::ContinualTask(CatalogImplicationKind::Altered {
-                    prev: _prev_ct,
-                    new: _new_ct,
-                }) => {
-                    // No action needed: continual task alterations (e.g.
-                    // renames, owner changes) are catalog-only and require
-                    // no controller changes.
-                }
-                CatalogImplication::ContinualTask(CatalogImplicationKind::Dropped(
-                    ct,
-                    full_name,
-                )) => {
-                    compute_sinks_to_drop.push((ct.cluster_id, ct.global_id()));
-                    sources_to_drop.push((catalog_id, ct.global_id()));
-                    dropped_item_names.insert(ct.global_id(), full_name);
-                }
                 CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
                     // No action needed: the secret payload is stored in
                     // secrets_controller.ensure() BEFORE the catalog transaction.
@@ -563,7 +544,6 @@ impl Coordinator {
                 | CatalogImplication::Index(CatalogImplicationKind::None)
                 | CatalogImplication::MaterializedView(CatalogImplicationKind::None)
                 | CatalogImplication::View(CatalogImplicationKind::None)
-                | CatalogImplication::ContinualTask(CatalogImplicationKind::None)
                 | CatalogImplication::Secret(CatalogImplicationKind::None)
                 | CatalogImplication::Connection(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
@@ -1570,8 +1550,7 @@ impl Coordinator {
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
-                    | CatalogItem::Secret(_)
-                    | CatalogItem::ContinualTask(_) => {
+                    | CatalogItem::Secret(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
                     }
@@ -1628,7 +1607,6 @@ enum CatalogImplication {
     Index(CatalogImplicationKind<Index>),
     MaterializedView(CatalogImplicationKind<MaterializedView>),
     View(CatalogImplicationKind<View>),
-    ContinualTask(CatalogImplicationKind<ContinualTask>),
     Secret(CatalogImplicationKind<Secret>),
     Connection(CatalogImplicationKind<Connection>),
     Cluster(CatalogImplicationKind<Cluster>),
@@ -1773,9 +1751,7 @@ impl CatalogImplication {
                 CatalogItem::View(view) => {
                     self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
                 }
-                CatalogItem::ContinualTask(ct) => {
-                    self.absorb_continual_task(ct, Some(parsed_full_name), catalog_update.diff);
-                }
+
                 CatalogItem::Secret(secret) => {
                     self.absorb_secret(secret, None, catalog_update.diff);
                 }
@@ -1814,9 +1790,7 @@ impl CatalogImplication {
                 CatalogItem::View(view) => {
                     self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
                 }
-                CatalogItem::ContinualTask(ct) => {
-                    self.absorb_continual_task(ct, None, catalog_update.diff);
-                }
+
                 CatalogItem::Secret(secret) => {
                     self.absorb_secret(secret, None, catalog_update.diff);
                 }
@@ -1865,7 +1839,6 @@ impl CatalogImplication {
     impl_absorb_method!(absorb_materialized_view, MaterializedView, MaterializedView);
     impl_absorb_method!(absorb_view, View, View);
 
-    impl_absorb_method!(absorb_continual_task, ContinualTask, ContinualTask);
     impl_absorb_method!(absorb_secret, Secret, Secret);
     impl_absorb_method!(absorb_connection, Connection, Connection);
 

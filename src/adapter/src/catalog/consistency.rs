@@ -273,8 +273,7 @@ impl CatalogState {
                 | CommentObjectId::Func(item_id)
                 | CommentObjectId::Connection(item_id)
                 | CommentObjectId::Type(item_id)
-                | CommentObjectId::Secret(item_id)
-                | CommentObjectId::ContinualTask(item_id) => {
+                | CommentObjectId::Secret(item_id) => {
                     let entry = self.entry_by_id.get(&item_id);
                     match entry {
                         None => comment_inconsistencies
@@ -383,10 +382,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !referenced_entry.referenced_by().contains(id)
-                    // Continual Tasks are self referential.
-                    && (referenced_entry.id() != *id && !referenced_entry.is_continual_task())
-                {
+                if !referenced_entry.referenced_by().contains(id) && referenced_entry.id() != *id {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,
@@ -403,10 +399,7 @@ impl CatalogState {
                     });
                     continue;
                 };
-                if !used_entry.used_by().contains(id)
-                    // Continual Tasks are self referential.
-                    && (used_entry.id() != *id && !used_entry.is_continual_task())
-                {
+                if !used_entry.used_by().contains(id) && used_entry.id() != *id {
                     dependency_inconsistencies.push(
                         ObjectDependencyInconsistency::InconsistentUsedBy {
                             object_a: *id,

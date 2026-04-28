@@ -992,52 +992,6 @@ impl CatalogState {
                     PrivilegeMap::from_mz_acl_items(acl_items),
                 );
             }
-            Builtin::ContinualTask(ct) => {
-                let mut acl_items = vec![rbac::owner_privilege(
-                    mz_sql::catalog::ObjectType::Source,
-                    MZ_SYSTEM_ROLE_ID,
-                )];
-                acl_items.extend_from_slice(&ct.access);
-                // Continual Tasks can't be versioned.
-                let versions = BTreeMap::new();
-
-                let item = self
-                    .parse_item(
-                        global_id,
-                        &ct.create_sql(),
-                        &versions,
-                        None,
-                        false,
-                        None,
-                        local_expression_cache,
-                        None,
-                    )
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "internal error: failed to load bootstrap continual task:\n\
-                                    {}\n\
-                                    error:\n\
-                                    {:?}\n\n\
-                                    make sure that the schema name is specified in the builtin continual task's create sql statement.",
-                            ct.name, e
-                        )
-                    });
-                let CatalogItem::ContinualTask(_) = &item else {
-                    panic!(
-                        "internal error: builtin continual task {}'s SQL does not begin with \"CREATE CONTINUAL TASK\".",
-                        ct.name
-                    );
-                };
-
-                self.insert_item(
-                    item_id,
-                    ct.oid,
-                    name,
-                    item,
-                    MZ_SYSTEM_ROLE_ID,
-                    PrivilegeMap::from_mz_acl_items(acl_items),
-                );
-            }
             Builtin::Connection(connection) => {
                 // Connections can't be versioned.
                 let versions = BTreeMap::new();
@@ -1500,8 +1454,7 @@ impl CatalogState {
     /// Set the optimized plan for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index`, `MaterializedView`, or
-    /// `ContinualTask`.
+    /// If the item is not an `Index` or `MaterializedView`.
     pub(super) fn set_optimized_plan(
         &mut self,
         id: GlobalId,
@@ -1512,7 +1465,6 @@ impl CatalogState {
         match entry.item_mut() {
             CatalogItem::Index(idx) => idx.optimized_plan = Some(Arc::new(plan)),
             CatalogItem::MaterializedView(mv) => mv.optimized_plan = Some(Arc::new(plan)),
-            CatalogItem::ContinualTask(ct) => ct.optimized_plan = Some(Arc::new(plan)),
             other => panic!("set_optimized_plan called on {} ({:?})", id, other.typ()),
         }
     }
@@ -1520,8 +1472,7 @@ impl CatalogState {
     /// Set the physical plan for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index`, `MaterializedView`, or
-    /// `ContinualTask`.
+    /// If the item is not an `Index` or `MaterializedView`.
     pub(super) fn set_physical_plan(
         &mut self,
         id: GlobalId,
@@ -1532,7 +1483,6 @@ impl CatalogState {
         match entry.item_mut() {
             CatalogItem::Index(idx) => idx.physical_plan = Some(Arc::new(plan)),
             CatalogItem::MaterializedView(mv) => mv.physical_plan = Some(Arc::new(plan)),
-            CatalogItem::ContinualTask(ct) => ct.physical_plan = Some(Arc::new(plan)),
             other => panic!("set_physical_plan called on {} ({:?})", id, other.typ()),
         }
     }
@@ -1540,8 +1490,7 @@ impl CatalogState {
     /// Set the `DataflowMetainfo` for the item identified by `id`.
     ///
     /// # Panics
-    /// If the item is not an `Index`, `MaterializedView`, or
-    /// `ContinualTask`.
+    /// If the item is not an `Index` or `MaterializedView`.
     pub(super) fn set_dataflow_metainfo(
         &mut self,
         id: GlobalId,
@@ -1569,7 +1518,6 @@ impl CatalogState {
         match entry.item_mut() {
             CatalogItem::Index(idx) => idx.dataflow_metainfo = Some(metainfo),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo = Some(metainfo),
-            CatalogItem::ContinualTask(ct) => ct.dataflow_metainfo = Some(metainfo),
             other => panic!("set_dataflow_metainfo called on {} ({:?})", id, other.typ()),
         }
     }
@@ -1598,7 +1546,6 @@ impl CatalogState {
             let metainfo = match entry.item_mut() {
                 CatalogItem::Index(idx) => idx.dataflow_metainfo.take(),
                 CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.take(),
-                CatalogItem::ContinualTask(ct) => ct.dataflow_metainfo.take(),
                 _ => None,
             };
             if let Some(mut metainfo) = metainfo {
@@ -1646,11 +1593,6 @@ impl CatalogState {
                                 }
                                 CatalogItem::MaterializedView(mv) => {
                                     if let Some(ref mut m) = mv.dataflow_metainfo {
-                                        m.optimizer_notices.retain(|x| &n != x);
-                                    }
-                                }
-                                CatalogItem::ContinualTask(ct) => {
-                                    if let Some(ref mut m) = ct.dataflow_metainfo {
                                         m.optimizer_notices.retain(|x| &n != x);
                                     }
                                 }
@@ -2385,8 +2327,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let mut tables = Vec::new();
         let mut derived_items = Vec::new();
         let mut sinks = Vec::new();
-        let mut continual_tasks = Vec::new();
-
         for update in item_updates {
             match update.0.item_type() {
                 CatalogItemType::Type => types.push(update),
@@ -2399,7 +2339,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
-                CatalogItemType::ContinualTask => continual_tasks.push(update),
             }
         }
 
@@ -2417,7 +2356,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             &mut sources,
             &mut tables,
             &mut sinks,
-            &mut continual_tasks,
         ] {
             group.sort_by_key(|(item, _, _)| item.id);
         }
@@ -2431,7 +2369,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             .chain(tables)
             .chain(derived_items)
             .chain(sinks)
-            .chain(continual_tasks)
             .collect()
     }
 
@@ -2455,8 +2392,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let mut tables = Vec::new();
         let mut derived_items = Vec::new();
         let mut sinks = Vec::new();
-        let mut continual_tasks = Vec::new();
-
         for update in temp_item_updates {
             match update.0.item_type() {
                 CatalogItemType::Type => types.push(update),
@@ -2469,7 +2404,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 | CatalogItemType::MaterializedView
                 | CatalogItemType::Index => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
-                CatalogItemType::ContinualTask => continual_tasks.push(update),
             }
         }
 
@@ -2483,7 +2417,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             &mut tables,
             &mut derived_items,
             &mut sinks,
-            &mut continual_tasks,
         ] {
             group.sort_by_key(|(item, _, _)| item.id);
         }
@@ -2497,7 +2430,6 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             .chain(tables)
             .chain(derived_items)
             .chain(sinks)
-            .chain(continual_tasks)
             .collect()
     }
     let temp_item_retractions = sort_temp_item_updates(temp_item_retractions);

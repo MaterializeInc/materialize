@@ -223,7 +223,6 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             CatalogItemType::Func => crate::objects::CatalogItemType::Func,
             CatalogItemType::Secret => crate::objects::CatalogItemType::Secret,
             CatalogItemType::Connection => crate::objects::CatalogItemType::Connection,
-            CatalogItemType::ContinualTask => crate::objects::CatalogItemType::ContinualTask,
         }
     }
 
@@ -239,7 +238,6 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             crate::objects::CatalogItemType::Func => CatalogItemType::Func,
             crate::objects::CatalogItemType::Secret => CatalogItemType::Secret,
             crate::objects::CatalogItemType::Connection => CatalogItemType::Connection,
-            crate::objects::CatalogItemType::ContinualTask => CatalogItemType::ContinualTask,
             crate::objects::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
@@ -266,7 +264,6 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Database => crate::objects::ObjectType::Database,
             ObjectType::Schema => crate::objects::ObjectType::Schema,
             ObjectType::Func => crate::objects::ObjectType::Func,
-            ObjectType::ContinualTask => crate::objects::ObjectType::ContinualTask,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
         }
     }
@@ -288,7 +285,6 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             crate::objects::ObjectType::Database => Ok(ObjectType::Database),
             crate::objects::ObjectType::Schema => Ok(ObjectType::Schema),
             crate::objects::ObjectType::Func => Ok(ObjectType::Func),
-            crate::objects::ObjectType::ContinualTask => Ok(ObjectType::ContinualTask),
             crate::objects::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
             crate::objects::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
@@ -447,9 +443,6 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             CommentObjectId::Database(database_id) => {
                 crate::objects::CommentObject::Database(database_id.into_proto())
             }
-            CommentObjectId::ContinualTask(global_id) => {
-                crate::objects::CommentObject::ContinualTask(global_id.into_proto())
-            }
             CommentObjectId::NetworkPolicy(network_policy_id) => {
                 crate::objects::CommentObject::NetworkPolicy(network_policy_id.into_proto())
             }
@@ -503,9 +496,6 @@ impl RustType<crate::objects::CommentObject> for CommentObjectId {
             }
             crate::objects::CommentObject::Secret(item_id) => {
                 CommentObjectId::Secret(item_id.into_rust()?)
-            }
-            crate::objects::CommentObject::ContinualTask(item_id) => {
-                CommentObjectId::ContinualTask(item_id.into_rust()?)
             }
             crate::objects::CommentObject::NetworkPolicy(global_id) => {
                 CommentObjectId::NetworkPolicy(global_id.into_rust()?)

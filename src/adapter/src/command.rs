@@ -579,8 +579,6 @@ pub enum ExecuteResponse {
     CreatedViews,
     /// The requested materialized view was created.
     CreatedMaterializedView,
-    /// The requested continual task was created.
-    CreatedContinualTask,
     /// The requested type was created.
     CreatedType,
     /// The requested network policy was created.
@@ -751,7 +749,6 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedMaterializedView)
             }
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
-            ExecuteResponseKind::CreatedContinualTask => Ok(ExecuteResponse::CreatedContinualTask),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
@@ -813,7 +810,6 @@ impl ExecuteResponse {
             CreatedView { .. } => Some("CREATE VIEW".into()),
             CreatedViews { .. } => Some("CREATE VIEWS".into()),
             CreatedMaterializedView { .. } => Some("CREATE MATERIALIZED VIEW".into()),
-            CreatedContinualTask { .. } => Some("CREATE CONTINUAL TASK".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
@@ -905,7 +901,6 @@ impl ExecuteResponse {
             CreateTable => &[CreatedTable],
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
-            CreateContinualTask => &[CreatedContinualTask],
             CreateIndex => &[CreatedIndex],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
