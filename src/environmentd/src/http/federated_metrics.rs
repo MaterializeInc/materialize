@@ -22,16 +22,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Extension;
-use axum::http::{HeaderMap, StatusCode};
+use axum::body::Body;
+use axum::http::{HeaderMap, HeaderValue, Request, StatusCode};
 use axum::response::IntoResponse;
 use bytes::Buf;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
+use http_body_util::BodyExt;
+use hyper::Uri;
+use hyper_util::rt::TokioIo;
 use mz_adapter::catalog::Catalog;
 use mz_catalog::memory::objects::CatalogEntry;
 use mz_controller::ReplicaHttpLocator;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::metrics::{MetricsRegistry, Rule};
+use mz_ore::netio::{SocketAddrType, Stream};
 use mz_repr::{CatalogItemId, GlobalId};
 use prometheus::Encoder;
 use prometheus::proto::{LabelPair, Metric, MetricFamily};
@@ -53,8 +58,9 @@ mod prom_pb {
     include!(concat!(env!("OUT_DIR"), "/io.prometheus.client.rs"));
 }
 
-/// Per-replica scrape timeout. Matches the cluster proxy's overall request
-/// timeout in `http/cluster.rs`.
+/// Per-replica connect timeout. Matches `http/cluster.rs`.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Per-replica overall scrape timeout. Matches `http/cluster.rs`.
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Result of scraping one clusterd `/metrics` endpoint.
@@ -96,16 +102,9 @@ pub async fn handle_federated_metrics(
     // 3. Scrape every clusterd in parallel. For each batch, env knows the
     //    (cluster_id, replica_id) it dispatched to — call the same helper
     //    `enrich` would call when a Rule::ReplicaNameLookup matches.
-    let http_client = reqwest::Client::new();
     let mut scrapes = FuturesUnordered::new();
     for (cluster_id, replica_id, addr) in targets {
-        scrapes.push(scrape_one(
-            http_client.clone(),
-            cluster_id,
-            replica_id,
-            addr,
-            SCRAPE_TIMEOUT,
-        ));
+        scrapes.push(scrape_one(cluster_id, replica_id, addr, SCRAPE_TIMEOUT));
     }
     while let Some(result) = scrapes.next().await {
         match result {
@@ -159,22 +158,88 @@ pub async fn handle_federated_metrics(
 /// Scrapes one clusterd `/metrics` endpoint, decodes the delimited
 /// protobuf body into `Vec<MetricFamily>`, and parses the
 /// `X-Mz-Enrich-Rules` JSON header into a `Vec<Rule>`.
+///
+/// Connection logic mirrors `http/cluster.rs::handle_cluster_proxy_inner`
+/// — uses `mz_ore::netio::Stream` so we transparently handle Unix /
+/// Turmoil / Inet replica HTTP addresses (clusterd processes spawned via
+/// `--orchestrator=process` listen on Unix sockets under
+/// `mzdata/secrets/...`).
 async fn scrape_one(
-    client: reqwest::Client,
     cluster_id: ClusterId,
     replica_id: ReplicaId,
-    addr: String,
+    http_addr: String,
     timeout: Duration,
 ) -> Result<ScrapedReplica, (ClusterId, ReplicaId, String)> {
-    let url = format!("http://{addr}/metrics");
-    let resp = client
-        .get(&url)
-        .header(reqwest::header::ACCEPT, prometheus::PROTOBUF_FORMAT)
-        .timeout(timeout)
-        .send()
+    let authority = match SocketAddrType::guess(&http_addr) {
+        SocketAddrType::Unix => format!("cluster_{cluster_id}_replica_{replica_id}"),
+        SocketAddrType::Turmoil => http_addr.trim_start_matches("turmoil:").to_owned(),
+        SocketAddrType::Inet => http_addr.clone(),
+    };
+    let uri = Uri::try_from(format!("http://{authority}/metrics"))
+        .map_err(|e| (cluster_id, replica_id, format!("invalid uri: {e}")))?;
+
+    let mut req = Request::builder()
+        .method("GET")
+        .uri(uri.clone())
+        .header(
+            axum::http::header::ACCEPT,
+            HeaderValue::from_static(prometheus::PROTOBUF_FORMAT),
+        )
+        // One-shot connection — let clusterd close cleanly after the
+        // response (matches the proxy's behavior in cluster.rs).
+        .header(axum::http::header::CONNECTION, HeaderValue::from_static("close"))
+        .body(Body::empty())
+        .map_err(|e| (cluster_id, replica_id, format!("build request: {e}")))?;
+    if let Some(host) = uri.host() {
+        req.headers_mut().insert(
+            axum::http::header::HOST,
+            HeaderValue::from_str(host)
+                .map_err(|e| (cluster_id, replica_id, format!("invalid host: {e}")))?,
+        );
+    }
+
+    let stream = tokio::time::timeout(CONNECT_TIMEOUT, Stream::connect(http_addr.as_str()))
         .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| (cluster_id, replica_id, e.to_string()))?;
+        .map_err(|_| {
+            (
+                cluster_id,
+                replica_id,
+                format!("connect timeout after {CONNECT_TIMEOUT:?}"),
+            )
+        })?
+        .map_err(|e| (cluster_id, replica_id, format!("connect: {e}")))?;
+
+    let io = TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|e| (cluster_id, replica_id, format!("handshake: {e}")))?;
+    mz_ore::task::spawn(
+        || format!("federated metrics scrape {http_addr}"),
+        async move {
+            if let Err(e) = conn.await {
+                debug!("clusterd federated scrape connection closed: {e}");
+            }
+        },
+    );
+
+    let resp = tokio::time::timeout(timeout, sender.send_request(req))
+        .await
+        .map_err(|_| {
+            (
+                cluster_id,
+                replica_id,
+                format!("request timeout after {timeout:?}"),
+            )
+        })?
+        .map_err(|e| (cluster_id, replica_id, format!("request: {e}")))?;
+
+    if !resp.status().is_success() {
+        return Err((
+            cluster_id,
+            replica_id,
+            format!("clusterd returned status {}", resp.status()),
+        ));
+    }
 
     let rules: Vec<Rule> = match resp.headers().get("x-mz-enrich-rules") {
         Some(h) => serde_json::from_slice(h.as_bytes())
@@ -183,9 +248,11 @@ async fn scrape_one(
     };
 
     let bytes = resp
-        .bytes()
+        .into_body()
+        .collect()
         .await
-        .map_err(|e| (cluster_id, replica_id, e.to_string()))?;
+        .map_err(|e| (cluster_id, replica_id, format!("read body: {e}")))?
+        .to_bytes();
 
     // Each MetricFamily is varint-length-prefixed in the response body
     // (see `prometheus::ProtobufEncoder` / `Message::write_length_delimited_to_writer`).

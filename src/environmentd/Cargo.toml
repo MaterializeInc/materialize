@@ -27,6 +27,7 @@ fail.workspace = true
 futures.workspace = true
 headers.workspace = true
 http.workspace = true
+http-body-util.workspace = true
 humantime.workspace = true
 hyper.workspace = true
 hyper-openssl.workspace = true
