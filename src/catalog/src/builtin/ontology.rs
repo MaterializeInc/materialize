@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use mz_pgrepr::oid;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
-use mz_repr::{RelationDesc, SqlScalarType};
+use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
 use mz_sql::catalog::NameReference;
 
 use super::{Builtin, BuiltinView, Ontology, PUBLIC_SELECT};
@@ -82,7 +82,7 @@ fn esc(s: &str) -> String {
 /// Build a simple ontology view from a name, OID, column defs, and SQL.
 fn view(
     name: &'static str,
-    o: u32,
+    oid: u32,
     cols: &[(&'static str, SqlScalarType, bool)],
     keys: &[Vec<usize>],
     sql: String,
@@ -98,7 +98,7 @@ fn view(
     BuiltinView {
         name,
         schema: MZ_INTERNAL_SCHEMA,
-        oid: o,
+        oid,
         desc,
         column_comments: BTreeMap::new(),
         sql: Box::leak(sql.into_boxed_str()),
@@ -157,7 +157,7 @@ fn entity_types_view(infos: &[Info]) -> BuiltinView {
 fn semantic_types_view() -> BuiltinView {
     let vals: Vec<_> = SEMANTIC_TYPE_DEFS
         .iter()
-        .map(|(n, t, d)| format!("('{}','{}','{}')", esc(n), esc(t), esc(d)))
+        .map(|(n, t, d)| format!("('{}','{}','{}')", esc(&n.to_string()), esc(t), esc(d)))
         .collect();
     view(
         "mz_ontology_semantic_types",
@@ -271,52 +271,100 @@ fn link_types_view(infos: &[Info]) -> BuiltinView {
 
 // ── Semantic type reference data ─────────────────────────────
 
-pub(super) const SEMANTIC_TYPE_DEFS: &[(&str, &str, &str)] = &[
+pub(super) const SEMANTIC_TYPE_DEFS: &[(SemanticType, &str, &str)] = &[
     (
-        "CatalogItemId",
+        SemanticType::CatalogItemId,
         "text",
         "SQL-layer object ID. Format: s{n}/u{n}.",
     ),
     (
-        "GlobalId",
+        SemanticType::GlobalId,
         "text",
         "Runtime ID used by compute/storage. Format: s{n}/u{n}/si{n}.",
     ),
-    ("ClusterId", "text", "Cluster ID. Format: s{n}/u{n}."),
     (
-        "ReplicaId",
+        SemanticType::ClusterId,
+        "text",
+        "Cluster ID. Format: s{n}/u{n}.",
+    ),
+    (
+        SemanticType::ReplicaId,
         "text",
         "Cluster replica ID. Format: s{n}/u{n}.",
     ),
-    ("SchemaId", "text", "Schema ID. Format: s{n}/u{n}."),
-    ("DatabaseId", "text", "Database ID. Format: s{n}/u{n}."),
-    ("RoleId", "text", "Role ID. Format: s{n}/g{n}/u{n}/p."),
     (
-        "NetworkPolicyId",
+        SemanticType::SchemaId,
+        "text",
+        "Schema ID. Format: s{n}/u{n}.",
+    ),
+    (
+        SemanticType::DatabaseId,
+        "text",
+        "Database ID. Format: s{n}/u{n}.",
+    ),
+    (
+        SemanticType::RoleId,
+        "text",
+        "Role ID. Format: s{n}/g{n}/u{n}/p.",
+    ),
+    (
+        SemanticType::NetworkPolicyId,
         "text",
         "Network policy ID. Format: s{n}/u{n}.",
     ),
-    ("ShardId", "text", "Persist shard ID. Format: s{uuid}."),
-    ("OID", "oid", "PostgreSQL-compatible object identifier."),
-    ("ObjectType", "text", "Catalog object type discriminator."),
-    ("ConnectionType", "text", "Connection type discriminator."),
-    ("SourceType", "text", "Source type discriminator."),
     (
-        "MzTimestamp",
-        "mz_timestamp",
-        "Internal logical timestamp (uint64).",
+        SemanticType::ShardId,
+        "text",
+        "Persist shard ID. Format: s{uuid}.",
     ),
     (
-        "WallclockTimestamp",
+        SemanticType::OID,
+        "oid",
+        "PostgreSQL-compatible object identifier.",
+    ),
+    (
+        SemanticType::ObjectType,
+        "text",
+        "Catalog object type discriminator (e.g., table, view, source, sink, index, materialized-view).",
+    ),
+    (
+        SemanticType::ConnectionType,
+        "text",
+        "Connection type discriminator (e.g., kafka, postgres, mysql, ssh-tunnel).",
+    ),
+    (
+        SemanticType::SourceType,
+        "text",
+        "Source type discriminator (e.g., kafka, postgres, mysql, webhook).",
+    ),
+    (
+        SemanticType::MzTimestamp,
+        "mz_timestamp",
+        "Internal logical timestamp (8-byte unsigned integer).",
+    ),
+    (
+        SemanticType::WallclockTimestamp,
         "timestamp with time zone",
         "Wall clock timestamp.",
     ),
-    ("ByteCount", "uint8", "A count of bytes."),
-    ("RecordCount", "uint8", "A count of records/rows."),
-    ("CreditRate", "numeric", "Credits consumed per hour."),
-    ("SqlDefinition", "text", "A SQL CREATE statement."),
+    (SemanticType::ByteCount, "uint8", "A count of bytes."),
     (
-        "RedactedSqlDefinition",
+        SemanticType::RecordCount,
+        "uint8",
+        "A count of records/rows.",
+    ),
+    (
+        SemanticType::CreditRate,
+        "numeric",
+        "Credits consumed per hour.",
+    ),
+    (
+        SemanticType::SqlDefinition,
+        "text",
+        "A SQL CREATE statement.",
+    ),
+    (
+        SemanticType::RedactedSqlDefinition,
         "text",
         "A redacted SQL CREATE statement.",
     ),

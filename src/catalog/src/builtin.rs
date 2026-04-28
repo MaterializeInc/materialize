@@ -41,7 +41,7 @@ use mz_repr::namespaces::{
     MZ_UNSAFE_SCHEMA, PG_CATALOG_SCHEMA,
 };
 use mz_repr::role_id::RoleId;
-use mz_repr::{RelationDesc, SqlRelationType, SqlScalarType};
+use mz_repr::{RelationDesc, SemanticType, SqlRelationType, SqlScalarType};
 use mz_sql::catalog::RoleAttributesRaw;
 use mz_sql::catalog::{
     CatalogItemType, CatalogType, CatalogTypeDetails, CatalogTypePgMetadata, NameReference,
@@ -2091,7 +2091,7 @@ pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     oid: oid::TABLE_MZ_ICEBERG_SINKS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("namespace", SqlScalarType::String.nullable(false))
         .with_column("table", SqlScalarType::String.nullable(false))
         .finish(),
@@ -2122,7 +2122,7 @@ pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     oid: oid::TABLE_MZ_KAFKA_SINKS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("topic", SqlScalarType::String.nullable(false))
         .with_key(vec![0])
         .finish(),
@@ -2151,7 +2151,7 @@ pub static MZ_KAFKA_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     oid: oid::TABLE_MZ_KAFKA_CONNECTIONS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column(
             "brokers",
             SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
@@ -2187,7 +2187,7 @@ pub static MZ_KAFKA_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     oid: oid::TABLE_MZ_KAFKA_SOURCES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("group_id_prefix", SqlScalarType::String.nullable(false))
         .with_column("topic", SqlScalarType::String.nullable(false))
         .finish(),
@@ -2223,7 +2223,7 @@ pub static MZ_POSTGRES_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     oid: oid::TABLE_MZ_POSTGRES_SOURCES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("replication_slot", SqlScalarType::String.nullable(false))
         .with_column("timeline_id", SqlScalarType::UInt64.nullable(true))
         .finish(),
@@ -2255,7 +2255,7 @@ pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| 
     oid: oid::TABLE_MZ_POSTGRES_SOURCE_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("schema_name", SqlScalarType::String.nullable(false))
         .with_column("table_name", SqlScalarType::String.nullable(false))
         .finish(),
@@ -2278,7 +2278,11 @@ pub static MZ_POSTGRES_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "postgres_source_table",
         description: "Postgres source table-level details",
-        links: &[],
+        links: &[OntologyLink {
+            name: "describes_source_table",
+            target: "object",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2287,7 +2291,7 @@ pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     oid: oid::TABLE_MZ_MYSQL_SOURCE_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("schema_name", SqlScalarType::String.nullable(false))
         .with_column("table_name", SqlScalarType::String.nullable(false))
         .finish(),
@@ -2310,7 +2314,11 @@ pub static MZ_MYSQL_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     ontology: Some(Ontology {
         entity_name: "mysql_source_table",
         description: "MySQL source table-level details",
-        links: &[],
+        links: &[OntologyLink {
+            name: "describes_source_table",
+            target: "object",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2319,7 +2327,7 @@ pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|
     oid: oid::TABLE_MZ_SQL_SERVER_SOURCE_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("schema_name", SqlScalarType::String.nullable(false))
         .with_column("table_name", SqlScalarType::String.nullable(false))
         .finish(),
@@ -2342,7 +2350,11 @@ pub static MZ_SQL_SERVER_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|
     ontology: Some(Ontology {
         entity_name: "sql_server_source_table",
         description: "SQL Server source table-level details",
-        links: &[],
+        links: &[OntologyLink {
+            name: "describes_source_table",
+            target: "object",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2351,7 +2363,7 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     oid: oid::TABLE_MZ_KAFKA_SOURCE_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("topic", SqlScalarType::String.nullable(false))
         .with_column("envelope_type", SqlScalarType::String.nullable(true))
         .with_column("key_format", SqlScalarType::String.nullable(true))
@@ -2381,7 +2393,11 @@ pub static MZ_KAFKA_SOURCE_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     ontology: Some(Ontology {
         entity_name: "kafka_source_table",
         description: "Kafka source table-level details",
-        links: &[],
+        links: &[OntologyLink {
+            name: "describes_source_table",
+            target: "object",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
+        }],
     }),
 });
 pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -2390,12 +2406,12 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
     oid: oid::TABLE_MZ_OBJECT_DEPENDENCIES_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column(
             "referenced_object_id",
             SqlScalarType::String.nullable(false),
         )
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -2414,12 +2430,12 @@ pub static MZ_OBJECT_DEPENDENCIES: LazyLock<BuiltinTable> = LazyLock::new(|| Bui
         description: "A dependency edge: one object depends on another",
         links: &[
             OntologyLink {
-                name: "depends_on",
+                name: "dependent_object",
                 target: "object",
                 properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
             },
             OntologyLink {
-                name: "depended_on_by",
+                name: "referenced_object",
                 target: "object",
                 properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "foreign_key", "source_column": "referenced_object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
             },
@@ -2433,9 +2449,9 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
     data_source: IntrospectionType::ComputeDependencies.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("dependency_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -2454,12 +2470,12 @@ pub static MZ_COMPUTE_DEPENDENCIES: LazyLock<BuiltinSource> = LazyLock::new(|| B
         description: "Dependency edges within compute dataflows",
         links: &[
             OntologyLink {
-                name: "compute_depends_on",
+                name: "dependent_compute_object",
                 target: "object",
                 properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one"}"#,
             },
             OntologyLink {
-                name: "compute_depended_by",
+                name: "compute_dependency_target",
                 target: "object",
                 properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "dependency_id", "target_column": "id", "cardinality": "many_to_one"}"#,
             },
@@ -2474,12 +2490,12 @@ pub static MZ_DATABASES: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
         oid: oid::MV_MZ_DATABASES_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("DatabaseId")
+            .with_semantic_type(SemanticType::DatabaseId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_semantic_type("OID")
+            .with_semantic_type(SemanticType::OID)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
@@ -2535,14 +2551,14 @@ pub static MZ_SCHEMAS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
         oid: oid::MV_MZ_SCHEMAS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SchemaId")
+            .with_semantic_type(SemanticType::SchemaId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_semantic_type("OID")
+            .with_semantic_type(SemanticType::OID)
             .with_column("database_id", SqlScalarType::String.nullable(true))
-            .with_semantic_type("DatabaseId")
+            .with_semantic_type(SemanticType::DatabaseId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
@@ -2611,14 +2627,14 @@ pub static MZ_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_COLUMNS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false)) // not a key
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("position", SqlScalarType::UInt64.nullable(false))
         .with_column("nullable", SqlScalarType::Bool.nullable(false))
         .with_column("type", SqlScalarType::String.nullable(false))
         .with_column("default", SqlScalarType::String.nullable(true))
         .with_column("type_oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("type_mod", SqlScalarType::Int32.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -2658,20 +2674,20 @@ pub static MZ_INDEXES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_INDEXES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("on_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("create_sql", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SqlDefinition")
+        .with_semantic_type(SemanticType::SqlDefinition)
         .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RedactedSqlDefinition")
+        .with_semantic_type(SemanticType::RedactedSqlDefinition)
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
@@ -2727,7 +2743,7 @@ pub static MZ_INDEX_COLUMNS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     oid: oid::TABLE_MZ_INDEX_COLUMNS_OID,
     desc: RelationDesc::builder()
         .with_column("index_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("index_position", SqlScalarType::UInt64.nullable(false))
         .with_column("on_position", SqlScalarType::UInt64.nullable(true))
         .with_column("on_expression", SqlScalarType::String.nullable(true))
@@ -2773,24 +2789,24 @@ pub static MZ_TABLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_TABLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SchemaId")
+        .with_semantic_type(SemanticType::SchemaId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column(
             "privileges",
             SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", SqlScalarType::String.nullable(true))
-        .with_semantic_type("SqlDefinition")
+        .with_semantic_type(SemanticType::SqlDefinition)
         .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
-        .with_semantic_type("RedactedSqlDefinition")
+        .with_semantic_type(SemanticType::RedactedSqlDefinition)
         .with_column("source_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
@@ -2849,24 +2865,24 @@ pub static MZ_CONNECTIONS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| 
         oid: oid::MV_MZ_CONNECTIONS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_semantic_type("OID")
+            .with_semantic_type(SemanticType::OID)
             .with_column("schema_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SchemaId")
+            .with_semantic_type(SemanticType::SchemaId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("type", SqlScalarType::String.nullable(false))
-            .with_semantic_type("ConnectionType")
+            .with_semantic_type(SemanticType::ConnectionType)
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
             .with_column("create_sql", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SqlDefinition")
+            .with_semantic_type(SemanticType::SqlDefinition)
             .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RedactedSqlDefinition")
+            .with_semantic_type(SemanticType::RedactedSqlDefinition)
             .with_key(vec![0])
             .with_key(vec![1])
             .finish(),
@@ -2950,7 +2966,7 @@ pub static MZ_SSH_TUNNEL_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| 
     oid: oid::TABLE_MZ_SSH_TUNNEL_CONNECTIONS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("public_key_1", SqlScalarType::String.nullable(false))
         .with_column("public_key_2", SqlScalarType::String.nullable(false))
         .finish(),
@@ -2983,32 +2999,32 @@ pub static MZ_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_SOURCES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SchemaId")
+        .with_semantic_type(SemanticType::SchemaId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("type", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SourceType")
+        .with_semantic_type(SemanticType::SourceType)
         .with_column("connection_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("size", SqlScalarType::String.nullable(true))
         .with_column("envelope_type", SqlScalarType::String.nullable(true))
         .with_column("key_format", SqlScalarType::String.nullable(true))
         .with_column("value_format", SqlScalarType::String.nullable(true))
         .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column(
             "privileges",
             SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", SqlScalarType::String.nullable(true))
-        .with_semantic_type("SqlDefinition")
+        .with_semantic_type(SemanticType::SqlDefinition)
         .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
-        .with_semantic_type("RedactedSqlDefinition")
+        .with_semantic_type(SemanticType::RedactedSqlDefinition)
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
@@ -3092,15 +3108,15 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         oid: oid::TABLE_MZ_SINKS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_semantic_type("OID")
+            .with_semantic_type(SemanticType::OID)
             .with_column("schema_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SchemaId")
+            .with_semantic_type(SemanticType::SchemaId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("type", SqlScalarType::String.nullable(false))
             .with_column("connection_id", SqlScalarType::String.nullable(true))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("size", SqlScalarType::String.nullable(true))
             .with_column("envelope_type", SqlScalarType::String.nullable(true))
             // This `format` column is deprecated and replaced by the `key_format` and `value_format` columns
@@ -3109,13 +3125,13 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
             .with_column("key_format", SqlScalarType::String.nullable(true))
             .with_column("value_format", SqlScalarType::String.nullable(true))
             .with_column("cluster_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("ClusterId")
+            .with_semantic_type(SemanticType::ClusterId)
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column("create_sql", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SqlDefinition")
+            .with_semantic_type(SemanticType::SqlDefinition)
             .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RedactedSqlDefinition")
+            .with_semantic_type(SemanticType::RedactedSqlDefinition)
             .with_key(vec![0])
             .with_key(vec![1])
             .finish(),
@@ -3184,6 +3200,11 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
                     target: "cluster",
                     properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
                 },
+                OntologyLink {
+                    name: "uses_connection",
+                    target: "connection",
+                    properties_json: r#"{"kind": "foreign_key", "source_column": "connection_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                },
             ],
         }),
     }
@@ -3194,24 +3215,24 @@ pub static MZ_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_VIEWS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SchemaId")
+        .with_semantic_type(SemanticType::SchemaId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("definition", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SqlDefinition")
+        .with_semantic_type(SemanticType::SqlDefinition)
         .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column(
             "privileges",
             SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SqlDefinition")
+        .with_semantic_type(SemanticType::SqlDefinition)
         .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RedactedSqlDefinition")
+        .with_semantic_type(SemanticType::RedactedSqlDefinition)
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
@@ -3262,26 +3283,26 @@ pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinMaterializedView> = LazyLock::
         oid: oid::MV_MZ_MATERIALIZED_VIEWS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("CatalogItemId")
+                .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-                .with_semantic_type("OID")
+                .with_semantic_type(SemanticType::OID)
             .with_column("schema_id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("SchemaId")
+                .with_semantic_type(SemanticType::SchemaId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("cluster_id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("ClusterId")
+                .with_semantic_type(SemanticType::ClusterId)
             .with_column("definition", SqlScalarType::String.nullable(false))
-                .with_semantic_type("SqlDefinition")
+                .with_semantic_type(SemanticType::SqlDefinition)
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("RoleId")
+                .with_semantic_type(SemanticType::RoleId)
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
             .with_column("create_sql", SqlScalarType::String.nullable(false))
-                .with_semantic_type("SqlDefinition")
+                .with_semantic_type(SemanticType::SqlDefinition)
             .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
-                .with_semantic_type("RedactedSqlDefinition")
+                .with_semantic_type(SemanticType::RedactedSqlDefinition)
             .with_key(vec![0])
             .with_key(vec![1])
             .finish(),
@@ -3452,23 +3473,23 @@ pub static MZ_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SchemaId")
+        .with_semantic_type(SemanticType::SchemaId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("category", SqlScalarType::String.nullable(false))
         .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column(
             "privileges",
             SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
         )
         .with_column("create_sql", SqlScalarType::String.nullable(true))
-        .with_semantic_type("SqlDefinition")
+        .with_semantic_type(SemanticType::SqlDefinition)
         .with_column("redacted_create_sql", SqlScalarType::String.nullable(true))
-        .with_semantic_type("RedactedSqlDefinition")
+        .with_semantic_type(SemanticType::RedactedSqlDefinition)
         .with_key(vec![0])
         .with_key(vec![1])
         .finish(),
@@ -3519,16 +3540,16 @@ pub static MZ_NETWORK_POLICIES: LazyLock<BuiltinMaterializedView> = LazyLock::ne
         oid: oid::MV_MZ_NETWORK_POLICIES_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("NetworkPolicyId")
+            .with_semantic_type(SemanticType::NetworkPolicyId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
             )
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_semantic_type("OID")
+            .with_semantic_type(SemanticType::OID)
             .with_key(vec![0])
             .with_key(vec![4])
             .finish(),
@@ -3640,11 +3661,11 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     oid: oid::TABLE_MZ_TYPE_PG_METADATA_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("typreceive", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -3657,9 +3678,9 @@ pub static MZ_ARRAY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
     oid: oid::TABLE_MZ_ARRAY_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("element_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "The ID of the array type."),
@@ -3672,7 +3693,7 @@ pub static MZ_ARRAY_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTabl
         description: "An array type with its element type",
         links: &[
             OntologyLink {
-                name: "is_subtype_of",
+                name: "detail_of",
                 target: "type",
                 properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
             },
@@ -3690,7 +3711,7 @@ pub static MZ_BASE_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     oid: oid::TABLE_MZ_BASE_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .finish(),
     column_comments: BTreeMap::from_iter([("id", "The ID of the type.")]),
     is_retained_metrics_object: false,
@@ -3707,9 +3728,9 @@ pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     oid: oid::TABLE_MZ_LIST_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("element_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column(
             "element_modifiers",
             SqlScalarType::List {
@@ -3734,7 +3755,7 @@ pub static MZ_LIST_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
         description: "A list type with its element type",
         links: &[
             OntologyLink {
-                name: "is_subtype_of",
+                name: "detail_of",
                 target: "type",
                 properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
             },
@@ -3752,11 +3773,11 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     oid: oid::TABLE_MZ_MAP_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("key_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("value_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column(
             "key_modifiers",
             SqlScalarType::List {
@@ -3794,7 +3815,7 @@ pub static MZ_MAP_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
         description: "A map type with its key and value types",
         links: &[
             OntologyLink {
-                name: "is_subtype_of",
+                name: "detail_of",
                 target: "type",
                 properties_json: r#"{"kind": "foreign_key", "source_column": "id", "target_column": "id", "cardinality": "one_to_one"}"#,
             },
@@ -3817,9 +3838,9 @@ pub static MZ_ROLES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_ROLES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("inherit", SqlScalarType::Bool.nullable(false))
         .with_column("rolcanlogin", SqlScalarType::Bool.nullable(true))
@@ -3854,11 +3875,11 @@ pub static MZ_ROLE_MEMBERS: LazyLock<BuiltinMaterializedView> = LazyLock::new(||
         oid: oid::MV_MZ_ROLE_MEMBERS_OID,
         desc: RelationDesc::builder()
             .with_column("role_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column("member", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column("grantor", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -3892,16 +3913,16 @@ WHERE data->>'kind' = 'Role'",
         is_retained_metrics_object: false,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
-            entity_name: "role_member",
+            entity_name: "role_membership",
             description: "A membership grant: one role is a member of another role",
             links: &[
                 OntologyLink {
-                    name: "member_of_role",
+                    name: "group_role",
                     target: "role",
                     properties_json: r#"{"kind": "foreign_key", "source_column": "role_id", "target_column": "id", "cardinality": "many_to_one"}"#,
                 },
                 OntologyLink {
-                    name: "has_member",
+                    name: "member_role",
                     target: "role",
                     properties_json: r#"{"kind": "foreign_key", "source_column": "member", "target_column": "id", "cardinality": "many_to_one"}"#,
                 },
@@ -3921,7 +3942,7 @@ pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
     oid: oid::TABLE_MZ_ROLE_PARAMETERS_OID,
     desc: RelationDesc::builder()
         .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("parameter_name", SqlScalarType::String.nullable(false))
         .with_column("parameter_value", SqlScalarType::String.nullable(false))
         .finish(),
@@ -3945,7 +3966,7 @@ pub static MZ_ROLE_PARAMETERS: LazyLock<BuiltinTable> = LazyLock::new(|| Builtin
         entity_name: "role_parameter",
         description: "A session parameter default set for a role",
         links: &[OntologyLink {
-            name: "parameter_of",
+            name: "default_parameter_setting_of",
             target: "role",
             properties_json: r#"{"kind": "foreign_key", "source_column": "role_id", "target_column": "id", "cardinality": "many_to_one"}"#,
         }],
@@ -3957,9 +3978,9 @@ pub static MZ_ROLE_AUTH: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     oid: oid::TABLE_MZ_ROLE_AUTH_OID,
     desc: RelationDesc::builder()
         .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("role_oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("password_hash", SqlScalarType::String.nullable(true))
         .with_column(
             "updated_at",
@@ -3991,7 +4012,7 @@ pub static MZ_PSEUDO_TYPES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     oid: oid::TABLE_MZ_PSEUDO_TYPES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .finish(),
     column_comments: BTreeMap::from_iter([("id", "The ID of the type.")]),
     is_retained_metrics_object: false,
@@ -4009,11 +4030,11 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
         oid: oid::TABLE_MZ_FUNCTIONS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false)) // not a key!
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_semantic_type("OID")
+            .with_semantic_type(SemanticType::OID)
             .with_column("schema_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SchemaId")
+            .with_semantic_type(SemanticType::SchemaId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column(
                 "argument_type_ids",
@@ -4023,12 +4044,12 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
                 "variadic_argument_type_id",
                 SqlScalarType::String.nullable(true),
             )
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("return_type_id", SqlScalarType::String.nullable(true))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("returns_set", SqlScalarType::Bool.nullable(false))
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .finish(),
         column_comments: BTreeMap::from_iter([
             ("id", "Materialize's unique ID for the function."),
@@ -4080,6 +4101,11 @@ pub static MZ_FUNCTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| {
                     target: "type",
                     properties_json: r#"{"kind": "foreign_key", "source_column": "return_type_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
                 },
+                OntologyLink {
+                    name: "has_variadic_arg_type",
+                    target: "type",
+                    properties_json: r#"{"kind": "foreign_key", "source_column": "variadic_argument_type_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+                },
             ],
         }),
     }
@@ -4090,14 +4116,14 @@ pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     oid: oid::TABLE_MZ_OPERATORS_OID,
     desc: RelationDesc::builder()
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column(
             "argument_type_ids",
             SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
         )
         .with_column("return_type_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -4105,7 +4131,11 @@ pub static MZ_OPERATORS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable 
     ontology: Some(Ontology {
         entity_name: "operator",
         description: "A built-in SQL operator",
-        links: &[],
+        links: &[OntologyLink {
+            name: "returns_type",
+            target: "type",
+            properties_json: r#"{"kind": "foreign_key", "source_column": "return_type_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+        }],
     }),
 });
 pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
@@ -4114,7 +4144,7 @@ pub static MZ_AGGREGATES: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable
     oid: oid::TABLE_MZ_AGGREGATES_OID,
     desc: RelationDesc::builder()
         .with_column("oid", SqlScalarType::Oid.nullable(false))
-        .with_semantic_type("OID")
+        .with_semantic_type(SemanticType::OID)
         .with_column("agg_kind", SqlScalarType::String.nullable(false))
         .with_column("agg_num_direct_args", SqlScalarType::Int16.nullable(false))
         .finish(),
@@ -4134,10 +4164,10 @@ pub static MZ_CLUSTERS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_CLUSTERS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column(
             "privileges",
             SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
@@ -4228,7 +4258,7 @@ pub static MZ_CLUSTER_WORKLOAD_CLASSES: LazyLock<BuiltinMaterializedView> =
         oid: oid::MV_MZ_CLUSTER_WORKLOAD_CLASSES_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("ClusterId")
+            .with_semantic_type(SemanticType::ClusterId)
             .with_column("workload_class", SqlScalarType::String.nullable(true))
             .with_key(vec![0])
             .finish(),
@@ -4265,7 +4295,7 @@ pub static MZ_CLUSTER_SCHEDULES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     oid: oid::TABLE_MZ_CLUSTER_SCHEDULES_OID,
     desc: RelationDesc::builder()
         .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .with_column("type", SqlScalarType::String.nullable(false))
         .with_column(
             "refresh_hydration_time_estimate",
@@ -4299,14 +4329,14 @@ pub static MZ_SECRETS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
         oid: oid::MV_MZ_SECRETS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-            .with_semantic_type("OID")
+            .with_semantic_type(SemanticType::OID)
             .with_column("schema_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SchemaId")
+            .with_semantic_type(SemanticType::SchemaId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("RoleId")
+            .with_semantic_type(SemanticType::RoleId)
             .with_column(
                 "privileges",
                 SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
@@ -4374,16 +4404,16 @@ pub static MZ_CLUSTER_REPLICAS: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     oid: oid::TABLE_MZ_CLUSTER_REPLICAS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .with_column("size", SqlScalarType::String.nullable(true))
         // `NULL` for un-orchestrated clusters and for replicas where the user
         // hasn't specified them.
         .with_column("availability_zone", SqlScalarType::String.nullable(true))
         .with_column("owner_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("disk", SqlScalarType::Bool.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -4467,7 +4497,7 @@ pub static MZ_PENDING_CLUSTER_REPLICAS: LazyLock<BuiltinMaterializedView> =
         oid: oid::MV_MZ_PENDING_CLUSTER_REPLICAS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("ReplicaId")
+            .with_semantic_type(SemanticType::ReplicaId)
             .with_key(vec![0])
             .finish(),
         column_comments: BTreeMap::from_iter([(
@@ -4532,7 +4562,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinView> = LazyLock::new(||
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_STATUSES_OID,
     desc: RelationDesc::builder()
         .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("process_id", SqlScalarType::UInt64.nullable(false))
         .with_column("status", SqlScalarType::String.nullable(false))
         .with_column("reason", SqlScalarType::String.nullable(true))
@@ -4540,7 +4570,7 @@ pub static MZ_CLUSTER_REPLICA_STATUSES: LazyLock<BuiltinView> = LazyLock::new(||
             "updated_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -4598,14 +4628,14 @@ pub static MZ_CLUSTER_REPLICA_SIZES: LazyLock<BuiltinTable> = LazyLock::new(|| B
         .with_column("workers", SqlScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", SqlScalarType::UInt64.nullable(false))
         .with_column("memory_bytes", SqlScalarType::UInt64.nullable(false))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column(
             "credits_per_hour",
             SqlScalarType::Numeric { max_scale: None }.nullable(false),
         )
-        .with_semantic_type("CreditRate")
+        .with_semantic_type(SemanticType::CreditRate)
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("size", "The human-readable replica size."),
@@ -4645,14 +4675,14 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
         .with_column("id", SqlScalarType::UInt64.nullable(false))
         .with_column("event_type", SqlScalarType::String.nullable(false))
         .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ObjectType")
+        .with_semantic_type(SemanticType::ObjectType)
         .with_column("details", SqlScalarType::Jsonb.nullable(false))
         .with_column("user", SqlScalarType::String.nullable(true))
         .with_column(
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -4727,11 +4757,18 @@ pub static MZ_SOURCE_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "source_status_history",
         description: "Historical source status events",
-        links: &[OntologyLink {
-            name: "status_history_of_source",
-            target: "source",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "source_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+        links: &[
+            OntologyLink {
+                name: "status_history_of_source",
+                target: "source",
+                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "source_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "on_replica",
+                target: "replica",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+            },
+        ],
     }),
 });
 
@@ -4768,7 +4805,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUSES: LazyLock<BuiltinView> = LazyL
         oid: oid::VIEW_MZ_AWS_PRIVATELINK_CONNECTION_STATUSES_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column(
                 "last_status_change_at",
@@ -4943,7 +4980,7 @@ pub static MZ_RECENT_SQL_TEXT: LazyLock<BuiltinView> = LazyLock::new(|| {
         desc: RelationDesc::builder()
             .with_column("sql_hash", SqlScalarType::Bytes.nullable(false))
             .with_column("sql", SqlScalarType::String.nullable(false))
-            .with_semantic_type("SqlDefinition")
+            .with_semantic_type(SemanticType::SqlDefinition)
             .with_column("redacted_sql", SqlScalarType::String.nullable(false))
             .with_key(vec![0, 1, 2])
             .finish(),
@@ -5129,7 +5166,7 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
         .with_column("execution_id", SqlScalarType::Uuid.nullable(false))
         .with_column("sample_rate", SqlScalarType::Float64.nullable(false))
         .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .with_column("application_name", SqlScalarType::String.nullable(false))
         .with_column("cluster_name", SqlScalarType::String.nullable(true))
         .with_column("database_name", SqlScalarType::String.nullable(false))
@@ -5146,9 +5183,9 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
             SqlScalarType::String.nullable(false),
         )
         .with_column("execution_timestamp", SqlScalarType::UInt64.nullable(true))
-        .with_semantic_type("MzTimestamp")
+        .with_semantic_type(SemanticType::MzTimestamp)
         .with_column("transient_index_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column(
             "params",
             SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false),
@@ -5158,12 +5195,12 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
             "began_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column(
             "finished_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column("finished_status", SqlScalarType::String.nullable(true))
         .with_column("error_message", SqlScalarType::String.nullable(true))
         .with_column("result_size", SqlScalarType::Int64.nullable(true))
@@ -5181,21 +5218,21 @@ pub static MZ_RECENT_ACTIVITY_LOG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
             "prepared_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column("statement_type", SqlScalarType::String.nullable(true))
         .with_column("throttled_count", SqlScalarType::UInt64.nullable(false))
         .with_column(
             "connected_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column(
             "initial_application_name",
             SqlScalarType::String.nullable(false),
         )
         .with_column("authenticated_user", SqlScalarType::String.nullable(false))
         .with_column("sql", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SqlDefinition")
+        .with_semantic_type(SemanticType::SqlDefinition)
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -5328,11 +5365,18 @@ WHERE mralt.sql_hash = mrst.sql_hash",
     ontology: Some(Ontology {
         entity_name: "activity_log",
         description: "Recent query activity with execution stats",
-        links: &[OntologyLink {
-            name: "session_on_cluster",
-            target: "cluster",
-            properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+        links: &[
+            OntologyLink {
+                name: "session_on_cluster",
+                target: "cluster",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "cluster_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "used_transient_index",
+                target: "object",
+                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "transient_index_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+            },
+        ],
     }),
 });
 
@@ -5438,15 +5482,15 @@ pub static MZ_SOURCE_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     oid: oid::VIEW_MZ_SOURCE_STATUSES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("type", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SourceType")
+        .with_semantic_type(SemanticType::SourceType)
         .with_column(
             "last_status_change_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column("status", SqlScalarType::String.nullable(false))
         .with_column("error", SqlScalarType::String.nullable(true))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
@@ -5662,11 +5706,18 @@ pub static MZ_SINK_STATUS_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| Bu
     ontology: Some(Ontology {
         entity_name: "sink_status_history",
         description: "Historical sink status events",
-        links: &[OntologyLink {
-            name: "status_history_of_sink",
-            target: "sink",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "sink_id", "target_column": "id", "cardinality": "many_to_one"}"#,
-        }],
+        links: &[
+            OntologyLink {
+                name: "status_history_of_sink",
+                target: "sink",
+                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "foreign_key", "source_column": "sink_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "on_replica",
+                target: "replica",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+            },
+        ],
     }),
 });
 
@@ -5676,14 +5727,14 @@ pub static MZ_SINK_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     oid: oid::VIEW_MZ_SINK_STATUSES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("type", SqlScalarType::String.nullable(false))
         .with_column(
             "last_status_change_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column("status", SqlScalarType::String.nullable(false))
         .with_column("error", SqlScalarType::String.nullable(true))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
@@ -5800,14 +5851,14 @@ pub static MZ_STORAGE_USAGE_BY_SHARD: LazyLock<BuiltinTable> = LazyLock::new(|| 
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::UInt64.nullable(false))
         .with_column("shard_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ShardId")
+        .with_semantic_type(SemanticType::ShardId)
         .with_column("size_bytes", SqlScalarType::UInt64.nullable(false))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column(
             "collection_timestamp",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -5852,7 +5903,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTIONS: LazyLock<BuiltinTable> = LazyLock::ne
         oid: oid::TABLE_MZ_AWS_PRIVATELINK_CONNECTIONS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("principal", SqlScalarType::String.nullable(false))
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -5998,17 +6049,17 @@ pub static MZ_CLUSTER_REPLICA_METRICS: LazyLock<BuiltinView> = LazyLock::new(|| 
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_METRICS_OID,
     desc: RelationDesc::builder()
         .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("process_id", SqlScalarType::UInt64.nullable(false))
         .with_column("cpu_nano_cores", SqlScalarType::UInt64.nullable(true))
         .with_column("memory_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column("heap_limit", SqlScalarType::UInt64.nullable(true))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -6059,11 +6110,11 @@ pub static MZ_CLUSTER_REPLICA_FRONTIERS: LazyLock<BuiltinSource> =
         data_source: IntrospectionType::ReplicaFrontiers.into(),
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("GlobalId")
+            .with_semantic_type(SemanticType::GlobalId)
             .with_column("replica_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("ReplicaId")
+            .with_semantic_type(SemanticType::ReplicaId)
             .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
-            .with_semantic_type("MzTimestamp")
+            .with_semantic_type(SemanticType::MzTimestamp)
             .finish(),
         column_comments: BTreeMap::from_iter([
             (
@@ -6097,11 +6148,11 @@ pub static MZ_FRONTIERS: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSourc
     data_source: IntrospectionType::Frontiers.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("read_frontier", SqlScalarType::MzTimestamp.nullable(true))
-        .with_semantic_type("MzTimestamp")
+        .with_semantic_type(SemanticType::MzTimestamp)
         .with_column("write_frontier", SqlScalarType::MzTimestamp.nullable(true))
-        .with_semantic_type("MzTimestamp")
+        .with_semantic_type(SemanticType::MzTimestamp)
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -6137,9 +6188,9 @@ pub static MZ_GLOBAL_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     oid: oid::VIEW_MZ_GLOBAL_FRONTIERS_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
-        .with_semantic_type("MzTimestamp")
+        .with_semantic_type(SemanticType::MzTimestamp)
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "
@@ -6179,11 +6230,18 @@ pub static MZ_WALLCLOCK_LAG_HISTORY: LazyLock<BuiltinSource> = LazyLock::new(|| 
     ontology: Some(Ontology {
         entity_name: "wallclock_lag_history",
         description: "Historical wallclock lag per object",
-        links: &[OntologyLink {
-            name: "measures_lag_of",
-            target: "object",
-            properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "measures", "source_column": "object_id", "target_column": "id", "metric": "wallclock_lag"}"#,
-        }],
+        links: &[
+            OntologyLink {
+                name: "measures_lag_of",
+                target: "object",
+                properties_json: r#"{"source_id_type": "GlobalId", "requires_mapping": "mz_internal.mz_object_global_ids", "kind": "measures", "source_column": "object_id", "target_column": "id", "metric": "wallclock_lag"}"#,
+            },
+            OntologyLink {
+                name: "on_replica",
+                target: "replica",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "replica_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
+            },
+        ],
     }),
 });
 
@@ -6193,13 +6251,13 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
     oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_HISTORY_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("lag", SqlScalarType::Interval.nullable(true))
         .with_column(
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_key(vec![0, 2])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -6246,7 +6304,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY: LazyLock<BuiltinView> = LazyL
         oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_RECENT_HISTORY_OID,
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("GlobalId")
+            .with_semantic_type(SemanticType::GlobalId)
             .with_column("lag", SqlScalarType::Interval.nullable(true))
             .with_column(
                 "occurred_at",
@@ -6283,7 +6341,7 @@ pub static MZ_WALLCLOCK_GLOBAL_LAG: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     oid: oid::VIEW_MZ_WALLCLOCK_GLOBAL_LAG_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("lag", SqlScalarType::Interval.nullable(true))
         .with_key(vec![0])
         .finish(),
@@ -6401,10 +6459,10 @@ pub static MZ_SUBSCRIPTIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTa
     oid: oid::TABLE_MZ_SUBSCRIPTIONS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("session_id", SqlScalarType::Uuid.nullable(false))
         .with_column("cluster_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .with_column(
             "created_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
@@ -6454,7 +6512,7 @@ pub static MZ_SESSIONS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
         .with_column("id", SqlScalarType::Uuid.nullable(false))
         .with_column("connection_id", SqlScalarType::UInt32.nullable(false))
         .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("client_ip", SqlScalarType::String.nullable(true))
         .with_column(
             "connected_at",
@@ -6495,15 +6553,15 @@ pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
     oid: oid::TABLE_MZ_DEFAULT_PRIVILEGES_OID,
     desc: RelationDesc::builder()
         .with_column("role_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("database_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("DatabaseId")
+        .with_semantic_type(SemanticType::DatabaseId)
         .with_column("schema_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("SchemaId")
+        .with_semantic_type(SemanticType::SchemaId)
         .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ObjectType")
+        .with_semantic_type(SemanticType::ObjectType)
         .with_column("grantee", SqlScalarType::String.nullable(false))
-        .with_semantic_type("RoleId")
+        .with_semantic_type(SemanticType::RoleId)
         .with_column("privileges", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -6550,6 +6608,11 @@ pub static MZ_DEFAULT_PRIVILEGES: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
                 target: "schema",
                 properties_json: r#"{"kind": "foreign_key", "source_column": "schema_id", "target_column": "id", "cardinality": "many_to_one", "nullable": true}"#,
             },
+            OntologyLink {
+                name: "default_priv_granted_to",
+                target: "role",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "grantee", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
         ],
     }),
 });
@@ -6580,9 +6643,9 @@ pub static MZ_COMMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
     oid: oid::TABLE_MZ_COMMENTS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ObjectType")
+        .with_semantic_type(SemanticType::ObjectType)
         .with_column("object_sub_id", SqlScalarType::Int32.nullable(true))
         .with_column("comment", SqlScalarType::String.nullable(false))
         .finish(),
@@ -6620,7 +6683,7 @@ pub static MZ_SOURCE_REFERENCES: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     oid: oid::TABLE_MZ_SOURCE_REFERENCES_OID,
     desc: RelationDesc::builder()
         .with_column("source_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("namespace", SqlScalarType::String.nullable(true))
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column(
@@ -6648,7 +6711,7 @@ pub static MZ_WEBHOOKS_SOURCES: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
     oid: oid::TABLE_MZ_WEBHOOK_SOURCES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("url", SqlScalarType::String.nullable(false))
         .finish(),
@@ -6679,7 +6742,7 @@ pub static MZ_HISTORY_RETENTION_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::n
         oid: oid::TABLE_MZ_HISTORY_RETENTION_STRATEGIES_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("strategy", SqlScalarType::String.nullable(false))
             .with_column("value", SqlScalarType::Jsonb.nullable(false))
             .finish(),
@@ -6710,7 +6773,7 @@ pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     oid: oid::TABLE_MZ_LICENSE_KEYS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("organization", SqlScalarType::String.nullable(false))
         .with_column("environment_id", SqlScalarType::String.nullable(false))
         .with_column(
@@ -6756,7 +6819,7 @@ pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     oid: oid::TABLE_MZ_REPLACEMENTS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("target_id", SqlScalarType::String.nullable(false))
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -6810,9 +6873,9 @@ pub static MZ_STORAGE_SHARDS: LazyLock<BuiltinSource> = LazyLock::new(|| Builtin
     data_source: IntrospectionType::ShardMapping.into(),
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("shard_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ShardId")
+        .with_semantic_type(SemanticType::ShardId)
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -6834,14 +6897,14 @@ pub static MZ_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVie
     oid: oid::VIEW_MZ_STORAGE_USAGE_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("size_bytes", SqlScalarType::UInt64.nullable(false))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column(
             "collection_timestamp",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_key(vec![0, 2])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -6886,9 +6949,9 @@ pub static MZ_RECENT_STORAGE_USAGE: LazyLock<BuiltinView> = LazyLock::new(|| {
     oid: oid::VIEW_MZ_RECENT_STORAGE_USAGE_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("size_bytes", SqlScalarType::UInt64.nullable(true))
-            .with_semantic_type("ByteCount")
+            .with_semantic_type(SemanticType::ByteCount)
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -6948,18 +7011,18 @@ pub static MZ_RELATIONS: LazyLock<BuiltinView> = LazyLock::new(|| {
         oid: oid::VIEW_MZ_RELATIONS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("CatalogItemId")
+                .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-                .with_semantic_type("OID")
+                .with_semantic_type(SemanticType::OID)
             .with_column("schema_id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("SchemaId")
+                .with_semantic_type(SemanticType::SchemaId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("type", SqlScalarType::String.nullable(false))
-                .with_semantic_type("ObjectType")
+                .with_semantic_type(SemanticType::ObjectType)
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("RoleId")
+                .with_semantic_type(SemanticType::RoleId)
             .with_column("cluster_id", SqlScalarType::String.nullable(true))
-                .with_semantic_type("ClusterId")
+                .with_semantic_type(SemanticType::ClusterId)
             .with_column("privileges", SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false))
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -7055,18 +7118,18 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         oid: oid::VIEW_MZ_OBJECTS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("CatalogItemId")
+                .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("oid", SqlScalarType::Oid.nullable(false))
-                .with_semantic_type("OID")
+                .with_semantic_type(SemanticType::OID)
             .with_column("schema_id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("SchemaId")
+                .with_semantic_type(SemanticType::SchemaId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("type", SqlScalarType::String.nullable(false))
-                .with_semantic_type("ObjectType")
+                .with_semantic_type(SemanticType::ObjectType)
             .with_column("owner_id", SqlScalarType::String.nullable(false))
-                .with_semantic_type("RoleId")
+                .with_semantic_type(SemanticType::RoleId)
             .with_column("cluster_id", SqlScalarType::String.nullable(true))
-                .with_semantic_type("ClusterId")
+                .with_semantic_type(SemanticType::ClusterId)
             .with_column("privileges", SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(true))
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -7116,18 +7179,18 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     oid: oid::VIEW_MZ_OBJECT_FULLY_QUALIFIED_NAMES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ObjectType")
+        .with_semantic_type(SemanticType::ObjectType)
         .with_column("schema_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("SchemaId")
+        .with_semantic_type(SemanticType::SchemaId)
         .with_column("schema_name", SqlScalarType::String.nullable(false))
         .with_column("database_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("DatabaseId")
+        .with_semantic_type(SemanticType::DatabaseId)
         .with_column("database_name", SqlScalarType::String.nullable(true))
         .with_column("cluster_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ClusterId")
+        .with_semantic_type(SemanticType::ClusterId)
         .finish(),
     column_comments: BTreeMap::from_iter([
         ("id", "Materialize's unique ID for the object."),
@@ -7184,9 +7247,8 @@ pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| Built
     oid: oid::VIEW_MZ_OBJECT_GLOBAL_IDS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("global_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -7215,10 +7277,10 @@ pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     oid: oid::VIEW_MZ_OBJECT_LIFETIMES_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("previous_id", SqlScalarType::String.nullable(true))
         .with_column("object_type", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ObjectType")
+        .with_semantic_type(SemanticType::ObjectType)
         .with_column("event_type", SqlScalarType::String.nullable(false))
         .with_column(
             "occurred_at",
@@ -7271,7 +7333,7 @@ pub static MZ_OBJECT_HISTORY: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinVi
     oid: oid::VIEW_MZ_OBJECT_HISTORY_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("cluster_id", SqlScalarType::String.nullable(true))
         .with_column("object_type", SqlScalarType::String.nullable(false))
         .with_column(
@@ -7526,7 +7588,7 @@ pub static MZ_DATAFLOW_GLOBAL_IDS: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::UInt64.nullable(false))
         .with_column("global_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -7548,7 +7610,7 @@ pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
     desc: RelationDesc::builder()
         .with_column("name", SqlScalarType::String.nullable(false))
         .with_column("global_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -7578,7 +7640,7 @@ pub static MZ_LIR_MAPPING: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView 
     oid: oid::VIEW_MZ_LIR_MAPPING_OID,
     desc: RelationDesc::builder()
         .with_column("global_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("lir_id", SqlScalarType::UInt64.nullable(false))
         .with_column("operator", SqlScalarType::String.nullable(false))
         .with_column("parent_lir_id", SqlScalarType::UInt64.nullable(true))
@@ -7700,12 +7762,12 @@ pub static MZ_OBJECT_TRANSITIVE_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::
         oid: oid::VIEW_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_OID,
         desc: RelationDesc::builder()
             .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column(
                 "referenced_object_id",
                 SqlScalarType::String.nullable(false),
             )
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_key(vec![0, 1])
             .finish(),
         column_comments: BTreeMap::from_iter([
@@ -7732,12 +7794,12 @@ SELECT object_id, referenced_object_id FROM reach;",
             description: "Transitive closure of object dependencies — all direct and indirect dependencies",
             links: &[
                 OntologyLink {
-                    name: "transitively_depends_on",
+                    name: "transitively_dependent_object",
                     target: "object",
                     properties_json: r#"{"kind": "foreign_key", "source_column": "object_id", "target_column": "id", "cardinality": "many_to_one", "source_id_type": "CatalogItemId"}"#,
                 },
                 OntologyLink {
-                    name: "transitively_depended_on_by",
+                    name: "transitively_referenced_object",
                     target: "object",
                     properties_json: r#"{"kind": "foreign_key", "source_column": "referenced_object_id", "target_column": "id", "cardinality": "many_to_one", "source_id_type": "CatalogItemId"}"#,
                 },
@@ -7752,7 +7814,7 @@ pub static MZ_COMPUTE_EXPORTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     oid: oid::VIEW_MZ_COMPUTE_EXPORTS_OID,
     desc: RelationDesc::builder()
         .with_column("export_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
         .with_key(vec![0])
         .finish(),
@@ -7795,9 +7857,9 @@ pub static MZ_COMPUTE_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(|| Builti
     oid: oid::VIEW_MZ_COMPUTE_FRONTIERS_OID,
     desc: RelationDesc::builder()
         .with_column("export_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
-        .with_semantic_type("MzTimestamp")
+        .with_semantic_type(SemanticType::MzTimestamp)
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -7958,11 +8020,11 @@ pub static MZ_COMPUTE_IMPORT_FRONTIERS: LazyLock<BuiltinView> = LazyLock::new(||
     oid: oid::VIEW_MZ_COMPUTE_IMPORT_FRONTIERS_OID,
     desc: RelationDesc::builder()
         .with_column("export_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("import_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
-        .with_semantic_type("MzTimestamp")
+        .with_semantic_type(SemanticType::MzTimestamp)
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -9710,7 +9772,7 @@ pub static MZ_COMPUTE_ERROR_COUNTS: LazyLock<BuiltinView> = LazyLock::new(|| Bui
     oid: oid::VIEW_MZ_COMPUTE_ERROR_COUNTS_OID,
     desc: RelationDesc::builder()
         .with_column("export_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column(
             "count",
             SqlScalarType::Numeric {
@@ -9755,9 +9817,9 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED: LazyLock<BuiltinSource> =
         oid: oid::SOURCE_MZ_COMPUTE_ERROR_COUNTS_RAW_UNIFIED_OID,
         desc: RelationDesc::builder()
             .with_column("replica_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("ReplicaId")
+            .with_semantic_type(SemanticType::ReplicaId)
             .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column(
                 "count",
                 SqlScalarType::Numeric { max_scale: None }.nullable(false),
@@ -9776,9 +9838,9 @@ pub static MZ_COMPUTE_HYDRATION_TIMES: LazyLock<BuiltinSource> = LazyLock::new(|
     oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_TIMES_OID,
     desc: RelationDesc::builder()
         .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("time_ns", SqlScalarType::UInt64.nullable(true))
         .finish(),
     data_source: IntrospectionType::ComputeHydrationTimes.into(),
@@ -9808,9 +9870,9 @@ pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(
     oid: oid::SOURCE_MZ_COMPUTE_HYDRATION_STATUSES_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("hydrated", SqlScalarType::Bool.nullable(false))
         .with_column("hydration_time", SqlScalarType::Interval.nullable(true))
         .finish(),
@@ -9871,9 +9933,9 @@ pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES: LazyLock<BuiltinSource> = Laz
         oid: oid::SOURCE_MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_OID,
         desc: RelationDesc::builder()
             .with_column("replica_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("ReplicaId")
+            .with_semantic_type(SemanticType::ReplicaId)
             .with_column("object_id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column(
                 "physical_plan_node_id",
                 SqlScalarType::UInt64.nullable(false),
@@ -10050,10 +10112,10 @@ pub static MZ_ACTIVE_PEEKS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::Uuid.nullable(false))
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("type", SqlScalarType::String.nullable(false))
         .with_column("time", SqlScalarType::MzTimestamp.nullable(false))
-        .with_semantic_type("MzTimestamp")
+        .with_semantic_type(SemanticType::MzTimestamp)
         .with_key(vec![0])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -10426,7 +10488,7 @@ pub static MZ_CLUSTER_REPLICA_UTILIZATION: LazyLock<BuiltinView> = LazyLock::new
     oid: oid::VIEW_MZ_CLUSTER_REPLICA_UTILIZATION_OID,
     desc: RelationDesc::builder()
         .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("process_id", SqlScalarType::UInt64.nullable(false))
         .with_column("cpu_percent", SqlScalarType::Float64.nullable(true))
         .with_column("memory_percent", SqlScalarType::Float64.nullable(true))
@@ -13807,7 +13869,7 @@ pub static MZ_CLUSTER_REPLICA_NAME_HISTORY: LazyLock<BuiltinView> = LazyLock::ne
             SqlScalarType::TimestampTz { precision: None }.nullable(true),
         )
         .with_column("id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("previous_name", SqlScalarType::String.nullable(true))
         .with_column("new_name", SqlScalarType::String.nullable(true))
         .finish(),
@@ -13875,9 +13937,9 @@ pub static MZ_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| Built
     oid: oid::VIEW_MZ_HYDRATION_STATUSES_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("hydrated", SqlScalarType::Bool.nullable(true))
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -13987,9 +14049,9 @@ pub static MZ_MATERIALIZATION_DEPENDENCIES: LazyLock<BuiltinView> = LazyLock::ne
     oid: oid::VIEW_MZ_MATERIALIZATION_DEPENDENCIES_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("dependency_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -14013,11 +14075,18 @@ JOIN mz_catalog.mz_relations r ON (r.id = d.referenced_object_id)",
     ontology: Some(Ontology {
         entity_name: "materialization_dep",
         description: "Dependencies between materializations",
-        links: &[OntologyLink {
-            name: "materialization_depends_on",
-            target: "object",
-            properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "depends_on", "source_column": "object_id", "target_column": "id"}"#,
-        }],
+        links: &[
+            OntologyLink {
+                name: "materialization_depends_on",
+                target: "object",
+                properties_json: r#"{"source_id_type": "CatalogItemId", "kind": "depends_on", "source_column": "object_id", "target_column": "id"}"#,
+            },
+            OntologyLink {
+                name: "materialization_dependency",
+                target: "object",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "dependency_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+        ],
     }),
 });
 
@@ -14027,19 +14096,19 @@ pub static MZ_MATERIALIZATION_LAG: LazyLock<BuiltinView> = LazyLock::new(|| Buil
     oid: oid::VIEW_MZ_MATERIALIZATION_LAG_OID,
     desc: RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("local_lag", SqlScalarType::Interval.nullable(true))
         .with_column("global_lag", SqlScalarType::Interval.nullable(true))
         .with_column(
             "slowest_local_input_id",
             SqlScalarType::String.nullable(false),
         )
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column(
             "slowest_global_input_id",
             SqlScalarType::String.nullable(false),
         )
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .finish(),
     column_comments: BTreeMap::from_iter([
         (
@@ -14148,11 +14217,23 @@ JOIN root_times r USING (id)",
     ontology: Some(Ontology {
         entity_name: "materialization_lag",
         description: "Lag between a materialization and its inputs",
-        links: &[OntologyLink {
-            name: "measures_materialization_lag",
-            target: "object",
-            properties_json: r#"{"kind": "measures", "source_column": "object_id", "target_column": "id", "metric": "materialization_lag"}"#,
-        }],
+        links: &[
+            OntologyLink {
+                name: "measures_materialization_lag",
+                target: "object",
+                properties_json: r#"{"kind": "measures", "source_column": "object_id", "target_column": "id", "metric": "materialization_lag"}"#,
+            },
+            OntologyLink {
+                name: "slowest_local_input",
+                target: "object",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "slowest_local_input_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+            OntologyLink {
+                name: "slowest_global_input",
+                target: "object",
+                properties_json: r#"{"kind": "foreign_key", "source_column": "slowest_global_input_id", "target_column": "id", "cardinality": "many_to_one"}"#,
+            },
+        ],
     }),
 });
 
@@ -15026,21 +15107,21 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
         // We need to add a redundant where clause for a new dataflow to be created.
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("replica_id", SqlScalarType::String.nullable(true))
-            .with_semantic_type("ReplicaId")
+            .with_semantic_type(SemanticType::ReplicaId)
             .with_column("messages_received", SqlScalarType::UInt64.nullable(false))
-            .with_semantic_type("RecordCount")
+            .with_semantic_type(SemanticType::RecordCount)
             .with_column("bytes_received", SqlScalarType::UInt64.nullable(false))
-            .with_semantic_type("ByteCount")
+            .with_semantic_type(SemanticType::ByteCount)
             .with_column("updates_staged", SqlScalarType::UInt64.nullable(false))
-            .with_semantic_type("RecordCount")
+            .with_semantic_type(SemanticType::RecordCount)
             .with_column("updates_committed", SqlScalarType::UInt64.nullable(false))
-            .with_semantic_type("RecordCount")
+            .with_semantic_type(SemanticType::RecordCount)
             .with_column("records_indexed", SqlScalarType::UInt64.nullable(false))
-            .with_semantic_type("RecordCount")
+            .with_semantic_type(SemanticType::RecordCount)
             .with_column("bytes_indexed", SqlScalarType::UInt64.nullable(false))
-            .with_semantic_type("ByteCount")
+            .with_semantic_type(SemanticType::ByteCount)
             .with_column(
                 "rehydration_latency",
                 SqlScalarType::Interval.nullable(true),
@@ -15049,12 +15130,12 @@ pub static MZ_SOURCE_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| {
                 "snapshot_records_known",
                 SqlScalarType::UInt64.nullable(true),
             )
-            .with_semantic_type("RecordCount")
+            .with_semantic_type(SemanticType::RecordCount)
             .with_column(
                 "snapshot_records_staged",
                 SqlScalarType::UInt64.nullable(true),
             )
-            .with_semantic_type("RecordCount")
+            .with_semantic_type(SemanticType::RecordCount)
             .with_column("snapshot_committed", SqlScalarType::Bool.nullable(false))
             .with_column("offset_known", SqlScalarType::UInt64.nullable(true))
             .with_column("offset_committed", SqlScalarType::UInt64.nullable(true))
@@ -15147,17 +15228,17 @@ pub static MZ_SINK_STATISTICS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinV
     oid: oid::VIEW_MZ_SINK_STATISTICS_OID,
     desc: RelationDesc::builder()
         .with_column("id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("CatalogItemId")
+        .with_semantic_type(SemanticType::CatalogItemId)
         .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("messages_staged", SqlScalarType::UInt64.nullable(false))
-        .with_semantic_type("RecordCount")
+        .with_semantic_type(SemanticType::RecordCount)
         .with_column("messages_committed", SqlScalarType::UInt64.nullable(false))
-        .with_semantic_type("RecordCount")
+        .with_semantic_type(SemanticType::RecordCount)
         .with_column("bytes_staged", SqlScalarType::UInt64.nullable(false))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_column("bytes_committed", SqlScalarType::UInt64.nullable(false))
-        .with_semantic_type("ByteCount")
+        .with_semantic_type(SemanticType::ByteCount)
         .with_key(vec![0, 1])
         .finish(),
     column_comments: BTreeMap::from_iter([
@@ -16293,19 +16374,11 @@ mod tests {
 
     /// Validates ontology metadata consistency:
     /// - Every link target references an entity that exists.
-    /// - Every semantic type annotation references a type in SEMANTIC_TYPE_DEFS.
     /// - No duplicate entity names.
     /// - Every annotated builtin has a non-empty entity_name and description.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)]
     fn test_ontology_consistency() {
-        use super::ontology::SEMANTIC_TYPE_DEFS;
-
-        let valid_semantic_types: BTreeSet<&str> = SEMANTIC_TYPE_DEFS
-            .iter()
-            .map(|(name, _, _)| *name)
-            .collect();
-
         // Collect all entity names from builtins with ontology annotations.
         let mut entity_names: BTreeSet<String> = BTreeSet::new();
         let mut duplicate_entities = Vec::new();
@@ -16372,8 +16445,38 @@ mod tests {
             bad_targets.join("\n"),
         );
 
-        // Validate semantic type annotations use known types.
-        let mut bad_sem_types = Vec::new();
+        // Semantic type annotations are typed (SemanticType enum), so validity
+        // is guaranteed at compile time — no runtime check needed.
+
+        // Validate that every "reference" column (one whose semantic type implies
+        // a FK relationship) is covered by an OntologyLink on entities that
+        // already have at least one FK-style link.
+        //
+        // Scope: only entities that have started FK annotation (at least one
+        // link with "source_column" in properties_json). Entities with only
+        // union/maps_to links, or no links at all, are not yet fully annotated
+        // and are skipped to avoid noise.
+        //
+        // Exemptions:
+        // - Column at index 0 named "id": almost always the entity's own PK,
+        //   not a FK (e.g. mz_objects.id, mz_functions.id).
+        // - Columns in the relation's declared key set.
+        //
+        // "Reference" types are ID types that imply a FK. Discriminators
+        // (ObjectType, ConnectionType, SourceType), OID, and metric types
+        // (ByteCount, etc.) are excluded.
+        let reference_sem_types: BTreeSet<SemanticType> = BTreeSet::from([
+            SemanticType::CatalogItemId,
+            SemanticType::GlobalId,
+            SemanticType::ClusterId,
+            SemanticType::ReplicaId,
+            SemanticType::SchemaId,
+            SemanticType::DatabaseId,
+            SemanticType::RoleId,
+            SemanticType::NetworkPolicyId,
+        ]);
+
+        let mut uncovered_fk_cols = Vec::new();
         for builtin in BUILTINS_STATIC.iter() {
             let (name, desc, ontology) = match builtin {
                 Builtin::Table(t) => (t.name, &t.desc, t.ontology.as_ref()),
@@ -16382,30 +16485,61 @@ mod tests {
                 Builtin::Source(s) => (s.name, &s.desc, s.ontology.as_ref()),
                 _ => continue,
             };
-            for (idx, _col) in desc.iter_names().enumerate() {
-                if let Some(sem) = desc.get_semantic_type(idx) {
-                    if !valid_semantic_types.contains(sem) {
-                        bad_sem_types.push(format!(
-                            "builtin {} column {} has semantic type {:?} not in SEMANTIC_TYPE_DEFS",
-                            name,
-                            desc.get_name(idx),
-                            sem
-                        ));
-                    }
-                }
+            let Some(ont) = ontology else { continue };
+
+            // Collect all source_column values declared by existing FK links.
+            // The format is always: "source_column": "colname"
+            let linked_cols: BTreeSet<&str> = ont
+                .links
+                .iter()
+                .filter_map(|link| {
+                    let json = link.properties_json;
+                    let key = "\"source_column\": \"";
+                    let start = json.find(key)? + key.len();
+                    let end = json[start..].find('"')? + start;
+                    Some(&json[start..end])
+                })
+                .collect();
+
+            // Skip entities that have no FK-style links yet — they are either
+            // unannotated or use only union/maps_to links. Only enforce
+            // coverage on entities that have started FK annotation.
+            if linked_cols.is_empty() {
+                continue;
             }
-            // Also check: if a builtin has semantic types but no ontology, warn.
-            let has_sem = (0..desc.arity()).any(|i| desc.get_semantic_type(i).is_some());
-            if has_sem && ontology.is_none() {
-                // This is not necessarily wrong (some builtins have semantic
-                // types for internal use without being ontology entities),
-                // but we track it for awareness.
+
+            // Column indices that are part of the declared key set.
+            let pk_indices: BTreeSet<usize> = desc.typ().keys.iter().flatten().copied().collect();
+
+            for (idx, col) in desc.iter_names().enumerate() {
+                let Some(sem) = desc.get_semantic_type(idx) else {
+                    continue;
+                };
+                if !reference_sem_types.contains(&sem) {
+                    continue;
+                }
+                // Exempt the entity's own primary identifier: column 0 named
+                // "id" is by convention the entity's own PK (not a FK), even
+                // when no explicit with_key() is declared on the relation.
+                if idx == 0 && col.as_str() == "id" {
+                    continue;
+                }
+                if pk_indices.contains(&idx) {
+                    continue;
+                }
+                if linked_cols.contains(col.as_str()) {
+                    continue;
+                }
+                uncovered_fk_cols.push(format!(
+                    "entity {:?} (builtin {}) column {:?} has semantic type {:?} but no OntologyLink covers it (add a link with source_column: {:?})",
+                    ont.entity_name, name, col.as_str(), sem, col.as_str()
+                ));
             }
         }
         assert!(
-            bad_sem_types.is_empty(),
-            "builtins have semantic types not in SEMANTIC_TYPE_DEFS:\n{}",
-            bad_sem_types.join("\n"),
+            uncovered_fk_cols.is_empty(),
+            "ontology entities have FK-typed columns with no OntologyLink:\n{}",
+            uncovered_fk_cols.join("\n"),
         );
 
         // Sanity check: we have a reasonable number of annotated entities.

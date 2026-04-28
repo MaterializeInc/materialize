@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_repr::{RelationDesc, SqlScalarType};
+use mz_repr::{RelationDesc, SemanticType, SqlScalarType};
 use std::sync::LazyLock;
 
 pub static MZ_PREPARED_STATEMENT_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
@@ -44,7 +44,7 @@ pub static MZ_SESSION_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
             "connected_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column(
             "initial_application_name",
             SqlScalarType::String.nullable(false),
@@ -112,14 +112,14 @@ pub static MZ_SOURCE_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column("source_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("status", SqlScalarType::String.nullable(false))
         .with_column("error", SqlScalarType::String.nullable(true))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
         .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .finish()
 });
 
@@ -129,14 +129,14 @@ pub static MZ_SINK_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .with_column("sink_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("status", SqlScalarType::String.nullable(false))
         .with_column("error", SqlScalarType::String.nullable(true))
         .with_column("details", SqlScalarType::Jsonb.nullable(true))
         .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .finish()
 });
 
@@ -155,7 +155,7 @@ pub static MZ_AWS_PRIVATELINK_CONNECTION_STATUS_HISTORY_DESC: LazyLock<RelationD
 pub static REPLICA_STATUS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         .with_column("replica_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("process_id", SqlScalarType::UInt64.nullable(false))
         .with_column("status", SqlScalarType::String.nullable(false))
         .with_column("reason", SqlScalarType::String.nullable(true))
@@ -188,15 +188,15 @@ pub static REPLICA_METRICS_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(
 pub static WALLCLOCK_LAG_HISTORY_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {
     RelationDesc::builder()
         .with_column("object_id", SqlScalarType::String.nullable(false))
-        .with_semantic_type("GlobalId")
+        .with_semantic_type(SemanticType::GlobalId)
         .with_column("replica_id", SqlScalarType::String.nullable(true))
-        .with_semantic_type("ReplicaId")
+        .with_semantic_type(SemanticType::ReplicaId)
         .with_column("lag", SqlScalarType::Interval.nullable(true))
         .with_column(
             "occurred_at",
             SqlScalarType::TimestampTz { precision: None }.nullable(false),
         )
-        .with_semantic_type("WallclockTimestamp")
+        .with_semantic_type(SemanticType::WallclockTimestamp)
         .finish()
 });
 

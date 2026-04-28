@@ -822,6 +822,64 @@ impl RustType<ProtoRelationVersion> for RelationVersion {
     }
 }
 
+/// Semantic type annotation for a column in a builtin catalog relation.
+///
+/// These are compile-time metadata used by the catalog ontology layer to
+/// describe the meaning of a column (e.g., that it contains a catalog item ID
+/// or a role ID). Possible values correspond to the entries in
+/// `SEMANTIC_TYPE_DEFS` in the `mz-catalog` crate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SemanticType {
+    CatalogItemId,
+    GlobalId,
+    ClusterId,
+    ReplicaId,
+    SchemaId,
+    DatabaseId,
+    RoleId,
+    NetworkPolicyId,
+    ShardId,
+    OID,
+    ObjectType,
+    ConnectionType,
+    SourceType,
+    MzTimestamp,
+    WallclockTimestamp,
+    ByteCount,
+    RecordCount,
+    CreditRate,
+    SqlDefinition,
+    RedactedSqlDefinition,
+}
+
+impl fmt::Display for SemanticType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            SemanticType::CatalogItemId => "CatalogItemId",
+            SemanticType::GlobalId => "GlobalId",
+            SemanticType::ClusterId => "ClusterId",
+            SemanticType::ReplicaId => "ReplicaId",
+            SemanticType::SchemaId => "SchemaId",
+            SemanticType::DatabaseId => "DatabaseId",
+            SemanticType::RoleId => "RoleId",
+            SemanticType::NetworkPolicyId => "NetworkPolicyId",
+            SemanticType::ShardId => "ShardId",
+            SemanticType::OID => "OID",
+            SemanticType::ObjectType => "ObjectType",
+            SemanticType::ConnectionType => "ConnectionType",
+            SemanticType::SourceType => "SourceType",
+            SemanticType::MzTimestamp => "MzTimestamp",
+            SemanticType::WallclockTimestamp => "WallclockTimestamp",
+            SemanticType::ByteCount => "ByteCount",
+            SemanticType::RecordCount => "RecordCount",
+            SemanticType::CreditRate => "CreditRate",
+            SemanticType::SqlDefinition => "SqlDefinition",
+            SemanticType::RedactedSqlDefinition => "RedactedSqlDefinition",
+        };
+        f.write_str(s)
+    }
+}
+
 /// Metadata (other than type) for a column in a [`RelationDesc`].
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 struct ColumnMetadata {
@@ -906,11 +964,11 @@ struct ColumnMetadata {
 pub struct RelationDesc {
     typ: SqlRelationType,
     metadata: BTreeMap<ColumnIndex, ColumnMetadata>,
-    /// Optional semantic type annotations for columns (e.g., "CatalogItemId", "RoleId").
+    /// Optional semantic type annotations for columns.
     /// Keyed by column index. Only populated for builtin catalog objects.
     /// Excluded from Eq/Hash/serialization — it's ontology metadata, not schema.
     #[serde(skip)]
-    semantic_types: BTreeMap<usize, &'static str>,
+    semantic_types: BTreeMap<usize, SemanticType>,
 }
 
 impl PartialEq for RelationDesc {
@@ -1227,7 +1285,7 @@ impl RelationDesc {
     }
 
     /// Gets the semantic type annotation for column `i`, if any.
-    pub fn get_semantic_type(&self, i: usize) -> Option<&'static str> {
+    pub fn get_semantic_type(&self, i: usize) -> Option<SemanticType> {
         self.semantic_types.get(&i).copied()
     }
 
@@ -1552,7 +1610,7 @@ pub struct RelationDescBuilder {
     /// Sets of indices that are "keys" for the collection.
     keys: Vec<Vec<usize>>,
     /// Semantic type annotations for columns.
-    semantic_types: BTreeMap<usize, &'static str>,
+    semantic_types: BTreeMap<usize, SemanticType>,
 }
 
 impl RelationDescBuilder {
@@ -1589,7 +1647,9 @@ impl RelationDescBuilder {
     }
 
     /// Annotates the most recently added column with a semantic type.
-    pub fn with_semantic_type(mut self, semantic_type: &'static str) -> RelationDescBuilder {
+    ///
+    /// Possible values are enumerated in [`SemanticType`].
+    pub fn with_semantic_type(mut self, semantic_type: SemanticType) -> RelationDescBuilder {
         let idx = self
             .columns
             .len()
@@ -2408,15 +2468,15 @@ mod tests {
     fn test_semantic_type_annotations() {
         let desc = RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .with_column("name", SqlScalarType::String.nullable(false))
             .with_column("cluster_id", SqlScalarType::String.nullable(true))
-            .with_semantic_type("ClusterId")
+            .with_semantic_type(SemanticType::ClusterId)
             .finish();
 
         // Annotated columns return their semantic type.
-        assert_eq!(desc.get_semantic_type(0), Some("CatalogItemId"));
-        assert_eq!(desc.get_semantic_type(2), Some("ClusterId"));
+        assert_eq!(desc.get_semantic_type(0), Some(SemanticType::CatalogItemId));
+        assert_eq!(desc.get_semantic_type(2), Some(SemanticType::ClusterId));
 
         // Unannotated columns return None.
         assert_eq!(desc.get_semantic_type(1), None);
@@ -2429,7 +2489,7 @@ mod tests {
     fn test_semantic_types_excluded_from_eq_and_hash() {
         let desc_a = RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .finish();
 
         let desc_b = RelationDesc::builder()
@@ -2454,7 +2514,7 @@ mod tests {
     fn test_semantic_types_excluded_from_serialization() {
         let desc = RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
-            .with_semantic_type("CatalogItemId")
+            .with_semantic_type(SemanticType::CatalogItemId)
             .finish();
 
         // Roundtrip through protobuf should lose semantic types (serde skip).
