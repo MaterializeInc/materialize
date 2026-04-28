@@ -1003,6 +1003,13 @@ class SystemParamConfigMap(Modification):
         result: list[Any] = [None]
         if version >= MzVersion.parse_mz("v26.1.0"):
             result.append({"max_connections": 1000})
+            result.append(
+                {
+                    "cluster_enable_topology_spread": "on",
+                    "cluster_topology_spread_soft": "on",
+                    "cluster_topology_spread_min_domains": 1,
+                }
+            )
         return result
 
     @classmethod
@@ -1113,6 +1120,92 @@ class SystemParamConfigMap(Modification):
                             ), f"Expected {param_name}={expected_value}, but got {actual_value}"
 
         retry(check_system_params, 240)
+
+        if "cluster_topology_spread_soft" in self.value:
+            validate_topology_spread_min_domains(self.value, port)
+
+
+def validate_topology_spread_min_domains(params: dict[str, Any], port: int) -> None:
+    is_soft = str(params.get("cluster_topology_spread_soft", "off")).lower() in (
+        "true",
+        "on",
+    )
+
+    # Create a fresh cluster so it picks up the current scheduling config.
+    # Built-in clusters are created at startup before the config-sync loop
+    # applies ConfigMap parameters, so they may not have topology spread
+    # constraints even when the parameter is enabled.
+    with port_forward_environmentd(port) as used_port:
+        with psycopg.connect(
+            f"host=localhost port={used_port} user=mz_system password=superpassword sslmode=disable"
+        ) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute(
+                    "CREATE CLUSTER topology_test_cluster REPLICAS (r1 (SIZE '25cc'))"
+                )
+                cur.execute(
+                    "SELECT id FROM mz_clusters WHERE name = 'topology_test_cluster'"
+                )
+                cluster_id = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT id FROM mz_cluster_replicas WHERE cluster_id = %s AND name = 'r1'",
+                    (cluster_id,),
+                )
+                replica_id = cur.fetchone()[0]
+
+    labels = {
+        "cluster.environmentd.materialize.cloud/type": "cluster",
+        "cluster.environmentd.materialize.cloud/cluster-id": cluster_id,
+        "cluster.environmentd.materialize.cloud/replica-id": replica_id,
+        "materialize.cloud/organization-name": "12345678-1234-1234-1234-123456789012",
+    }
+
+    def check() -> None:
+        clusterd = get_pod_data(labels)["items"][0]
+        constraints = clusterd["spec"].get("topologySpreadConstraints", [])
+        assert (
+            len(constraints) > 0
+        ), "Expected topologySpreadConstraints on clusterd pod, but found none"
+
+        for constraint in constraints:
+            when_unsatisfiable = constraint.get("whenUnsatisfiable")
+            min_domains = constraint.get("minDomains")
+
+            if is_soft:
+                assert when_unsatisfiable == "ScheduleAnyway", (
+                    f"Expected whenUnsatisfiable=ScheduleAnyway for soft mode, "
+                    f"but got {when_unsatisfiable}"
+                )
+                assert min_domains is None, (
+                    f"Expected minDomains to be absent when soft=true "
+                    f"(Kubernetes rejects minDomains with ScheduleAnyway), "
+                    f"but got minDomains={min_domains}"
+                )
+            else:
+                assert when_unsatisfiable == "DoNotSchedule", (
+                    f"Expected whenUnsatisfiable=DoNotSchedule for hard mode, "
+                    f"but got {when_unsatisfiable}"
+                )
+                expected_min_domains = params.get(
+                    "cluster_topology_spread_min_domains"
+                )
+                if expected_min_domains is not None:
+                    assert min_domains == int(expected_min_domains), (
+                        f"Expected minDomains={expected_min_domains}, "
+                        f"but got {min_domains}"
+                    )
+
+    retry(check, 120)
+
+    # Clean up
+    with port_forward_environmentd(port) as used_port:
+        with psycopg.connect(
+            f"host=localhost port={used_port} user=mz_system password=superpassword sslmode=disable"
+        ) as conn:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("DROP CLUSTER topology_test_cluster CASCADE")
 
 
 def validate_cluster_replica_size(
