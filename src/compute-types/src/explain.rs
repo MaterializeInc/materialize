@@ -71,7 +71,12 @@ impl<'a> DataflowDescription<Plan> {
             .iter_mut()
             .map(|(id, import)| {
                 let op = import.desc.arguments.operators.as_ref();
-                ExplainSource::new(*id, op, context.config.filter_pushdown)
+                ExplainSource::new(
+                    *id,
+                    op,
+                    context.config.filter_pushdown,
+                    context.config.projection_pushdown,
+                )
             })
             .collect::<Vec<_>>();
 
@@ -139,7 +144,12 @@ impl<'a> DataflowDescription<OptimizedMirRelationExpr> {
             .iter_mut()
             .map(|(id, import)| {
                 let op = import.desc.arguments.operators.as_ref();
-                ExplainSource::new(*id, op, context.config.filter_pushdown)
+                ExplainSource::new(
+                    *id,
+                    op,
+                    context.config.filter_pushdown,
+                    context.config.projection_pushdown,
+                )
             })
             .collect::<Vec<_>>();
 

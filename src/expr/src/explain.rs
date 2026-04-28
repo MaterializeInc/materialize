@@ -9,7 +9,7 @@
 
 //! `EXPLAIN` support for structures defined in this crate.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Formatter;
 use std::time::Duration;
 
@@ -18,7 +18,7 @@ use mz_repr::GlobalId;
 use mz_repr::explain::ExplainError::LinearChainsPlusRecursive;
 use mz_repr::explain::text::DisplayText;
 use mz_repr::explain::{
-    AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, ScalarOps,
+    AnnotatedPlan, Explain, ExplainConfig, ExplainError, ExprHumanizer, Indices, ScalarOps,
     UnsupportedFormat, UsedIndexes,
 };
 use mz_repr::optimize::OptimizerFeatures;
@@ -93,11 +93,43 @@ where
     }
 }
 
+/// Carries metadata about the columns demanded from a source decoder.
+/// (Only emitted when a context flag is enabled.)
+#[derive(Debug)]
+pub struct ProjectionInfo {
+    /// Input columns demanded by the source MFP (filter + map + project).
+    pub demand: Vec<usize>,
+    /// Total input arity, for deciding whether the demand is the identity.
+    pub input_arity: usize,
+}
+
+impl<'a, C, M> DisplayText<C> for HumanizedExpr<'a, ProjectionInfo, M>
+where
+    C: AsMut<Indent>,
+    M: HumanizerMode,
+{
+    fn fmt_text(&self, f: &mut Formatter<'_>, ctx: &mut C) -> std::fmt::Result {
+        let ProjectionInfo {
+            demand,
+            input_arity,
+        } = self.expr;
+
+        // Suppress the annotation when every column is demanded — that's the
+        // case where projection pushdown is a no-op.
+        if demand.len() == *input_arity {
+            return Ok(());
+        }
+
+        writeln!(f, "{}demand=({})", ctx.as_mut(), Indices(demand))
+    }
+}
+
 #[allow(missing_debug_implementations)]
 pub struct ExplainSource<'a> {
     pub id: GlobalId,
     pub op: Option<&'a MapFilterProject>,
     pub pushdown_info: Option<PushdownInfo<'a>>,
+    pub projection_info: Option<ProjectionInfo>,
 }
 
 impl<'a> ExplainSource<'a> {
@@ -105,6 +137,7 @@ impl<'a> ExplainSource<'a> {
         id: GlobalId,
         op: Option<&'a MapFilterProject>,
         filter_pushdown: bool,
+        projection_pushdown: bool,
     ) -> ExplainSource<'a> {
         let pushdown_info = if filter_pushdown {
             op.map(|op| {
@@ -121,10 +154,23 @@ impl<'a> ExplainSource<'a> {
             None
         };
 
+        let projection_info = if projection_pushdown {
+            op.filter(|op| !op.is_identity()).map(|op| {
+                let demand: BTreeSet<usize> = op.demand();
+                ProjectionInfo {
+                    demand: demand.into_iter().collect(),
+                    input_arity: op.input_arity,
+                }
+            })
+        } else {
+            None
+        };
+
         ExplainSource {
             id,
             op,
             pushdown_info,
+            projection_info,
         }
     }
 
@@ -154,6 +200,9 @@ where
             }
             if let Some(pushdown_info) = &self.expr.pushdown_info {
                 self.child(pushdown_info).fmt_text(f, ctx)?;
+            }
+            if let Some(projection_info) = &self.expr.projection_info {
+                self.child(projection_info).fmt_text(f, ctx)?;
             }
             Ok(())
         })

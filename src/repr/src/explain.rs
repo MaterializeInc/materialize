@@ -199,6 +199,8 @@ pub struct ExplainConfig {
     pub timing: bool,
     /// Show MFP pushdown information.
     pub filter_pushdown: bool,
+    /// Show source column demand pushed into persist source decoders.
+    pub projection_pushdown: bool,
 
     /// Optimizer feature flags.
     pub features: OptimizerFeatureOverrides,
@@ -213,6 +215,7 @@ impl Default for ExplainConfig {
             cardinality: false,
             column_names: false,
             filter_pushdown: false,
+            projection_pushdown: false,
             humanized_exprs: false,
             join_impls: true,
             keys: false,
@@ -1017,6 +1020,7 @@ mod tests {
             cardinality: false,
             column_names: false,
             filter_pushdown: false,
+            projection_pushdown: false,
             humanized_exprs: false,
             join_impls: false,
             keys: false,
