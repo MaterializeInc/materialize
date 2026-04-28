@@ -670,9 +670,6 @@ pub struct CatalogEntry {
 /// because that would be rebinding the [`GlobalId`] of the pTVC. Instead we
 /// allocate a new [`GlobalId`] to refer to the new version of the table, and
 /// then the [`CatalogEntry`] tracks the [`GlobalId`] for each version.
-///
-/// TODO(ct): Add a note here if we end up using this for associating continual
-/// tasks with a single catalog item.
 #[derive(Clone, Debug)]
 pub struct CatalogCollectionEntry {
     pub entry: CatalogEntry,

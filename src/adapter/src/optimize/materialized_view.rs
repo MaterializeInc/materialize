@@ -25,7 +25,6 @@
 //!
 //! See also MaterializeInc/materialize#22940.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -80,24 +79,6 @@ pub struct Optimizer {
     metrics: OptimizerMetrics,
     /// The time spent performing optimization so far.
     duration: Duration,
-    /// Overrides monotonicity for the given source collections.
-    ///
-    /// This is here only for continual tasks, which at runtime introduce
-    /// synthetic retractions to "input sources". If/when we split a CT
-    /// optimizer out of the MV optimizer, this can be removed.
-    ///
-    /// TODO(ct3): There are other differences between a GlobalId used as a CT
-    /// input vs as a normal collection, such as the statistical size estimates.
-    /// Plus, at the moment, it is not possible to use the same GlobalId as both
-    /// an "input" and a "reference" in a CT. So, better than this approach
-    /// would be for the optimizer itself to somehow understand the distinction
-    /// between a CT input and a normal collection.
-    ///
-    /// In the meantime, it might be desirable to refactor the MV optimizer to
-    /// have a small amount of knowledge about CTs, in particular producing the
-    /// CT sink connection directly. This would allow us to replace this field
-    /// with something derived directly from that sink connection.
-    force_source_non_monotonic: BTreeSet<GlobalId>,
 }
 
 impl Optimizer {
@@ -112,7 +93,6 @@ impl Optimizer {
         debug_name: String,
         config: OptimizerConfig,
         metrics: OptimizerMetrics,
-        force_source_non_monotonic: BTreeSet<GlobalId>,
     ) -> Self {
         Self {
             typecheck_ctx: empty_typechecking_context(),
@@ -127,7 +107,6 @@ impl Optimizer {
             config,
             metrics,
             duration: Default::default(),
-            force_source_non_monotonic,
         }
     }
 }
@@ -299,12 +278,6 @@ impl Optimize<LocalMirPlan> for Optimizer {
             &mut df_meta,
             Some(&mut self.metrics),
         );
-        // Apply source monotonicity overrides.
-        for id in self.force_source_non_monotonic.iter() {
-            if let Some(import) = df_desc.source_imports.get_mut(id) {
-                import.monotonic = false;
-            }
-        }
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
 
