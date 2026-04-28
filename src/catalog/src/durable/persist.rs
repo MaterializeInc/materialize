@@ -862,6 +862,9 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
                     StateUpdateKind::UnfinalizedShard(key, ()) => {
                         apply(&mut snapshot.unfinalized_shards, key, &(), diff);
                     }
+                    StateUpdateKind::PreAllocatedShard(key, ()) => {
+                        apply(&mut snapshot.pre_allocated_shards, key, &(), diff);
+                    }
                     StateUpdateKind::TxnWalShard((), value) => {
                         apply(&mut snapshot.txn_wal_shard, &(), value, diff);
                     }
@@ -2055,6 +2058,9 @@ impl Trace {
                     .push(((k, v), ts, diff)),
                 StateUpdateKind::UnfinalizedShard(k, ()) => {
                     trace.unfinalized_shards.values.push(((k, ()), ts, diff))
+                }
+                StateUpdateKind::PreAllocatedShard(k, ()) => {
+                    trace.pre_allocated_shards.values.push(((k, ()), ts, diff))
                 }
                 StateUpdateKind::TxnWalShard((), v) => {
                     trace.txn_wal_shard.values.push((((), v), ts, diff))

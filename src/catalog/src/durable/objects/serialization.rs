@@ -19,9 +19,9 @@ use crate::durable::objects::{
     ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
     DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
     IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
+    NetworkPolicyKey, NetworkPolicyValue, PreAllocatedShardKey, RoleKey, RoleValue, SchemaKey,
+    SchemaValue, ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue,
+    SourceReference, SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
     StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
     SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
 };
@@ -706,6 +706,20 @@ impl RustType<proto::UnfinalizedShardKey> for UnfinalizedShardKey {
 
     fn from_proto(proto: proto::UnfinalizedShardKey) -> Result<Self, TryFromProtoError> {
         Ok(UnfinalizedShardKey {
+            shard: proto.shard.into_rust()?,
+        })
+    }
+}
+
+impl RustType<proto::PreAllocatedShardKey> for PreAllocatedShardKey {
+    fn into_proto(&self) -> proto::PreAllocatedShardKey {
+        proto::PreAllocatedShardKey {
+            shard: self.shard.to_string(),
+        }
+    }
+
+    fn from_proto(proto: proto::PreAllocatedShardKey) -> Result<Self, TryFromProtoError> {
+        Ok(PreAllocatedShardKey {
             shard: proto.shard.into_rust()?,
         })
     }
