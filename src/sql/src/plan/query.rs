@@ -5282,11 +5282,12 @@ fn plan_aggregate_common(
 
 fn plan_identifier(ecx: &ExprContext, names: &[Ident]) -> Result<HirScalarExpr, PlanError> {
     let mut names = names.to_vec();
-    let col_name = normalize::column_name(
-        names
-            .pop()
-            .ok_or_else(|| PlanError::Internal("empty identifier".into()))?,
-    );
+    // The parser guarantees that an `Expr::Identifier` is constructed with a
+    // non-empty list of name parts, so an empty list here is an internal bug.
+    let Some(last) = names.pop() else {
+        bail_internal!("empty identifier");
+    };
+    let col_name = normalize::column_name(last);
 
     // If the name is qualified, it must refer to a column in a table.
     if !names.is_empty() {

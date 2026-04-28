@@ -34,7 +34,8 @@ use crate::ast::{AstInfo, Ident, OrderByExpr, Query, UnresolvedItemName, Value};
 /// inappropriate type, like `WHERE 1` or `SELECT 1=1`, as necessary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Expr<T: AstInfo> {
-    /// Identifier e.g. table name or column name
+    /// Identifier e.g. table name or column name. The parser always
+    /// constructs this with a non-empty `Vec`.
     Identifier(Vec<Ident>),
     /// Qualified wildcard, e.g. `alias.*` or `schema.table.*`.
     QualifiedWildcard(Vec<Ident>),
