@@ -2015,7 +2015,7 @@ fn plan_set_expr(
             ) -> Result<(HirRelationExpr, Scope), PlanError> {
                 let rows = vec![plan.row.iter().collect::<Vec<_>>()];
                 let desc = desc.relation_desc.ok_or_else(|| {
-                    PlanError::Internal("statement description missing relation descriptor".into())
+                    internal_err!("statement description missing relation descriptor")
                 })?;
                 let scope = Scope::from_source(None, desc.iter_names());
                 let expr = HirRelationExpr::constant(rows, desc.into_typ());

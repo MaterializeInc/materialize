@@ -979,9 +979,8 @@ impl<'a> ShowSelect<'a> {
         scx: &'a StatementContext,
         query: String,
     ) -> Result<(ShowSelect<'a>, ResolvedIds), PlanError> {
-        let stmts = parse::parse(&query).map_err(|e| {
-            PlanError::Internal(format!("failed to parse generated SHOW query: {}", e))
-        })?;
+        let stmts = parse::parse(&query)
+            .map_err(|e| internal_err!("failed to parse generated SHOW query: {}", e))?;
         let stmt = match stmts.into_element().ast {
             Statement::Select(select) => select,
             _ => bail_internal!("generated SHOW query was not a SELECT statement"),

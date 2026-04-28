@@ -1203,8 +1203,8 @@ async fn purify_create_source(
                                         .meta
                                         .load_generator_desc()
                                         .ok_or_else(|| {
-                                            PlanError::Internal(
-                                                "expected load generator source reference".into(),
+                                            internal_err!(
+                                                "expected load generator source reference"
                                             )
                                         })?
                                         .clone(),
@@ -1212,8 +1212,8 @@ async fn purify_create_source(
                                         .meta
                                         .load_generator_output()
                                         .ok_or_else(|| {
-                                            PlanError::Internal(
-                                                "expected load generator source reference".into(),
+                                            internal_err!(
+                                                "expected load generator source reference"
                                             )
                                         })?
                                         .clone(),
@@ -1970,16 +1970,12 @@ async fn purify_create_table_from_source(
                     table: export
                         .meta
                         .load_generator_desc()
-                        .ok_or_else(|| {
-                            PlanError::Internal("expected load generator source reference".into())
-                        })?
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
                         .clone(),
                     output: export
                         .meta
                         .load_generator_output()
-                        .ok_or_else(|| {
-                            PlanError::Internal("expected load generator source reference".into())
-                        })?
+                        .ok_or_else(|| internal_err!("expected load generator source reference"))?
                         .clone(),
                 },
             }
@@ -2356,7 +2352,7 @@ pub fn generate_subsource_statements(
     let (_, purified_export) = subsources
         .iter()
         .next()
-        .ok_or_else(|| PlanError::Internal("expected at least one subsource".into()))?;
+        .ok_or_else(|| internal_err!("expected at least one subsource"))?;
 
     let statements = match &purified_export.details {
         PurifiedExportDetails::Postgres { .. } => {
@@ -2386,8 +2382,8 @@ pub fn generate_subsource_statements(
                     }
                 };
                 let desc = desc.ok_or_else(|| {
-                    PlanError::Internal(
-                        "subsources cannot be generated for single-output load generators".into(),
+                    internal_err!(
+                        "subsources cannot be generated for single-output load generators"
                     )
                 })?;
 

@@ -1117,7 +1117,7 @@ fn plan_mysql_source_connection(
     } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| PlanError::Internal("MySQL source missing details".into()))?;
+        .ok_or_else(|| internal_err!("MySQL source missing details"))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details = ProtoMySqlSourceDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
     let details = MySqlSourceDetails::from_proto(details).map_err(|e| sql_err!("{}", e))?;
@@ -1144,7 +1144,7 @@ fn plan_sqlserver_source_connection(
     let SqlServerConfigOptionExtracted { details, .. } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| PlanError::Internal("SQL Server source missing details".into()))?;
+        .ok_or_else(|| internal_err!("SQL Server source missing details"))?;
     let extras = hex::decode(details)
         .map_err(|e| sql_err!("{e}"))
         .and_then(|raw| ProtoSqlServerSourceExtras::decode(&*raw).map_err(|e| sql_err!("{e}")))
@@ -1177,7 +1177,7 @@ fn plan_postgres_source_connection(
     } = options.clone().try_into()?;
     let details = details
         .as_ref()
-        .ok_or_else(|| PlanError::Internal("Postgres source missing details".into()))?;
+        .ok_or_else(|| internal_err!("Postgres source missing details"))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details =
         ProtoPostgresSourcePublicationDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -1642,7 +1642,7 @@ pub fn plan_create_subsource(
         // created during the purification process.
         let details = details
             .as_ref()
-            .ok_or_else(|| PlanError::Internal("source-export subsource missing details".into()))?;
+            .ok_or_else(|| internal_err!("source-export subsource missing details"))?;
         let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
         let details =
             ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -1781,7 +1781,7 @@ pub fn plan_create_table_from_source(
     // created during the purification process.
     let details = details
         .as_ref()
-        .ok_or_else(|| PlanError::Internal("source-export missing details".into()))?;
+        .ok_or_else(|| internal_err!("source-export missing details"))?;
     let details = hex::decode(details).map_err(|e| sql_err!("{}", e))?;
     let details =
         ProtoSourceExportStatementDetails::decode(&*details).map_err(|e| sql_err!("{}", e))?;
@@ -7219,9 +7219,9 @@ pub fn plan_alter_sink(
             // First we reconstruct the original CREATE SINK statement
             let create_sql = item.create_sql();
             let stmts = mz_sql_parser::parser::parse_statements(create_sql)?;
-            let [stmt]: [StatementParseResult; 1] = stmts.try_into().map_err(|_| {
-                PlanError::Internal("create SQL of sink was not exactly one statement".into())
-            })?;
+            let [stmt]: [StatementParseResult; 1] = stmts
+                .try_into()
+                .map_err(|_| internal_err!("create SQL of sink was not exactly one statement"))?;
             let Statement::CreateSink(stmt) = stmt.ast else {
                 bail_internal!("create SQL of sink is not a CREATE SINK statement");
             };
