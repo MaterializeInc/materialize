@@ -233,14 +233,14 @@ pub const CONSOLE_OIDC_SCOPES: Config<&'static str> = Config::new(
 /// Interval at which to collect per-object arrangement size snapshots for the history table.
 pub const ARRANGEMENT_SIZE_COLLECTION_INTERVAL: Config<Duration> = Config::new(
     "arrangement_size_collection_interval",
-    Duration::from_secs(60 * 60),
+    Duration::from_hours(1),
     "Interval at which to collect and snapshot per-object arrangement sizes.",
 );
 
 /// How long to retain per-object arrangement size history.
 pub const ARRANGEMENT_SIZE_RETENTION_PERIOD: Config<Duration> = Config::new(
     "arrangement_size_retention_period",
-    Duration::from_secs(7 * 24 * 60 * 60),
+    Duration::from_hours(7 * 24),
     "How long to retain per-object arrangement size history.",
 );
 

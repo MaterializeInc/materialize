@@ -1931,11 +1931,6 @@ pub struct Coordinator {
     /// The interval at which to collect storage usage information.
     storage_usage_collection_interval: Duration,
 
-    /// Set once all compute objects have been observed as hydrated, gating
-    /// the first write into `mz_object_arrangement_size_history`. Sticky:
-    /// later partial re-hydrations (e.g. replica restart) don't re-arm it.
-    arrangement_sizes_hydration_observed: bool,
-
     /// Segment analytics client.
     #[derivative(Debug = "ignore")]
     segment_client: Option<mz_segment::Client>,
@@ -4720,7 +4715,6 @@ pub fn serve(
                     cloud_resource_controller,
                     storage_usage_client,
                     storage_usage_collection_interval,
-                    arrangement_sizes_hydration_observed: false,
                     segment_client,
                     metrics,
                     optimizer_metrics,

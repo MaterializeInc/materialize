@@ -566,27 +566,35 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
             GROUP BY export_id, lir_id
         )",
     },
-    // Per-object arrangement sizes, one row per `(object_id, replica)`.
+    // Per-object arrangement sizes, one row per `(object_id, replica)`,
+    // populating `mz_object_arrangement_sizes`.
     //
     // `mz_arrangement_heap_size_raw` and `mz_arrangement_batcher_size_raw` are
     // differential logs where each `+1` row represents one byte of heap delta;
     // after consolidation, `COUNT(*)` is the current arrangement size in bytes.
     //
-    // Objects smaller than 10 MiB report exact bytes; larger ones are rounded
-    // to the nearest 10 MiB to suppress byte-level churn in the collection.
+    // The `HAVING` floor drops objects below 10 MiB. Below that threshold the
+    // heap-size collection wiggles by a few bytes per second from ordinary
+    // allocator activity, and emitting exact bytes would push a downstream
+    // update on every wiggle. Quantizing to the nearest 10 MiB keeps the
+    // emitted size stable across in-bucket wiggle.
     //
     // `mz_dataflow_addresses.address[1]` is the root of each operator's address
     // tree, which equals the owning `dataflow_id` — so we can go addresses →
     // operator → dataflow without joining `mz_dataflow_operator_dataflows`.
+    //
+    // Joining on `ce.dataflow_id` assumes one dataflow exports a single object;
+    // if that stops holding, the same arrangement bytes would be attributed
+    // to multiple `export_id`s and we'd need to revisit the granularity.
+    //
+    // Transient export IDs (`t*`) are ephemeral dataflows (peeks, subscribes,
+    // including this one); we drop them to avoid self-feedback churn.
     SubscribeSpec {
         introspection_type: IntrospectionType::ComputeObjectArrangementSizes,
         sql: "SUBSCRIBE (
             SELECT
                 ce.export_id AS object_id,
-                CASE
-                    WHEN COUNT(*) < 10485760 THEN COUNT(*)::int8
-                    ELSE ((COUNT(*) + 5242880) / 10485760 * 10485760)::int8
-                END AS size
+                ((COUNT(*) + 5242880) / 10485760 * 10485760)::int8 AS size
             FROM mz_introspection.mz_compute_exports AS ce
             JOIN (
                 SELECT addrs.address[1] AS dataflow_id, addrs.id AS operator_id
@@ -597,8 +605,9 @@ const SUBSCRIBES: &[SubscribeSpec] = &[
                 UNION ALL
                 SELECT operator_id FROM mz_introspection.mz_arrangement_batcher_size_raw
             ) AS rs ON rs.operator_id = od.operator_id
+            WHERE ce.export_id NOT LIKE 't%'
             GROUP BY ce.export_id
-            OPTIONS (AGGREGATE INPUT GROUP SIZE = 1000)
+            HAVING COUNT(*) >= 10485760
         )",
     },
 ];

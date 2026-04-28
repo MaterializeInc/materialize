@@ -976,6 +976,124 @@ def workflow_user_id_no_reuse_after_restart(c: Composition) -> None:
     c.sql("DROP TABLE idreuse_t1")
 
 
+def workflow_arrangement_sizes_hydration_gate(c: Composition) -> None:
+    """Regression test: the snapshot of `mz_object_arrangement_sizes` must
+    never record a size from an in-progress rehydration.
+
+    After a restart the per-replica introspection-subscribes
+    (`mz_compute_hydration_times` and `mz_object_arrangement_sizes`)
+    re-install at independent rates, racing the collection timer. The
+    race is narrow, so we repeat the kill/up/observe cycle several
+    times to keep the test reliable.
+
+    The test workload doesn't change, so the steady-state size of each
+    arrangement is constant. Every snapshot of a `(replica, object)` pair
+    that was correctly gated should record that constant size; a snapshot
+    that fired while the arrangement was still loading would record a
+    smaller value. So after the kill/up rounds settle, we compare the
+    current size of each pair to every row in
+    `mz_object_arrangement_size_history` for that pair, and require an
+    exact match. The history table is append-only — wrong rows are never
+    overwritten by later correct ones — so any mismatch we see now is
+    direct evidence of a buggy snapshot at some earlier
+    `collection_timestamp`.
+    """
+
+    num_replicas = 2
+    arranged_names = tuple(f"idx{i}" for i in range(1, 21))
+    expected_count = len(arranged_names) * num_replicas
+    name_filter = "(" + ", ".join(f"'{n}'" for n in arranged_names) + ")"
+    restart_rounds = 5
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "arrangement_size_collection_interval": "500ms",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+
+        index_ddls = "\n".join(
+            f"CREATE INDEX idx{i} IN CLUSTER test ON v ((a + {i}));"
+            for i in range(1, 21)
+        )
+        c.sql(dedent(f"""
+                CREATE CLUSTER test SIZE 'scale=1,workers=1', REPLICATION FACTOR {num_replicas};
+                CREATE TABLE t (a int, b text);
+                INSERT INTO t SELECT g, repeat('x', 1024) FROM generate_series(1, 30000) g;
+                CREATE VIEW v AS SELECT a, b FROM t;
+                {index_ddls}
+                """))
+
+        def wait_for_full_sample() -> None:
+            deadline = time.time() + 120
+            while time.time() < deadline:
+                rows = c.sql_query(f"""
+                    SELECT 1 FROM mz_internal.mz_object_arrangement_size_history h
+                      JOIN mz_objects o ON o.id = h.object_id
+                     WHERE o.name IN {name_filter}
+                     GROUP BY h.collection_timestamp
+                    HAVING count(*) = {expected_count}
+                     LIMIT 1
+                    """)
+                if rows:
+                    return
+                time.sleep(0.5)
+            raise UIError(f"timed out waiting for a sample with {expected_count} rows")
+
+        for _ in range(restart_rounds):
+            wait_for_full_sample()
+            c.kill("materialized")
+            c.up("materialized")
+            # The kill/up just put every replica back into rehydration.
+            # Sleep so several 500 ms snapshots fire while the
+            # arrangements are still rebuilding — that's when a buggy
+            # snapshot would record a partial size.
+            time.sleep(8)
+
+        # Require all expected pairs to be present in
+        # `mz_object_arrangement_sizes` after settling; otherwise the
+        # size check below would trivially pass on an empty dataset.
+        wait_for_full_sample()
+        steady_state_rows = c.sql_query(f"""
+            SELECT s.replica_id, o.name, s.size
+              FROM mz_internal.mz_object_arrangement_sizes s
+              JOIN mz_objects o ON o.id = s.object_id
+             WHERE o.name IN {name_filter}
+            """)
+        expected_size_for: dict[tuple[str, str], int] = {
+            (replica_id, name): size for replica_id, name, size in steady_state_rows
+        }
+        assert len(expected_size_for) == expected_count, (
+            f"expected {expected_count} `(replica_id, object_id)` pairs in "
+            f"mz_object_arrangement_sizes after settling; got "
+            f"{len(expected_size_for)}: {sorted(expected_size_for)}"
+        )
+
+        history_rows = c.sql_query(f"""
+            SELECT h.collection_timestamp::text, h.replica_id, o.name, h.size
+              FROM mz_internal.mz_object_arrangement_size_history h
+              JOIN mz_objects o ON o.id = h.object_id
+             WHERE o.name IN {name_filter}
+             ORDER BY h.collection_timestamp, h.replica_id, o.name
+            """)
+        mismatches: list[tuple[str, str, str, int, int]] = []
+        for ts, replica_id, name, size in history_rows:
+            expected = expected_size_for[(replica_id, name)]
+            if size != expected:
+                mismatches.append((ts, replica_id, name, size, expected))
+        assert not mismatches, (
+            f"{len(mismatches)} history rows recorded a size different from the "
+            f"steady-state size of the same `(replica_id, object_id)` pair "
+            f"(the snapshot must have written this row while the arrangement "
+            f"was still mid-build); first 10: {mismatches[:10]}"
+        )
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":

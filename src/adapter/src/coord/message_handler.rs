@@ -354,13 +354,27 @@ impl Coordinator {
 
     /// Schedules the next per-object arrangement sizes snapshot.
     ///
-    /// Re-reads the interval dyncfg on every call so operators can retune
-    /// cadence without a restart. Aligns to an `organization_id`-seeded offset
-    /// within the interval so collections stay consistent across restarts and
-    /// don't synchronize across environments.
+    /// Aligns each fire to an `organization_id`-seeded offset within the
+    /// interval so collections stay consistent across restarts and don't
+    /// synchronize across environments. Sleeps are capped at `MAX_SLEEP`,
+    /// so dyncfg changes (interval edits or the `0s` disable sentinel) take
+    /// effect within one cap rather than after the full interval.
     pub async fn schedule_arrangement_sizes_collection(&self) {
+        const MAX_SLEEP: Duration = Duration::from_secs(60);
+
         let interval_duration = mz_adapter_types::dyncfgs::ARRANGEMENT_SIZE_COLLECTION_INTERVAL
             .get(self.catalog().system_config().dyncfgs());
+
+        // `0s` disables collection. Keep polling so re-enabling takes effect
+        // within `MAX_SLEEP` rather than requiring an envd restart.
+        if interval_duration.is_zero() {
+            let internal_cmd_tx = self.internal_cmd_tx.clone();
+            task::spawn(|| "arrangement_sizes_collection_disabled", async move {
+                tokio::time::sleep(MAX_SLEEP).await;
+                let _ = internal_cmd_tx.send(Message::ArrangementSizesSchedule);
+            });
+            return;
+        }
 
         const SEED_LEN: usize = 32;
         let mut seed = [0; SEED_LEN];
@@ -392,36 +406,41 @@ impl Coordinator {
         };
         let sleep_for = Duration::from_millis(next_collection_ts - now_ts);
 
+        // Within one cap of the next fire we sleep the remainder and snapshot;
+        // further out we sleep the cap and re-enter so a dyncfg change is
+        // picked up before committing to a long sleep.
+        let (capped_sleep, fire_snapshot) = if sleep_for <= MAX_SLEEP {
+            (sleep_for, true)
+        } else {
+            (MAX_SLEEP, false)
+        };
+
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         task::spawn(|| "arrangement_sizes_collection", async move {
-            tokio::time::sleep(sleep_for).await;
-            // Best-effort: if the coordinator is shutting down, just drop.
-            let _ = internal_cmd_tx.send(Message::ArrangementSizesSnapshot);
+            tokio::time::sleep(capped_sleep).await;
+            let msg = if fire_snapshot {
+                Message::ArrangementSizesSnapshot
+            } else {
+                Message::ArrangementSizesSchedule
+            };
+            // Send is best-effort: if the coordinator is shutting down, drop.
+            let _ = internal_cmd_tx.send(msg);
         });
     }
 
     /// Snapshots the current contents of `mz_object_arrangement_sizes` and
     /// appends them to `mz_object_arrangement_size_history`, tagged with a
     /// shared `collection_timestamp`. Reschedules on completion.
+    ///
+    /// Filters out `(replica_id, object_id)` pairs that haven't finished
+    /// hydrating, so we never record a half-built arrangement size. A pair
+    /// re-enters the history once hydration completes.
     #[mz_ore::instrument(level = "debug")]
     async fn arrangement_sizes_snapshot(&mut self) {
         // The catalog server is not writable in read-only mode.
         if self.controller.read_only() {
             self.schedule_arrangement_sizes_collection().await;
             return;
-        }
-
-        // Delay writes until every compute object has hydrated, so we
-        // don't record partial sizes from still-building dataflows.
-        // Sticky: later snapshots skip this check. Gate retries run at
-        // the full collection interval, so the first snapshot can lag
-        // hydration by up to one interval.
-        if !self.arrangement_sizes_hydration_observed {
-            if !self.check_arrangement_sizes_hydration().await {
-                self.schedule_arrangement_sizes_collection().await;
-                return;
-            }
-            self.arrangement_sizes_hydration_observed = true;
         }
 
         let collection_timer = self
@@ -433,6 +452,13 @@ impl Coordinator {
             &mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZES_UNIFIED,
         );
         let live_global_id = self.catalog.get_entry(&live_item_id).latest_global_id();
+        let hydration_item_id = self
+            .catalog()
+            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_COMPUTE_HYDRATION_TIMES);
+        let hydration_global_id = self
+            .catalog
+            .get_entry(&hydration_item_id)
+            .latest_global_id();
         let history_item_id = self
             .catalog()
             .resolve_builtin_table(&mz_catalog::builtin::MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY);
@@ -452,6 +478,46 @@ impl Coordinator {
                 return;
             }
         };
+        let mut hydration_snapshot = match self
+            .controller
+            .storage_collections
+            .snapshot(hydration_global_id, read_ts)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("arrangement sizes hydration snapshot failed: {e:?}");
+                drop(collection_timer);
+                self.schedule_arrangement_sizes_collection().await;
+                return;
+            }
+        };
+        differential_dataflow::consolidation::consolidate(&mut hydration_snapshot);
+
+        // `mz_compute_hydration_times` reports `time_ns IS NULL` for objects
+        // still building, so we collect only the pairs with a non-null time.
+        let mut datum_vec = mz_repr::DatumVec::new();
+        let mut hydrated: BTreeSet<(String, String)> = BTreeSet::new();
+        const HYDRATION_COL_REPLICA_ID: usize = 0;
+        const HYDRATION_COL_OBJECT_ID: usize = 1;
+        const HYDRATION_COL_TIME_NS: usize = 2;
+        const HYDRATION_COL_COUNT: usize = 3;
+        for (row, diff) in &hydration_snapshot {
+            if *diff != 1 {
+                continue;
+            }
+            let datums = datum_vec.borrow_with(row);
+            if datums.len() < HYDRATION_COL_COUNT {
+                continue;
+            }
+            if datums[HYDRATION_COL_TIME_NS].is_null() {
+                continue;
+            }
+            hydrated.insert((
+                datums[HYDRATION_COL_REPLICA_ID].unwrap_str().to_string(),
+                datums[HYDRATION_COL_OBJECT_ID].unwrap_str().to_string(),
+            ));
+        }
 
         // `collection_ts` is stamped after the snapshot so it's always >= the
         // state the rows describe, and monotone across restarts. The snapshot
@@ -475,38 +541,41 @@ impl Coordinator {
 
         let mut skipped_malformed: u64 = 0;
         let mut skipped_null_size: u64 = 0;
-        let updates: Vec<BuiltinTableUpdate> = consolidated
-            .into_iter()
-            .filter_map(|(row, diff)| {
-                if diff != 1 {
-                    return None;
-                }
-                let datums = row.unpack();
-                // Surface schema drift via a warn log below rather than silently
-                // skipping entire snapshots.
-                if datums.len() != LIVE_COL_COUNT {
-                    skipped_malformed += 1;
-                    return None;
-                }
-                let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
-                let object_id = datums[LIVE_COL_OBJECT_ID].unwrap_str();
-                let size_datum = datums[LIVE_COL_SIZE];
-                // The history table's `size` is non-null; fabricating zero would
-                // be misleading, so drop.
-                if size_datum.is_null() {
-                    skipped_null_size += 1;
-                    return None;
-                }
-                let size = size_datum.unwrap_int64();
-                let new_row = Row::pack_slice(&[
-                    Datum::String(replica_id),
-                    Datum::String(object_id),
-                    Datum::Int64(size),
-                    collection_datum,
-                ]);
-                Some(BuiltinTableUpdate::row(history_item_id, new_row, Diff::ONE))
-            })
-            .collect();
+        let mut skipped_unhydrated: u64 = 0;
+        let mut updates: Vec<BuiltinTableUpdate> = Vec::with_capacity(consolidated.len());
+        for (row, diff) in consolidated.iter() {
+            if *diff != 1 {
+                continue;
+            }
+            let datums = datum_vec.borrow_with(row);
+            // Surface schema drift via a warn log below rather than silently
+            // skipping entire snapshots.
+            if datums.len() != LIVE_COL_COUNT {
+                skipped_malformed += 1;
+                continue;
+            }
+            let replica_id = datums[LIVE_COL_REPLICA_ID].unwrap_str();
+            let object_id = datums[LIVE_COL_OBJECT_ID].unwrap_str();
+            let size_datum = datums[LIVE_COL_SIZE];
+            // The history table's `size` is non-null; fabricating zero would
+            // be misleading, so drop.
+            if size_datum.is_null() {
+                skipped_null_size += 1;
+                continue;
+            }
+            if !hydrated.contains(&(replica_id.to_string(), object_id.to_string())) {
+                skipped_unhydrated += 1;
+                continue;
+            }
+            let size = size_datum.unwrap_int64();
+            let new_row = Row::pack_slice(&[
+                Datum::String(replica_id),
+                Datum::String(object_id),
+                Datum::Int64(size),
+                collection_datum,
+            ]);
+            updates.push(BuiltinTableUpdate::row(history_item_id, new_row, Diff::ONE));
+        }
         if skipped_malformed > 0 {
             warn!(
                 "mz_object_arrangement_sizes schema drift: skipped {skipped_malformed} rows \
@@ -515,6 +584,12 @@ impl Coordinator {
         }
         if skipped_null_size > 0 {
             tracing::debug!("skipped {skipped_null_size} live rows with null size");
+        }
+        if skipped_unhydrated > 0 {
+            tracing::debug!(
+                "skipped {skipped_unhydrated} live rows whose (replica_id, object_id) was \
+                 not yet hydrated"
+            );
         }
 
         let row_count = updates.len();
@@ -556,32 +631,6 @@ impl Coordinator {
         task::spawn(|| "arrangement_sizes_pruning_apply", async move {
             fut.await;
         });
-    }
-
-    /// Returns `true` when every row in `mz_compute_hydration_times` has a
-    /// non-null `time_ns` (i.e. every compute object on every replica has
-    /// finished its initial hydration). An empty collection also returns
-    /// `true`. On snapshot failure, returns `false` so the caller retries.
-    async fn check_arrangement_sizes_hydration(&self) -> bool {
-        let item_id = self
-            .catalog()
-            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_COMPUTE_HYDRATION_TIMES);
-        let global_id = self.catalog.get_entry(&item_id).latest_global_id();
-        let read_ts = self.get_local_read_ts().await;
-        let mut snapshot = match self
-            .controller
-            .storage_collections
-            .snapshot(global_id, read_ts)
-            .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!("arrangement-sizes hydration gate snapshot failed: {e:?}");
-                return false;
-            }
-        };
-        differential_dataflow::consolidation::consolidate(&mut snapshot);
-        arrangement_sizes_all_hydrated(&snapshot)
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1063,84 +1112,5 @@ impl Coordinator {
                 }
             });
         }
-    }
-}
-
-/// Returns `true` when every `+1` row in a consolidated snapshot of
-/// `mz_compute_hydration_times` has a non-null `time_ns` (column 2), i.e.
-/// every compute object on every replica has finished hydrating at least
-/// once. Empty input returns `true`. Unexpected row shape returns `false`
-/// so the caller re-polls rather than crashing on schema drift.
-fn arrangement_sizes_all_hydrated(snapshot: &[(mz_repr::Row, i64)]) -> bool {
-    const HYDRATION_COL_TIME_NS: usize = 2;
-    for (row, diff) in snapshot {
-        if *diff != 1 {
-            continue;
-        }
-        let datums = row.unpack();
-        let Some(time_ns) = datums.get(HYDRATION_COL_TIME_NS) else {
-            return false;
-        };
-        if time_ns.is_null() {
-            return false;
-        }
-    }
-    true
-}
-
-#[cfg(test)]
-mod arrangement_sizes_hydration_tests {
-    use mz_repr::{Datum, Row};
-
-    use super::arrangement_sizes_all_hydrated;
-
-    // Columns: (replica_id, object_id, time_ns). `time_ns` is the value
-    // under test; the other columns are packed with realistic defaults so
-    // shape drift would surface.
-    fn hydration_row(time_ns: Option<u64>) -> Row {
-        Row::pack_slice(&[
-            Datum::String("r1"),
-            Datum::String("u1"),
-            match time_ns {
-                Some(ns) => Datum::UInt64(ns),
-                None => Datum::Null,
-            },
-        ])
-    }
-
-    #[mz_ore::test]
-    fn empty_snapshot_is_hydrated() {
-        assert!(arrangement_sizes_all_hydrated(&[]));
-    }
-
-    #[mz_ore::test]
-    fn all_non_null_is_hydrated() {
-        let rows = vec![(hydration_row(Some(100)), 1), (hydration_row(Some(200)), 1)];
-        assert!(arrangement_sizes_all_hydrated(&rows));
-    }
-
-    #[mz_ore::test]
-    fn any_null_blocks_hydration() {
-        let rows = vec![
-            (hydration_row(Some(100)), 1),
-            (hydration_row(None), 1),
-            (hydration_row(Some(300)), 1),
-        ];
-        assert!(!arrangement_sizes_all_hydrated(&rows));
-    }
-
-    #[mz_ore::test]
-    fn retractions_are_ignored() {
-        // A -1 row represents stale state that consolidation would remove.
-        // We skip it so a retracted null doesn't veto hydration.
-        let rows = vec![(hydration_row(None), -1), (hydration_row(Some(100)), 1)];
-        assert!(arrangement_sizes_all_hydrated(&rows));
-    }
-
-    #[mz_ore::test]
-    fn malformed_row_blocks_hydration() {
-        let malformed = Row::pack_slice(&[Datum::String("r1"), Datum::String("u1")]);
-        let rows = vec![(malformed, 1)];
-        assert!(!arrangement_sizes_all_hydrated(&rows));
     }
 }
