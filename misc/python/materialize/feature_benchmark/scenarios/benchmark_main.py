@@ -117,6 +117,52 @@ true
 """)
 
 
+class ProjectionPushdown(Scenario):
+    """Hydrate an MV that reads one column from a 32-column persist table.
+
+    Exercises parquet ProjectionMask pushdown: persist's decoder skips the 31
+    columns the MV does not demand. The wide table is created once in
+    `init()`; each iteration measures fresh hydration of a narrow MV by
+    parking the cluster at rf=0, creating the MV, starting the timer,
+    bringing the cluster up to rf=1, and waiting for the MV to be readable.
+    """
+
+    SCALE = 6
+
+    def init(self) -> list[Action]:
+        n = self.n()
+        column_defs = ", ".join(f"f{i} INTEGER" for i in range(32))
+        select_cols = ", ".join(
+            f"((generate_series * {17 + i * 7}) % 1000003)::int AS f{i}"
+            for i in range(32)
+        )
+        return [
+            TdAction(f"""
+> CREATE CLUSTER pp_cluster SIZE 'scale=1,workers=16', REPLICATION FACTOR 1
+> CREATE TABLE pp_wide ({column_defs})
+> INSERT INTO pp_wide SELECT {select_cols} FROM generate_series(1, {n})
+> SELECT COUNT(*) = {n} FROM pp_wide
+true
+"""),
+        ]
+
+    def benchmark(self) -> MeasurementSource:
+        return Td(f"""
+> DROP MATERIALIZED VIEW IF EXISTS pp_narrow
+> ALTER CLUSTER pp_cluster SET (REPLICATION FACTOR 0)
+> CREATE MATERIALIZED VIEW pp_narrow IN CLUSTER pp_cluster AS SELECT f0 FROM pp_wide
+> SET CLUSTER = pp_cluster
+> SELECT 1
+  /* A */
+1
+> ALTER CLUSTER pp_cluster SET (REPLICATION FACTOR 1)
+> SELECT COUNT(*) FROM pp_narrow
+  /* B */
+{self.n()}
+> SET CLUSTER = default
+""")
+
+
 class FastPathFilterIndex(FastPath):
     """Measure the time it takes for the fast path to filter our all rows from a materialized view using an index and return"""
 
