@@ -14,7 +14,6 @@ retried until it produces the desired result.
 """
 
 import glob
-import os
 
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
@@ -233,9 +232,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 persistent=False,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(
-                MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax" / junit_report
-            )
+            if not args.rewrite_results:
+                (
+                    MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax" / junit_report
+                ).unlink(missing_ok=True)
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()

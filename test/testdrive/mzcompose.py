@@ -14,7 +14,6 @@ retried until it produces the desired result.
 """
 
 import glob
-import os
 
 from materialize import MZ_ROOT, buildkite, ci_util
 from materialize.mzcompose.composition import (
@@ -248,7 +247,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 file,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(MZ_ROOT / "test" / "testdrive" / junit_report)
+            if not args.rewrite_results:
+                (MZ_ROOT / "test" / "testdrive" / junit_report).unlink(missing_ok=True)
 
         files = buildkite.shard_list(
             sorted(

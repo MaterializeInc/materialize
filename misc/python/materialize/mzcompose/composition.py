@@ -873,9 +873,10 @@ class Composition:
         """Run a one-off command in a service.
 
         Delegates to `docker compose run`. See that command's help for details.
-        Note that unlike `docker compose run`, any services whose definitions
-        have changed are rebuilt (like `docker compose up` would do) before the
-        command is executed.
+
+        Note that this does *not* rebuild services whose definitions have
+        changed. If you need to pick up definition changes (env vars, volumes,
+        image, etc.), call `up` with the service first.
 
         Args:
             service: The name of a service in the composition.

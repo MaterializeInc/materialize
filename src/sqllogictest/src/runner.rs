@@ -899,7 +899,7 @@ impl<'a> Runner<'a> {
             for (i, row) in rows.iter().enumerate() {
                 let name: &str = row.get("name");
                 let size: &str = row.get("size");
-                if name != format!("r{i}") || size != self.config.replica_size {
+                if name != format!("r{}", i + 1) || size != self.config.replica_size {
                     needs_default_replica = true;
                     break;
                 }
