@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/lib.rs
-revision: aa7a1afd31
+revision: 9d0a7c3c6f
 ---
 
 # adapter

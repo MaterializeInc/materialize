@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/acl.rs
-revision: daff501451
+revision: 721951ce66
 ---
 
 # mz-sql::plan::statement::acl

@@ -1,6 +1,6 @@
 ---
 source: src/catalog-protos/src/serialization.rs
-revision: aa7a1afd31
+revision: 9d0a7c3c6f
 ---
 
 # mz-catalog-protos::serialization

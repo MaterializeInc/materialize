@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/appends.rs
-revision: af5783aa4f
+revision: 9d0a7c3c6f
 ---
 
 # adapter::coord::appends

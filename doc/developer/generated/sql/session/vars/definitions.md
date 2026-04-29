@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars/definitions.rs
-revision: 44d6b9ac6a
+revision: 9d0a7c3c6f
 ---
 
 # mz-sql::session::vars::definitions

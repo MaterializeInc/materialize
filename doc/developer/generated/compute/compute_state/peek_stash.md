@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/compute_state/peek_stash.rs
-revision: 6e4c800333
+revision: 23772dc84e
 ---
 
 # mz-compute::compute_state::peek_stash
