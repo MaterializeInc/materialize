@@ -1548,7 +1548,7 @@ impl PeekClient {
                     true => "true",
                     false => "false",
                 },
-                isolation_level.as_str().as_ref(),
+                isolation_level.as_variant_str(),
                 &compute_instance.to_string(),
             ])
             .inc();
