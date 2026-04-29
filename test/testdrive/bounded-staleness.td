@@ -12,12 +12,19 @@
 > CREATE TABLE bs_t (a int);
 > INSERT INTO bs_t VALUES (1), (2), (3);
 
-> SET transaction_isolation = 'bounded staleness 5s'
-
-> SELECT count(*) FROM bs_t;
+# Read once under default (strict serializable) isolation so the read frontier
+# advances past the insert before we switch to bounded staleness. Under bounded
+# staleness, the SELECT does not block on input frontiers, so we must observe
+# the write here first.
+> SELECT count(*) FROM bs_t
 3
 
-> SELECT sum(a) FROM bs_t;
+> SET transaction_isolation = 'bounded staleness 5s'
+
+> SELECT count(*) FROM bs_t
+3
+
+> SELECT sum(a) FROM bs_t
 6
 
 # Round-trip via SHOW.
@@ -34,7 +41,7 @@
 # to 0 so the MV's upper frontier stops advancing. After waiting past the
 # staleness bound, a SELECT under bounded staleness must error.
 
-> CREATE CLUSTER bs_cluster SIZE '1'
+> CREATE CLUSTER bs_cluster SIZE 'scale=1,workers=1'
 
 > CREATE TABLE bs_t (a int)
 
