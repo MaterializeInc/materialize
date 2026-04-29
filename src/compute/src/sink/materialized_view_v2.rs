@@ -14,6 +14,37 @@
 //! Gated behind the `ENABLE_SYNC_MV_SINK` dyncfg.
 //!
 //! See the [main module](super::materialized_view) for the operator graph and design docs.
+//!
+//! ### Channel ordering requirements
+//!
+//! Each operator splits state across a Timely thread (which observes inputs and frontiers) and a
+//! Tokio task (which owns persist I/O state). They communicate via `mpsc` command channels, which
+//! preserve send order on a single sender. Each operator instance constructs its own
+//! `(tx, rx)` pair inside `render` and never clones the sender, so there is exactly one producer
+//! per channel — sends are totally ordered. Different worker instances of the same operator
+//! never share a channel, so cross-worker ordering is not a concern. The correctness of the
+//! operators relies on a few ordering invariants between the messages sent within a single Timely
+//! activation:
+//!
+//!  * **`mint`**: the `persist_watch` Tokio task is the sole producer of persist-frontier updates
+//!    and emits them in monotonically increasing order, terminated by the empty frontier. The
+//!    Timely closure drains the receiver each activation; processing in receive order is therefore
+//!    sufficient. No cross-channel ordering is needed because `mint` only has the one channel.
+//!
+//!  * **`write`**: per-activation, the Timely closure first appends all observed input data into
+//!    a single `WriteCommand::Batch` and only then sends a `WriteCommand::WriteBatch` (issued from
+//!    `maybe_start_batch` after frontier checks). The Tokio task processes commands FIFO, so a
+//!    `WriteBatch` is guaranteed to see every `Batch` from the same activation already applied to
+//!    the corrections buffer. Reversing this order would let the task write a batch that is
+//!    missing updates the Timely closure already observed.
+//!
+//!  * **`append`**: per-activation, the Timely closure forwards messages in the order
+//!    `Description` → `Batch` → `BatchesFrontier`. The first two carry the data the task needs
+//!    to absorb; `BatchesFrontier` is the trigger that allows `maybe_append_batches` to fire.
+//!    Sending `BatchesFrontier` *after* its corresponding `Batch` messages ensures the task does
+//!    not append a batch description before all batches contributing to it have been absorbed.
+//!    If the order were reversed, `maybe_append_batches` could fire on an incomplete `batches`
+//!    set and miss writes.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -915,6 +946,19 @@ mod write {
         }
 
         fn absorb_batch_description(&mut self, desc: BatchDescription, cap: Capability<Timestamp>) {
+            // Enforce monotonicity: drop descriptions whose `lower` regresses below the one we
+            // already hold. The `mint` operator only emits strictly increasing `lower`s
+            // (invariant 1), so a regression means this description is outdated. We cannot use
+            // `persist_frontiers` for the same check, because during snapshot processing those
+            // frontiers can be ahead of the shard's write frontier and a still-valid description
+            // may have a `lower` below them.
+            if let Some((prev, _)) = &self.batch_description {
+                if PartialOrder::less_than(&desc.lower, &prev.lower) {
+                    self.trace(format!("skipping outdated batch description: {desc:?}"));
+                    return;
+                }
+            }
+
             self.batch_description = Some((desc, cap));
             self.trace("set batch description");
         }
@@ -1037,7 +1081,11 @@ mod append {
                     }
                 });
 
-                // Forward batches frontier advancements.
+                // Forward batches frontier advancements *after* the per-activation
+                // `Description`/`Batch` sends above. The Tokio task drains commands FIFO and only
+                // calls `maybe_append_batches` on `Description`/`BatchesFrontier`; if a frontier
+                // advance arrived before its batches, the task could append an incomplete set.
+                // See module-level docs for the full ordering invariant.
                 let new_batches_frontier = frontiers[1].frontier();
                 if PartialOrder::less_than(&prev_batches_frontier.borrow(), &new_batches_frontier) {
                     prev_batches_frontier.clear();
