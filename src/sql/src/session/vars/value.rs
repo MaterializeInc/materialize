@@ -1331,7 +1331,7 @@ mod bounded_staleness_tests {
         IsolationLevel::parse(VarInput::Flat(s))
     }
 
-    #[test]
+    #[mz_ore::test]
     fn parses_bounded_staleness() {
         assert_eq!(
             parse_iso("bounded staleness 5s").unwrap(),
@@ -1341,25 +1341,46 @@ mod bounded_staleness_tests {
             parse_iso("bounded staleness 500ms").unwrap(),
             IsolationLevel::BoundedStaleness(Duration::from_millis(500))
         );
+        // Upper-case input normalises.
+        assert_eq!(
+            parse_iso("BOUNDED STALENESS 5s").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_secs(5))
+        );
+        // Leading/trailing whitespace tolerated.
+        assert_eq!(
+            parse_iso("  bounded staleness 5s  ").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_secs(5))
+        );
     }
 
-    #[test]
+    #[mz_ore::test]
     fn rejects_zero_duration() {
         assert!(parse_iso("bounded staleness 0s").is_err());
         assert!(parse_iso("bounded staleness 0ms").is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn rejects_unparseable_duration() {
         assert!(parse_iso("bounded staleness banana").is_err());
         assert!(parse_iso("bounded staleness").is_err());
     }
 
-    #[test]
+    #[mz_ore::test]
     fn round_trips_format() {
         let lvl = IsolationLevel::BoundedStaleness(Duration::from_secs(5));
         assert_eq!(lvl.format(), "bounded staleness 5s");
         let parsed = parse_iso(&lvl.format()).unwrap();
         assert_eq!(parsed, lvl);
+    }
+
+    #[mz_ore::test]
+    fn rejects_over_max_bound() {
+        // 1-hour cap; 2h must be rejected.
+        assert!(parse_iso("bounded staleness 2h").is_err());
+        assert!(parse_iso("bounded staleness 3601s").is_err());
+        // Exactly 1h is at the boundary — `d > MAX_BOUND` is strict, so it
+        // should still be accepted.
+        assert!(parse_iso("bounded staleness 1h").is_ok());
+        assert!(parse_iso("bounded staleness 60m").is_ok());
     }
 }
