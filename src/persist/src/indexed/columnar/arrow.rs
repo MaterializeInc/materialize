@@ -9,15 +9,12 @@
 
 //! Apache Arrow encodings and utils for persist data
 
-use std::ptr::NonNull;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{Array, ArrayData, ArrayRef, BinaryArray, Int64Array, RecordBatch, make_array};
-use arrow::buffer::{BooleanBuffer, Buffer, NullBuffer};
-use arrow::datatypes::ToByteSlice;
+use arrow::buffer::{BooleanBuffer, NullBuffer};
 use itertools::Itertools;
-use mz_dyncfg::Config;
 
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::indexed::encoding::BlobTraceUpdates;
@@ -62,53 +59,30 @@ pub fn encode_arrow_batch(updates: &BlobTraceUpdates) -> RecordBatch {
     RecordBatch::try_from_iter_with_nullable(fields).expect("valid field definitions")
 }
 
-pub(crate) const ENABLE_ARROW_LGALLOC_CC_SIZES: Config<bool> = Config::new(
-    "persist_enable_arrow_lgalloc_cc_sizes",
-    true,
-    "An incident flag to disable copying decoded arrow data into lgalloc on cc sized clusters.",
-);
-
-pub(crate) const ENABLE_ARROW_LGALLOC_NONCC_SIZES: Config<bool> = Config::new(
-    "persist_enable_arrow_lgalloc_noncc_sizes",
-    false,
-    "A feature flag to enable copying decoded arrow data into lgalloc on non-cc sized clusters.",
-);
-
-fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> ArrayData {
-    // NB: Arrow generally aligns buffers very coarsely: see arrow::alloc::ALIGNMENT.
-    // However, lgalloc aligns buffers even more coarsely - to the page boundary -
-    // so we never expect alignment issues in practice. If that changes, build()
-    // will return an error below, as it does for all invalid data.
-    let buffers = data
-        .buffers()
-        .iter()
-        .map(|b| realloc_buffer(b, metrics))
-        .collect();
+/// Walks the given arrow [`ArrayData`] recursively, dropping null buffers from
+/// non-nullable fields.
+///
+/// Workaround for <https://github.com/apache/arrow-rs/issues/6510>: parquet decoding
+/// can generate nulls in non-nullable fields that are only masked by, e.g., a
+/// grandparent, but some arrow code expects the direct parent to mask its
+/// non-nullable children. Dropping the buffer here prevents those validations
+/// from failing. (Top-level arrays are always marked nullable, so they're
+/// unaffected.)
+fn rebuild_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> ArrayData {
+    let buffers = data.buffers().to_vec();
     let child_data = {
         let field_iter = mz_persist_types::arrow::fields_for_type(data.data_type()).iter();
         let child_iter = data.child_data().iter();
         field_iter
             .zip_eq(child_iter)
-            .map(|(f, d)| realloc_data(d.clone(), f.is_nullable(), metrics))
+            .map(|(f, d)| rebuild_data(d.clone(), f.is_nullable(), metrics))
             .collect()
     };
     let nulls = if nullable {
-        data.nulls().map(|n| {
-            let buffer = realloc_buffer(n.buffer(), metrics);
-            NullBuffer::new(BooleanBuffer::new(buffer, n.offset(), n.len()))
-        })
+        data.nulls()
+            .map(|n| NullBuffer::new(BooleanBuffer::new(n.buffer().clone(), n.offset(), n.len())))
     } else {
         if data.nulls().is_some() {
-            // This is a workaround for: https://github.com/apache/arrow-rs/issues/6510
-            // It should always be safe to drop the null buffer for a non-nullable field, since
-            // any nulls cannot possibly represent real data and thus must be masked off at
-            // some higher level. We always realloc data we get back from parquet, so this is
-            // a convenient and efficient place to do the rewrite.
-            // Why does this help? Parquet decoding can generate nulls in non-nullable fields
-            // that are only masked by eg. a grandparent, not the direct parent... but some arrow
-            // code expects the parent to mask any nulls in its non-nullable children. Dropping
-            // the buffer here prevents those validations from failing. (Top-level arrays are always
-            // marked nullable, but since they don't have parents that's not a problem either.)
             metrics.parquet.elided_null_buffers.inc();
         }
         None
@@ -125,47 +99,20 @@ fn realloc_data(data: ArrayData, nullable: bool, metrics: &ColumnarMetrics) -> A
         .expect("reconstructing valid arrow array")
 }
 
-/// Re-allocate the backing storage for a specific array using lgalloc, if it's configured.
-/// (And hopefully-temporarily work around a parquet decoding issue upstream.)
+/// Rebuild the given array, dropping null buffers on non-nullable fields.
 pub fn realloc_array<A: Array + From<ArrayData>>(array: &A, metrics: &ColumnarMetrics) -> A {
     let data = array.to_data();
     // Top-level arrays are always nullable.
-    let data = realloc_data(data, true, metrics);
+    let data = rebuild_data(data, true, metrics);
     A::from(data)
 }
 
-/// Re-allocate the backing storage for an array ref using lgalloc, if it's configured.
-/// (And hopefully-temporarily work around a parquet decoding issue upstream.)
+/// Rebuild the given array ref, dropping null buffers on non-nullable fields.
 pub fn realloc_any(array: ArrayRef, metrics: &ColumnarMetrics) -> ArrayRef {
     let data = array.into_data();
     // Top-level arrays are always nullable.
-    let data = realloc_data(data, true, metrics);
+    let data = rebuild_data(data, true, metrics);
     make_array(data)
-}
-
-fn realloc_buffer(buffer: &Buffer, metrics: &ColumnarMetrics) -> Buffer {
-    let use_lgbytes_mmap = if metrics.is_cc_active {
-        ENABLE_ARROW_LGALLOC_CC_SIZES.get(&metrics.cfg)
-    } else {
-        ENABLE_ARROW_LGALLOC_NONCC_SIZES.get(&metrics.cfg)
-    };
-    let region = if use_lgbytes_mmap {
-        metrics
-            .lgbytes_arrow
-            .try_mmap_region(buffer.as_slice())
-            .ok()
-    } else {
-        None
-    };
-    let Some(region) = region else {
-        return buffer.clone();
-    };
-    let bytes: &[u8] = region.as_ref().to_byte_slice();
-    let ptr: NonNull<[u8]> = bytes.into();
-    // This is fine: see [[NonNull::as_non_null_ptr]] for an unstable version of this usage.
-    let ptr: NonNull<u8> = ptr.cast();
-    // SAFETY: `ptr` is valid for `len` bytes, and kept alive as long as `region` lives.
-    unsafe { Buffer::from_custom_allocation(ptr, bytes.len(), Arc::new(region)) }
 }
 
 /// Converts an [`arrow`] [RecordBatch] into a [BlobTraceUpdates] and reallocate the backing data.
