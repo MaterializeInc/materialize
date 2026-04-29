@@ -282,7 +282,10 @@ impl HttpServer {
                     allowed_roles,
                 });
             if let listeners::AuthenticatorKind::None = authenticator_kind {
-                ws_router = ws_router.layer(middleware::from_fn(x_materialize_user_header_auth));
+                ws_router = ws_router.layer(middleware::from_fn_with_state(
+                    allowed_roles,
+                    x_materialize_user_header_auth,
+                ));
             }
             router = router.merge(ws_router);
         }
@@ -552,8 +555,10 @@ impl HttpServer {
                 router = router.merge(login_router).layer(session_layer);
             }
             listeners::AuthenticatorKind::None => {
-                base_router =
-                    base_router.layer(middleware::from_fn(x_materialize_user_header_auth));
+                base_router = base_router.layer(middleware::from_fn_with_state(
+                    allowed_roles,
+                    x_materialize_user_header_auth,
+                ));
             }
             _ => {}
         }
@@ -659,7 +664,11 @@ pub async fn handle_leader_skip_catchup(
     }
 }
 
-async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl IntoResponse {
+async fn x_materialize_user_header_auth(
+    State(allowed_roles): State<AllowedRoles>,
+    mut req: Request,
+    next: Next,
+) -> impl IntoResponse {
     // TODO migrate teleport to basic auth and remove this.
     if let Some(username) = req.headers().get("x-materialize-user").map(|h| h.to_str()) {
         let username = match username {
@@ -670,6 +679,11 @@ async fn x_materialize_user_header_auth(mut req: Request, next: Next) -> impl In
                 )));
             }
         };
+        // Enforce the listener's `allowed_roles` policy here. Without this,
+        // a listener with `authenticator_kind=None` and `allowed_roles=Normal`
+        // would let any caller assert `x-materialize-user: mz_system` and
+        // bypass the role restriction.
+        check_role_allowed(&username, allowed_roles)?;
         req.extensions_mut().insert(AuthedUser {
             name: username,
             external_metadata_rx: None,
