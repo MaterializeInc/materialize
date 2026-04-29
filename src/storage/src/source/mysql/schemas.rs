@@ -64,13 +64,18 @@ where
                             )),
                         );
                         match new_desc {
-                            Ok(desc) => match output.desc.determine_compatibility(&desc) {
-                                Ok(()) => None,
-                                Err(err) => Some((
-                                    output,
-                                    DefiniteError::IncompatibleSchema(err.to_string()),
-                                )),
-                            },
+                            Ok(desc) => {
+                                match output
+                                    .desc
+                                    .determine_compatibility(&desc, output.binlog_full_metadata)
+                                {
+                                    Ok(()) => None,
+                                    Err(err) => Some((
+                                        output,
+                                        DefiniteError::IncompatibleSchema(err.to_string()),
+                                    )),
+                                }
+                            }
                             Err(err) => {
                                 Some((output, DefiniteError::IncompatibleSchema(err.to_string())))
                             }
