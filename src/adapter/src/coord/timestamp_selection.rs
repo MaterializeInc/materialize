@@ -429,6 +429,22 @@ pub trait TimestampProvider {
             if !constraints.lower_bound().less_equal(&candidate)
                 || constraints.upper_bound().less_than(&candidate)
             {
+                if let IsolationLevel::BoundedStaleness(d) = isolation_level {
+                    let lower = constraints.lower_bound();
+                    let upper_bound_anti = constraints.upper_bound();
+                    let lower_ms: u64 = lower.iter().next().map(|t| u64::from(*t)).unwrap_or(0);
+                    let upper_ms: u64 = upper_bound_anti
+                        .iter()
+                        .next()
+                        .map(|t| u64::from(*t).saturating_sub(1))
+                        .unwrap_or(0);
+                    let gap = lower_ms.saturating_sub(upper_ms);
+                    return Err(AdapterError::BoundedStalenessExceeded {
+                        bound: *d,
+                        gap_ms: gap,
+                        slowest_input: None,
+                    });
+                }
                 return Err(AdapterError::ImpossibleTimestampConstraints {
                     constraints: constraints.display(timeline.as_ref()).to_string(),
                 });

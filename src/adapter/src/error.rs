@@ -265,6 +265,14 @@ pub enum AdapterError {
     ImpossibleTimestampConstraints {
         constraints: String,
     },
+    /// Returned when bounded staleness was selected but the input frontiers lag
+    /// further than the bound permits, so no timestamp in the no-wait window is
+    /// at most `bound` stale.
+    BoundedStalenessExceeded {
+        bound: std::time::Duration,
+        gap_ms: u64,
+        slowest_input: Option<mz_repr::GlobalId>,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -725,6 +733,7 @@ impl AdapterError {
             }
             // similar to AbsurdSubscribeBounds
             AdapterError::ImpossibleTimestampConstraints { .. } => SqlState::DATA_EXCEPTION,
+            AdapterError::BoundedStalenessExceeded { .. } => SqlState::T_R_SERIALIZATION_FAILURE,
         }
     }
 
@@ -1121,6 +1130,22 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ImpossibleTimestampConstraints { .. } => {
                 write!(f, "could not find a valid timestamp for the query")
+            }
+            AdapterError::BoundedStalenessExceeded {
+                bound,
+                gap_ms,
+                slowest_input,
+            } => {
+                write!(
+                    f,
+                    "cannot serve query under bounded staleness {:?}; freshest available timestamp \
+                     is {}ms older than the bound",
+                    bound, gap_ms,
+                )?;
+                if let Some(id) = slowest_input {
+                    write!(f, "; slowest input: {}", id)?;
+                }
+                Ok(())
             }
         }
     }
