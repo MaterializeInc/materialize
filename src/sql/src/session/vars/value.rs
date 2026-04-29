@@ -906,35 +906,45 @@ pub enum IsolationLevel {
      */
     StrongSessionSerializable,
     StrictSerializable,
+    /// Bounded staleness — pick `T` such that `T >= now_ms - D` and the
+    /// query does not wait on input frontiers. Errors if no such `T` exists
+    /// in the no-wait window. See
+    /// `doc/developer/design/20260429_bounded_staleness_isolation.md`.
+    BoundedStaleness(std::time::Duration),
 }
 
 impl IsolationLevel {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> Cow<'static, str> {
         match self {
-            Self::ReadUncommitted => "read uncommitted",
-            Self::ReadCommitted => "read committed",
-            Self::RepeatableRead => "repeatable read",
-            Self::Serializable => "serializable",
-            Self::StrongSessionSerializable => "strong session serializable",
-            Self::StrictSerializable => "strict serializable",
+            Self::ReadUncommitted => Cow::Borrowed("read uncommitted"),
+            Self::ReadCommitted => Cow::Borrowed("read committed"),
+            Self::RepeatableRead => Cow::Borrowed("repeatable read"),
+            Self::Serializable => Cow::Borrowed("serializable"),
+            Self::StrongSessionSerializable => Cow::Borrowed("strong session serializable"),
+            Self::StrictSerializable => Cow::Borrowed("strict serializable"),
+            Self::BoundedStaleness(d) => Cow::Owned(format!(
+                "bounded staleness {}",
+                humantime::format_duration(*d)
+            )),
         }
     }
 
     fn valid_values() -> Vec<&'static str> {
         vec![
-            Self::ReadUncommitted.as_str(),
-            Self::ReadCommitted.as_str(),
-            Self::RepeatableRead.as_str(),
-            Self::Serializable.as_str(),
+            "read uncommitted",
+            "read committed",
+            "repeatable read",
+            "serializable",
             // TODO(jkosh44) Add StrongSessionSerializable when it becomes available to users.
-            Self::StrictSerializable.as_str(),
+            "strict serializable",
+            "bounded staleness <duration>",
         ]
     }
 }
 
 impl fmt::Display for IsolationLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(&self.as_str())
     }
 }
 
@@ -951,26 +961,58 @@ impl Value for IsolationLevel {
         Self: Sized,
     {
         let s = extract_single_value(input)?;
-        let s = UncasedStr::new(s);
+        let lower = s.to_ascii_lowercase();
+        let lower = lower.trim();
 
         // We don't have any optimizations for levels below Serializable,
         // so we upgrade them all to Serializable.
-        if s == Self::ReadUncommitted.as_str()
-            || s == Self::ReadCommitted.as_str()
-            || s == Self::RepeatableRead.as_str()
-            || s == Self::Serializable.as_str()
-        {
-            Ok(Self::Serializable)
-        } else if s == Self::StrongSessionSerializable.as_str() {
-            Ok(Self::StrongSessionSerializable)
-        } else if s == Self::StrictSerializable.as_str() {
-            Ok(Self::StrictSerializable)
-        } else {
-            Err(VarParseError::ConstrainedParameter {
-                invalid_values: input.to_vec(),
-                valid_values: Some(IsolationLevel::valid_values()),
-            })
+        if matches!(
+            lower,
+            "read uncommitted" | "read committed" | "repeatable read" | "serializable"
+        ) {
+            return Ok(Self::Serializable);
         }
+        if lower == "strong session serializable" {
+            return Ok(Self::StrongSessionSerializable);
+        }
+        if lower == "strict serializable" {
+            return Ok(Self::StrictSerializable);
+        }
+
+        if let Some(rest) = lower.strip_prefix("bounded staleness") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                return Err(VarParseError::ConstrainedParameter {
+                    invalid_values: input.to_vec(),
+                    valid_values: Some(IsolationLevel::valid_values()),
+                });
+            }
+            let d = humantime::parse_duration(rest).map_err(|_| {
+                VarParseError::ConstrainedParameter {
+                    invalid_values: input.to_vec(),
+                    valid_values: Some(IsolationLevel::valid_values()),
+                }
+            })?;
+            if d.is_zero() {
+                return Err(VarParseError::ConstrainedParameter {
+                    invalid_values: input.to_vec(),
+                    valid_values: Some(IsolationLevel::valid_values()),
+                });
+            }
+            const MAX_BOUND: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+            if d > MAX_BOUND {
+                return Err(VarParseError::ConstrainedParameter {
+                    invalid_values: input.to_vec(),
+                    valid_values: Some(IsolationLevel::valid_values()),
+                });
+            }
+            return Ok(Self::BoundedStaleness(d));
+        }
+
+        Err(VarParseError::ConstrainedParameter {
+            invalid_values: input.to_vec(),
+            valid_values: Some(IsolationLevel::valid_values()),
+        })
     }
 
     fn box_clone(&self) -> Box<dyn Value> {
@@ -1277,5 +1319,47 @@ mod tests {
                 )
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod bounded_staleness_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn parse_iso(s: &str) -> Result<IsolationLevel, VarParseError> {
+        IsolationLevel::parse(VarInput::Flat(s))
+    }
+
+    #[test]
+    fn parses_bounded_staleness() {
+        assert_eq!(
+            parse_iso("bounded staleness 5s").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_secs(5))
+        );
+        assert_eq!(
+            parse_iso("bounded staleness 500ms").unwrap(),
+            IsolationLevel::BoundedStaleness(Duration::from_millis(500))
+        );
+    }
+
+    #[test]
+    fn rejects_zero_duration() {
+        assert!(parse_iso("bounded staleness 0s").is_err());
+        assert!(parse_iso("bounded staleness 0ms").is_err());
+    }
+
+    #[test]
+    fn rejects_unparseable_duration() {
+        assert!(parse_iso("bounded staleness banana").is_err());
+        assert!(parse_iso("bounded staleness").is_err());
+    }
+
+    #[test]
+    fn round_trips_format() {
+        let lvl = IsolationLevel::BoundedStaleness(Duration::from_secs(5));
+        assert_eq!(lvl.format(), "bounded staleness 5s");
+        let parsed = parse_iso(&lvl.format()).unwrap();
+        assert_eq!(parsed, lvl);
     }
 }
