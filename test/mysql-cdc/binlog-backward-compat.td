@@ -27,17 +27,17 @@ SET GLOBAL binlog_row_metadata = MINIMAL;
 DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
-CREATE TABLE foo (name VARCHAR(16), value VARCHAR(32));
-INSERT INTO foo VALUES ('a', 'apple'), ('b', 'banana');
+CREATE TABLE foo (name VARCHAR(16), age INT, value VARCHAR(32));
+INSERT INTO foo VALUES ('a', 1, 'apple'), ('b', 2, 'banana');
 
-> CREATE SOURCE mysql_src FROM MYSQL CONNECTION mysql_conn FOR TABLES (foo);
+> CREATE SOURCE mysql_src FROM MYSQL CONNECTION mysql_conn (EXCLUDE COLUMNS (public.foo.age)) FOR TABLES (public.foo);
 
 > SELECT * FROM foo;
 a apple
 b banana
 
 $ mysql-execute name=mysql
-INSERT INTO foo VALUES ('c', 'cherry');
+INSERT INTO foo VALUES ('c', 3, 'cherry');
 
 > SELECT * FROM foo;
 a apple
@@ -59,13 +59,17 @@ DELETE FROM foo WHERE name = 'b';
 a avocado
 c cherry
 
-> DROP SOURCE mysql_src CASCADE;
-
 $ mysql-execute name=mysql
 SET GLOBAL binlog_row_metadata = FULL;
 USE public;
 CREATE TABLE bar (a INT, b INT, c INT);
 INSERT INTO bar VALUES (1, 2, 3), (4, 5, 6);
+INSERT INTO foo VALUES ('d', 4, 'date');
+
+> SELECT * FROM foo;
+a avocado
+c cherry
+d date
 
 > CREATE SOURCE mysql_src2 FROM MYSQL CONNECTION mysql_conn;
 
@@ -78,30 +82,52 @@ INSERT INTO bar VALUES (1, 2, 3), (4, 5, 6);
 $ mysql-execute name=mysql
 SET GLOBAL binlog_row_metadata = MINIMAL;
 INSERT INTO bar VALUES (7, 8, 9);
+INSERT INTO foo VALUES ('e', 5, 'eggplant');
 
-> SELECT * FROM bar;
-1 3
-4 6
-7 9
+> SELECT * FROM foo;
+a avocado
+c cherry
+d date
+e eggplant
+
+! SELECT * FROM bar;
+contains:binlog_row_metadata has since been set to a different value
 
 $ mysql-execute name=mysql
 UPDATE bar SET c = 30 WHERE a = 1;
 
-> SELECT * FROM bar;
-1 30
-4 6
-7 9
+! SELECT * FROM bar;
+contains:binlog_row_metadata has since been set to a different value
 
 $ mysql-execute name=mysql
 DELETE FROM bar WHERE a = 4;
 
-> SELECT * FROM bar;
-1 30
-7 9
+! SELECT * FROM bar;
+contains:binlog_row_metadata has since been set to a different value
 
-> DROP SOURCE mysql_src2 CASCADE;
-
-
-# Restore to a clean state so other tests are unaffected.
 $ mysql-execute name=mysql
 SET GLOBAL binlog_row_metadata = FULL;
+INSERT INTO bar VALUES (10, 11, 12);
+INSERT INTO foo VALUES ('f', 6, 'fig');
+
+# This should be an unrecoverable error, even though binlog_row_metadata has been restored to FULL
+! SELECT * FROM bar;
+contains:binlog_row_metadata has since been set to a different value
+
+> SELECT * FROM foo;
+a avocado
+c cherry
+d date
+e eggplant
+f fig
+
+$ mysql-execute name=mysql
+ALTER TABLE foo DROP COLUMN age;
+
+# this should fail even with FULL metadata turned on, as the source was created with minimal metadata
+! SELECT * FROM foo;
+contains:incompatible schema change
+
+> DROP SOURCE mysql_src CASCADE;
+
+> DROP SOURCE mysql_src2 CASCADE;
