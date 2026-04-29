@@ -49,7 +49,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.test_result import TestResult
 from materialize.ui import UIError
-from materialize.util import filter_cmd
+from materialize.util import redact_secrets
 
 RECOMMENDED_MIN_MEM = 7 * 1024**3  # 7GiB
 RECOMMENDED_MIN_CPUS = 2
@@ -945,7 +945,7 @@ To see the available workflows, run:
             for obj in test_case.errors + test_case.failures + test_case.skipped:
                 for typ in ("message", "output"):
                     if obj[typ]:
-                        obj[typ] = " ".join(filter_cmd(obj[typ].split(" ")))
+                        obj[typ] = redact_secrets(obj[typ])
         junit_report = ci_util.junit_report_filename("mzcompose")
         with junit_report.open("w") as f:
             junit_xml.to_xml_report_file(f, [junit_suite])
