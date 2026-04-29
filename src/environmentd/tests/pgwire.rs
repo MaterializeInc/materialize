@@ -771,6 +771,11 @@ fn test_pgtest_vars() {
 
 // Materialize's differences from Postgres' responses.
 #[mz_ore::test]
+fn test_pgtest_mz_affected() {
+    pg_test_inner(Path::new("../../test/pgtest-mz/affected.pt"), true);
+}
+
+#[mz_ore::test]
 fn test_pgtest_mz_copy_from_csv() {
     pg_test_inner(Path::new("../../test/pgtest-mz/copy-from-csv.pt"), true);
 }
@@ -828,6 +833,35 @@ fn test_pgtest_mz_transactions() {
 #[mz_ore::test]
 fn test_pgtest_mz_vars() {
     pg_test_inner(Path::new("../../test/pgtest-mz/vars.pt"), true);
+}
+
+// Guard against .pt files silently losing test coverage when new files are
+// added to test/pgtest/ or test/pgtest-mz/ without a corresponding test wrapper.
+#[mz_ore::test]
+fn test_all_pt_files_have_test_wrappers() {
+    let source = include_str!("pgwire.rs");
+    for (dir, prefix) in [
+        ("../../test/pgtest", "test_pgtest_"),
+        ("../../test/pgtest-mz", "test_pgtest_mz_"),
+    ] {
+        let dir_path = Path::new(dir);
+        for entry in
+            std::fs::read_dir(dir_path).unwrap_or_else(|e| panic!("failed to read {dir}: {e}"))
+        {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name();
+            let name = file_name.to_str().unwrap();
+            if !name.ends_with(".pt") {
+                continue;
+            }
+            let stem = name.trim_end_matches(".pt").replace('-', "_");
+            let expected_fn = format!("fn {prefix}{stem}(");
+            assert!(
+                source.contains(&expected_fn),
+                "no test wrapper found for {dir}/{name} — expected `{expected_fn})`",
+            );
+        }
+    }
 }
 
 // Test that encoding a message with too many columns (> i16::MAX) doesn't
