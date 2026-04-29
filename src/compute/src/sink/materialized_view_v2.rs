@@ -207,6 +207,16 @@ mod mint {
             //  (a) It starts at the shard's read frontier, not its write frontier.
             //  (b) It can lag behind if there are spikes in ingested data.
             //
+            // The decoupling from the `persist` stream is load-bearing: that stream can fall
+            // arbitrarily behind the shard upper during snapshot replay or write spikes. Using
+            // it would delay both (1) the controller-visible sink frontier (`shared_frontier`),
+            // which previously caused a CrossJoin feature-bench regression where the controller
+            // held a finished MV dataflow open waiting for the empty frontier, and (2) the
+            // `state.persist_frontier` that gates batch-description minting, stalling mint until
+            // the read-back stream catches up. The goal isn't tick-granular descriptions per
+            // se — it's avoiding the stream-induced stall. See 5eab5ff896 for the original
+            // regression and rationale.
+            //
             // The task sends the empty frontier as its final message before exiting. The
             // operator drops `persist_rx` once it receives the empty frontier.
             let (persist_tx, persist_rx) = mpsc::unbounded_channel();
@@ -405,30 +415,41 @@ mod mint {
 
         /// Drain persist frontier updates from the Tokio task.
         ///
+        /// Frontiers from the `persist_watch` task are monotonically increasing, so only the
+        /// most recent one matters. We drain all queued messages and apply just the latest,
+        /// avoiding redundant `advance_persist_frontier`/`trace!` calls when several updates
+        /// arrived between activations.
+        ///
         /// The task sends the empty frontier as its final message before exiting. Once
         /// received, we drop the receiver.
         fn drain_persist_rx(&mut self, shared_frontier: &RefCell<Antichain<Timestamp>>) {
             let Some(mut rx) = self.persist_rx.take() else {
                 return;
             };
+            let mut latest: Option<Antichain<Timestamp>> = None;
+            let mut closed = false;
             loop {
                 match rx.try_recv() {
                     Ok(frontier) => {
-                        shared_frontier.borrow_mut().clone_from(&frontier);
                         let done = frontier.is_empty();
-                        self.advance_persist_frontier(frontier.borrow());
+                        latest = Some(frontier);
                         if done {
-                            return;
+                            closed = true;
+                            break;
                         }
                     }
-                    Err(mpsc::error::TryRecvError::Empty) => {
-                        self.persist_rx = Some(rx);
-                        return;
-                    }
+                    Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => {
                         panic!("mint persist_watch task unexpectedly gone");
                     }
                 }
+            }
+            if let Some(frontier) = latest {
+                shared_frontier.borrow_mut().clone_from(&frontier);
+                self.advance_persist_frontier(frontier.borrow());
+            }
+            if !closed {
+                self.persist_rx = Some(rx);
             }
         }
 

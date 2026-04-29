@@ -565,6 +565,16 @@ mod mint {
             // the `persist` stream, because the latter has two annoying glitches:
             //  (a) It starts at the shard's read frontier, not its write frontier.
             //  (b) It can lag behind if there are spikes in ingested data.
+            //
+            // The decoupling from the `persist` stream is load-bearing: that stream can fall
+            // arbitrarily behind the shard upper during snapshot replay or write spikes. Using it
+            // would delay both (1) the controller-visible sink frontier (`shared_frontier`),
+            // which previously caused a CrossJoin feature-bench regression where the controller
+            // held a finished MV dataflow open waiting for the empty frontier, and (2) the
+            // `state.persist_frontier` that gates batch-description minting, stalling mint until
+            // the read-back stream catches up. The goal isn't tick-granular descriptions per
+            // se — it's avoiding the stream-induced stall. See 5eab5ff896 for the original
+            // regression and rationale.
             let mut persist_frontiers = pin!(async_stream::stream! {
                 let mut writer = persist_api.open_writer().await;
                 let mut frontier = Antichain::from_elem(Timestamp::MIN);
