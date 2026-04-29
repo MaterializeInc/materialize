@@ -24,6 +24,7 @@ SELECT id, name, inherit FROM mz_roles WHERE id LIKE 's%' OR id LIKE 'g%'
 s1  mz_system  true
 s2  mz_support  true
 s3  mz_analytics  true
+s4  mz_jwt_sync  true
 g1  mz_monitor  true
 g2  mz_monitor_redacted  true
 
@@ -90,6 +91,7 @@ SELECT name, inherit FROM mz_roles
 ----
 materialize  true
 mz_analytics  true
+mz_jwt_sync  true
 mz_monitor  true
 mz_monitor_redacted  true
 mz_support  true
@@ -106,6 +108,7 @@ SELECT name FROM mz_roles
 ----
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -121,6 +124,7 @@ SELECT name FROM mz_roles
 ----
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -135,6 +139,7 @@ SELECT name FROM mz_roles
 ----
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor
 mz_monitor_redacted
 mz_support
@@ -152,6 +157,7 @@ mz_monitor
 mz_support
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor_redacted
 
 statement ok

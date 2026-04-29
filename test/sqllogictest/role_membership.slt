@@ -918,8 +918,9 @@ mz_monitor
 mz_support
 materialize
 mz_analytics
+mz_jwt_sync
 mz_monitor_redacted
-COMPLETE 10
+COMPLETE 11
 
 statement ok
 DROP ROLE r1, r2, r3, r4

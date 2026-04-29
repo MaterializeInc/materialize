@@ -1803,6 +1803,9 @@ class FlipFlagsAction(Action):
             "oidc_issuer",
             "oidc_audience",
             "oidc_authentication_claim",
+            "oidc_group_role_sync_enabled",
+            "oidc_group_claim",
+            "oidc_group_role_sync_strict",
             "console_oidc_client_id",
             "console_oidc_scopes",
         ]

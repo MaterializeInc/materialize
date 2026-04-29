@@ -139,6 +139,29 @@ pub const OIDC_AUTHENTICATION_CLAIM: Config<&'static str> = Config::new(
     "OIDC authentication claim to use as username.",
 );
 
+/// Whether OIDC group-to-role sync is enabled.
+/// When true, JWT group claims are used to sync role memberships on login.
+pub const OIDC_GROUP_ROLE_SYNC_ENABLED: Config<bool> = Config::new(
+    "oidc_group_role_sync_enabled",
+    false,
+    "Enable OIDC JWT group-to-role membership sync on login.",
+);
+
+/// The JWT claim name that contains group memberships.
+pub const OIDC_GROUP_CLAIM: Config<&'static str> = Config::new(
+    "oidc_group_claim",
+    "groups",
+    "JWT claim name containing group memberships for role sync.",
+);
+
+/// Whether to reject login when group sync fails (strict/fail-closed mode).
+/// When false (default), sync failures are logged but login proceeds (fail-open).
+pub const OIDC_GROUP_ROLE_SYNC_STRICT: Config<bool> = Config::new(
+    "oidc_group_role_sync_strict",
+    false,
+    "When true, reject login if OIDC group-to-role sync fails (fail-closed).",
+);
+
 pub const PERSIST_FAST_PATH_ORDER: Config<bool> = Config::new(
     "persist_fast_path_order",
     false,
@@ -228,6 +251,9 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&OIDC_ISSUER)
         .add(&OIDC_AUDIENCE)
         .add(&OIDC_AUTHENTICATION_CLAIM)
+        .add(&OIDC_GROUP_ROLE_SYNC_ENABLED)
+        .add(&OIDC_GROUP_CLAIM)
+        .add(&OIDC_GROUP_ROLE_SYNC_STRICT)
         .add(&PERSIST_FAST_PATH_ORDER)
         .add(&ENABLE_S3_TABLES_REGION_CHECK)
         .add(&ENABLE_MCP_AGENT)
