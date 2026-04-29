@@ -1955,6 +1955,31 @@ impl Coordinator {
                         session.add_notice(AdapterNotice::StrongSessionSerializable);
                     }
                 }
+
+                // Reject incompatible combinations of bounded staleness and
+                // real_time_recency after the variable has been applied.
+                if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
+                    && matches!(
+                        session.vars().transaction_isolation(),
+                        IsolationLevel::BoundedStaleness(_)
+                    )
+                    && session.vars().real_time_recency()
+                {
+                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                        "real_time_recency cannot be combined with bounded staleness isolation"
+                    )));
+                }
+                if name.as_str() == vars::REAL_TIME_RECENCY.name()
+                    && session.vars().real_time_recency()
+                    && matches!(
+                        session.vars().transaction_isolation(),
+                        IsolationLevel::BoundedStaleness(_)
+                    )
+                {
+                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                        "real_time_recency cannot be combined with bounded staleness isolation"
+                    )));
+                }
             }
             None => vars.reset(self.catalog().system_config(), &name, local)?,
         }
@@ -2521,6 +2546,15 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::ReadOnlyTransaction));
             return;
         }
+        if matches!(
+            ctx.session().vars().transaction_isolation(),
+            IsolationLevel::BoundedStaleness(_)
+        ) {
+            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "writes are not permitted under bounded staleness isolation"
+            ))));
+            return;
+        }
 
         // The structure of this code originates from a time where
         // `ReadThenWritePlan` was carrying an `MirRelationExpr` instead of an
@@ -2617,6 +2651,16 @@ impl Coordinator {
         mut ctx: ExecuteContext,
         plan: plan::ReadThenWritePlan,
     ) {
+        if matches!(
+            ctx.session().vars().transaction_isolation(),
+            IsolationLevel::BoundedStaleness(_)
+        ) {
+            ctx.retire(Err(AdapterError::Unstructured(anyhow::anyhow!(
+                "writes are not permitted under bounded staleness isolation"
+            ))));
+            return;
+        }
+
         let mut source_ids: BTreeSet<_> = plan
             .selection
             .depends_on()
