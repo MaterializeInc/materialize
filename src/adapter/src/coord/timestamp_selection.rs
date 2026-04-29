@@ -18,6 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::cast::CastLossy;
+use mz_ore::now::EpochMillis;
 use mz_repr::{GlobalId, Timestamp, TimestampManipulation};
 use mz_sql::plan::QueryWhen;
 use mz_sql::session::vars::IsolationLevel;
@@ -237,6 +238,9 @@ pub trait TimestampProvider {
                     isolation_level,
                     IsolationLevel::StrictSerializable | IsolationLevel::StrongSessionSerializable
                 ))
+        // BoundedStaleness intentionally NOT in this list: bounded staleness derives its
+        // freshness floor from wall clock, not from oracle.read_ts, and never blocks on
+        // the oracle.
     }
 
     /// Uses constraints and preferences to determine a timestamp for a query.
@@ -252,6 +256,7 @@ pub trait TimestampProvider {
         isolation_level: &IsolationLevel,
         timeline: &Option<Timeline>,
         largest_not_in_advance_of_upper: Timestamp,
+        now: EpochMillis,
     ) -> Result<RawTimestampDetermination, AdapterError> {
         use constraints::{Constraints, Preference, Reason};
 
@@ -331,6 +336,18 @@ pub trait TimestampProvider {
                 constraints.lower.push((
                     Antichain::from_elem(real_time_recency_ts),
                     Reason::RealTimeRecency,
+                ));
+            }
+
+            // For BoundedStaleness, add a wall-clock-derived lower bound: the chosen
+            // timestamp must not be older than `now - D`. This never blocks on the oracle.
+            if let IsolationLevel::BoundedStaleness(d) = isolation_level {
+                let now_ms = Timestamp::from(now);
+                let bound_ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+                let lower = now_ms.saturating_sub(bound_ms);
+                constraints.lower.push((
+                    Antichain::from_elem(lower),
+                    Reason::IsolationLevel(*isolation_level),
                 ));
             }
 
@@ -443,6 +460,7 @@ pub trait TimestampProvider {
         oracle_read_ts: Option<Timestamp>,
         real_time_recency_ts: Option<Timestamp>,
         isolation_level: &IsolationLevel,
+        now: EpochMillis,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         // First, we acquire read holds that will ensure the queried collections
         // stay queryable at the chosen timestamp.
@@ -460,6 +478,7 @@ pub trait TimestampProvider {
             isolation_level,
             read_holds,
             upper,
+            now,
         )
     }
 
@@ -474,6 +493,7 @@ pub trait TimestampProvider {
         isolation_level: &IsolationLevel,
         read_holds: ReadHolds,
         upper: Antichain<Timestamp>,
+        now: EpochMillis,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let timeline = Self::get_timeline(timeline_context);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
@@ -510,6 +530,7 @@ pub trait TimestampProvider {
             isolation_level,
             &timeline,
             largest_not_in_advance_of_upper,
+            now,
         )?;
 
         let timestamp_context = TimestampContext::from_timeline_context(
@@ -609,6 +630,7 @@ impl Coordinator {
         real_time_recency_ts: Option<mz_repr::Timestamp>,
     ) -> Result<(TimestampDetermination, ReadHolds), AdapterError> {
         let isolation_level = session.vars().transaction_isolation();
+        let now = self.now();
         let (det, read_holds) = self.determine_timestamp_for(
             session,
             id_bundle,
@@ -617,6 +639,7 @@ impl Coordinator {
             oracle_read_ts,
             real_time_recency_ts,
             isolation_level,
+            now,
         )?;
         self.metrics
             .determine_timestamp
@@ -643,6 +666,7 @@ impl Coordinator {
                     oracle_read_ts,
                     real_time_recency_ts,
                     &IsolationLevel::Serializable,
+                    now,
                 )?;
 
                 if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
@@ -651,6 +675,32 @@ impl Coordinator {
                         .with_label_values(&[compute_instance.to_string().as_str()])
                         .observe(f64::cast_lossy(u64::from(
                             strict.saturating_sub(*serializable),
+                        )));
+                }
+            }
+        }
+        if !det.respond_immediately()
+            && matches!(isolation_level, IsolationLevel::BoundedStaleness(_))
+            && real_time_recency_ts.is_none()
+        {
+            // Note down the difference between BoundedStaleness and Serializable into a metric.
+            if let Some(bs_ts) = det.timestamp_context.timestamp() {
+                let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
+                    session,
+                    id_bundle,
+                    when,
+                    timeline_context,
+                    oracle_read_ts,
+                    real_time_recency_ts,
+                    &IsolationLevel::Serializable,
+                    now,
+                )?;
+                if let Some(serializable) = serializable_det.timestamp_context.timestamp() {
+                    self.metrics
+                        .timestamp_difference_for_bounded_staleness_ms
+                        .with_label_values(&[compute_instance.to_string().as_str()])
+                        .observe(f64::cast_lossy(u64::from(
+                            serializable.saturating_sub(*bs_ts),
                         )));
                 }
             }
