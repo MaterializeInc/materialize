@@ -1348,7 +1348,11 @@ impl RecordFirstRowStream {
             .inner()
             .metrics()
             .time_to_first_row_seconds
-            .with_label_values(&[instance.as_ref(), isolation_level.as_str(), strategy])
+            .with_label_values(&[
+                instance.as_ref(),
+                isolation_level.as_str().as_ref(),
+                strategy,
+            ])
     }
 
     /// If you want to match [`RecordFirstRowStream`]'s logic but don't need
