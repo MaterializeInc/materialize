@@ -366,7 +366,14 @@ pub struct Transaction<'a> {
 
 impl<'a> Transaction<'a> {
     async fn new(client: &'a mut Client) -> Result<Self, SqlServerError> {
-        let results = client
+        // Construct the guard *before* awaiting BEGIN to avoid a potential race where
+        // transaction is started on remote, but the transaction is cancelled before returning.
+        let tx = Transaction {
+            client,
+            closed: false,
+        };
+        let results = tx
+            .client
             .simple_query("BEGIN TRANSACTION")
             .await
             .context("begin")?;
@@ -375,10 +382,7 @@ impl<'a> Transaction<'a> {
                 "expected empty result from BEGIN TRANSACTION. Got: {results:?}"
             )))
         } else {
-            Ok(Transaction {
-                client,
-                closed: false,
-            })
+            Ok(tx)
         }
     }
 
