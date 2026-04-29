@@ -96,6 +96,23 @@ Before modifying timestamp selection or oracle interaction, verify:
    `read_ts` calls (including the fast path, if any) return `>= t`? This must
    hold across nodes, not just within the local process.
 
+### Bounded staleness depends on a wall-clock-capped timeline
+
+The `BoundedStaleness(D)` isolation level picks `T >= now_ms - D` as the
+freshness lower bound, where `now_ms` is the `EpochMilliseconds` `NowFn`.
+The user-visible contract `oracle_read_ts(now) - T <= D` holds *only because*
+`oracle_read_ts(now) <= now_ms` for every query in the `EpochMilliseconds`
+timeline.
+
+If we ever introduce a timeline whose timestamps are not bounded above by
+wall-clock time --- for example a logical-clock timeline detached from real
+time --- the bounded-staleness math no longer holds. In that case bounded
+staleness must be either redesigned or rejected at planning time for queries
+that touch such a timeline.
+
+The current implementation rejects bounded-staleness queries whose timeline
+is not `EpochMilliseconds`, in `determine_timestamp_for_inner`.
+
 ## Rejected Optimizations
 
 This section records specific optimizations that have been attempted and found
