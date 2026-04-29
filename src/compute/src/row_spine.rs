@@ -1177,6 +1177,10 @@ mod dictionary {
 
         #[inline]
         pub fn to_row(&self) -> Row {
+            // Fast path: unencoded data is already row-formatted bytes.
+            if self.iter.index.is_none() {
+                return unsafe { Row::from_bytes_unchecked(self.iter.data) };
+            }
             Row::pack(*self)
         }
     }
@@ -1261,6 +1265,15 @@ mod dictionary {
         type Item = Datum<'a>;
         #[inline(always)]
         fn next(&mut self) -> Option<Self::Item> {
+            // Fast path: no codec means raw row-encoded bytes. Parse directly off the
+            // cursor with a single `read_datum`, skipping the `ColumnsIter::next`
+            // round-trip that would size a slice and re-parse it.
+            if self.iter.index.is_none() {
+                if self.iter.data.is_empty() {
+                    return None;
+                }
+                return Some(unsafe { read_datum(&mut self.iter.data) });
+            }
             self.iter
                 .next()
                 .map(|mut bytes| unsafe { read_datum(&mut bytes) })
@@ -1426,6 +1439,7 @@ mod row_codec {
 
         impl<'a> Iterator for ColumnsIter<'a> {
             type Item = &'a [u8];
+            #[inline(always)]
             fn next(&mut self) -> Option<Self::Item> {
                 if self.data.is_empty() {
                     None
