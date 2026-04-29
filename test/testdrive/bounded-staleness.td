@@ -21,19 +21,36 @@
 
 # --- error path: bounded staleness exceeded -----------------------------------
 #
-# Under a tiny bound, freshly-created collections may not have advanced their
-# upper frontier within the staleness window, exercising the
-# BoundedStalenessExceeded error path. The test depends on the timing of
-# frontier advancement; if it becomes flaky in CI, replace with a deterministic
-# stall primitive when one is available.
+# Build an MV on a dedicated cluster, then drop the cluster's replication factor
+# to 0 so the MV's upper frontier stops advancing. After waiting past the
+# staleness bound, a SELECT under bounded staleness must error.
 
-> CREATE TABLE bs_slow (a int);
+> CREATE CLUSTER bs_cluster SIZE '1'
 
-> SET transaction_isolation = 'bounded staleness 1ms'
+> CREATE TABLE bs_t (a int)
 
-! SELECT count(*) FROM bs_slow
+> INSERT INTO bs_t VALUES (1), (2), (3)
+
+> CREATE MATERIALIZED VIEW bs_mv IN CLUSTER bs_cluster AS
+  SELECT count(*) FROM bs_t
+
+> SELECT * FROM bs_mv
+3
+
+> ALTER CLUSTER bs_cluster SET (REPLICATION FACTOR 0)
+
+> SELECT mz_unsafe.mz_sleep(2)
+<null>
+
+> SET transaction_isolation = 'bounded staleness 500ms'
+
+! SELECT * FROM bs_mv
 contains: cannot serve query under bounded staleness
 
 > RESET transaction_isolation
 
-> DROP TABLE bs_slow
+> DROP MATERIALIZED VIEW bs_mv
+
+> DROP TABLE bs_t
+
+> DROP CLUSTER bs_cluster
