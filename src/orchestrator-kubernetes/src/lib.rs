@@ -784,9 +784,21 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 };
 
+                if config.soft && config.min_domains.is_some() {
+                    warn!(
+                        "topology spread is soft but min_domains is set; \
+                         Kubernetes rejects minDomains with ScheduleAnyway, \
+                         so min_domains will be ignored"
+                    );
+                }
+
                 let constraint = TopologySpreadConstraint {
                     label_selector: Some(ls),
-                    min_domains: config.min_domains,
+                    min_domains: if config.soft {
+                        None
+                    } else {
+                        config.min_domains
+                    },
                     max_skew: config.max_skew,
                     topology_key: "topology.kubernetes.io/zone".to_string(),
                     when_unsatisfiable: if config.soft {
