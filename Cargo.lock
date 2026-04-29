@@ -1876,12 +1876,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cidr"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "579504560394e388085d0c080ea587dfa5c15f7e251b4d5247d1e1a61d1d6928"
-
-[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2162,9 +2156,9 @@ dependencies = [
 
 [[package]]
 name = "core-foundation"
-version = "0.9.4"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91e195e091a93c46f7102ec7818a2aa394e1e1771c3ab4825963fa03e45afb8f"
+checksum = "194a7a9e6de53fa55116934067c844d9d749312f75c6f6d0980e8c252f8c2146"
 dependencies = [
  "core-foundation-sys",
  "libc",
@@ -3266,15 +3260,14 @@ dependencies = [
 
 [[package]]
 name = "eventsource-client"
-version = "0.17.1"
+version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f08d78ef3c0bd7cef8f9fdf7822eceb44fe2300689906b9984c577f549bc80dd"
+checksum = "c26451361cde19fe2322835b6e684f4825902edf3139ce9d6a70e6542566a0b2"
 dependencies = [
  "base64 0.22.1",
- "bytes",
  "futures",
- "http 1.4.0",
- "launchdarkly-sdk-transport",
+ "hyper 0.14.32",
+ "hyper-timeout 0.4.1",
  "log",
  "pin-project",
  "rand 0.8.5",
@@ -4153,26 +4146,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hyper-http-proxy"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ad4b0a1e37510028bc4ba81d0e38d239c39671b0f0ce9e02dfa93a8133f7c08"
-dependencies = [
- "bytes",
- "futures-util",
- "headers",
- "http 1.4.0",
- "hyper 1.9.0",
- "hyper-tls 0.6.0",
- "hyper-util",
- "native-tls",
- "pin-project-lite",
- "tokio",
- "tokio-native-tls",
- "tower-service",
-]
-
-[[package]]
 name = "hyper-openssl"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4206,6 +4179,18 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+]
+
+[[package]]
+name = "hyper-timeout"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb958482e8c7be4bc3cf272a766a2b0bf1a6755e7a6ae777f017a31d11b13b1"
+dependencies = [
+ "hyper 0.14.32",
+ "pin-project-lite",
+ "tokio",
+ "tokio-io-timeout",
 ]
 
 [[package]]
@@ -4816,7 +4801,7 @@ dependencies = [
  "http-body-util",
  "hyper 1.9.0",
  "hyper-openssl",
- "hyper-timeout",
+ "hyper-timeout 0.5.1",
  "hyper-util",
  "jiff",
  "jsonpath-rust",
@@ -4898,46 +4883,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "launchdarkly-sdk-transport"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fe83622d04dfcaaeac0b5e3aaa1cc156eb1e70c8b68dfcaffaee4365faa00d3"
-dependencies = [
- "bytes",
- "futures",
- "http 1.4.0",
- "http-body-util",
- "hyper 1.9.0",
- "hyper-http-proxy",
- "hyper-timeout",
- "hyper-tls 0.6.0",
- "hyper-util",
- "log",
- "native-tls",
- "no-proxy",
- "tower 0.4.13",
-]
-
-[[package]]
 name = "launchdarkly-server-sdk"
-version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc7d03f7f2557dfebc24147d90b2080313fd5a60a4de5219dce1b574956f1c4e"
+version = "2.6.2"
+source = "git+https://github.com/MaterializeInc/rust-server-sdk?rev=3e0a0b98b09a2970f292577a07e1c9382b65b5da#3e0a0b98b09a2970f292577a07e1c9382b65b5da"
 dependencies = [
- "bitflags 2.11.0",
- "bytes",
+ "aws-lc-rs",
  "chrono",
  "crossbeam-channel",
  "data-encoding",
  "eventsource-client",
  "futures",
- "http 1.4.0",
- "launchdarkly-sdk-transport",
+ "hyper 0.14.32",
  "launchdarkly-server-sdk-evaluation",
+ "lazy_static",
  "log",
  "lru",
  "moka",
- "openssl",
  "parking_lot",
  "rand 0.9.4",
  "serde",
@@ -4950,9 +4911,9 @@ dependencies = [
 
 [[package]]
 name = "launchdarkly-server-sdk-evaluation"
-version = "2.1.2"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70166742950e523236f98dad92ad55f6b2f713d84124d6a360329bfd6c44fbd4"
+checksum = "63706c23ee67f699563e5c52c7542361eccc966cba0430b6a7862c0ecaee9432"
 dependencies = [
  "base16ct",
  "chrono",
@@ -5542,10 +5503,10 @@ dependencies = [
  "governor",
  "hex",
  "http 1.4.0",
+ "hyper-tls 0.5.0",
  "imbl",
  "ipnet",
  "itertools 0.14.0",
- "launchdarkly-sdk-transport",
  "launchdarkly-server-sdk",
  "maplit",
  "mz-adapter-types",
@@ -6339,7 +6300,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "humantime",
- "launchdarkly-sdk-transport",
+ "hyper-tls 0.5.0",
  "launchdarkly-server-sdk",
  "mz-build-info",
  "mz-dyncfg",
@@ -8555,9 +8516,9 @@ dependencies = [
 
 [[package]]
 name = "native-tls"
-version = "0.2.15"
+version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cdede44f9a69cab2899a2049e2c3bd49bf911a157f6a3353d4a91c61abbce44"
+checksum = "87de3442987e9dbec73158d5c715e7ad9072fda936bb03d19d7fa10e00520f0e"
 dependencies = [
  "libc",
  "log",
@@ -8591,15 +8552,6 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
-]
-
-[[package]]
-name = "no-proxy"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f79c902b31ceac6856e262af5dbaffef75390cf4647c9fef7b55da69a4b912e"
-dependencies = [
- "cidr",
 ]
 
 [[package]]
@@ -10975,11 +10927,11 @@ dependencies = [
 
 [[package]]
 name = "security-framework"
-version = "2.11.1"
+version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "897b2245f0b511c87893af39b033e5ca9cce68824c4d7e7630b5a1d339658d02"
+checksum = "770452e37cad93e0a50d5abc3990d2bc351c36d0328f86cefec2f2fb206eaef6"
 dependencies = [
- "bitflags 2.11.0",
+ "bitflags 1.3.2",
  "core-foundation",
  "core-foundation-sys",
  "libc",
@@ -12152,6 +12104,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-io-timeout"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90c49f106be240de154571dd31fbe48acb10ba6c6dd6f6517ad603abffa42de9"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-io-utility"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12358,7 +12320,7 @@ dependencies = [
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.9.0",
- "hyper-timeout",
+ "hyper-timeout 0.5.1",
  "hyper-util",
  "percent-encoding",
  "pin-project",
@@ -12423,7 +12385,6 @@ dependencies = [
  "pin-project-lite",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
