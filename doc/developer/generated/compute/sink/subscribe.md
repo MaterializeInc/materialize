@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/subscribe.rs
-revision: bf9d3f5f53
+revision: 9d0a7c3c6f
 ---
 
 # mz-compute::sink::subscribe

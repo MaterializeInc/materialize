@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/lib.rs
-revision: 48175dc930
+revision: 721951ce66
 ---
 
 # mz-sql
@@ -20,6 +20,8 @@ Module structure:
 * `session` — session/system variable infrastructure, user/role definitions, session metadata trait
 * `kafka_util`, `iceberg` — connector-specific `WITH`-option extraction
 * `optimizer_metrics` — Prometheus metrics for optimization latency
+
+The crate-level `lib.rs` defines shared error-construction macros: `sql_bail!`/`sql_err!` (user-facing errors), `bail_unsupported!`/`bail_never_supported!` (feature guards), and `bail_internal!`/`internal_err!` (internal invariant violations that produce `PlanError::Internal`).
 
 Key dependencies: `mz-expr`, `mz-repr`, `mz-sql-parser`, `mz-catalog` (via the `SessionCatalog` trait), `mz-storage-types`, `mz-adapter-types`.
 Primary downstream consumer: `mz-adapter`.

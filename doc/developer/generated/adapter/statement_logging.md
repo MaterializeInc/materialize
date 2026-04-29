@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/statement_logging.rs
-revision: 07e0546b22
+revision: 9d0a7c3c6f
 ---
 
 # adapter::statement_logging

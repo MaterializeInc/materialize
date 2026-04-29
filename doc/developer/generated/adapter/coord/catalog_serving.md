@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/catalog_serving.rs
-revision: 67adf54488
+revision: 9d0a7c3c6f
 ---
 
 # adapter::coord::catalog_serving

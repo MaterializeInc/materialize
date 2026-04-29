@@ -1,6 +1,6 @@
 ---
 source: src/storage/src/sink/iceberg.rs
-revision: 613d974f9c
+revision: 2f22224ae6
 ---
 
 # mz-storage::sink::iceberg
@@ -14,4 +14,4 @@ Data file writing is envelope-specific, dispatched through the `EnvelopeHandler`
 Both handlers use a `WriterContext` (shared Arrow schema with Materialize extension metadata merged into Iceberg field IDs, `FileIO`, location/file-name generators, and `WriterProperties`) constructed once per operator startup.
 The commit operator groups files by batch and updates the Iceberg table metadata, including an `mz-frontier` property to track progress.
 Includes helpers for adding Parquet field IDs to Arrow schemas required by Iceberg for schema evolution (`add_field_ids_to_arrow_schema`) and for merging Materialize extension metadata into Iceberg-derived Arrow schemas (`merge_materialize_metadata_into_iceberg_schema`).
-Interval columns are stored as `LargeUtf8` (string) in Iceberg since the format has no native interval type; range columns are represented as Iceberg structs mirroring the five-field Arrow representation.
+Type override logic for unsigned integers and intervals is provided by `mz_storage_types::sinks::iceberg_type_overrides` (moved there for shared use); range columns are represented as Iceberg structs mirroring the five-field Arrow representation.
