@@ -635,13 +635,12 @@ impl Coordinator {
                     let cluster = self.catalog().get_cluster(cluster_id);
                     let cluster_name = cluster.name.clone();
                     let cluster_role = cluster.role();
-                    let replica_name = format!("{}.{}", cluster_name, replica.name);
                     self.handle_create_cluster_replica(
                         cluster_id,
                         replica_id,
                         cluster_role,
                         cluster_name,
-                        replica_name,
+                        replica.name.clone(),
                         replica.config.clone(),
                     )
                     .await;

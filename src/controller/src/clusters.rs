@@ -811,7 +811,10 @@ impl Controller {
                     ),
                 ]),
                 annotations: BTreeMap::from([
-                    ("replica-name".into(), replica_name),
+                    (
+                        "replica-name".into(),
+                        format!("{cluster_name}.{replica_name}"),
+                    ),
                     ("cluster-name".into(), cluster_name),
                 ]),
                 availability_zones: match location.availability_zones {
