@@ -54,7 +54,7 @@ pub fn plan_set_variable(
     if let VariableValue::Values(values) = &value {
         if let Some(value) = values.first() {
             if name.as_str() == TRANSACTION_ISOLATION_VAR_NAME
-                && value == IsolationLevel::StrongSessionSerializable.as_str()
+                && *value == IsolationLevel::StrongSessionSerializable.as_str()
             {
                 scx.require_feature_flag(&vars::ENABLE_SESSION_TIMELINES)?;
             }
