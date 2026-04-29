@@ -1350,7 +1350,7 @@ impl RecordFirstRowStream {
             .time_to_first_row_seconds
             .with_label_values(&[
                 instance.as_ref(),
-                isolation_level.as_str().as_ref(),
+                isolation_level.as_variant_str(),
                 strategy,
             ])
     }
