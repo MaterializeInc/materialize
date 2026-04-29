@@ -1302,6 +1302,8 @@ pub struct RecordFirstRowStream {
     pub recorded_first_row_instant: Option<Instant>,
     /// Whether we have already observed the end of the underlying stream.
     pub no_more_rows: bool,
+    /// Whether the first-to-last-byte metric has already been recorded for this stream.
+    pub metric_recorded: bool,
 }
 
 impl RecordFirstRowStream {
@@ -1321,6 +1323,7 @@ impl RecordFirstRowStream {
             saw_rows: false,
             recorded_first_row_instant: None,
             no_more_rows: false,
+            metric_recorded: false,
         }
     }
 
