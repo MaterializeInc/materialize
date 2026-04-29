@@ -16,7 +16,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use mz_ore::assert_none;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlScalarType};
 use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
@@ -329,7 +328,7 @@ pub fn show_schemas<'a>(
             None => sql_bail!("no database specified and no active database"),
         },
         Some(ResolvedDatabaseName::Error) => {
-            unreachable!("should have been handled in name resolution")
+            bail_internal!("unresolved database name")
         }
     };
     let query = format!(
@@ -362,6 +361,16 @@ pub fn show_network_policies<'a>(
     )
 }
 
+/// Ensures that the `FROM` clause was not provided for `SHOW` commands that
+/// don't accept it. The parser is supposed to reject such cases, so this is an
+/// internal-only invariant.
+fn ensure_no_from<T>(from: Option<T>) -> Result<(), PlanError> {
+    if from.is_some() {
+        bail_internal!("FROM not supported for this SHOW command");
+    }
+    Ok(())
+}
+
 pub fn show_objects<'a>(
     scx: &'a StatementContext<'a>,
     ShowObjectsStatement {
@@ -379,15 +388,15 @@ pub fn show_objects<'a>(
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_roles(scx, filter)
         }
         ShowObjectType::Cluster => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_clusters(scx, filter)
         }
         ShowObjectType::ClusterReplica => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_cluster_replicas(scx, filter)
         }
         ShowObjectType::Secret => show_secrets(scx, from, filter),
@@ -400,27 +409,27 @@ pub fn show_objects<'a>(
             on_object,
         } => show_indexes(scx, from, on_object, in_cluster, filter),
         ShowObjectType::Database => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_databases(scx, filter)
         }
         ShowObjectType::Schema { from: db_from } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_schemas(scx, db_from, filter)
         }
         ShowObjectType::Privileges { object_type, role } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::DefaultPrivileges { object_type, role } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_default_privileges(scx, object_type, role, filter)
         }
         ShowObjectType::RoleMembership { role } => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_role_membership(scx, role, filter)
         }
         ShowObjectType::NetworkPolicy => {
-            assert_none!(from, "parser should reject from");
+            ensure_no_from(from)?;
             show_network_policies(scx, filter)
         }
     }
@@ -970,10 +979,11 @@ impl<'a> ShowSelect<'a> {
         scx: &'a StatementContext,
         query: String,
     ) -> Result<(ShowSelect<'a>, ResolvedIds), PlanError> {
-        let stmts = parse::parse(&query).expect("ShowSelect::new called with invalid SQL");
+        let stmts = parse::parse(&query)
+            .map_err(|e| internal_err!("failed to parse generated SHOW query: {}", e))?;
         let stmt = match stmts.into_element().ast {
             Statement::Select(select) => select,
-            _ => panic!("ShowSelect::new called with non-SELECT statement"),
+            _ => bail_internal!("generated SHOW query was not a SELECT statement"),
         };
         let (mut stmt, new_resolved_ids) = names::resolve(scx.catalog, stmt)?;
         transform_ast::transform(scx, &mut stmt)?;

@@ -306,6 +306,7 @@ pub enum PlanError {
     UntilReadyTimeoutRequired,
     SubsourceResolutionError(ExternalReferenceResolutionError),
     Replan(String),
+    Internal(String),
     NetworkPolicyLockoutError,
     NetworkPolicyInUse,
     /// Expected a constant expression that evaluates without an error to a non-null value.
@@ -868,6 +869,7 @@ impl fmt::Display for PlanError {
             },
             Self::SubsourceResolutionError(e) => write!(f, "{}", e),
             Self::Replan(msg) => write!(f, "internal error while replanning, please contact support: {msg}"),
+            Self::Internal(msg) => write!(f, "internal error: {msg}"),
             Self::NetworkPolicyLockoutError => write!(f, "policy would block current session IP"),
             Self::NetworkPolicyInUse => write!(f, "network policy is currently in use"),
             Self::UntilReadyTimeoutRequired => {
