@@ -1073,7 +1073,7 @@ impl Typecheck {
                             let diffs = scalar_subtype_difference(
                                 &t_expr.scalar_type,
                                 &t_first.scalar_type,
-                            );
+                            ).into_iter().filter_map(|d| d.ignore_nullability()).collect_vec();
                             if !diffs.is_empty() {
                                 return Err(TypeError::MismatchColumn {
                                     source: expr,
