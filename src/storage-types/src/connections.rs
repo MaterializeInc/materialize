@@ -2433,10 +2433,13 @@ impl SqlServerConnectionDetails<InlinedConnection> {
 
         // Prevent users from probing our internal network ports by trying to
         // connect to localhost, or another non-external IP.
-        let enfoce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
+        let enforce_external_addresses = ENFORCE_EXTERNAL_ADDRESSES.get(dyncfg);
 
         let tunnel = match &self.tunnel {
-            Tunnel::Direct => mz_sql_server_util::config::TunnelConfig::Direct,
+            Tunnel::Direct => {
+                resolve_address(&self.host, enforce_external_addresses).await?;
+                mz_sql_server_util::config::TunnelConfig::Direct
+            }
             Tunnel::Ssh(SshTunnel {
                 connection_id,
                 connection: ssh_connection,
@@ -2448,7 +2451,7 @@ impl SqlServerConnectionDetails<InlinedConnection> {
                 let key_pair = SshKeyPair::from_bytes(&secret).context("ssh key pair")?;
                 // Ensure any SSH-bastion host we connect to is resolved to an
                 // external address.
-                let addresses = resolve_address(&ssh_connection.host, enfoce_external_addresses)
+                let addresses = resolve_address(&ssh_connection.host, enforce_external_addresses)
                     .await
                     .context("ssh tunnel")?;
 
