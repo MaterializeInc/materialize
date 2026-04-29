@@ -2058,15 +2058,14 @@ impl Coordinator {
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
 
-        // Skip the credit consumption check at bootstrap when the license is expired
-        // with DisableClusterCreation behavior. That mode is a soft-fail: it warns and
-        // prevents *new* cluster creation, but must not block startup with existing replicas.
+        // Skip the credit consumption check at bootstrap under DisableClusterCreation behavior:
+        // this codepath validates existing replicas at startup, not cluster creation, so it
+        // must not block startup. New cluster creation is still gated by the DDL-time check.
         // The Disable case is already handled by a bail! in main.rs before we reach here.
-        let enforce_credit_limit_at_bootstrap = !(self.license_key.expired
-            && matches!(
-                self.license_key.expiration_behavior,
-                ExpirationBehavior::DisableClusterCreation,
-            ));
+        let enforce_credit_limit_at_bootstrap = !matches!(
+            self.license_key.expiration_behavior,
+            ExpirationBehavior::DisableClusterCreation,
+        );
         if enforce_credit_limit_at_bootstrap {
             self.validate_resource_limit_numeric(
                 Numeric::zero(),
