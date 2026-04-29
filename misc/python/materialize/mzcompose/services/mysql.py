@@ -14,7 +14,9 @@ from materialize.mzcompose.service import (
 )
 
 
-def create_mysql_server_args(server_id: str, is_master: bool, binlog_row_metadata: str = "full") -> list[str]:
+def create_mysql_server_args(
+    server_id: str, is_master: bool, binlog_row_metadata: str = "full"
+) -> list[str]:
     args = [
         "--log-bin=mysql-bin",
         "--gtid_mode=ON",
