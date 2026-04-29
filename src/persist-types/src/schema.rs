@@ -9,6 +9,7 @@
 
 //! Persist schema evolution.
 
+use std::collections::BTreeSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -101,6 +102,56 @@ impl Migration {
     /// encoded by `old` to be the same arrow DataType as data encoded by `new`.
     pub fn migrate(&self, array: Arc<dyn Array>) -> Arc<dyn Array> {
         self.0.migrate(array)
+    }
+
+    /// Returns true if this migration is a no-op (the schemas have identical
+    /// arrow shape).
+    pub fn is_no_op(&self) -> bool {
+        matches!(self.0, ArrayMigration::NoOp)
+    }
+
+    /// If this migration's only effect is to drop sub-fields of an `ok` field
+    /// nested inside an outer struct (the SourceData = `Result<Row, _>`
+    /// envelope), returns the names of the dropped sub-fields. Otherwise
+    /// returns `None`.
+    ///
+    /// This is the exact shape that parquet column-projection pushdown can
+    /// substitute for: when projection drops the same blob-side leaves,
+    /// applying this migration afterward would be redundant (and would also
+    /// panic on `DropField` since the field is already gone).
+    pub fn pure_drops_under_source_data_ok(&self) -> Option<BTreeSet<String>> {
+        let outer_actions = match &self.0 {
+            ArrayMigration::NoOp => return Some(BTreeSet::new()),
+            ArrayMigration::Struct(actions) => actions,
+            ArrayMigration::List(_, _) => return None,
+        };
+        if outer_actions.is_empty() {
+            return Some(BTreeSet::new());
+        }
+        if outer_actions.len() != 1 {
+            return None;
+        }
+        let StructArrayMigration::Recurse { name, migration } = &outer_actions[0] else {
+            return None;
+        };
+        if name != "ok" {
+            return None;
+        }
+        let inner_actions = match migration {
+            ArrayMigration::NoOp => return Some(BTreeSet::new()),
+            ArrayMigration::Struct(actions) => actions,
+            ArrayMigration::List(_, _) => return None,
+        };
+        let mut dropped = BTreeSet::new();
+        for action in inner_actions {
+            match action {
+                StructArrayMigration::DropField { name } => {
+                    dropped.insert(name.clone());
+                }
+                _ => return None,
+            }
+        }
+        Some(dropped)
     }
 }
 
@@ -841,5 +892,115 @@ mod tests {
             // Should be able to migrate, should not contain any drops.
             Some(false),
         )
+    }
+
+    /// Helper for the `pure_drops_under_source_data_ok` cases below: build a
+    /// SourceData-shaped struct (`{ ok: <inner>, err: Binary }`) where `inner`
+    /// is a struct of named row sub-fields.
+    fn source_data(
+        ok_subfields: impl IntoIterator<Item = (&'static str, DataType, bool)>,
+    ) -> DataType {
+        struct_([
+            ("ok", struct_(ok_subfields), true),
+            ("err", DataType::Binary, true),
+        ])
+    }
+
+    #[mz_ore::test]
+    fn pure_drops_under_source_data_ok_recognizes_drop_only_migrations() {
+        use DataType::*;
+
+        // Drop a single sub-field of `ok`.
+        let migration = super::backward_compatible(
+            &source_data([("0", Int64, true), ("1", Utf8, true), ("2", Utf8, true)]),
+            &source_data([("0", Int64, true), ("1", Utf8, true)]),
+        )
+        .expect("backward compatible");
+        let dropped = migration
+            .pure_drops_under_source_data_ok()
+            .expect("pure drops");
+        assert_eq!(
+            dropped,
+            BTreeSet::from(["2".to_owned()]),
+            "expected exactly the dropped sub-field name"
+        );
+
+        // Drop several sub-fields in one shot.
+        let migration = super::backward_compatible(
+            &source_data([
+                ("0", Int64, true),
+                ("1", Utf8, true),
+                ("2", Utf8, true),
+                ("3", Int64, true),
+                ("4", Utf8, true),
+            ]),
+            &source_data([("0", Int64, true), ("1", Utf8, true)]),
+        )
+        .expect("backward compatible");
+        let dropped = migration
+            .pure_drops_under_source_data_ok()
+            .expect("pure drops");
+        assert_eq!(
+            dropped,
+            BTreeSet::from(["2".to_owned(), "3".to_owned(), "4".to_owned()]),
+        );
+
+        // No-op migration also counts (empty drop set) — projection is then
+        // a no-op too, so the override is trivially safe.
+        let migration = super::backward_compatible(
+            &source_data([("0", Int64, true)]),
+            &source_data([("0", Int64, true)]),
+        )
+        .expect("backward compatible");
+        let dropped = migration
+            .pure_drops_under_source_data_ok()
+            .expect("noop counts as zero drops");
+        assert!(dropped.is_empty());
+    }
+
+    #[mz_ore::test]
+    fn pure_drops_under_source_data_ok_rejects_non_drop_migrations() {
+        use DataType::*;
+
+        // Adding a field is not a pure drop; projection alone cannot
+        // synthesize an absent column.
+        let migration = super::backward_compatible(
+            &source_data([("0", Int64, true)]),
+            &source_data([("0", Int64, true), ("1", Utf8, true)]),
+        )
+        .expect("backward compatible");
+        assert!(
+            migration.pure_drops_under_source_data_ok().is_none(),
+            "AddFieldNullableAtEnd should not be classified as a pure drop"
+        );
+
+        // Mixing an add with drops also disqualifies the migration.
+        let migration = super::backward_compatible(
+            &source_data([("0", Int64, true), ("1", Utf8, true), ("2", Utf8, true)]),
+            &source_data([("0", Int64, true), ("3", Utf8, true)]),
+        )
+        .expect("backward compatible");
+        assert!(
+            migration.pure_drops_under_source_data_ok().is_none(),
+            "drop+add must not be classified as a pure drop"
+        );
+
+        // Touching the err side disqualifies the migration: our override
+        // shape only recurses into `ok`.
+        let migration = super::backward_compatible(
+            &struct_([
+                ("ok", struct_([("0", Int64, true)]), true),
+                ("err", struct_([("inner", Utf8, true)]), true),
+            ]),
+            &struct_([
+                ("ok", struct_([("0", Int64, true)]), true),
+                ("err", struct_([]), true),
+            ]),
+        )
+        .expect("backward compatible");
+        assert!(
+            migration.pure_drops_under_source_data_ok().is_none(),
+            "changes outside `ok` should disqualify"
+        );
     }
 }

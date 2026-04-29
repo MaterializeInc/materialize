@@ -52,7 +52,7 @@ use crate::generated::persist::{
     ProtoU64Description,
 };
 use crate::indexed::columnar::arrow::realloc_array;
-use crate::indexed::columnar::parquet::{decode_trace_parquet, encode_trace_parquet};
+use crate::indexed::columnar::parquet::{decode_trace_parquet_with_demand, encode_trace_parquet};
 use crate::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use crate::location::Blob;
 use crate::metrics::ColumnarMetrics;
@@ -727,7 +727,19 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
 
     /// Decodes a BlobTraceBatchPart from the Parquet format.
     pub fn decode(buf: &SegmentedBytes, metrics: &ColumnarMetrics) -> Result<Self, Error> {
-        decode_trace_parquet(buf.clone(), metrics)
+        Self::decode_with_demand(buf, metrics, None)
+    }
+
+    /// Like [`Self::decode`], but pushes a column-demand mask down into the
+    /// parquet reader so leaves under un-demanded sub-fields of the row struct
+    /// (`k_s` for source/MV shards) are skipped. `row_demand` must be sorted
+    /// ascending with no duplicates.
+    pub fn decode_with_demand(
+        buf: &SegmentedBytes,
+        metrics: &ColumnarMetrics,
+        row_demand: Option<&[usize]>,
+    ) -> Result<Self, Error> {
+        decode_trace_parquet_with_demand(buf.clone(), metrics, row_demand)
     }
 
     /// Scans the part and returns a lower bound on the contained keys.

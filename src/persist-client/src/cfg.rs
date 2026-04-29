@@ -33,7 +33,7 @@ use crate::internal::machine::{
     NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER,
 };
 use crate::internal::state::ROLLUP_THRESHOLD;
-use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
+use crate::operators::{STORAGE_SOURCE_DECODE_FUEL, STORAGE_SOURCE_ENABLE_COLUMN_PROJECTION};
 use crate::read::READER_LEASE_DURATION;
 
 // Ignores the patch version
@@ -231,6 +231,12 @@ impl PersistConfig {
         STORAGE_SOURCE_DECODE_FUEL.get(self)
     }
 
+    /// Whether the persist source pushes the MFP's column demand into the
+    /// row decoder, skipping decode of un-demanded columns.
+    pub fn storage_source_enable_column_projection(&self) -> bool {
+        STORAGE_SOURCE_ENABLE_COLUMN_PROJECTION.get(self)
+    }
+
     /// Overrides the value for "persist_reader_lease_duration".
     pub fn set_reader_lease_duration(&self, val: Duration) {
         self.set_config(&READER_LEASE_DURATION, val);
@@ -350,6 +356,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::internal::state::ROLLUP_FALLBACK_THRESHOLD_MS)
         .add(&crate::internal::state::ENABLE_INCREMENTAL_COMPACTION)
         .add(&crate::operators::STORAGE_SOURCE_DECODE_FUEL)
+        .add(&crate::operators::STORAGE_SOURCE_ENABLE_COLUMN_PROJECTION)
         .add(&crate::read::READER_LEASE_DURATION)
         .add(&crate::rpc::PUBSUB_CLIENT_ENABLED)
         .add(&crate::rpc::PUBSUB_PUSH_DIFF_ENABLED)

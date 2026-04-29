@@ -1,0 +1,77 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Verify that `EXPLAIN ... WITH (projection pushdown)` surfaces the column
+# demand the persist source decoder will receive. The `demand=(...)` set is the
+# union of columns read by the source MFP's filter, map, and projection. It is
+# suppressed when every input column is demanded (the no-op case).
+
+statement ok
+CREATE TABLE t (a int, b int, c int, d int);
+
+# Pure projection: only `a` is demanded.
+
+statement ok
+CREATE MATERIALIZED VIEW mv_project AS SELECT a FROM t;
+
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(humanized expressions, projection pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_project
+----
+materialize.public.mv_project:
+  Get::Collection materialize.public.t
+    raw=true
+
+Source materialize.public.t
+  project=(#0)
+  demand=(#0)
+
+Target cluster: quickstart
+
+EOF
+
+# Projection plus a filter on a different column: demand is the union.
+
+statement ok
+CREATE MATERIALIZED VIEW mv_project_filter AS SELECT a FROM t WHERE c > 5;
+
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(humanized expressions, projection pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_project_filter
+----
+materialize.public.mv_project_filter:
+  Get::Collection materialize.public.t
+    raw=true
+
+Source materialize.public.t
+  project=(#0)
+  filter=((#2{c} > 5))
+  demand=(#0, #2)
+
+Target cluster: quickstart
+
+EOF
+
+# Identity projection: no demand annotation is emitted.
+
+statement ok
+CREATE MATERIALIZED VIEW mv_identity AS SELECT * FROM t;
+
+query T multiline
+EXPLAIN PHYSICAL PLAN WITH(humanized expressions, projection pushdown) AS VERBOSE TEXT FOR MATERIALIZED VIEW mv_identity
+----
+materialize.public.mv_identity:
+  Get::PassArrangements materialize.public.t
+    raw=true
+
+Source materialize.public.t
+
+Target cluster: quickstart
+
+EOF

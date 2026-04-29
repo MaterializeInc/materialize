@@ -11,7 +11,9 @@
 
 use mz_repr::explain::json::DisplayJson;
 
-use crate::explain::{ExplainMultiPlan, ExplainSinglePlan, ExplainSource, PushdownInfo};
+use crate::explain::{
+    ExplainMultiPlan, ExplainSinglePlan, ExplainSource, ProjectionInfo, PushdownInfo,
+};
 
 impl<'a, T: 'a> DisplayJson for ExplainSinglePlan<'a, T>
 where
@@ -47,6 +49,7 @@ where
                      id,
                      op,
                      pushdown_info,
+                     projection_info,
                  }| {
                     let mut json = serde_json::json!({
                         "id": id,
@@ -56,6 +59,15 @@ where
                     if let Some(PushdownInfo { pushdown }) = pushdown_info {
                         let object = json.as_object_mut().unwrap();
                         object.insert("pushdown".to_owned(), serde_json::json!(pushdown));
+                    }
+
+                    if let Some(ProjectionInfo {
+                        demand,
+                        input_arity: _,
+                    }) = projection_info
+                    {
+                        let object = json.as_object_mut().unwrap();
+                        object.insert("demand".to_owned(), serde_json::json!(demand));
                     }
 
                     json
